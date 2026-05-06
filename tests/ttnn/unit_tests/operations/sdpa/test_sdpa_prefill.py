@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_with_llk_assert
 
 
 def fa_rand(*shape):
@@ -610,6 +609,69 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
 
 
+def run_sdpa_noncausal_randn_bias(device, b, nh, s, d, torch_dtype, ttnn_dtype):
+    torch.manual_seed(1234)
+
+    scale = 1.0 / math.sqrt(d)  # 0.125 for d=64
+
+    Q = torch.randn(b, nh, s, d, dtype=torch_dtype)
+    K = torch.randn(b, nh, s, d, dtype=torch_dtype)
+    V = torch.randn(b, nh, s, d, dtype=torch_dtype)
+    attn_bias = torch.randn(b, nh, s, s, dtype=torch_dtype)
+
+    tt_Q = ttnn.from_torch(
+        Q, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_K = ttnn.from_torch(
+        K, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_V = ttnn.from_torch(
+        V, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_bias = ttnn.from_torch(
+        attn_bias, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    tt_Q = ttnn.to_layout(tt_Q, ttnn.TILE_LAYOUT)
+    tt_K = ttnn.to_layout(tt_K, ttnn.TILE_LAYOUT)
+    tt_V = ttnn.to_layout(tt_V, ttnn.TILE_LAYOUT)
+    tt_bias = ttnn.to_layout(tt_bias, ttnn.TILE_LAYOUT)
+
+    tt_back = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        attn_mask=tt_bias,
+        is_causal=False,
+        scale=scale,
+        sliding_window_size=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_back = ttnn.to_torch(tt_back)
+
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        Q,
+        K,
+        V,
+        attn_mask=attn_bias,
+        dropout_p=0.0,
+        is_causal=False,
+        scale=scale,
+    )
+
+    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.99)
+    logger.debug(f"b={b} nh={nh} s={s} d={d} dtype={torch_dtype} | PCC={out_pcc}")
+    assert out_pass
+
+
+@pytest.mark.parametrize(
+    "b, nh, s, d",
+    ([1, 12, 197, 64],),
+)
+def test_sdpa_noncausal_randn_bias(device, b, nh, s, d):
+    run_sdpa_noncausal_randn_bias(device, b, nh, s, d, torch.bfloat16, ttnn.bfloat16)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
 @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
@@ -629,7 +691,6 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     assert device.num_program_cache_entries() == 1
 
 
-@skip_with_llk_assert("Hits LLK assert check for are_unpacker_AB_configured_correctly.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])

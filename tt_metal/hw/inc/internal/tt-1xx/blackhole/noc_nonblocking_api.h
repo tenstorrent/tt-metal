@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,6 +27,9 @@ constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_DRISC)
+constexpr std::underlying_type_t<DramProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<DramProcessorTypes>>(DramProcessorTypes::DM0);
 #elif defined(COMPILE_FOR_TRISC)
 // TRISC is not a data movement processor. This is just so it compiles
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
@@ -181,6 +184,11 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
     uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     return *ptr;
+}
+
+inline __attribute__((always_inline)) void NOC_CFG_WRITE_REG(uint32_t noc, uint32_t reg_id, uint32_t val) {
+    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
+    *(volatile uint32_t*)offset = val;
 }
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {

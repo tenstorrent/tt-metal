@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -93,10 +93,10 @@ bool reader_only(
         reader_kernel,
         reader_core,
         {
-            (uint32_t)dram_byte_address,
+            static_cast<uint32_t>(dram_byte_address),
             0,
-            (uint32_t)l1_byte_address,
-            (uint32_t)byte_size,
+            static_cast<uint32_t>(l1_byte_address),
+            static_cast<uint32_t>(byte_size),
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -164,10 +164,10 @@ bool writer_only(
         writer_kernel,
         writer_core,
         {
-            (uint32_t)dram_byte_address,
+            static_cast<uint32_t>(dram_byte_address),
             0,
-            (uint32_t)l1_byte_address,
-            (uint32_t)byte_size,
+            static_cast<uint32_t>(l1_byte_address),
+            static_cast<uint32_t>(byte_size),
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -195,7 +195,6 @@ struct ReaderWriterConfig {
 bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderWriterConfig& test_config) {
     bool pass = true;
 
-    const uint32_t cb_index = 0;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -217,10 +216,16 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    tt_metal::CircularBufferConfig l1_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{cb_index, test_config.l1_data_format}})
-            .set_page_size(cb_index, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_cb_config);
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_dfb_config = {
+        .entry_size = test_config.tile_byte_size,
+        .num_entries = test_config.num_tiles,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .data_format = test_config.l1_data_format};
+    uint32_t l1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_dfb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
         program_,
@@ -229,7 +234,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {cb_index}});
+            .compile_args = {l1_dfb, /*use_dfbs=*/true}});
 
     auto writer_kernel = tt_metal::CreateKernel(
         program_,
@@ -238,7 +243,10 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {cb_index}});
+            .compile_args = {l1_dfb, /*use_dfbs=*/true}});
+
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, l1_dfb, reader_kernel, writer_kernel);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -251,23 +259,29 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
+    // DRAM buffer is configured with page_size = byte_size (whole buffer),
+    // so aligned_page_size() returns the whole-buffer stride, not per-tile.
+    // Derive the per-tile DRAM stride directly from byte_size / num_tiles.
+    const uint32_t per_tile_stride = static_cast<uint32_t>(byte_size / test_config.num_tiles);
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)input_dram_byte_address,
+            static_cast<uint32_t>(input_dram_byte_address),
             0,
-            (uint32_t)test_config.num_tiles,
+            static_cast<uint32_t>(test_config.num_tiles),
+            per_tile_stride,
         });
     tt_metal::SetRuntimeArgs(
         program_,
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            static_cast<uint32_t>(output_dram_byte_address),
             0,
-            (uint32_t)test_config.num_tiles,
+            static_cast<uint32_t>(test_config.num_tiles),
+            per_tile_stride,
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -321,49 +335,52 @@ bool reader_datacopy_writer(
     KernelHandle compute_kernel;
     uint32_t num_threads = 1;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        num_threads = test_config.num_tiles == 1 ? 1 : 4;
+    }
+
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
+        .entry_size = test_config.tile_byte_size,
+        .num_entries = test_config.num_tiles,
+        .num_producers = num_threads,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = num_threads,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true,  // ignored on WH/BH
+        .data_format = test_config.l1_input_data_format};
+
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+        .entry_size = test_config.tile_byte_size,
+        .num_entries = test_config.num_tiles,
+        .num_producers = num_threads,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = num_threads,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true,  // ignored on WH/BH
+        .data_format = test_config.l1_output_data_format};
+
+    uint32_t l1_input_dfb =
+        tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input_dfb_config);
+    uint32_t l1_output_dfb =
+        tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
+
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         if (test_config.num_tiles > 1) {
             TT_FATAL(test_config.num_tiles % 4 == 0, "Number of tiles must be divisible by 4");
         }
-        num_threads = test_config.num_tiles == 1 ? 1 : 4;
-
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
-            .entry_size = test_config.tile_byte_size,
-            .num_entries = test_config.num_tiles,
-            .num_producers = num_threads,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = num_threads,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = true,
-            .data_format = test_config.l1_input_data_format
-        };
-
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
-            .entry_size = test_config.tile_byte_size,
-            .num_entries = test_config.num_tiles,
-            .num_producers = num_threads,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = num_threads,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = true,
-            .data_format = test_config.l1_output_data_format
-        };
-
-        uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input_dfb_config);
-        uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
 
         reader_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = num_threads, .compile_args = {l1_input_dfb}});
+                .num_threads_per_cluster = num_threads, .compile_args = {l1_input_dfb, /*use_dfbs=*/true}});
 
         writer_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = num_threads, .compile_args = {l1_output_dfb}});
+                .num_threads_per_cluster = num_threads, .compile_args = {l1_output_dfb, /*use_dfbs=*/true}});
 
         uint32_t per_core_tile_cnt = test_config.num_tiles / num_threads;
         compute_kernel = tt_metal::experimental::quasar::CreateKernel(
@@ -371,24 +388,9 @@ bool reader_datacopy_writer(
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = num_threads, .compile_args = {uint(per_core_tile_cnt)}});
+                .num_threads_per_cluster = num_threads, .compile_args = {uint(per_core_tile_cnt), /*use_dfbs=*/true}});
 
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_input_dfb, reader_kernel, compute_kernel);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_output_dfb, compute_kernel, writer_kernel);
     } else {
-        const uint32_t input0_cb_index = 0;
-        const uint32_t output_cb_index = 16;
-
-        tt_metal::CircularBufferConfig l1_input_cb_config =
-            tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
-                .set_page_size(input0_cb_index, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input_cb_config);
-
-        tt_metal::CircularBufferConfig l1_output_cb_config =
-            tt_metal::CircularBufferConfig(byte_size, {{output_cb_index, test_config.l1_output_data_format}})
-                .set_page_size(output_cb_index, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
-
         reader_kernel = tt_metal::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
@@ -396,7 +398,7 @@ bool reader_datacopy_writer(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
-                .compile_args = {input0_cb_index}});
+                .compile_args = {l1_input_dfb, /*use_dfbs=*/true}});
 
         writer_kernel = tt_metal::CreateKernel(
             program_,
@@ -405,14 +407,19 @@ bool reader_datacopy_writer(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = {output_cb_index}});
+                .compile_args = {l1_output_dfb, /*use_dfbs=*/true}});
 
         compute_kernel = tt_metal::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             test_config.core,
-            tt_metal::ComputeConfig{.compile_args = {uint(test_config.num_tiles)}});
+            tt_metal::ComputeConfig{.compile_args = {uint(test_config.num_tiles), /*use_dfbs=*/true}});
     }
+
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, l1_input_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, l1_output_dfb, compute_kernel, writer_kernel);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -427,23 +434,30 @@ bool reader_datacopy_writer(
 
     uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
+    // DRAM buffer uses page_size = byte_size (whole-buffer), so derive the
+    // per-tile stride directly. byte_size covers all test_config.num_tiles
+    // tiles across all threads; the stride between consecutive tiles in DRAM
+    // is byte_size / test_config.num_tiles.
+    const uint32_t per_tile_stride = static_cast<uint32_t>(byte_size / test_config.num_tiles);
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)input_dram_byte_address,
+            static_cast<uint32_t>(input_dram_byte_address),
             0,
-            num_tiles_per_thread
+            num_tiles_per_thread,
+            per_tile_stride,
         });
     tt_metal::SetRuntimeArgs(
         program_,
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            static_cast<uint32_t>(output_dram_byte_address),
             0,
-            num_tiles_per_thread
+            num_tiles_per_thread,
+            per_tile_stride,
         });
 
     auto blocking = device->arch() == ARCH::QUASAR;

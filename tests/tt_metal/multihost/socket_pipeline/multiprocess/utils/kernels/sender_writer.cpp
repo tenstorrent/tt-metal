@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,7 +55,7 @@ void kernel_main() {
     uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
-    auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_tensor_addr, input_page_size);
+    auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_tensor_addr);
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);

@@ -1,0 +1,35 @@
+# Physical Groupings File - WH T3K Configuration
+# T3K cluster: Wormhole-based N300 boards, 2x4 mesh (8 ASICs) per host
+# Used for T3K cluster type with WORMHOLE_B0 architecture
+
+groupings {
+  name: "2x2_Mesh_t3k"
+  preset_type: MESH
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 1 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 2 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 3 asic_location: ASIC_LOCATION_UNSPECIFIED }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "2x4_Mesh_t3k"
+  preset_type: MESH
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 1 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 2 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 3 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 4 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 5 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 6 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 7 asic_location: ASIC_LOCATION_UNSPECIFIED }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}

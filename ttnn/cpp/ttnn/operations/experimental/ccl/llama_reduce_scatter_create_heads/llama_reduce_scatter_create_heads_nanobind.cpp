@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 
 #include "llama_reduce_scatter_create_heads.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -30,13 +31,13 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
                 topology (ttnn.Topology): Communication topology for the reduce-scatter stage.
-                num_links (number, optional): the number of links. Defaults to `3`.
+                num_links (number, optional): the number of links. Defaults to the maximum available.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
            Returns:
-               ttnn.Tensor: the output tensor.
+               Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: Q, K, and V output tensors.
 
             Example:
 
@@ -54,24 +55,23 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
     ttnn::bind_function<"llama_rs_create_heads", "ttnn.experimental.">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::experimental::llama_rs_create_heads,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("intermediate_packet_buffer").noconvert(),
-            nb::arg("dim"),
-            nb::arg("cross_device_semaphore"),
-            nb::arg("subdevice_id"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("topology"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("num_heads"),
-            nb::arg("num_kv_heads"),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("qkv_memory_config") = nb::none(),
-            nb::arg("use_noc1_only") = false,
-            nb::arg("use_optimal_ccl_for_llama") = false));
+        &ttnn::experimental::llama_rs_create_heads,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("intermediate_packet_buffer").noconvert(),
+        nb::arg("dim"),
+        nb::arg("cross_device_semaphore"),
+        nb::arg("subdevice_id"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::kw_only(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("num_heads"),
+        nb::arg("num_kv_heads"),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("qkv_memory_config") = nb::none(),
+        nb::arg("use_noc1_only") = false,
+        nb::arg("use_optimal_ccl_for_llama") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

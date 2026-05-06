@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -89,7 +89,8 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    bool use_l1_small_for_semaphores) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -117,7 +118,8 @@ std::vector<ttnn::Tensor> all_broadcast(
             .output_mem_config = output_mem_config,
             .cluster_axis = cluster_axis,
             .sub_device_id = sub_device_id,
-            .topology = topology},
+            .topology = topology,
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         input_tensor);
 }
 }  // namespace ttnn::prim

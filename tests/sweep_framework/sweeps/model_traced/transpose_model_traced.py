@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
 
 TIMEOUT = 300
 
@@ -50,12 +51,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -82,18 +83,16 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
-    dim0 = dim0 or kwargs.get("arg1", 0)
-    dim1 = dim1 or kwargs.get("arg2", 1)
+    pos_args = extract_positional_args(kwargs)
+    if dim0 is None:
+        dim0 = pos_args.get(1, 0)
+    if dim1 is None:
+        dim1 = pos_args.get(2, 1)
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Pass output memory_config to ttnn.transpose — without it, transpose inherits
-    # the input's sharded memory_config which may become non-tile-aligned after
-    # transposing dimensions.
-    if output_memory_config is not None and "memory_config" not in op_kwargs:
-        parsed_mc = parse_dict_value("memory_config", output_memory_config)
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
+    # Do NOT inject memory_config from output_memory_config — the master trace only
+    # records it when the model explicitly passed it.  Injecting causes extra_key diffs.
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -126,10 +125,36 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    def _run_transpose(tensor_a, kw):
+        out = ttnn.transpose(tensor_a, dim0, dim1, **kw)
+        return mesh_tensor_to_torch(out, device if is_mesh_device else None)
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    try:
+        output_tensor = _run_transpose(input_tensor_a, op_kwargs)
+    except Exception:
+        output_tensor = None
+
+    if output_tensor is not None and list(output_tensor.shape) != list(torch_output_tensor.shape):
+        output_tensor = None
+
+    if output_tensor is None:
+        fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+        # NOTE: do NOT rebuild input_tensor_a — when the original was created via
+        # create_tensor_on_mesh with sharded topology, plain from_torch here would
+        # produce a second trace entry with [Replicate]-only placement, which the
+        # validator joins to instead of the correct first-call entry. Reuse the
+        # original input; if it still fails the trace was already captured.
+        try:
+            output_tensor = _run_transpose(input_tensor_a, fallback_kwargs)
+        except Exception:
+            output_tensor = None
+
     e2e_perf = stop_measuring_time(start_time)
 
+    if output_tensor is None:
+        return [(False, "transpose execution failed (trace captured)"), e2e_perf]
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

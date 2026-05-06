@@ -1,15 +1,19 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
+#include "context/metal_context.hpp"
+#include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -22,6 +26,10 @@ namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class AllocatorImpl;
 class DispatchTopology;
+class SharedMemoryStatsProvider;
+namespace detail {
+class ProgramImpl;
+}
 
 namespace experimental {
 class DispatchContext;
@@ -32,6 +40,8 @@ class Device : public IDevice {
 public:
     Device() = delete;
     Device(
+        MetalEnv* env,
+        MetalContext* context,
         ChipId device_id,
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
@@ -48,8 +58,11 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    Device(Device&& other) noexcept;
-    Device& operator=(Device&& other) noexcept;
+    // Move constructor/assignment deleted due to active_programs_mutex_ (std::mutex is not movable)
+    Device(Device&& other) noexcept = delete;
+    Device& operator=(Device&& other) noexcept = delete;
+
+    ContextId get_context_id() const { return context_->get_context_id(); }
 
     tt::ARCH arch() const override;
 
@@ -130,13 +143,13 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void init_command_queue_host() override;
-    void init_command_queue_device() override;
+    void init_command_queue_host();
+    void init_command_queue_device();
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
-    bool compile_fabric() override;
-    void configure_fabric() override;
+    bool compile_fabric();
+    void configure_fabric();
     // Puts device into reset
     bool close() override;
 
@@ -161,6 +174,14 @@ public:
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         this->mesh_device = mesh_device;
     };
+
+    // Get SHM stats provider for real-time memory monitoring (used by GraphTracker)
+    SharedMemoryStatsProvider* get_shm_stats_provider() const { return shm_stats_provider_.get(); }
+
+    // Program tracking for accurate CB memory reporting
+    void register_program(detail::ProgramImpl* program);
+    void unregister_program(detail::ProgramImpl* program);
+    uint64_t get_total_cb_allocated() const;
 
 private:
     // Deprecated overrides for sub_device_manager_tracker
@@ -207,6 +228,9 @@ private:
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
+    // TODO: Remove this member in favor of passing in dependencies directly
+    MetalContext* context_ = nullptr;  // Runtime state
+    MetalEnv* env_;                    // Lower level state
     ChipId id_;
     std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 
@@ -242,6 +266,13 @@ private:
     uint32_t trace_buffers_size_ = 0;
 
     std::unique_ptr<AllocatorImpl> default_allocator_;
+
+    // Shared memory statistics provider (for real-time memory monitoring)
+    std::unique_ptr<class SharedMemoryStatsProvider> shm_stats_provider_;
+
+    // Program tracking for CB memory reporting
+    std::unordered_set<detail::ProgramImpl*> active_programs_;
+    mutable std::mutex active_programs_mutex_;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,19 +37,20 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto old_running_mean_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto old_running_var_args = TensorAccessorArgs<old_running_mean_args.next_compile_time_args_offset()>();
+    constexpr bool old_stat_is_fp32 =
+        get_compile_time_arg_val(old_running_var_args.next_compile_time_args_offset()) == 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src_addr);
 
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     const uint32_t old_running_mean_tile_bytes = get_tile_size(cb_id_old_running_mean);
-    const auto old_running_mean =
-        TensorAccessor(old_running_mean_args, old_running_mean_addr, old_running_mean_tile_bytes);
+    const auto old_running_mean = TensorAccessor(old_running_mean_args, old_running_mean_addr);
 
     const uint32_t old_running_var_tile_bytes = get_tile_size(cb_id_old_running_var);
-    const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr, old_running_var_tile_bytes);
+    const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_id_src_obj(cb_id_src);
@@ -90,7 +91,11 @@ void kernel_main() {
                         {.page_id = tile_offset},
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
-                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_mean);
+                    if constexpr (old_stat_is_fp32) {
+                        fill_tile_with_first_element<float>(cb_id_old_running_mean);
+                    } else {
+                        fill_tile_with_first_element_bfloat16(cb_id_old_running_mean);
+                    }
                     cb_id_old_running_mean_obj.push_back(onetile);
 
                     // write data
@@ -115,7 +120,11 @@ void kernel_main() {
                         {.page_id = tile_offset},
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
-                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_var);
+                    if constexpr (old_stat_is_fp32) {
+                        fill_tile_with_first_element<float>(cb_id_old_running_var);
+                    } else {
+                        fill_tile_with_first_element_bfloat16(cb_id_old_running_var);
+                    }
                     cb_id_old_running_var_obj.push_back(onetile);
 
                     // write data

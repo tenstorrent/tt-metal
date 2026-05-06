@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,9 @@ bool can_use_sharded_optimized_factory(
         if (i != padded_shape.rank() - 2 && (padded_shape[i] != operation_attributes.output_padded_shape[i])) {
             return false;
         }
+    }
+    if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        return false;  // ND_SHARDED output should take the default factory.
     }
     return !operation_attributes.sub_core_grids.has_value();
 }
@@ -122,13 +125,24 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_WIDTH,
         TILE_HEIGHT);
 
-    if (input_tensor.memory_config().is_sharded()) {
+    const uint32_t alignment_requirement = hal::get_l1_alignment();
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+        uint32_t l1_address_increment_size =
+            operation_attributes.output_padded_shape[-1] *
+            input_tensor.element_size();  // For height-sharded and interleaved tensors, the l1 address in the reader
+                                          // kernel gets incremented by the output padded width size.
+        TT_FATAL(
+            l1_address_increment_size % alignment_requirement == 0,
+            "Output padded width size {} must be aligned to {} bytes for HEIGHT_SHARDED or INTERLEAVED tensors",
+            l1_address_increment_size,
+            alignment_requirement);
+    } else if (input_tensor.memory_config().is_sharded()) {
         uint32_t shard_width = input_tensor.shard_spec().has_value()
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
 
         const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
             page_size_bytes == input_tensor.buffer()->aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
@@ -156,7 +170,11 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);  // If the input is using the legacy sharded optimized program
+                          // factory, the output has the same shard spec as the input.
         return TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(

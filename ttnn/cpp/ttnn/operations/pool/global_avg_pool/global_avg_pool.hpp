@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,8 +19,8 @@ Tensor global_avg_pool2d(
 
 }  // namespace tt::tt_metal
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

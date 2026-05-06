@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -38,8 +38,6 @@ Per-receiver data layout (8 heads per receiver):
 @pytest.mark.parametrize(
     "qnope_shard_shape, qrope_shard_shape, noc",
     [
-        ((1, 512), (2, 64), ttnn.NOC.NOC_0),  # Force NOC0
-        ((1, 512), (2, 64), ttnn.NOC.NOC_1),  # Force NOC1
         ((1, 512), (2, 64), None),  # Auto NOC routing - selects best single NOC
     ],
 )

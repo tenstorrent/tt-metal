@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_query_op_runtime.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
@@ -79,7 +78,10 @@ TEST_P(BinaryOpTraceRuntime, Add) {
     {
         auto* device = device_;
         auto query = ttnn::graph::query_op_runtime(
-            [](auto&&... args) { return ttnn::add(args...); }, device, input_spec_a, input_spec_b);
+            [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec_a,
+            input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);

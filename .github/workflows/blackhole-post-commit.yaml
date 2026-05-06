@@ -83,6 +83,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      schedule-runs-all-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "When true (default), a scheduled run uses the Blackhole schedule suite (not gated on run-* alone). When false, only run-* inputs enable jobs—set false when calling from another workflow."
   workflow_dispatch:
     inputs:
       runner-label:
@@ -257,6 +262,7 @@ jobs:
       dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
       build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
+      schedule-runs-all-tests-effective: ${{ steps.resolve.outputs.schedule-runs-all-tests-effective }}
     steps:
       - id: resolve
         run: |
@@ -282,9 +288,23 @@ jobs:
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
           fi
 
+          # Effective schedule suite flag: true unless input is defined and explicitly false (unset/null is not "off").
+          echo "=== schedule-runs-all-tests (resolve-artifacts) ==="
+          echo "github.event_name: ${{ github.event_name }}"
+          echo "inputs.schedule-runs-all-tests (toJSON): ${{ toJSON(inputs.schedule-runs-all-tests) }}"
+          explicit_false="${{ inputs.schedule-runs-all-tests == false && toJSON(inputs.schedule-runs-all-tests) != 'null' }}"
+          echo "explicit false (defined && == false): $explicit_false"
+          if [[ "$explicit_false" == "true" ]]; then
+            echo "schedule-runs-all-tests-effective=false" >> "$GITHUB_OUTPUT"
+            echo "schedule-runs-all-tests-effective: false"
+          else
+            echo "schedule-runs-all-tests-effective=true" >> "$GITHUB_OUTPUT"
+            echo "schedule-runs-all-tests-effective: true"
+          fi
+
   run-profiler-regression:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-profiler-regression != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-profiler-regression == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     strategy:
@@ -302,7 +322,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-umd-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
@@ -318,7 +338,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   models-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-models-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
     strategy:
@@ -335,7 +355,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-ttnn-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
@@ -351,7 +371,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ops-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-ops-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -370,7 +390,7 @@ jobs:
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-tt-cnn-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     strategy:
@@ -387,7 +407,8 @@ jobs:
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
-    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (inputs.run-blackhole-multi-card-fast-unit-tests != false && (!contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule'))) }}
+    # Don't run on daily P100-only schedule
+    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && github.event.schedule != '0 7 * * *' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     needs: [resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml

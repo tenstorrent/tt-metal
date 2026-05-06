@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/circular_buffer.h"
 
 // ------------------------------------------------------------------
 // 1) unflatten_index<RANK>:
@@ -108,7 +109,8 @@ void kernel_main() {
     // Address generator
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
+    experimental::CircularBuffer cb_out(cb_id_out0);
 
     // ------------------------------------------------------------------------
     // 3) Height dimension remainder logic
@@ -224,8 +226,8 @@ void kernel_main() {
         uint32_t base_output_face_line_offset_bytes = output_face_line_offset * element_size;
 
         // 6d) Wait for data block
-        cb_wait_front(cb_id_out0, 1);
-        uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out.wait_front(1);
+        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
 
         // 6e) Loop over faces in the height dimension
         for (uint8_t face_h = 0; face_h < num_faces_h; ++face_h) {
@@ -261,7 +263,7 @@ void kernel_main() {
                     uint32_t output_tile_offset_bytes = base_output_face_line_offset_bytes + face_w_offset_bytes;
 
                     // Build final output address
-                    uint64_t write_noc_base_addr = get_noc_addr(output_tile_idx, s, output_tile_offset_bytes);
+                    uint64_t write_noc_base_addr = s.get_noc_addr(output_tile_idx, output_tile_offset_bytes);
 
                     // Build final input read address
                     uint32_t final_addr = base_l1_read_addr + face_h_offset_bytes + face_w_offset_bytes +
@@ -273,15 +275,16 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, 1);
+        cb_out.pop_front(1);
     }
 
     // ------------------------------------------------------------------------
     // 7) Handle padding if needed
     // ------------------------------------------------------------------------
     if constexpr (needs_padding) {
-        cb_wait_front(tt::CBIndex::c_1, 1);
-        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_1);
+        experimental::CircularBuffer cb1(tt::CBIndex::c_1);
+        cb1.wait_front(1);
+        uint32_t l1_read_ptr = cb1.get_read_ptr();
 
         // We'll reuse 'dest_multi_idx' for tile indexing
         constexpr uint32_t x_t = output_H_tiled - 1;
@@ -319,7 +322,7 @@ void kernel_main() {
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
                         uint32_t offset = (face_offset + (sub_tile_line * FACE_WIDTH)) * element_size;
 
-                        uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+                        uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
 
                         // Perform asynchronous write
                         noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
@@ -328,6 +331,6 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(tt::CBIndex::c_1, 1);
+        cb1.pop_front(1);
     }
 }

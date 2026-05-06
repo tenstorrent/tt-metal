@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     // Skip if simulator is not available
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {

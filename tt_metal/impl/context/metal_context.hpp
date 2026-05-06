@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,9 @@
 #include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
-#include "context_types.hpp"
-
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
@@ -73,6 +72,10 @@ public:
 
     // Check if a MetalContext for a given context id exists.
     static bool instance_exists(ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    // Returns the id of this instance. The ID cannot be used to uniquely identify the context.
+    // IDs are recycled after instances are destroyed.
+    ContextId get_context_id() const { return context_id_; }
 
     [[deprecated("Use MetalEnv instead")]] Cluster& get_cluster();
     [[deprecated("Use MetalEnv instead")]] llrt::RunTimeOptions& rtoptions();
@@ -132,6 +135,9 @@ public:
     distributed::SystemMesh& get_system_mesh();
 
     const distributed::multihost::DistributedContext& global_distributed_context();
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): Misleading name — this returns the sub-context
+    // communicator (post MPI_Comm_split), NOT the full MPI_COMM_WORLD. Rename or remove in favor of
+    // get_distributed_context_ptr() and DistributedContext::get_world_context().
     const distributed::multihost::DistributedContext& full_world_distributed_context() const;
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -81,6 +81,7 @@ bool can_use_streaming_compute(
     bool fp32_dest_acc_en,
     uint32_t qk_out_subblock_h,
     uint32_t Sk_chunk_t,
+    uint32_t dst_size,
     uint32_t padded_Sk,
     uint32_t Sk,
     uint32_t Sq_chunk_t) {
@@ -90,7 +91,7 @@ bool can_use_streaming_compute(
     if (sliding_window_size.value_or(0) != 0 || is_chunked || fp32_dest_acc_en) {
         return false;
     }
-    if (qk_out_subblock_h > 2 || Sk_chunk_t % (8 / qk_out_subblock_h) != 0) {
+    if (qk_out_subblock_h > 2 || Sk_chunk_t % (dst_size / qk_out_subblock_h) != 0) {
         return false;
     }
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
@@ -394,19 +395,22 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         fp32_dest_acc_en,
         qk_out_subblock_h,
         Sk_chunk_t,
+        dst_size,
         padded_Sk,
         Sk,
         Sq_chunk_t);
 
-    const bool lightweight_mask = use_streaming_compute && use_padded_mask;
+    const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
+    const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = lightweight_mask ? 1 : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    uint32_t mask_tiles =
+        lightweight_mask ? (lightweight_causal ? 2 : 1) : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
-    uint32_t out0_t = Sq_chunk_t * vDHt;
+    uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
     uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
@@ -417,7 +421,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
     log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
     log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
@@ -429,12 +432,23 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
+    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp).
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
+    log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
@@ -572,7 +586,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
-        (std::uint32_t)(use_streaming_compute && use_padded_mask),  // arg 20: lightweight mask for v2
+        (std::uint32_t)(lightweight_mask),       // arg 20: lightweight mask (causal or streaming padded)
+        (std::uint32_t)(use_streaming_compute),  // arg 21: row-grouped cb_out drain
+        out_out_subblock_h,                      // arg 22: drain group height
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -644,15 +660,18 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
+    // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
+    // both must share the same data format for the unpack config to be correct.
+    TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
     uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
     uint32_t out_tile_size = tt::tile_size(out_df);
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
@@ -683,13 +702,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
-        // Lightweight mask: single bfloat16 -inf tile (no Bfp4_b round-trip artifacts).
+        // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
         // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
-        uint32_t actual_mask_tiles = lightweight_mask ? 1 : mask_tiles;
         tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
-        uint32_t actual_mask_tile_size = lightweight_mask ? tt::tile_size(actual_mask_df) : mask_tile_size;
+        uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
         auto c_in3_config =
-            CircularBufferConfig(actual_mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
+            CircularBufferConfig(mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
                 .set_page_size(tt::CBIndex::c_3, actual_mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
     }
@@ -1216,11 +1234,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                // When the injector is geometrically inside the mcast rect (not at min or max X),
-                // the hardware counts it as a destination slot, so num_dests must include it.
-                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+                const uint32_t mcast_num_dests = num_receivers;
 
                 // Configure injector
                 auto& injector_chain = core_chain_info[injector_idx];
@@ -1259,7 +1273,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             }
         }
 
-        log_info(
+        log_debug(
             tt::LogOp,
             "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
             mcast_chains,

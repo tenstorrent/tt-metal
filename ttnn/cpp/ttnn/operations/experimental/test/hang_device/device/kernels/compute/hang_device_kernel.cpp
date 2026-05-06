@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,5 +7,6 @@
 
 void kernel_main() {
     DPRINT_MATH(DPRINT << "Hanging the device, use this only for testing!!!" << ENDL());
+    DEVICE_PRINT_MATH("Hanging the device, use this only for testing!!!\n");
     while (true);
 }

@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     bool read_single_h_block_per_core = get_arg_val<uint32_t>(0) == 1;
@@ -21,14 +22,17 @@ void kernel_main() {
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(2);
 
+    experimental::CircularBuffer cb_in(cb_in0);
+    experimental::CircularBuffer cb_out(cb_out0);
+
     if (read_single_h_block_per_core) {
         uint32_t write_stick_stride = stick_size_bytes * num_cores_read;
 
         uint32_t l1_write_offset = 0;
         for (uint32_t core = 0; core < num_cores_read; ++core) {
-            uint32_t l1_read_addr = get_read_ptr(cb_in0) + read_stick_offset[core] + src_read_stick_offset;
+            uint32_t l1_read_addr = cb_in.get_read_ptr() + read_stick_offset[core] + src_read_stick_offset;
             uint64_t noc_read_addr = get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr);
-            uint32_t l1_write_addr = get_write_ptr(cb_out0) + l1_write_offset + dst_write_stick_offset;
+            uint32_t l1_write_addr = cb_out.get_write_ptr() + l1_write_offset + dst_write_stick_offset;
             for (uint32_t i = 0; i < num_sticks_per_shard_core; ++i) {
                 noc_async_read_one_packet(noc_read_addr, l1_write_addr, stick_size_bytes);
                 noc_read_addr += read_stick_stride;
@@ -38,8 +42,8 @@ void kernel_main() {
             noc_async_read_barrier();
         }
     } else {
-        uint32_t l1_write_addr = get_write_ptr(cb_out0) + dst_write_stick_offset;
-        uint32_t l1_read_addr = get_read_ptr(cb_in0) + src_read_stick_offset;
+        uint32_t l1_write_addr = cb_out.get_write_ptr() + dst_write_stick_offset;
+        uint32_t l1_read_addr = cb_in.get_read_ptr() + src_read_stick_offset;
 
         for (uint32_t c = 0; c < num_C_blocks_per_core; ++c) {
             for (uint32_t core = 0; core < num_cores_read; ++core) {

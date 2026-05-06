@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
-#include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -21,9 +22,9 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // If fp32 then use higher accuracy exp function
     // Otherwise, use exp_21f (~1 ULP on bfloat16)
     if constexpr (is_fp32_acc_to_dest_mode) {
-        exp_neg_x = _sfpu_exp_improved_<true>(-x);
+        exp_neg_x = _sfpu_exp_accurate_<true>(-x);
     } else {
-        exp_neg_x = _sfpu_exp_21f_<true>(-x);
+        exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
 
     sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
@@ -46,7 +47,7 @@ inline void calculate_sigmoid() {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
             if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+                result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
             }
 
             sfpi::dst_reg[0] = result;

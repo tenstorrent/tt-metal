@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,8 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<bool> share_cache) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -68,7 +69,7 @@ ttnn::Tensor scaled_dot_product_attention_decode(
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
     return ttnn::prim::sdpa_decode(
         input_tensor_q,
         input_tensor_k,
@@ -86,7 +87,7 @@ ttnn::Tensor scaled_dot_product_attention_decode(
         program_config,
         kernel_config_val,
         k_chunk_size,
-        std::nullopt,
+        share_cache,
         std::nullopt,
         std::nullopt);
 }
@@ -124,7 +125,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     return ttnn::prim::sdpa_decode(
         input_tensor_q,
@@ -192,7 +193,7 @@ ttnn::Tensor flash_multi_latent_attention_decode(
     }
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     return ttnn::prim::sdpa_decode(
         input_tensor_q,
@@ -260,7 +261,7 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     return ttnn::prim::sdpa_decode(
         input_tensor_q,

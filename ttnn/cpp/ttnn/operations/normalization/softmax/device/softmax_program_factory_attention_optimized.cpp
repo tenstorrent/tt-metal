@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,8 +56,10 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), attributes.compute_kernel_config);
 
-    constexpr tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    const uint32_t scalar_tile_size = tt::tile_size(scalar_cb_data_format);
+    const tt::DataFormat max_scaler_cb_data_format =
+        in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t max_scaler_tile_size = tt::tile_size(max_scaler_cb_data_format);
+    const uint32_t fused_attention_scale_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     const tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
@@ -69,6 +71,10 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
+
+    const tt::DataFormat sum_scaler_cb_data_format =
+        im_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -104,7 +110,8 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         cb_size_sum_bytes += im4_t * im_tile_size;
     }
     if (tensor_args.mask.has_value()) {
-        cb_size_sum_bytes += (im3_t * im_tile_size) + (in3_t * scalar_tile_size) + (in4_t * mask_tile_size);
+        cb_size_sum_bytes +=
+            (im3_t * im_tile_size) + (in3_t * fused_attention_scale_tile_size) + (in4_t * mask_tile_size);
     }
 
     // Program specific checks
@@ -234,9 +241,14 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                                   .set_page_size(tt::CBIndex::c_16, im_tile_size);
         CreateCircularBuffer(program, all_device_cores, c_recip_config);
     }
-    auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{tt::CBIndex::c_2, scalar_cb_data_format}})
-                            .set_page_size(tt::CBIndex::c_2, scalar_tile_size);
+    auto c_in2_config =
+        CircularBufferConfig(in2_t * max_scaler_tile_size, {{tt::CBIndex::c_2, max_scaler_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_2, max_scaler_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
+    auto c_sum_scaler_config =
+        CircularBufferConfig(in2_t * sum_scaler_tile_size, {{tt::CBIndex::c_13, sum_scaler_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_13, sum_scaler_tile_size);
+    CreateCircularBuffer(program, all_device_cores, c_sum_scaler_config);
     auto c_intermed0_config = CircularBufferConfig(im0_t * im_tile_size, {{tt::CBIndex::c_6, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_6, im_tile_size);
     auto cb_intermed0_id = CreateCircularBuffer(program, all_device_cores, c_intermed0_config);
@@ -250,8 +262,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                 .set_page_size(tt::CBIndex::c_9, im_tile_size);
         cb_intermed3_id = CreateCircularBuffer(program, all_device_cores, c_intermed3_config);
         CircularBufferConfig c_in3_config =
-            CircularBufferConfig(in3_t * scalar_tile_size, {{tt::CBIndex::c_3, scalar_cb_data_format}})
-                .set_page_size(tt::CBIndex::c_3, scalar_tile_size);
+            CircularBufferConfig(
+                in3_t * fused_attention_scale_tile_size, {{tt::CBIndex::c_3, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::CBIndex::c_3, fused_attention_scale_tile_size);
         cb_in3_id = CreateCircularBuffer(program, all_device_cores, c_in3_config);
         CircularBufferConfig c_in4_config =
             CircularBufferConfig(in4_t * mask_tile_size, {{tt::CBIndex::c_4, mask_cb_data_format}})
@@ -288,9 +301,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             if (attributes.is_causal_mask) {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
             } else {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
             }
 
             SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0, 0});
@@ -329,10 +342,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                  mask_addr,
                  curr_ht,
                  mask_id,
-                 0x3f803f80,
                  in0_t,
                  mask_curr_ht,
-                 mask_offset});  // [10]=1.0f is scaler
+                 mask_offset});
         } else {
             SetRuntimeArgs(
                 program,
@@ -348,8 +360,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                  mask_addr,
                  curr_ht,
                  mask_id,
-                 0x3f803f80,
-                 in0_t});  // [10]=1.0f is scaler
+                 in0_t});
         }
 
         SetRuntimeArgs(
@@ -367,12 +378,14 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         curr_row += num_tile_rows_per_core;
     }
 
-    return {
-        std::move(program),
-        {reader_kernels_id, writer_kernels_id, softmax_kernels_id, grid_size,       fp32_dest_acc_en, scalar_tile_size,
-         in0_tile_size,     im_tile_size,      out0_tile_size,     mask_tile_size,  cb_in0_id,        cb_out0_id,
-         cb_intermed1_id,   cb_in2_id,         cb_intermed0_id,    cb_intermed3_id, cb_in3_id,        cb_in4_id,
-         cb_intermed2_id,   cb_intermed4_id,   use_large_kernel,   cb_length}};
+    return {std::move(program), {reader_kernels_id, writer_kernels_id, softmax_kernels_id,
+                                 grid_size,         fp32_dest_acc_en,  max_scaler_tile_size,
+                                 in0_tile_size,     im_tile_size,      out0_tile_size,
+                                 mask_tile_size,    cb_in0_id,         cb_out0_id,
+                                 cb_intermed1_id,   cb_in2_id,         cb_intermed0_id,
+                                 cb_intermed3_id,   cb_in3_id,         cb_in4_id,
+                                 cb_intermed2_id,   cb_intermed4_id,   use_large_kernel,
+                                 cb_length}};
 }
 
 void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
@@ -469,7 +482,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     UpdateCircularBufferTotalSize(
         cached_program.program,
         cached_program.shared_variables.cb_in2_id,
-        in2_t * cached_program.shared_variables.scalar_tile_size);
+        in2_t * cached_program.shared_variables.max_scaler_tile_size);
     UpdateCircularBufferTotalSize(
         cached_program.program,
         cached_program.shared_variables.cb_intermed0_id,
@@ -483,7 +496,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         UpdateCircularBufferTotalSize(
             cached_program.program,
             cached_program.shared_variables.cb_in3_id.value(),
-            in3_t * cached_program.shared_variables.scalar_tile_size);
+            in3_t * tt::tile_size(tt::DataFormat::Float16_b));
         UpdateCircularBufferTotalSize(
             cached_program.program,
             cached_program.shared_variables.cb_in4_id.value(),
@@ -554,7 +567,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         reader_kernel_args[7] = mask_buffer_address;
         reader_kernel_args[8] = curr_ht;
         reader_kernel_args[9] = mask_id;
-        // reader_kernel_args[10] = 0x3f803f80; // Hardcoded value doesn't need to be updated
 
         if (attributes.is_causal_mask) {
             reader_kernel_args[11] = mask_curr_ht;

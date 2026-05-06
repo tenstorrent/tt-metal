@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,21 +10,18 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_abs_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::abs, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::abs>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_abs<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_abs<APPROXIMATE>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_abs_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_abs_int32<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_abs_int32<APPROXIMATE>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

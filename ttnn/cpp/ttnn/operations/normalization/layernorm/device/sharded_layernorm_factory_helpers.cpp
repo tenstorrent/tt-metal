@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -547,6 +547,13 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     sizes.in6_CB_size = in0_block_tiles * beta_single_tile_size / block_ht;
 
     sizes.x_CB_size = in0_block_tiles * single_tile_size;
+    if (is_post_all_gather && !rms_norm) {
+        // Non-RMSNORM post-allgather reuses cb_x (c_24) as both cb_ex_sqr and cb_im.
+        // The allgather worker writes 1 tile to cb_ex_sqr first, advancing the write
+        // pointer. The CB needs an extra tile so the subsequent cb_im write has enough
+        // contiguous space.
+        sizes.x_CB_size += single_tile_size;
+    }
     sizes.xmm_CB_size = in0_block_tiles * single_tile_size;
 
     sizes.ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
@@ -777,12 +784,56 @@ void add_kernel_descriptors(
     const WorkerDistribution& workers,
     const GridParams& grid,
     KernelConfig&& kernel_config) {
+    // Named compile-time args for CB indices - enables kernel chaining/fusion
+    KernelDescriptor::NamedCompileTimeArgs reader_cb_named_args = {
+        {"cb_ex_partial", tt::CBIndex::c_8},
+        {"cb_ex", tt::CBIndex::c_9},
+        {"cb_ex_external", tt::CBIndex::c_10},
+        {"cb_ex_partial2", tt::CBIndex::c_11},
+        {"cb_ex2", tt::CBIndex::c_12},
+        {"cb_ex_external2", tt::CBIndex::c_13},
+        {"cb_ex_global", tt::CBIndex::c_15},
+        {"cb_ex2pe", tt::CBIndex::c_20},
+    };
+
+    KernelDescriptor::NamedCompileTimeArgs writer_cb_named_args = {
+        {"cb_gamma", tt::CBIndex::c_5},
+        {"cb_beta", tt::CBIndex::c_6},
+        {"cb_out", tt::CBIndex::c_16},
+        {"cb_out_resharded", tt::CBIndex::c_17},
+        {"cb_in_2", tt::CBIndex::c_2},
+        {"cb_eps", tt::CBIndex::c_3},
+        {"cb_in_4", tt::CBIndex::c_4},
+    };
+
+    KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_scaler", tt::CBIndex::c_2},
+        {"cb_eps", tt::CBIndex::c_3},
+        {"cb_scaler_global", tt::CBIndex::c_4},
+        {"cb_gamma", tt::CBIndex::c_5},
+        {"cb_beta", tt::CBIndex::c_6},
+        {"cb_ex_partial", tt::CBIndex::c_8},
+        {"cb_ex", tt::CBIndex::c_9},
+        {"cb_ex_external", tt::CBIndex::c_10},
+        {"cb_ex_partial2", tt::CBIndex::c_11},
+        {"cb_ex2", tt::CBIndex::c_12},
+        {"cb_ex_external2", tt::CBIndex::c_13},
+        {"cb_ex_global", tt::CBIndex::c_15},
+        {"cb_out", tt::CBIndex::c_16},
+        {"cb_xmm", tt::CBIndex::c_18},
+        {"cb_ex2pe", tt::CBIndex::c_20},
+        {"cb_x", tt::CBIndex::c_24},
+    };
+
     // Reader sender kernel
     KernelDescriptor reader_sender_kernel_desc;
     reader_sender_kernel_desc.kernel_source = kernel_config.reader_sender_path;
     reader_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_sender_kernel_desc.core_ranges = core_ranges.sender_cores;
     reader_sender_kernel_desc.compile_time_args = std::move(kernel_config.reader_sender_ct_args);
+    reader_sender_kernel_desc.named_compile_time_args = reader_cb_named_args;
     reader_sender_kernel_desc.defines = std::move(kernel_config.reader_sender_defines);
     reader_sender_kernel_desc.runtime_args = std::move(kernel_config.reader_sender_rt_args);
     reader_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -799,6 +850,7 @@ void add_kernel_descriptors(
         reader_receiver_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_workers_except_sender;
         reader_receiver_all_to_all_kernel_desc.compile_time_args =
             std::move(kernel_config.reader_receiver_all_to_all_ct_args);
+        reader_receiver_all_to_all_kernel_desc.named_compile_time_args = reader_cb_named_args;
         reader_receiver_all_to_all_kernel_desc.defines = kernel_config.reader_receiver_defines;
         reader_receiver_all_to_all_kernel_desc.runtime_args =
             std::move(kernel_config.reader_receiver_all_to_all_rt_args);
@@ -816,6 +868,7 @@ void add_kernel_descriptors(
         reader_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         reader_receiver_kernel_desc.compile_time_args = std::move(kernel_config.reader_receiver_ct_args);
+        reader_receiver_kernel_desc.named_compile_time_args = reader_cb_named_args;
         reader_receiver_kernel_desc.defines = std::move(kernel_config.reader_receiver_defines);
         reader_receiver_kernel_desc.runtime_args = std::move(kernel_config.reader_receiver_rt_args);
         reader_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -831,6 +884,7 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_sender_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
+    writer_sender_kernel_desc.named_compile_time_args = writer_cb_named_args;
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
     writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -846,6 +900,7 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
+        writer_receiver_kernel_desc.named_compile_time_args = writer_cb_named_args;
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
         writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -861,6 +916,7 @@ void add_kernel_descriptors(
     compute_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     compute_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_all_to_all_ct_args);
+    compute_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
     compute_all_to_all_kernel_desc.defines = kernel_config.compute_defines;
     compute_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_all_to_all_rt_args);
     compute_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
@@ -876,6 +932,7 @@ void add_kernel_descriptors(
         compute_not_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_not_all_to_all_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         compute_not_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_not_all_to_all_ct_args);
+        compute_not_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
         compute_not_all_to_all_kernel_desc.defines = std::move(kernel_config.compute_defines);
         compute_not_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_not_all_to_all_rt_args);
         compute_not_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
@@ -1008,13 +1065,16 @@ void add_cb_descriptors(
             tt::CBIndex::c_3,
             tt::DataFormat::Float16_b,
             cb_config.bfloat16_tile_size));
-        // CB 4: in4 scaler-c
+        // CB 4: in4 scaler-c (global reduce scaler — F32 when intermediates are F32, otherwise BF16)
+        tt::DataFormat scaler_global_format =
+            cb_config.cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        uint32_t scaler_global_tile_size = tt::tile_size(scaler_global_format);
         program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in2_CB_size,
+            scaler_global_tile_size,
             core_ranges.all_cores,
             tt::CBIndex::c_4,
-            tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
+            scaler_global_format,
+            scaler_global_tile_size));
         // CB 11: ex_partial2
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_partial_CB_size,

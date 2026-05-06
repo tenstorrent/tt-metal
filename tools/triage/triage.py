@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,6 +23,7 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
+    --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
 
 Description:
@@ -54,33 +55,18 @@ from pathlib import Path
 import re
 
 
-def find_install_debugger_script() -> str:
-    script_path = Path(__file__).resolve()
-    install_script = script_path.parent.parent.parent / "scripts" / "install_debugger.sh"
-    return str(install_script)
-
+_triage_requirements_path = str(Path(__file__).resolve().parent / "requirements.txt")
 
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
-except ImportError as e:
-    RST = "\033[0m" if utils.should_use_color() else ""
-    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
-    install_script = find_install_debugger_script()
-    print(f"Module '{e}' not found. Please install tt-exalens by running:")
-    print(f"  {GREEN}{install_script}{RST}")
-    exit(1)
-
-# Check if requirements are installed
-try:
     import capnp
+    from mpi4py import MPI
 except ImportError as e:
     RST = "\033[0m" if utils.should_use_color() else ""
     GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    requirements_path = os.path.join(script_dir, "requirements.txt")
-    print(f"Module '{e}' not found. Please install requirements.txt:")
     pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
-    print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
+    print(f"Module '{e.name}' not found. Please install requirements by running:")
+    print(f"  {GREEN}{pip_cmd} install -r {_triage_requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -99,6 +85,26 @@ from ttexalens.elf import ElfVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
+
+
+def _raise_open_file_limit(desired: int = 65536) -> None:
+    """
+    Raise the open file limit for the current process to the desired value if possible.
+    This is necessary to avoid hitting the open file limit when processing many ELF files with the elf cache enabled.
+    If the file limit is already at or above the desired value, this function does nothing.
+    """
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        new_soft = desired if hard == resource.RLIM_INFINITY else min(desired, hard)
+        if new_soft <= soft:
+            return
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except (ImportError, OSError, ValueError) as e:
+        utils.WARN(
+            f"Failed to raise open file limit: {e}. This may cause issues when processing many ELF files. Consider increasing the limit manually (ulimit -n {desired})."
+        )
 
 
 class ScriptPriority(Enum):
@@ -439,6 +445,7 @@ def create_progress() -> Progress:
 
 def process_arguments(args: ScriptArguments) -> None:
     init_console_and_verbosity(args)
+    _raise_open_file_limit()
 
 
 def parse_arguments(
@@ -686,58 +693,77 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
 def _enforce_dependencies(args: ScriptArguments) -> None:
     """Enforce approved `ttexalens` version unless skipped.
 
-    Reads a single-line SHA from `ttexalens_ref.txt` in the parent
-    directory of this script (next to `install_debugger.sh`). Compares it to the
-    installed `ttexalens` version's dev hash and raises `TTTriageError` on
-    mismatch unless `--skip-version-check` is provided. If the ref file
-    is missing or empty, a warning is printed and the check is skipped.
+    Reads the `tt-exalens` requirement from `requirements.txt` in the same
+    directory as this script. Compares the specifier to the installed
+    `tt-exalens` version and exits on mismatch unless `--skip-version-check`
+    is provided. If the requirement is missing or the file is unreadable, a
+    warning is printed and the check is skipped.
     """
-    # Skip flag for dependency checks
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
     try:
         skip_check = bool(args["--skip-version-check"])
     except Exception:
         skip_check = False
 
-    install_script = find_install_debugger_script()
-    scripts_dir = os.path.dirname(install_script)
-    ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
-
     try:
-        with open(ref_path, "r", encoding="utf-8") as f:
-            approved_version = f.read().strip()
+        with open(_triage_requirements_path, "r", encoding="utf-8") as f:
+            req_lines = f.read().splitlines()
     except FileNotFoundError:
-        utils.WARN("ttexalens_ref.txt not found. Skipping debugger version check. " f"Expected at: {ref_path}")
+        utils.WARN(
+            f"requirements.txt not found. Skipping debugger version check. Expected at: {_triage_requirements_path}"
+        )
         return
     except Exception as e:
-        utils.WARN(f"Failed to read ttexalens_ref.txt: {e}. Skipping debugger version check.")
+        utils.WARN(f"Failed to read requirements.txt: {e}. Skipping debugger version check.")
         return
 
-    if not approved_version:
-        utils.WARN("ttexalens_ref.txt is empty. Skipping debugger version check.")
-        return
+    # Find the tt-exalens requirement line
+    tt_exalens_req = None
+    for line in req_lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            req = Requirement(line)
+            if re.sub(r"[-_]", "-", req.name).lower() == "tt-exalens":
+                tt_exalens_req = req
+                break
+        except Exception:
+            continue
 
-    # Get installed version string
-    try:
-        installed_version = importlib_metadata.version("tt-exalens")
-        utils.DEBUG(f"Installed tt-exalens version: {installed_version}")
-    except importlib_metadata.PackageNotFoundError:
+    if tt_exalens_req is None:
         utils.WARN(
-            f"Required debugger component is not installed. Please run {install_script} to install debugger dependencies."
+            f"tt-exalens not found in requirements.txt ({_triage_requirements_path}). Skipping debugger version check."
         )
+        return
+
+    # Get installed version
+    try:
+        installed_version_str = importlib_metadata.version("tt-exalens")
+        installed_version = Version(installed_version_str)
+        utils.DEBUG(f"Installed tt-exalens version: {installed_version_str}")
+    except importlib_metadata.PackageNotFoundError:
+        pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+        install_cmd = f"{pip_cmd} install -r {_triage_requirements_path}"
+        utils.WARN(f"Required debugger component is not installed. Please run: {install_cmd}")
         console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
-        console.print(f"  [command]{install_script}[/]")
+        console.print(f"  [command]{install_cmd}[/]")
         exit(1)
 
-    # Check if installed version matches approved version
-    if approved_version != installed_version:
-        message = f"Debugger version mismatch.\n  Installed: {installed_version}\n  Approved:  {approved_version}"
+    # Check if installed version satisfies the requirement
+    if installed_version not in tt_exalens_req.specifier:
+        pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+        install_cmd = f"{pip_cmd} install -r {_triage_requirements_path}"
+        message = f"Debugger version mismatch.\n  Installed: {installed_version_str}\n  Required:  {tt_exalens_req}"
         if skip_check:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
         else:
             console.print(message)
             console.print(f"Please install tt-exalens by running:")
-            console.print(f"  [command]{install_script}[/]")
+            console.print(f"  [command]{install_cmd}[/]")
             console.print(f"Or disable this check by running with [command]--skip-version-check[/] argument.")
             exit(1)
 
@@ -989,6 +1015,10 @@ def main():
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
+
+    from elfs_cache import run as get_elfs_cache
+
+    get_elfs_cache(args, context).log_stats()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -43,23 +43,32 @@ from .config import (
     ThroughputProgramConfig,
     AllToAllDispatchConfig,
     AllToAllCombineConfig,
+    FusedMoeGptConfig,
     create_expert_mapping_tensors,
     create_remap_topk_mask,
 )
 from .decode import decode_forward
-from .prefill import prefill_forward_chunked
+from .fused_decode import fused_decode_forward
+from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
 from .weights import (
     ThroughputExpertWeights,
     load_throughput_expert_weights,
+    create_fused_moe_gpt_config,
+    get_moe_gpt_combine_core_range,
 )
 
 __all__ = [
     "ThroughputExperts",
     "ThroughputExpertConfig",
     "ThroughputProgramConfig",
+    "DeepSeekPrefillConfig",
     "ThroughputExpertWeights",
     "AllToAllDispatchConfig",
     "AllToAllCombineConfig",
+    "FusedMoeGptConfig",
+    "fused_decode_forward",
+    "create_fused_moe_gpt_config",
+    "get_moe_gpt_combine_core_range",
 ]
 
 
@@ -101,6 +110,8 @@ class ThroughputExperts:
         dispatch_cluster_axis: Optional[int] = None,
         decode_memory_config: ttnn.MemoryConfig = None,
         prefill_memory_config: ttnn.MemoryConfig = None,
+        fused_config: Optional[FusedMoeGptConfig] = None,
+        prefill_config: Optional["DeepSeekPrefillConfig"] = None,
     ):
         """
         Initialize throughput experts.
@@ -115,6 +126,9 @@ class ThroughputExperts:
             dispatch_cluster_axis: Mesh axis for all_to_all operations (default: 0 for rows)
             decode_memory_config: Memory config for decode (default: L1)
             prefill_memory_config: Memory config for prefill (default: DRAM)
+            fused_config: If provided, use the fused flow (all_to_all_dispatch_metadata +
+                moe_gpt + selective_reduce_combine) for decode instead of the dense flow.
+                The existing unit tests use the dense flow (fused_config=None).
 
         Raises:
             ValueError: If mesh configuration is incompatible with all_to_all operations
@@ -127,30 +141,35 @@ class ThroughputExperts:
         self.ccl_manager = ccl_manager
         self.config = config
         self.program_config = program_config or ThroughputProgramConfig()
+        self.fused_config = fused_config
+        self.prefill_config = prefill_config
 
         # Memory configurations
         decode_memory_config = decode_memory_config or ttnn.L1_MEMORY_CONFIG
         prefill_memory_config = prefill_memory_config or ttnn.DRAM_MEMORY_CONFIG
 
-        # Create all_to_all configurations
+        # Create all_to_all configurations (used by dense flow)
+        _axis = dispatch_cluster_axis if dispatch_cluster_axis is not None else 0
         self.dispatch_config_decode = AllToAllDispatchConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=decode_memory_config,
+            cluster_axis=_axis,
         )
         self.dispatch_config_prefill = AllToAllDispatchConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=prefill_memory_config,
+            cluster_axis=_axis,
         )
         self.combine_config_decode = AllToAllCombineConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=decode_memory_config,
+            cluster_axis=_axis,
         )
         self.combine_config_prefill = AllToAllCombineConfig(
-            cluster_axis=dispatch_cluster_axis,
             memory_config=prefill_memory_config,
+            cluster_axis=_axis,
         )
 
-        # Load weights
+        # Load weights for the dense flow. When using the fused flow (fused_config is set),
+        # the weights are pre-loaded in moe_gpt format and stored in fused_config.
+        # We still load the dense weights here for prefill and for backward compatibility.
         self.weights = load_throughput_expert_weights(
             mesh_device=mesh_device,
             config=config,
@@ -159,13 +178,11 @@ class ThroughputExperts:
             tensor_cache_path=tensor_cache_path,
         )
 
-        # Create mapping tensors for all_to_all routing
+        # Create mapping tensors for all_to_all routing (dense flow)
         self.expert_mapping_tensors = create_expert_mapping_tensors(
             num_devices=config.num_devices,
-            num_experts_per_device=config.num_experts_per_device,
+            num_experts_global=config.num_experts,
             mesh_device=mesh_device,
-            cluster_axis=dispatch_cluster_axis,
-            mesh_shape=mesh_shape,
         )
 
         # Create remap mask (rows is dispatch dimension)
@@ -228,14 +245,30 @@ class ThroughputExperts:
         """
         Decode forward pass.
 
+        When fused_config is set (passed at init), uses the fused flow:
+          all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
+        Otherwise uses the dense flow:
+          all_to_all_dispatch → batched matmul → all_to_all_combine → weighted sum → all_reduce
+
         Args:
             hidden_states: Input [batch_per_device, 1, 1, hidden_size]
             topk_expert_indices: Expert indices [batch_per_device, 1, 1, k]
             topk_expert_weights: Routing weights [batch_per_device, 1, 1, k]
 
         Returns:
-            Output [batch_per_device, 1, 1, hidden_size]
+            Dense flow: [batch_per_device, 1, 1, hidden_size] (fully reduced)
+            Fused flow: [1, 1, tokens_per_device, hidden_size] (unweighted expert sum +
+                all_reduce across cluster_axis=1; PCC vs. reference is low without bias)
         """
+        if self.fused_config is not None:
+            return fused_decode_forward(
+                hidden_states=hidden_states,
+                topk_expert_indices=topk_expert_indices,
+                topk_expert_scores=topk_expert_weights,
+                config=self.config,
+                fused_config=self.fused_config,
+                mesh_device=self.mesh_device,
+            )
         return decode_forward(
             hidden_states=hidden_states,
             topk_expert_indices=topk_expert_indices,
@@ -271,21 +304,20 @@ class ThroughputExperts:
         Returns:
             Output [seq_per_device, 1, 1, hidden_size]
         """
-        return prefill_forward_chunked(
+        # DeepSeek-style chunked prefill is the only supported path; the legacy
+        # chunked fallback was removed when DeepSeek prefill was bundled into
+        # use_throughput_experts.
+        return forward_prefill_deepseek(
             hidden_states=hidden_states,
             topk_expert_indices=topk_expert_indices,
             topk_expert_weights=topk_expert_weights,
-            weights=self.weights,
             config=self.config,
-            expert_mapping_tensors=self.expert_mapping_tensors,
-            remap_topk_mask=self.remap_topk_mask,
-            dispatch_config=self.dispatch_config_prefill,
-            combine_config=self.combine_config_prefill,
-            program_config=self.program_config,
+            prefill_config=self.prefill_config,
             mesh_device=self.mesh_device,
             mesh_config=self.mesh_config,
             ccl_manager=self.ccl_manager,
-            chunk_size=chunk_size,
+            weights=self.weights,
+            program_config=self.program_config,
         )
 
     @classmethod

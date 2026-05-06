@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -69,6 +69,7 @@ void kernel_main() {
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
@@ -155,6 +156,16 @@ void kernel_main() {
         }
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
+        constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
+
+        LightweightMaskContext lw_mask;
+        if constexpr (use_lightweight_causal_mask) {
+            lw_mask.is_causal = true;
+            lw_mask.neginf_tile_idx = 0;
+            lw_mask.causal_diag_tile_idx = 1;
+            cb_wait_front(cb_mask_in, 2);
+        }
+
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
             if (phase == 0) {
                 chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
@@ -178,7 +189,8 @@ void kernel_main() {
                         use_padded_mask,
                         is_chunked,
                         scale_fp32,
-                        sliding_window_size>(
+                        sliding_window_size,
+                        use_lightweight_causal_mask>(
                         Skt,
                         qk_in0_block_w,
                         qk_subblock_w,
@@ -200,6 +212,7 @@ void kernel_main() {
                         k_num_chunks,
                         q_chunk_tiles,
                         k_chunk_tiles,
+                        v_chunk_tiles,
                         qk_chunk_tiles,
                         out_chunk_tiles,
                         cb_q_in,
@@ -214,7 +227,8 @@ void kernel_main() {
                         cb_sum_A,
                         cb_sum_B,
                         cb_exp_max_diff,
-                        cb_out);
+                        cb_out,
+                        lw_mask);
                 }
             }
         }

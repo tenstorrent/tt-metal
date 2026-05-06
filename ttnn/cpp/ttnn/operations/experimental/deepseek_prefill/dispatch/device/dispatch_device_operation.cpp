@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Validate input tensor layouts are ROW_MAJOR
-    TT_FATAL(
-        tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
     TT_FATAL(
         tensor_args.weights_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Weights tensor must be ROW_MAJOR layout");
@@ -44,8 +41,9 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Indices tensor must be INT32 or UINT32, got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
-        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32,
-        "Expert offsets tensor must be INT32, got {}",
+        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32 ||
+            tensor_args.expert_offsets_tensor.dtype() == DataType::UINT32,
+        "Expert offsets tensor must be INT32 or UINT32, got {}",
         tensor_args.expert_offsets_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
@@ -66,15 +64,11 @@ void DispatchDeviceOperation::validate_on_program_cache_hit(
 DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Extract necessary dimensions from operation attributes
-    uint32_t experts_per_chip = operation_attributes.experts_per_chip;
     uint32_t metadata_len = operation_attributes.metadata_len;
-    uint32_t max_dispatched_tokens_per_expert = operation_attributes.max_dispatched_tokens_per_expert;
+    uint32_t max_dispatch_buffer_token_size = operation_attributes.max_dispatch_buffer_token_size;
 
     // Get the input tensor's per-device shape (sharded dimension)
     auto input_shape = tensor_args.input_tensor.tensor_spec().logical_shape();
-
-    // Extract per-device batch size from the input's first dimension (sharded on dim 0)
-    uint32_t per_device_batch = input_shape[0];  // This is 1 for input sharded on dim 0
     uint32_t hidden_dim = input_shape[-1];
 
     // Memory config for all output tensors (inherits sharding from input)
@@ -83,12 +77,11 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     // Layout for all output tensors
     auto layout = tt::tt_metal::Layout::ROW_MAJOR;
 
-    // Define output shapes - these are PER-DEVICE shapes (not global shapes)
-    // When sharded on dim 0, each device should get shape [1, ...]
-    auto dispatch_buffer_shape =
-        ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
-    auto dispatch_metadata_shape =
-        ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
+    // Define output shapes - these are PER-DEVICE shapes (not global shapes). The
+    // dispatch buffer is a single flat region shared across all local experts; its
+    // total token capacity is max_dispatch_buffer_token_size.
+    auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
+    auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
@@ -108,10 +101,11 @@ DispatchDeviceOperation::topology_return_value_t DispatchDeviceOperation::comput
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_topology = input_tensor.tensor_topology();
 
-    // Both output tensors use the same topology as the input
-    // (sharded on dimension 0 across the mesh)
+    // Both output tensors use explicit Shard placements across both mesh dimensions
     auto output_topology = tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), input_topology.placements(), input_topology.mesh_coords());
+        input_topology.distribution_shape(),
+        {tt::tt_metal::distributed::MeshMapperConfig::Shard{0}, tt::tt_metal::distributed::MeshMapperConfig::Shard{1}},
+        input_topology.mesh_coords());
 
     return {output_topology, output_topology};
 }
@@ -140,12 +134,13 @@ prefill_dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    bool use_l1_small_for_semaphores) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -154,12 +149,13 @@ prefill_dispatch(
             .num_routed_experts = num_routed_experts,
             .num_experts_per_tok = num_experts_per_tok,
             .metadata_len = metadata_len,
-            .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert,
+            .max_dispatch_buffer_token_size = max_dispatch_buffer_token_size,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
             .output_mem_config = memory_config,
-            .worker_core_range_set = worker_core_range_set},
+            .worker_core_range_set = worker_core_range_set,
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

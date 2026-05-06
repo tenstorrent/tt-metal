@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,25 +39,27 @@ void kernel_main() {
     constexpr auto batch_var_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<batch_var_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr bool batch_stat_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset()) == 1;
+    constexpr bool param_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset() + 1) == 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src_addr);
 
     // output
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     // batch_var
     const uint32_t batch_var_tile_bytes = get_tile_size(cb_id_batch_var);
-    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr, batch_var_tile_bytes);
+    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr);
 
     // weight
     const uint32_t weight_tile_bytes = get_tile_size(cb_id_weight);
-    const auto weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto weight = TensorAccessor(weight_args, weight_addr);
 
     // bias
     const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
-    const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
+    const auto bias = TensorAccessor(bias_args, bias_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_id_src_obj(cb_id_src);
@@ -83,7 +85,11 @@ void kernel_main() {
             cb_id_src_obj.reserve_back(onetile);
             noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
+            if constexpr (batch_stat_is_fp32) {
+                fill_tile_with_first_element<float>(cb_id_src);
+            } else {
+                fill_tile_with_first_element_bfloat16(cb_id_src);
+            }
             cb_id_src_obj.push_back(onetile);
 
             // read a tile from batch variance
@@ -91,7 +97,11 @@ void kernel_main() {
             noc.async_read(
                 batch_var, cb_id_batch_var_obj, batch_var_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_var);
+            if constexpr (batch_stat_is_fp32) {
+                fill_tile_with_first_element<float>(cb_id_batch_var);
+            } else {
+                fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+            }
             cb_id_batch_var_obj.push_back(onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
@@ -99,7 +109,11 @@ void kernel_main() {
                 noc.async_read(
                     weight, cb_id_weight_obj, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_weight);
+                if constexpr (param_is_fp32) {
+                    fill_tile_with_first_element<float>(cb_id_weight);
+                } else {
+                    fill_tile_with_first_element_bfloat16(cb_id_weight);
+                }
                 cb_id_weight_obj.push_back(onetile);
             }
 
@@ -107,7 +121,11 @@ void kernel_main() {
                 cb_id_bias_obj.reserve_back(onetile);
                 noc.async_read(bias, cb_id_bias_obj, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_bias);
+                if constexpr (param_is_fp32) {
+                    fill_tile_with_first_element<float>(cb_id_bias);
+                } else {
+                    fill_tile_with_first_element_bfloat16(cb_id_bias);
+                }
                 cb_id_bias_obj.push_back(onetile);
             }
 

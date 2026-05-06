@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);         // pages for this core
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
-    auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, page_size);
+    auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr);
 
     for (uint32_t page_index = start_page_index; page_index < start_page_index + num_pages; ++page_index) {
         cb_wait_front(scratch_buffer_cb_id, 1);

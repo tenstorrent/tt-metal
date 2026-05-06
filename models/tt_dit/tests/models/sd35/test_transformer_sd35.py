@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -460,7 +460,7 @@ def test_sd35_transformer_model_caching(
         padding_config=padding_config,
     )
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict(), on_host=True)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 

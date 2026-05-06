@@ -1,8 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
@@ -12,14 +15,16 @@ void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
 
-    const auto s = TensorAccessor(src_args, input_buffer_address, get_tile_size(src_cb_id));
+    experimental::CircularBuffer src_cb(src_cb_id);
+    experimental::Noc noc;
+    const auto s = TensorAccessor(src_args, input_buffer_address);
+    const uint32_t tile_bytes = get_tile_size(src_cb_id);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_reserve_back(src_cb_id, 1);
-        uint32_t src_cb_write_addr = get_write_ptr(src_cb_id);
-        noc_async_read_tile(i, s, src_cb_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(src_cb_id, 1);
+        src_cb.reserve_back(1);
+        noc.async_read(s, src_cb, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        src_cb.push_back(1);
     }
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,9 +58,19 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
 
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
+    multihost::Rank peer_rank,
+    const std::shared_ptr<const multihost::DistributedContext>& context);
+
+void forward_descriptor_to_peer(
+    const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context,
     const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
+
+SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
+    const SocketPeerDescriptor& desc,
+    multihost::Rank peer_rank,
+    const std::shared_ptr<const multihost::DistributedContext>& context);
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,

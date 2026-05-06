@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 #include "ttnn/operations/ccl/broadcast/device/broadcast_device_operation_types.hpp"
 #include "ttnn/operations/ccl/broadcast/device/broadcast_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>

@@ -1,12 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#if defined(USE_DEVICE_PRINT)
-#include "device_print.h"
-#endif
 
 #include "risc_common.h"
 
@@ -490,3 +486,6 @@ DebugPrinter operator<<(DebugPrinter dp, T* val) {
 #if defined(KERNEL_BUILD)
 #include "dprint_tile.h"
 #endif
+
+// Support for DEVICE_PRINT.
+#include "device_print.h"

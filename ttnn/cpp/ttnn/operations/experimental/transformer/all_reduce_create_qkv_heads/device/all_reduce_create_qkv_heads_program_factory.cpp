@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
@@ -139,22 +139,25 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
                                         ? mesh_view.get_devices_on_column(mesh_coord[1])
                                         : mesh_view.get_devices_on_row(mesh_coord[0]);
+    const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
+                                     ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
+                                     : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
         if (devices.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(operation_attributes.ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(operation_attributes.ring_size - 1);
             }
             if (i != operation_attributes.ring_size - 1) {
-                forward_device = devices.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
@@ -397,13 +400,14 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     }
 
     // Create output tensor page splits
-    std::vector<uint32_t> output_tensor_pages_in_link(operation_attributes.num_links, 0);
+    std::vector<uint32_t> output_tensor_pages_in_link;
+    output_tensor_pages_in_link.reserve(operation_attributes.num_links);
     uint32_t num_assigned_pages = 0;
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
         uint32_t num_output_pages_per_link = output_tensor_shard_num_pages * num_output_cores_in_link[link];
         uint32_t num_pages_this_link =
             std::min(num_output_pages_per_link, output_tensor_num_pages - num_assigned_pages);
-        output_tensor_pages_in_link[link] = num_pages_this_link;
+        output_tensor_pages_in_link.push_back(num_pages_this_link);
         num_assigned_pages += num_pages_this_link;
     }
 
@@ -426,7 +430,8 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
             to the end_core_idx of the current link. Ie, 2 links read from the same core
     */
     std::vector<std::pair<uint32_t, uint32_t>> input_cores_idx_per_link(operation_attributes.num_links, {0, 0});
-    std::vector<uint32_t> input_tensor_tile_offset_per_link(operation_attributes.num_links, 0);
+    std::vector<uint32_t> input_tensor_tile_offset_per_link;
+    input_tensor_tile_offset_per_link.reserve(operation_attributes.num_links);
     uint32_t start_core_idx = 0;
     uint32_t num_pages_overflow = 0;
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
@@ -435,7 +440,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         // Get offset based on previous overflow
         uint32_t input_tensor_tile_offset =
             (input_tensor_shard_num_pages - num_pages_overflow) % input_tensor_shard_num_pages;
-        input_tensor_tile_offset_per_link[link] = input_tensor_tile_offset;
+        input_tensor_tile_offset_per_link.push_back(input_tensor_tile_offset);
 
         uint32_t end_core_idx = std::min(
             start_core_idx + tt::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
@@ -460,9 +465,10 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     }
 
     // Create reduction semaphores for each link
-    std::vector<uint32_t> reduction_semaphore_ids(operation_attributes.num_links, 0);
+    std::vector<uint32_t> reduction_semaphore_ids;
+    reduction_semaphore_ids.reserve(operation_attributes.num_links);
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
-        reduction_semaphore_ids[link] = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+        reduction_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, all_cores, 0));
     }
 
     /* reduction cb */
@@ -739,24 +745,18 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_fabric_node_id.has_value());
+        if (forward_fabric_node_id.has_value()) {
+            const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_device_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
 
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_fabric_node_id.has_value());
+        if (backward_fabric_node_id.has_value()) {
+            const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_device_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);

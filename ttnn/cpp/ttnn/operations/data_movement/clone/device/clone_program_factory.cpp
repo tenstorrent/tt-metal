@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,6 +55,13 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         auto shard_shape = shard_spec.shape();
         uint32_t shard_height = shard_shape[0];
         uint32_t shard_width = shard_shape[1];
+
+        // For row-major sharded, the unit (stick) size must be the shard width, not the
+        // full tensor width. Using tensor width causes OOB reads past the shard boundary.
+        if (!tilized) {
+            input_unit_size = shard_width * input.element_size();
+            output_unit_size = shard_width * output.element_size();
+        }
 
         if (tilized) {
             num_units_per_core_group_1 = (shard_height * shard_width) / TILE_HW;

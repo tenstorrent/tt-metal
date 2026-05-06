@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_device_operation.hpp"
 #include "all_gather_async_device_operation_types.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -12,9 +13,32 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
+#include <algorithm>
+
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+bool via_broadcast_has_contiguous_output_slice(const Tensor& input_tensor, int32_t gather_dim) {
+    const auto& padded_shape = input_tensor.padded_shape();
+    std::vector<uint32_t> page_extents(padded_shape.begin(), padded_shape.end());
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        TT_FATAL(page_extents.size() >= 2, "Broadcast all-gather requires rank >= 2 for tile layout");
+        page_extents[page_extents.size() - 2] =
+            tt::div_up(page_extents[page_extents.size() - 2], tt::constants::TILE_HEIGHT);
+        page_extents[page_extents.size() - 1] =
+            tt::div_up(page_extents[page_extents.size() - 1], tt::constants::TILE_WIDTH);
+    }
+
+    return std::all_of(
+        page_extents.begin(), page_extents.begin() + gather_dim, [](const auto& extent) { return extent == 1; });
+}
+
+}  // namespace
 
 AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes) {
     // Check for minimal sharded case
@@ -167,6 +191,16 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4");
     }
+
+    if (version == AllGatherAsyncVersion::VIA_BROADCAST) {
+        TT_FATAL(
+            via_broadcast_has_contiguous_output_slice(input_tensor, args.dim),
+            "Broadcast all-gather currently only supports gather dims whose preceding page-ordered dimensions are "
+            "singleton. Got dim {} with padded shape {} and layout {}",
+            args.dim,
+            input_tensor.padded_shape(),
+            input_tensor.layout());
+    }
 }
 
 AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation::compute_output_specs(
@@ -223,7 +257,7 @@ ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOperation::invoke(
+std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     int32_t dim,
@@ -304,3 +338,50 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOpera
 }
 
 }  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<uint32_t>& cluster_axis,
+    bool use_optimal_ccl_for_llama,
+    bool use_all_gather_async_llama_sharded,
+    bool use_all_gather_async_via_broadcast,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<uint32_t>& chunks_per_sync,
+    const std::optional<uint32_t>& num_workers_per_link,
+    const std::optional<uint32_t>& num_buffers_per_channel,
+    bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const MeshDevice* optional_mesh_device) {
+    auto [params, inputs] = experimental::prim::all_gather_async_build_operation_args(
+        input_tensor,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        sub_device_id,
+        cluster_axis,
+        use_optimal_ccl_for_llama,
+        use_all_gather_async_llama_sharded,
+        use_all_gather_async_via_broadcast,
+        barrier_semaphore,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel,
+        reverse_order,
+        sub_core_grid,
+        optional_mesh_device);
+    return ttnn::device_operation::launch<experimental::prim::AllGatherAsyncDeviceOperation>(params, inputs);
+}
+
+}  // namespace ttnn::prim

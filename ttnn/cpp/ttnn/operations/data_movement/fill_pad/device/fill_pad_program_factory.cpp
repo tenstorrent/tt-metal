@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -52,13 +52,15 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     const bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // pack bf16 vals
-    uint32_t packed_fill_value = static_cast<std::uint32_t>(fill_value);
+    uint32_t packed_fill_value = 0;
     if (input_tensor.dtype() == DataType::BFLOAT16) {
         packed_fill_value = pack_two_bfloat16_into_uint32({bfloat16(fill_value), bfloat16(fill_value)});
     } else if (input_tensor.dtype() == DataType::UINT16) {
         packed_fill_value = pack_two_uint16_into_uint32({fill_value, fill_value});
     } else if (input_tensor.dtype() == DataType::FLOAT32) {
         packed_fill_value = std::bit_cast<uint32_t>(fill_value);
+    } else {
+        packed_fill_value = static_cast<std::uint32_t>(fill_value);
     }
 
     const uint32_t padded_height = tt::div_up(height, tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;

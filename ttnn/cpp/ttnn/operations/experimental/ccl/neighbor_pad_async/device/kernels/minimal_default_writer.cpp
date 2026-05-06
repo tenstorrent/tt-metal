@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -99,7 +99,18 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
-    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
+    // W writer two-pass args: appended after fabric connection args (compile-time guarded).
+    uint32_t w2_t_start = 0, w2_t_count = 0, w2_h_pad_top = 0, w2_h_in = 0, w2_h_pad_bot = 0, w2_h_out = 0;
+    if constexpr (is_w_fabric_writer) {
+        w2_t_start = get_arg_val<uint32_t>(arg_for_fab++);
+        w2_t_count = get_arg_val<uint32_t>(arg_for_fab++);
+        w2_h_pad_top = get_arg_val<uint32_t>(arg_for_fab++);
+        w2_h_in = get_arg_val<uint32_t>(arg_for_fab++);
+        w2_h_pad_bot = get_arg_val<uint32_t>(arg_for_fab++);
+        w2_h_out = get_arg_val<uint32_t>(arg_for_fab++);
+    }
+
+    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address);
 
     // L1 intermediate: discover the recv CB base address (same on neighbor device due to identical program)
     uint32_t recv_buf_base = 0;
@@ -120,57 +131,106 @@ void kernel_main() {
         fabric_opened = true;
     }
 
-    // Startup barrier: full-mesh multicast sync.
-    // H writers: sync with all H-axis devices (same column).
-    // W writers: sync with all W-axis devices (same row).
-    // Together these transitively synchronize all devices in the mesh,
-    // ensuring the previous dispatch has completed before new fabric data is sent.
-    // Each direction's writer multicasts atomic inc to both same-direction and opposite-direction
-    // cores on all reachable devices. Every core waits for ring_size-1 total increments.
+    // Startup barrier: sync across all devices before sending new fabric data.
+    // H writers: multicast to all H-axis devices (same column, consistent harvesting).
+    // W writers: 1-hop unicast to immediate W neighbor only.
+    //   W-axis devices span different UBBs with potentially different core harvesting,
+    //   so multicast (which targets fixed NOC x,y) would hit wrong cores on remote devices.
+    //   H all-to-all multicast + W 1-hop unicast transitively synchronizes the full mesh.
     if (use_barrier_sem) {
-        auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
+        if constexpr (!is_w_fabric_writer) {
+            // H barrier: multicast to all H-axis devices (same column)
+            auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
 
-        if (!is_last_chip) {
-            // Set up multicast routing and atomic inc state
-            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_barrier_sem_inc, barrier_multicast_route_info);
-            fabric_multicast_noc_unicast_atomic_inc_set_state<
-                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                pkt_hdr_barrier_sem_inc,
-                static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
-                static_cast<uint8_t>(barrier_multicast_route_info.range_hops),
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+            if (!is_last_chip) {
+                // Set up multicast routing and atomic inc state
+                ccl_routing_utils::fabric_set_line_multicast_route(
+                    pkt_hdr_barrier_sem_inc, barrier_multicast_route_info);
+                fabric_multicast_noc_unicast_atomic_inc_set_state<
+                    UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                    pkt_hdr_barrier_sem_inc,
+                    static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
+                    static_cast<uint8_t>(barrier_multicast_route_info.range_hops),
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
 
-            // Multicast to same-direction cores on all reachable devices
-            uint64_t same_dir_noc_addr = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, barrier_sem, 0);
-            if (direction) {
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    &fabric_connection.get_backward_connection(),
-                    pkt_hdr_barrier_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_dir_noc_addr, 0});
-            } else {
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    &fabric_connection.get_forward_connection(),
-                    pkt_hdr_barrier_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_dir_noc_addr, 0});
+                // Multicast to same-direction cores on all reachable devices
+                uint64_t same_dir_noc_addr =
+                    safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, barrier_sem, 0);
+                if (direction) {
+                    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        &fabric_connection.get_backward_connection(),
+                        pkt_hdr_barrier_sem_inc,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_dir_noc_addr, 0});
+                } else {
+                    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        &fabric_connection.get_forward_connection(),
+                        pkt_hdr_barrier_sem_inc,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_dir_noc_addr, 0});
+                }
+
+                // Multicast to opposite-direction cores on all reachable devices
+                uint64_t opp_dir_noc_addr = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+                if (direction) {
+                    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        &fabric_connection.get_backward_connection(),
+                        pkt_hdr_barrier_sem_inc,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opp_dir_noc_addr, 0});
+                } else {
+                    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        &fabric_connection.get_forward_connection(),
+                        pkt_hdr_barrier_sem_inc,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opp_dir_noc_addr, 0});
+                }
             }
 
-            // Multicast to opposite-direction cores on all reachable devices
-            uint64_t opp_dir_noc_addr = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-            if (direction) {
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    &fabric_connection.get_backward_connection(),
-                    pkt_hdr_barrier_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opp_dir_noc_addr, 0});
-            } else {
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    &fabric_connection.get_forward_connection(),
-                    pkt_hdr_barrier_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opp_dir_noc_addr, 0});
+            if constexpr (ring_size > 1) {
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
             }
-        }
+        } else {
+            // W barrier: 1-hop unicast to immediate W neighbor only.
+            // neighbor_sem_noc0_x/y and barrier_sem_noc0_x/y are NOC coords of the local
+            // device's worker cores. Since NOC coords are not chip-dependent, these are
+            // valid targets on the neighbor device as well.
+            if (!is_last_chip) {
+                auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
 
-        if constexpr (ring_size > 1) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+                // Unicast barrier inc to same-direction W core on immediate neighbor
+                uint64_t same_dir_noc_addr =
+                    safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, barrier_sem, 0);
+                pkt_hdr_barrier_sem_inc->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_dir_noc_addr, 1u});
+                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_barrier_sem_inc, unicast_route_info);
+                if (direction) {
+                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                } else {
+                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                }
+
+                // Unicast barrier inc to opposite-direction W core on immediate neighbor
+                uint64_t opp_dir_noc_addr = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+                pkt_hdr_barrier_sem_inc->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opp_dir_noc_addr, 1u});
+                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_barrier_sem_inc, unicast_route_info);
+                if (direction) {
+                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                } else {
+                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                }
+            }
+
+            // Wait for 1 barrier inc from each adjacent W device (if it exists)
+            uint32_t w_barrier_wait = (is_first_chip ? 0u : 1u) + (is_last_chip ? 0u : 1u);
+            if (w_barrier_wait > 0) {
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), w_barrier_wait);
+            }
         }
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -192,9 +252,12 @@ void kernel_main() {
         pad2_right_sticks = num_sticks_per_halo_dim - num_sticks_to_read - stick_start_id;
     }
 
+    // Per-row processing body shared between H writer sequential loop and W writer two-pass loop.
+    // Captured by reference so it sees all local variables (outer_dim_offset, l1_buf_offset, etc.).
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     uint32_t l1_buf_offset = 0;  // L1 intermediate: accumulates across all outer_dims (no reuse)
-    for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
+
+    auto process_one_row = [&]() {
         if (is_first_chip) {
             if (!is_padding_zeros) {
                 // Replicate a slice of 1 from input to output
@@ -217,7 +280,7 @@ void kernel_main() {
 
                     for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                         uint64_t dst_noc_addr =
-                            get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
+                            dst_accessor.get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                     }
                     dst_stick_id++;
@@ -244,7 +307,7 @@ void kernel_main() {
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                         uint64_t dst_noc_addr =
-                            get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
+                            dst_accessor.get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                     }
                     dst_stick_id++;
@@ -287,7 +350,7 @@ void kernel_main() {
                             l1_buf_offset += stick_size;
                         } else {
                             // Non-corner: send directly to neighbor's output DRAM
-                            dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                            dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
                         }
                     } else if constexpr (use_l1_intermediate) {
                         // W writer: all sticks to L1
@@ -295,7 +358,7 @@ void kernel_main() {
                             neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
                         l1_buf_offset += stick_size;
                     } else {
-                        dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                        dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
                     }
 
                     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
@@ -341,10 +404,42 @@ void kernel_main() {
             }
             noc_async_writes_flushed();
         }
+    };  // end process_one_row
 
-        // No local interior copy in this kernel. Dedicated local-copy kernels handle that work.
-
-        outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
+    if constexpr (!is_w_fabric_writer) {
+        // H writer: sequential outer_dim loop (unchanged)
+        for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
+            process_one_row();
+            // No local interior copy in this kernel. Dedicated local-copy kernels handle that work.
+            outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
+        }
+    } else {
+        // W writer two-pass loop.
+        // Pass 1: interior rows (h_pad_top <= row < h_pad_top + h_in per T batch).
+        // CB is fed by W reader Phase 1 which reads from INPUT DRAM — no barrier needed.
+        for (uint32_t t = 0; t < w2_t_count; ++t) {
+            for (uint32_t h = 0; h < w2_h_in; ++h) {
+                // dst_row is the flat output row index for interior row h in T batch (w2_t_start + t)
+                uint32_t dst_row = (w2_t_start + t) * w2_h_out + w2_h_pad_top + h;
+                outer_dim_offset = dst_row * output_halo_dim_size;
+                process_one_row();
+            }
+        }
+        // Pass 2: H-pad rows (corners). CB is fed by W reader Phase 2 after H barrier.
+        for (uint32_t t = 0; t < w2_t_count; ++t) {
+            // Top H-pad rows
+            for (uint32_t h = 0; h < w2_h_pad_top; ++h) {
+                uint32_t dst_row = (w2_t_start + t) * w2_h_out + h;
+                outer_dim_offset = dst_row * output_halo_dim_size;
+                process_one_row();
+            }
+            // Bottom H-pad rows
+            for (uint32_t h = 0; h < w2_h_pad_bot; ++h) {
+                uint32_t dst_row = (w2_t_start + t) * w2_h_out + w2_h_pad_top + w2_h_in + h;
+                outer_dim_offset = dst_row * output_halo_dim_size;
+                process_one_row();
+            }
+        }
     }
 
     // Ensure all DRAM writes from main loop are complete.
@@ -372,7 +467,7 @@ void kernel_main() {
                             for (uint32_t c = 0; c < num_sticks_to_read; c++) {
                                 cb_wait_front(cb_output_id, 1);
                                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                                uint64_t dst_noc_addr = get_noc_addr(base_dst + c, dst_accessor);
+                                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(base_dst + c);
                                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, 1);
@@ -383,7 +478,7 @@ void kernel_main() {
                             for (uint32_t c = 0; c < pad2_right_sticks; c++) {
                                 cb_wait_front(cb_output_id, 1);
                                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                                uint64_t dst_noc_addr = get_noc_addr(base_dst + c, dst_accessor);
+                                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(base_dst + c);
                                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, 1);
@@ -393,7 +488,7 @@ void kernel_main() {
                             for (uint32_t c = 0; c < pad2_left_sticks; c++) {
                                 cb_wait_front(cb_output_id, 1);
                                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                                uint64_t dst_noc_addr = get_noc_addr(right_start + c, dst_accessor);
+                                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(right_start + c);
                                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, 1);
@@ -405,7 +500,7 @@ void kernel_main() {
                         for (uint32_t iter = 0; iter < num_sticks_to_read; iter++) {
                             cb_wait_front(cb_output_id, 1);
                             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+                            uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
                             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                             noc_async_write_barrier();
                             cb_pop_front(cb_output_id, 1);
@@ -431,5 +526,5 @@ void kernel_main() {
         uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
         noc_semaphore_inc(sem_noc_addr, 1);
     }
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

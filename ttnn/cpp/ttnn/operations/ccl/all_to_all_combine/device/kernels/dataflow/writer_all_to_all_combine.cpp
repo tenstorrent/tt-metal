@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -107,7 +107,7 @@ void kernel_main() {
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_arg_count);
 
-    const auto output_addrgen = TensorAccessor(output_args, output_base_addr, data_size_bytes);
+    const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
@@ -149,7 +149,7 @@ void kernel_main() {
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(t, k);
-                const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
+                const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<

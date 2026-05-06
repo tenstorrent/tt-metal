@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/dprint.h"  // required in all kernels using DPRINT
+#include "api/debug/device_print.h"  // required in all kernels using DEVICE_PRINT
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -21,8 +21,7 @@ void kernel_main() {
 
     // Read floating point value from SRAM and print it
     float* data = (float*)l1_addr;
-    DPRINT << "Master, I have retrieved the value stored on Device 0 DRAM. Here we go.  It is: " << F32(*data)
-           << ENDL();
+    DEVICE_PRINT("Master, I have retrieved the value stored on Device 0 DRAM. Here we go.  It is: {}\n", *data);
 
     cb_push_back(cb_id, 0);
 }

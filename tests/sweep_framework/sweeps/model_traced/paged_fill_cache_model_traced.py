@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,10 +14,12 @@ from functools import partial
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 TIMEOUT = 300
@@ -47,24 +49,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0)
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -91,7 +80,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"batch_idx"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # V2 vectors provide page_table as a named tensor (page_table_*) instead of input_c_*
     page_table_kwargs = extract_named_tensor_kwargs(kwargs, "page_table")
@@ -142,8 +131,26 @@ def run(
         shape_c
     )
 
-    # For reference output, just use input_a (paged_fill_cache is a caching operation)
+    # Real paged_fill_cache golden: write input_b's seq_len chunks into the
+    # cache pages indexed by page_table[batch_idx]. cache layout is
+    # [num_pages, num_heads, page_size, head_dim]; input layout is
+    # [batch, num_heads, seq_len, head_dim]. mesh_tensor_to_torch reassembles
+    # the sharded cache back to global shape, so a global torch reference
+    # matches the actual reassembled output.
     torch_output_tensor = torch_input_tensor_a.clone()
+    if len(shape_a) == 4 and len(shape_b) == 4 and torch_input_tensor_c.numel() > 0:
+        _page_size = shape_a[2]
+        _seq_len = shape_b[2]
+        _bidx = int(op_kwargs.get("batch_idx", 0))
+        _page_idx_row = torch_input_tensor_c.to(torch.int64).reshape(torch_input_tensor_c.shape[0], -1)
+        if 0 <= _bidx < _page_idx_row.shape[0]:
+            _pages = _page_idx_row[_bidx].tolist()
+            for _chunk_idx, _page in enumerate(_pages):
+                _start = _chunk_idx * _page_size
+                _end = _start + _page_size
+                if _end > _seq_len or not (0 <= _page < shape_a[0]):
+                    break
+                torch_output_tensor[_page, :, :_page_size, :] = torch_input_tensor_b[_bidx, :, _start:_end, :]
 
     # Convert to TTNN tensors
     is_host = storage_type and "HOST" in str(storage_type)
@@ -201,9 +208,9 @@ def run(
         input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype_b, layout=layout_b)
         input_tensor_c = ttnn.from_torch(torch_input_tensor_c, dtype=dtype_c, layout=layout_c)
 
-    batch_idx = kwargs.get("batch_idx", 0)
-    if batch_idx is None:
-        batch_idx = 0
+    # Ensure batch_idx has a default value in op_kwargs
+    if "batch_idx" not in op_kwargs or op_kwargs["batch_idx"] is None:
+        op_kwargs["batch_idx"] = 0
 
     start_time = start_measuring_time()
     try:
@@ -211,7 +218,6 @@ def run(
             input_tensor_a,  # cache_tensor
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
-            batch_idx=batch_idx,
             **op_kwargs,
         )
     except TypeError:
@@ -219,13 +225,17 @@ def run(
             input_tensor_a,  # cache_tensor
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
-            batch_idx=batch_idx,
             **op_kwargs,
         )
     # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, kwargs.get("input_b_tensor_placement", None)
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]

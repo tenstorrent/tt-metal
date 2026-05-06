@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,9 +27,9 @@ void kernel_main() {
     constexpr auto dgamma_args = TensorAccessorArgs<dx_args.next_compile_time_args_offset()>();
     constexpr auto dbeta_args = TensorAccessorArgs<dgamma_args.next_compile_time_args_offset()>();
 
-    const auto dx_output_addr_generator = TensorAccessor(dx_args, dx_output_addr, tile_bytes);
-    const auto dgamma_output_addr_generator = TensorAccessor(dgamma_args, dgamma_output_addr, tile_bytes);
-    const auto dbeta_output_addr_generator = TensorAccessor(dbeta_args, dbeta_output_addr, tile_bytes);
+    const auto dx_output_addr_generator = TensorAccessor(dx_args, dx_output_addr);
+    const auto dgamma_output_addr_generator = TensorAccessor(dgamma_args, dgamma_output_addr);
+    const auto dbeta_output_addr_generator = TensorAccessor(dbeta_args, dbeta_output_addr);
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {

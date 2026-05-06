@@ -34,6 +34,8 @@ on:
         type: boolean
   workflow_run:
     workflows:
+      # WARNING: workflows added here must not have square brackets in the name!
+      # See: https://github.com/tenstorrent/tt-metal/pull/42798
       - "Sanity tests"
       - "PR - Sanity tests"
       - "Sanity tests nightly debug run"
@@ -48,11 +50,16 @@ on:
       - "(T3K) T3000 integration tests"
       - "(T3K) T3000 perf tests"
       - "(T3K) T3000 e2e tests"
-      - "(T3K) T3000 perplexity tests"
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
       - "(T3K) T3000 fast tests"
       - "(T3K) Choose your pipeline"
+      - "(Tier 1) Models End-To-End Tests"
+      - "(Tier 1) Models Unit Tests"
+      - "(Tier 2) Models End-To-End Tests"
+      - "(Tier 2) Models Unit Tests"
+      - "(Tier 3) Models End-To-End Tests"
+      - "(Tier 3) Models Unit Tests"
       - "(Galaxy) Choose your pipeline"
       - "ttnn - Run sweeps"
       - "ttnn stress tests"
@@ -75,10 +82,9 @@ on:
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
       - "(Galaxy) unit tests"
-      - "(Galaxy) Quick"
-      - "(Galaxy) Fast tests"
+      - "(Galaxy) Sanity"
+      - "(Galaxy) Health"
       - "(Galaxy) DeepSeek tests"
-      - "(TG) TG op perf tests"
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "Profiler CI"
@@ -188,7 +194,7 @@ jobs:
           hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
       - name: Upload workflow run data, even on failure
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: workflow-run-data

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -128,6 +128,13 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
         nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
         nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
+
+    mod.def(
+        "get_fabric_config",
+        &tt::tt_fabric::GetFabricConfig,
+        R"(
+            Returns the currently active global fabric configuration.
+        )");
 
     mod.def(
         "setup_fabric_connection",

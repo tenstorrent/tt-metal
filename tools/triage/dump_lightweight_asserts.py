@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ from callstack_provider import (
     run as get_callstack_provider,
     CallstackProvider,
 )
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -56,6 +57,14 @@ class LightweightAssertInfo:
     arguments_and_locals: str | None = triage_field("Arguments and Locals")
 
 
+def _macro_name_start_for_needle(code_line: str, needle_index: int) -> int:
+    """Move left from the open of a macro to the first character of its name (e.g. L in LLK_ASSERT)."""
+    macro_start = needle_index
+    while macro_start > 0 and (code_line[macro_start - 1].isalnum() or code_line[macro_start - 1] == "_"):
+        macro_start -= 1
+    return macro_start
+
+
 def extract_assert_code(file: str | None, line: int | None, column: int | None) -> str:
     if file is None or line is None:
         return "?"
@@ -68,12 +77,31 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
             if not (0 <= line - 1 < len(lines)):
                 return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
+
+            def scan_for_needle(needle: str) -> None:
+                nonlocal start_index
+                search_from = 0
+                while True:
+                    new_index = code_line.find(needle, search_from)
+                    if new_index == -1:
+                        break
+                    macro_start = _macro_name_start_for_needle(code_line, new_index)
+                    if column is not None:
+                        if macro_start == column:
+                            start_index = new_index
+                            break
+                        if macro_start > column:
+                            # Preserve the last ASSERT-like macro before the reported column.
+                            # If none was seen yet, fall back to the first later macro so we
+                            # still avoid returning "ASSERT() not found!" for approximate columns.
+                            if start_index == -1:
+                                start_index = new_index
+                            break
+                    start_index = new_index
+                    search_from = new_index + 1
+
             start_index = -1
-            while True:
-                new_index = code_line.find("ASSERT(", start_index + 1)
-                if new_index == -1 or (column is not None and new_index >= column):
-                    break
-                start_index = new_index
+            scan_for_needle("ASSERT(")
             if start_index == -1:
                 return "ASSERT() not found! Check the first code line in the stack trace."
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
@@ -93,7 +121,31 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                         break
                 i += 1
             if paren_count != 0:
-                return "ASSERT() is multi line. Check the first code line in the stack trace."
+                current_line_idx = line
+                while paren_count > 0 and current_line_idx < len(lines):
+                    next_line = lines[current_line_idx]
+                    code_line += " " + next_line.strip()
+                    for ch in next_line:
+                        if ch == "(":
+                            paren_count += 1
+                        elif ch == ")":
+                            paren_count -= 1
+                            if paren_count == 0:
+                                break
+                    current_line_idx += 1
+                if paren_count != 0:
+                    return "ASSERT() closing paren not found. Check the first code line in the stack trace."
+                # Re-scan the assembled string to find the closing paren position
+                i = open_paren_index + 1
+                scan_count = 1
+                while i < len(code_line):
+                    if code_line[i] == "(":
+                        scan_count += 1
+                    elif code_line[i] == ")":
+                        scan_count -= 1
+                        if scan_count == 0:
+                            break
+                    i += 1
             return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
@@ -115,9 +167,13 @@ def serialize_variables(variables: list[CallstackEntryVariable], assert_code: st
 def dump_lightweight_asserts(
     location: OnChipCoordinate,
     risc_name: str,
+    dispatcher_data: DispatcherData,
     callstack_provider: CallstackProvider,
 ) -> LightweightAssertInfo | None:
     try:
+        if not dispatcher_data.risc_enabled(risc_name):
+            return None
+
         risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
@@ -170,22 +226,42 @@ def dump_lightweight_asserts(
                 callstack_data.kernel_callstack_with_message.callstack[0].column,
             )
             arguments_and_locals = ""
-            if len(callstack_data.kernel_callstack_with_message.callstack[0].arguments) > 0:
-                arguments_and_locals += "\nArguments:\n"
-                arguments_and_locals += serialize_variables(
-                    callstack_data.kernel_callstack_with_message.callstack[0].arguments, assert_code
-                )
-                for var in callstack_data.kernel_callstack_with_message.callstack[0].arguments:
+            top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
+            if len(top_frame.template_parameters) > 0:
+                arguments_and_locals += "\nTemplate parameters:\n"
+                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
+                for var in top_frame.template_parameters:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(callstack_data.kernel_callstack_with_message.callstack[0].locals) > 0:
+            if len(top_frame.arguments) > 0:
+                arguments_and_locals += "\nRuntime arguments:\n"
+                arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
+                for var in top_frame.arguments:
+                    if var.name is not None:
+                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
+            if len(top_frame.locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(
-                    callstack_data.kernel_callstack_with_message.callstack[0].locals, assert_code
-                )
-                for var in callstack_data.kernel_callstack_with_message.callstack[0].locals:
+                arguments_and_locals += serialize_variables(top_frame.locals, assert_code)
+                for var in top_frame.locals:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
+            if arguments_and_locals and " = ?" in arguments_and_locals:
+
+                def _any_value_missing(vs: list[CallstackEntryVariable]) -> bool:
+                    return any(v.value is None for v in vs)
+
+                if any(
+                    _any_value_missing(vs)
+                    for vs in (
+                        top_frame.template_parameters,
+                        top_frame.arguments,
+                        top_frame.locals,
+                    )
+                ):
+                    arguments_and_locals += (
+                        "\n\n[dim]Values shown as '?' were not returned by the debugger "
+                        "(e.g. optimized out, or not in a live range at the ebreak). The source may still be correct.[/]"
+                    )
         return LightweightAssertInfo(
             kernel_name=callstack_data.dispatcher_core_data.kernel_name,
             kernel_callstack_with_message=LightweightAssertCallstackWithCode(
@@ -207,15 +283,17 @@ def dump_lightweight_asserts(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
+    dispatcher_data = get_dispatcher_data(args, context)
 
     callstacks_data = run_checks.run_per_core_check(
         lambda location, risc_name: dump_lightweight_asserts(
             location,
             risc_name,
+            dispatcher_data,
             callstack_provider,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -80,7 +80,7 @@ Tensor pre_sort_transform_tensor(
             {padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
         tt::tt_metal::Array4D({0, 0, 0, 0}),
         descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
-        /*multicore=*/true);
+        /*use_multicore=*/true);
 
     return padded_output_tensor;
 }
@@ -155,7 +155,11 @@ bool validate_optional_output_tensors_for_early_exit(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-std::vector<Tensor> ExecuteSort::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+std::vector<Tensor> sort(
     const Tensor& input_tensor,
     const int8_t dim,
     const bool descending,
@@ -167,12 +171,26 @@ std::vector<Tensor> ExecuteSort::invoke(
 
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
-        if (CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
+        auto indices = ttnn::zeros_like(input_tensor, DataType::UINT16);
+        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
             std::get<0>(*optional_output_tensors) = input_tensor;
+            std::get<1>(*optional_output_tensors) = indices;
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         }
-        return {input_tensor, ttnn::zeros_like(input_tensor)};
+        return {input_tensor, indices};
+    }
+
+    const int8_t normalized_dim = dim < 0 ? rank + dim : dim;
+    if (original_lshape[normalized_dim] == 1) {
+        auto indices = ttnn::zeros_like(input_tensor, DataType::UINT16);
+        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
+                optional_output_tensors, original_lshape)) {
+            std::get<0>(*optional_output_tensors) = input_tensor;
+            std::get<1>(*optional_output_tensors) = indices;
+            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
+        }
+        return {input_tensor, indices};
     }
 
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
@@ -180,16 +198,16 @@ std::vector<Tensor> ExecuteSort::invoke(
 
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
 
-    Tensor padded_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
+    Tensor padded_input_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
         input_tensor, dim, is_dim_last_idx, is_rank_le_4d, descending);
 
     std::vector<std::optional<Tensor>> output_tensors;
     if (optional_output_tensors.has_value()) {
-        output_tensors = reduction_common::tuple_to_vector_optional(*optional_output_tensors);
-        output_tensors[0] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
+        output_tensors = ::reduction_common::tuple_to_vector_optional(*optional_output_tensors);
+        output_tensors[0] = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
             output_tensors[0].value(), dim, is_dim_last_idx, is_rank_le_4d, descending);
 
-        output_tensors[1] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
+        output_tensors[1] = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
             output_tensors[1].value(), dim, is_dim_last_idx, is_rank_le_4d, descending);
     } else {
         output_tensors = std::vector<std::optional<Tensor>>{
@@ -201,7 +219,7 @@ std::vector<Tensor> ExecuteSort::invoke(
     auto sorted_tensors =
         ttnn::prim::sort(padded_input_tensor, dim, descending, stable, memory_config_value, output_tensors);
 
-    auto post_transform_output_tensors = CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
+    auto post_transform_output_tensors = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, memory_config_value);
 
     // Check if padding or dtype conversion changed buffer address
@@ -217,4 +235,4 @@ std::vector<Tensor> ExecuteSort::invoke(
     return post_transform_output_tensors;
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

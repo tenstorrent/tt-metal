@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -240,16 +241,6 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
     return ret;
 }
 
-bool MeshWorkloadImpl::kernel_binary_always_stored_in_ringbuffer() {
-    // Return true if kernel binaries cannot be placed in a ring buffer for
-    // any program in the MeshWorkload
-    bool stored_in_ring_buf = true;
-    for (auto& [device_range, program] : programs_) {
-        stored_in_ring_buf &= program.impl().kernel_binary_always_stored_in_ringbuffer();
-    }
-    return stored_in_ring_buf;
-}
-
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
     uint32_t programmable_core_type_index) {
     // Get all kernels across all programs in the MeshWorkload
@@ -419,7 +410,12 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        extract_context_id(mesh_device),
+        mesh_device,
+        kernels_getter,
+        kernel_groups_getter,
+        semaphores_getter,
+        programs);
 
     set_finalized();
 }

@@ -3,9 +3,22 @@
 
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_compilation_failures.cpp
+    device_print/test_dram_print_output.cpp
+    device_print/test_eth_cores.cpp
     device_print/test_format_updates.cpp
+    device_print/test_invalid_print_core.cpp
+    device_print/test_mesh_coords.cpp
+    device_print/test_mute_device.cpp
+    device_print/test_print_before_finish.cpp
+    device_print/test_print_config_register.cpp
     device_print/test_print_output.cpp
+    device_print/test_print_prepend_device_core_risc.cpp
+    device_print/test_print_tensix_dest.cpp
+    device_print/test_print_tile.cpp
+    device_print/test_print_tiles_multiple.cpp
+    device_print/test_checkpoint.cpp
     dprint/test_dprint_mesh_coords.cpp
+    dprint/test_dram_cores.cpp
     dprint/test_eth_cores.cpp
     dprint/test_invalid_print_core.cpp
     dprint/test_mute_device.cpp
@@ -29,6 +42,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_stack_usage.cpp
     watcher/test_waypoint.cpp
     watcher/test_runtime_args_known_garbage.cpp
+    watcher/test_tile_counters_log.cpp
 )
 
 set(UNIT_TESTS_INSPECTOR_SRC inspector/test_rpc_startup.cpp)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,6 +39,8 @@ void kernel_main() {
     uint32_t P = kernel_size_h * kernel_size_w;
     uint32_t l = LH * LW;
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(input_args, input_addr, input_cb_page_size);
 
     for (uint32_t row_id = start_id; row_id < start_id + num_units_per_core; row_id++) {

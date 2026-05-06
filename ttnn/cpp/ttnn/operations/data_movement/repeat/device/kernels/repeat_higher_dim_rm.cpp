@@ -1,10 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 using namespace tt::data_movement::common;
 
@@ -42,8 +46,12 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr, original_page_size_bytes);
-    const auto d = TensorAccessor(dst_args, dst_addr, original_page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    const auto d = TensorAccessor(dst_args, dst_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
 
     // alignments pre-calculations
     constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;
@@ -54,12 +62,12 @@ void kernel_main() {
     const uint64_t w_mask_to_use = MASK_16;
     const uint64_t w_offset_to_use = OFFSET_16;
 
-    cb_reserve_back(cb_id_in0, 1);
-    cb_reserve_back(cb_id_in1, 1);
-    uint32_t input_buffer = get_write_ptr(cb_id_in0);
-    uint32_t alignment_buffer = get_write_ptr(cb_id_in1);
-    cb_push_back(cb_id_in1, 1);
-    cb_push_back(cb_id_in0, 1);
+    cb0.reserve_back(1);
+    cb1.reserve_back(1);
+    uint32_t input_buffer = cb0.get_write_ptr();
+    uint32_t alignment_buffer = cb1.get_write_ptr();
+    cb1.push_back(1);
+    cb0.push_back(1);
 
     alignment_buffer = align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);  // aligned for writes
     input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);          // aligned for reads
@@ -76,9 +84,17 @@ void kernel_main() {
                 uint32_t read_offset = h_offset + r_offset + l;
                 src_noc_addr = s.get_noc_addr(read_offset, 0);
                 data_location = input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed aligned to src_noc_addr
-                enhanced_noc_async_read<original_page_size_bytes, false>(
-                    src_noc_addr, data_location, original_page_size_bytes);
-                noc_async_read_barrier();
+
+                experimental::CoreLocalMem<uint32_t> dst_mem(data_location);
+                // Use TensorAccessor directly to avoid address truncation
+                // Template parameter preserves one-packet fast path for page-sized transfers
+                noc.async_read<experimental::Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+                    s,
+                    dst_mem,
+                    original_page_size_bytes,
+                    {.page_id = read_offset, .offset_bytes = 0},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
 
                 for (uint32_t n = 0; n < repetitions; n++) {
                     // Perform the writes
@@ -98,10 +114,20 @@ void kernel_main() {
                     }
                     // Now we are ensured the data is at write_buffer and it is aligned for the write
                     // Orchestrate the write
-                    enhanced_noc_async_write<original_page_size_bytes, false>(
-                        data_location, dst_noc_addr, original_page_size_bytes);
+                    experimental::CoreLocalMem<uint32_t> src_mem(data_location);
+                    // Use TensorAccessor directly to avoid address truncation
+                    // Template parameter preserves one-packet fast path for page-sized transfers
+                    noc.async_write<
+                        experimental::Noc::TxnIdMode::DISABLED,
+                        experimental::Noc::ResponseMode::NON_POSTED,
+                        original_page_size_bytes>(
+                        src_mem,
+                        d,
+                        original_page_size_bytes,
+                        {.offset_bytes = 0},
+                        {.page_id = write_offset, .offset_bytes = 0});
                 }
-                noc_async_write_barrier();
+                noc.async_write_barrier();
             }
         }
     }

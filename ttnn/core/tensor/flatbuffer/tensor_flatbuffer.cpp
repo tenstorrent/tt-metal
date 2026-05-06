@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,7 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
+#include <limits>
 
 namespace ttnn {
 namespace {
@@ -166,25 +167,62 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     const auto& host_storage = tensor.host_storage();
 
+    // Deduplicate replicated shards: two shards are duplicates if their coordinates differ only
+    // along Replicate dimensions. The deduplication key is built from coordinates at sharded
+    // dimensions only.
+    const auto& placements = tensor.tensor_topology().placements();
+    const auto& mesh_shape = tensor.tensor_topology().distribution_shape();
+    size_t unique_keys = 1;
+    for (size_t dim = 0; dim < placements.size(); ++dim) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+            unique_keys *= mesh_shape[dim];
+        }
+    }
+    std::vector<uint64_t> dedup_key_to_offset(unique_keys, std::numeric_limits<uint64_t>::max());
+
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
+
+    const auto& topology_mesh_coords = tensor.tensor_topology().mesh_coords();
+    TT_FATAL(
+        topology_mesh_coords.size() == mesh_shape.mesh_size(),
+        "Topology mesh coords size {} should match distribution shape size {}",
+        topology_mesh_coords.size(),
+        mesh_shape.mesh_size());
+
+    // Iterate over distribution coordinates and map to physical coordinates via the topology.
     uint64_t next_buffer_offset = 0;
-    for (const auto& coord : host_storage.buffer().shard_coords()) {
-        // Iterate over local populated shards.
+    size_t dist_idx = 0;
+    for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        const auto& coord = topology_mesh_coords[dist_idx++];
+
         if (const auto& buffer = host_storage.buffer().get_shard(coord); buffer.has_value()) {
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
 
             uint64_t shard_buffer_offset = next_buffer_offset;
-            if (auto [it, inserted] = buffer_to_offset.try_emplace(buffer_address, shard_buffer_offset); inserted) {
-                // Encountered a new buffer, add it to the buffers vector.
+
+            size_t key = 0;
+            for (size_t dim = 0; dim < placements.size(); ++dim) {
+                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+                    key = key * mesh_shape[dim] + dist_coord[dim];
+                }
+            }
+
+            if (dedup_key_to_offset[key] != std::numeric_limits<uint64_t>::max()) {
+                // Shards whose coordinates differ only along replicated dimensions are identical.
+                shard_buffer_offset = dedup_key_to_offset[key];
+            } else if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
+                // If two shards share the same buffer, they are identical.
+                shard_buffer_offset = it->second;
+            } else {
                 next_buffer_offset += buffer_size;
                 buffers.push_back(*buffer);
-            } else {
-                // Point to the existing buffer.
-                shard_buffer_offset = it->second;
             }
+
+            buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
+            dedup_key_to_offset[key] = shard_buffer_offset;
 
             auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
             auto mesh_coord_offset = to_flatbuffer(coord, builder);
@@ -241,13 +279,12 @@ Tensor from_flatbuffer(
 
     // NOTE: Existing tensor cache files may not have a tensor topology.
     // Create tensor topology from flatbuffer if it exists, otherwise create a fully replicated topology.
-    tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
     const auto* fb_topology = fb_tensor->tensor_topology();
     tt::tt_metal::TensorTopology topology =
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(std::move(host_storage), spec, std::move(topology));
+    return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), spec, std::move(topology)));
 }
 
 }  // namespace ttnn

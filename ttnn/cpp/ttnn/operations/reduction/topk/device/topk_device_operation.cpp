@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
