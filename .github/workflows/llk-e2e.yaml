@@ -20,7 +20,6 @@ permissions:
 jobs:
   llk-e2e-tests:
     name: "LLK e2e Tests"
-    needs: build-images
     uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
