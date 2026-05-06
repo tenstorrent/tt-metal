@@ -580,11 +580,18 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        page_tables_per_layer=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if page_tables_per_layer is None:
+            # vLLM hybrid bridges (HybridAttentionForCausalLM subclasses) stash
+            # the per-layer list on the model handle for the duration of a
+            # forward call rather than threading the kwarg through Generator's
+            # many ttnn_prefill_forward call sites. Pick it up here when set.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         return self.forward(
             x,
             current_pos=None,
@@ -598,6 +605,7 @@ class Transformer(LightweightModule):
             get_last_token=get_last_token,
             kv_cache=kv_cache,
             batch_size=batch_size,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -613,6 +621,7 @@ class Transformer(LightweightModule):
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
+        page_tables_per_layer=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -623,6 +632,11 @@ class Transformer(LightweightModule):
 
         x_embed = self._transform_decode_inputs_device(x)
 
+        if page_tables_per_layer is None:
+            # See ttnn_prefill_forward: hybrid bridges stash the per-layer list
+            # on the model when active, since Generator doesn't thread the kwarg.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -631,6 +645,7 @@ class Transformer(LightweightModule):
             mode=Mode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
         if sampling_on_device and self.sampling is not None:
@@ -693,11 +708,18 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        page_tables_per_layer=None,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
                 self.prefetcher.run()
+
+        if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(self.layers)} layers"
+            )
 
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -714,6 +736,14 @@ class Transformer(LightweightModule):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
+            # vLLM hybrid kv-cache-groups: each attention layer gets its own
+            # paged pool (sliding-window vs full-attention have different
+            # block counts). When ``page_tables_per_layer`` is None we fall
+            # back to broadcasting the single ``page_table`` to every layer
+            # — byte-equivalent to the pre-hybrid path used by every legacy
+            # caller (demos, unit tests, non-hybrid vLLM bridges).
+            layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
+
             x = layer(
                 x,
                 current_pos,
@@ -721,7 +751,7 @@ class Transformer(LightweightModule):
                 rot_mats_local=rot_mats_local,
                 user_id=user_id,
                 mode=mode,
-                page_table=page_table,
+                page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,

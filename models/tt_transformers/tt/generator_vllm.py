@@ -642,7 +642,28 @@ class MistralForCausalLM(Generator):
     info=Gemma3ProcessingInfo,
     dummy_inputs=Gemma3DummyInputsBuilder,
 )
-class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
+class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiModal):
+    """Gemma3 multimodal — hybrid attention (sliding-window + full).
+
+    Gemma3's text decoder alternates ``sliding_attention`` and
+    ``full_attention`` per ``hf_config.text_config.layer_types`` (a 5:1
+    ratio in the 27B variant), so the bridge inherits from
+    :class:`HybridAttentionForCausalLM` to opt into vLLM's hybrid kv cache
+    manager. Sliding-window layers index a smaller paged pool than
+    full-attention layers — the per-layer KV cache shape difference is
+    where the asymmetric-hybrid memory savings live, and was the original
+    motivation for kv-cache-groups (it's what unblocks the 62-layer × 107
+    MB-per-layer DRAM OOM on T3K seen in run 25437459815).
+
+    Mirrors the ``GptOssForCausalLM`` plumbing: ``prefill_forward`` /
+    ``decode_forward`` stash ``page_tables_per_layer`` on each
+    ``self.model[i]`` for the duration of a single
+    ``super().{prefill_forward_text,decode_forward}`` call. The underlying
+    ``Transformer.ttnn_*_forward`` (which ``TtGemmaModel`` inherits)
+    picks up the stash via ``_active_page_tables_per_layer`` and routes
+    each layer's attention to its own page table.
+    """
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
@@ -693,17 +714,44 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def cache_path(self):
         return self.model_args[0].model_cache_path
 
-    def prefill_forward(self, *args, **kwargs):
-        return super().prefill_forward_text(**kwargs)
+    def _route_per_layer_page_tables(self, page_tables_per_layer):
+        """See :class:`GptOssForCausalLM._route_per_layer_page_tables`.
+
+        Localised attribute injection so the per-layer list reaches the
+        many ``ttnn_*_forward`` call sites in :class:`Generator` without
+        threading a feature-specific kwarg through every one of them.
+        """
+
+        class _Stash:
+            def __init__(self, models, value):
+                self._models = models
+                self._value = value
+
+            def __enter__(self):
+                if self._value is None:
+                    return
+                for m in self._models:
+                    m._active_page_tables_per_layer = self._value
+
+            def __exit__(self, *_):
+                if self._value is None:
+                    return
+                for m in self._models:
+                    if hasattr(m, "_active_page_tables_per_layer"):
+                        del m._active_page_tables_per_layer
+
+        return _Stash(self.model, page_tables_per_layer)
+
+    def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        with self._route_per_layer_page_tables(page_tables_per_layer):
+            return super().prefill_forward_text(**kwargs)
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        with self._route_per_layer_page_tables(page_tables_per_layer):
+            return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
 
 
 class GptOssForCausalLM(HybridAttentionForCausalLM):
