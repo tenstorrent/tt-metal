@@ -2069,6 +2069,15 @@ def prepare_compressed_sram_slots(
     t_io = t_predict = t_build = t_refresh = 0.0
     n_candidates = 0
 
+    # Reset the CompressedTensor module-level pack/upload accumulators so the
+    # snapshot below attributes only the work done inside this slot loop.
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import (
+        get_build_timing_stats,
+        reset_build_timing_stats,
+    )
+
+    reset_build_timing_stats()
+
     for slot_idx, expert_idx in enumerate(requested_experts):
         n_candidates += 1
         gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
@@ -2256,6 +2265,19 @@ def prepare_compressed_sram_slots(
         max(0.0, elapsed - t_accounted),
         n_candidates,
         num_slots,
+    )
+    # Build-phase split: how much of t_build was host-side BFP packing vs
+    # device upload, summed across the predict-time and build-time
+    # ``CompressedTensor.from_torch`` / ``from_bspm`` calls.  Stats are
+    # populated by `_pack_single_device` / `_pack_multi_device` and the
+    # per-core upload helpers in ``compressed_tensor.compressed_tensor``.
+    build_stats = get_build_timing_stats()
+    logger.info(
+        "  SRAM build sub-phases (layer {}): pack={:.3f}s upload={:.3f}s " "(from_torch+from_bspm calls={})",
+        layer_idx,
+        build_stats["pack_s"],
+        build_stats["upload_s"],
+        build_stats["n_calls"],
     )
     return SramCompressedExpertSlots(
         num_slots=num_slots,

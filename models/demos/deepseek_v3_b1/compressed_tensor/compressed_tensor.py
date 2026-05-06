@@ -24,6 +24,8 @@ Multi-device (mesh) support:
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import torch
 from loguru import logger
@@ -40,6 +42,30 @@ from .tile_utils import (
     ttnn_quantize_fn,
     unpack_bfp_tile,
 )
+
+# ---------------------------------------------------------------------------
+# Build-phase timing accumulators
+# ---------------------------------------------------------------------------
+# Module-level pack/upload wall-clock counters, populated by
+# ``_pack_single_device`` / ``_pack_multi_device`` and the per-core / lockstep
+# upload helpers.  Callers (e.g. ``prepare_compressed_sram_slots``) snapshot
+# these via ``reset_build_timing_stats()`` / ``get_build_timing_stats()`` to
+# split the SRAM "build" phase into host-side BFP packing vs device upload.
+# Cost when not consumed: two attribute lookups + an add per phase.
+_BUILD_TIMING_STATS: dict = {"pack_s": 0.0, "upload_s": 0.0, "n_calls": 0}
+
+
+def reset_build_timing_stats() -> None:
+    """Zero the module-level pack/upload accumulators."""
+    _BUILD_TIMING_STATS["pack_s"] = 0.0
+    _BUILD_TIMING_STATS["upload_s"] = 0.0
+    _BUILD_TIMING_STATS["n_calls"] = 0
+
+
+def get_build_timing_stats() -> dict:
+    """Return a snapshot of the current pack/upload accumulators."""
+    return dict(_BUILD_TIMING_STATS)
+
 
 # Format index → mantissa bits lookup (matches COMPRESSED_FORMATS ordering)
 _FMT_IDX_TO_MANT_BITS = {idx: BFP_MANT_BITS[fmt] for idx, fmt in enumerate(COMPRESSED_FORMATS) if fmt in BFP_MANT_BITS}
@@ -252,6 +278,7 @@ class CompressedTensor:
         mesh_mapper_config=None,
     ) -> CompressedTensor:
         """Convenience: run assignment then pack in one step."""
+        _BUILD_TIMING_STATS["n_calls"] += 1
         result = assigner.assign(tensor, quantize_fn)
         return cls(
             tensor,
@@ -278,6 +305,7 @@ class CompressedTensor:
 
         Bypasses CompressedTensorAssigner — uses the provided assignment directly.
         """
+        _BUILD_TIMING_STATS["n_calls"] += 1
         return cls(
             tensor,
             assignment,
@@ -518,6 +546,7 @@ class CompressedTensor:
         self._per_device_assignment_flat[coord0] = self._assignment_flat
 
         # Compress each shard's tiles
+        _t = time.perf_counter()
         shard_data, shard_data_sizes = [], []
         tile_formats = []
         for _core, page_indices in shard_mapping:
@@ -527,6 +556,7 @@ class CompressedTensor:
             shard_data.append(tile_data_list)
             shard_data_sizes.append(shard_bytes)
             tile_formats.extend(tile_format_list)
+        _BUILD_TIMING_STATS["pack_s"] += time.perf_counter() - _t
         self._per_device_tile_formats[coord0] = tile_formats
 
         alignment = _get_alignment(memory_config.buffer_type)
@@ -535,6 +565,7 @@ class CompressedTensor:
         logical_shape = ttnn.Shape(list(tensor.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
 
+        _t = time.perf_counter()
         if per_core_allocation:
             self._multi_device_data_per_core[coord0] = self._create_per_core_tensors(
                 shard_data,
@@ -554,6 +585,7 @@ class CompressedTensor:
                 device=device,
                 memory_config=data_memory_config,
             )
+        _BUILD_TIMING_STATS["upload_s"] += time.perf_counter() - _t
 
         # Assignment tensor
         if assignment_memory_config is not None:
@@ -753,6 +785,7 @@ class CompressedTensor:
         replicated_axes = self._get_replicated_axes()
         packed_cache = {}  # {shard_key: coord} — first coord packed for each unique shard key
 
+        _t = time.perf_counter()
         for coord, dev_tensor, dev_assignment in per_device_slices:
             coord_tuple = tuple(coord[i] for i in range(self._mesh_shape.dims()))
             shard_key = tuple(coord_tuple[ax] for ax in range(len(coord_tuple)) if ax not in replicated_axes)
@@ -791,6 +824,7 @@ class CompressedTensor:
             self._per_device_core_assignment[coord] = self._build_core_assignment_from(shard_mapping, dev_assignment)
             self._per_device_assignment_flat[coord] = dev_assignment
             packed_cache[shard_key] = coord
+        _BUILD_TIMING_STATS["pack_s"] += time.perf_counter() - _t
 
         # Global max shard size across all devices
         alignment = _get_alignment(memory_config.buffer_type)
@@ -800,6 +834,7 @@ class CompressedTensor:
         logical_shape = ttnn.Shape(list(tensor.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
 
+        _t = time.perf_counter()
         if per_core_allocation:
             self._pack_multi_device_per_core(
                 all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
@@ -808,6 +843,7 @@ class CompressedTensor:
             self._pack_multi_device_lock_step(
                 all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
             )
+        _BUILD_TIMING_STATS["upload_s"] += time.perf_counter() - _t
 
     def _pack_multi_device_lock_step(
         self, all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
