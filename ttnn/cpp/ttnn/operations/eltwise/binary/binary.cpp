@@ -1433,4 +1433,201 @@ Tensor hypot(
         std::nullopt);
 }
 
+// Binary ops moved from composite (pure pass-throughs to invoke_binary_ng)
+Tensor minimum(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        operations::binary::BinaryOpType::MINIMUM,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor maximum(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        operations::binary::BinaryOpType::MAXIMUM,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::detail::invoke_binary_ng(
+        input_b,
+        input_a,
+        operations::binary::BinaryOpType::ATAN2,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
+}
+
+Tensor gcd(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        operations::binary::BinaryOpType::GCD,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor lcm(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        operations::binary::BinaryOpType::LCM,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor remainder(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::detail::invoke_binary_ng(
+        input_a,
+        input_b,
+        operations::binary::BinaryOpType::REMAINDER,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
+        std::nullopt,
+        sub_core_grids);
+}
+
+Tensor fmod(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    return ttnn::detail::invoke_binary_ng(
+        input_a,
+        input_b,
+        operations::binary::BinaryOpType::FMOD,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
+}
+
+Tensor rsub(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        operations::binary::BinaryOpType::RSUB,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor pow(
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::detail::invoke_binary_ng(
+        input,
+        exponent,
+        operations::binary::BinaryOpType::POWER,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
 }  // namespace ttnn
