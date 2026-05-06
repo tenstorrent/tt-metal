@@ -30,6 +30,11 @@
       "stage": "post_decoder_fused",
       "fixture": "stage_post_decoder_fused.json",
       "generator": "generate_stage_fixtures.py"
+    },
+    {
+      "stage": "combined_drafter",
+      "fixture": "stage_combined_drafter.json",
+      "generator": "generate_stage_fixtures.py"
     }
   ],
   "trace_files": [

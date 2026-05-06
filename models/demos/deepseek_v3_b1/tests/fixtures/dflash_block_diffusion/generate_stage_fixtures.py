@@ -190,6 +190,40 @@ def build_fixtures(golden_path: Path, output_dir: Path) -> None:
         },
     )
 
+    _write_json(
+        output_dir / "stage_combined_drafter.json",
+        {
+            **common,
+            "stage": "combined_drafter",
+            "mapping": "full DFlash drafter pipeline: pre-decoder, decoder layers, and post-decoder packet emit",
+            "stage_fixture_paths": [
+                "stage_pre_decoder_fused.json",
+                "stage_decoder_layer_0.json",
+                "stage_decoder_layer_1.json",
+                "stage_post_decoder_fused.json",
+            ],
+            "device_size_choice": {
+                "smallest_viable": "one_blackhole_galaxy",
+                "stage_slots": 4,
+                "stage_shape": "4x2",
+                "mapped_stage_count": 4,
+                "fits_one_galaxy": True,
+                "reason": "pre-decoder fused + two drafter decoder layers + post-decoder fused equals four stages",
+            },
+            "expected": {
+                "final_hidden": _tensor(final_hidden),
+                "draft_logits": _tensor(draft_logits),
+                "draft_token_ids": draft_token_ids.tolist(),
+                "host_packet": {
+                    "type": "DRAFT_BLOCK_PROPOSAL",
+                    "anchor_position": 2,
+                    "token_ids": draft_token_ids.tolist()[0],
+                    "positions": [3, 4, 5],
+                },
+            },
+        },
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate tiny DFlash block-diffusion stage fixtures.")

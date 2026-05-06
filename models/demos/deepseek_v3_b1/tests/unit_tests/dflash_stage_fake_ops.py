@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
+import copy
 import json
-import math
 from pathlib import Path
 
 import torch
@@ -114,6 +114,36 @@ def fake_post_decoder_fused_stage(fixture: dict) -> dict:
             "positions": list(range(anchor_position + 1, anchor_position + int(config["block_size"]))),
         },
     }
+
+
+def fake_combined_drafter(fixture: dict, fixture_dir: Path) -> dict:
+    """Fake full-module seam: replace with the real DFlash drafter module when available."""
+    stage_fixtures = [
+        load_stage_fixture(fixture_dir / rel_path, expected_stage)
+        for rel_path, expected_stage in zip(
+            fixture["stage_fixture_paths"],
+            ["pre_decoder_fused", "decoder_layer_0", "decoder_layer_1", "post_decoder_fused"],
+            strict=True,
+        )
+    ]
+
+    pre = fake_pre_decoder_fused_stage(stage_fixtures[0])
+    hidden_states = pre["decoder_input"]
+    target_context = pre["target_context"]
+    position_cos = pre["position_cos"]
+    position_sin = pre["position_sin"]
+
+    for layer_fixture in stage_fixtures[1:3]:
+        layer_fixture = copy.deepcopy(layer_fixture)
+        layer_fixture["inputs"]["hidden_states"] = hidden_states.tolist()
+        layer_fixture["inputs"]["target_context"] = target_context.tolist()
+        layer_fixture["inputs"]["position_cos"] = position_cos.tolist()
+        layer_fixture["inputs"]["position_sin"] = position_sin.tolist()
+        hidden_states = fake_decoder_layer_stage(layer_fixture)
+
+    post_fixture = copy.deepcopy(stage_fixtures[3])
+    post_fixture["inputs"]["hidden_states"] = hidden_states.tolist()
+    return fake_post_decoder_fused_stage(post_fixture)
 
 
 def rotary_embedding(
