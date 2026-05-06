@@ -14,7 +14,7 @@ Supported ``model_type``:
 
 - ``llama``    — any combination of DDP and TP (uses the ``"tp"`` mesh axis).
 - ``gpt2``     — DDP only; TP is rejected.
-- ``deepseek`` — single-device only.
+- ``deepseek`` — DDP only; TP is rejected. Optional MoE TP uses ``moe_tp_axis``.
 - ``qwen3``    — DDP only; TP is rejected.
 """
 
@@ -55,7 +55,6 @@ from ttml.models.qwen3 import (
     Qwen3Config,
     Qwen3RopeScalingConfig,
 )
-from ttml.modules import Parameter
 from ttml.common.utils import (
     round_up_to_tile,
     get_tt_metal_runtime_root,
@@ -295,6 +294,13 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     2D mesh (both dims > 1): the number of enabled parallelisms must equal
     the number of mesh dims, and assignment order is DP -> TP. CP/PP are
     out of scope here.
+
+    Exception: some models (e.g. DeepSeek) do not implement the general
+    tensor-parallel model path (`enable_tp=true`), but still want a 2D mesh
+    for DDP + MoE-TP experimentation. In that case, allow `enable_ddp=true`
+    with `enable_tp=false` on a 2D mesh by naming axis 0 as "dp" and leaving
+    other axes unnamed; the caller may rename a remaining axis (e.g. to
+    "moe_tp") for MoE sharding.
     """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
@@ -319,11 +325,18 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
         axis_names[active] = enabled_names[0]
     else:
         if len(enabled_names) != n:
-            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
-        # enabled_names is ordered ("dp", "tp") by construction above, matching
-        # the C++ assignment order in auto_context.cpp.
-        for i, name in enumerate(enabled_names):
-            axis_names[i] = name
+            # Allow DP-only on a 2D mesh (axis 0 becomes "dp").
+            if enabled_names == ("dp",):
+                axis_names[0] = "dp"
+            else:
+                raise ValueError(
+                    f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}"
+                )
+        else:
+            # enabled_names is ordered ("dp", "tp") by construction above, matching
+            # the C++ assignment order in auto_context.cpp.
+            for i, name in enumerate(enabled_names):
+                axis_names[i] = name
 
     return ttml.Mesh(shape, tuple(axis_names))
 
