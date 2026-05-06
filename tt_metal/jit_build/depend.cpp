@@ -285,7 +285,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
 bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::filesystem::path& obj) {
     auto t0 = std::chrono::steady_clock::now();
     std::filesystem::path hash_path = out_dir / obj;
-    hash_path += ".dephash";
+    hash_path.concat(".dephash");
 
     std::ifstream hash_file;
     std::error_code open_ec;

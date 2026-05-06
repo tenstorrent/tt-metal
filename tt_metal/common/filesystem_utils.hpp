@@ -135,7 +135,11 @@ inline constexpr int kFsRetryJitterMs = 100;
 
 // Check if error code is ESTALE (stale file handle) - NFS specific error
 inline bool is_estale_error(const std::error_code& ec) {
+#ifdef ESTALE
     return ec.category() == std::system_category() && ec.value() == ESTALE;
+#else
+    return false;
+#endif
 }
 
 // Check if error is ENOENT (file/directory not found)

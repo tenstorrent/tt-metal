@@ -789,7 +789,7 @@ void DataMovementKernel::read_binaries(IDevice* device, const std::filesystem::p
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
 
-void DramKernel::read_binaries(IDevice* device, const std::fileystem::path& binary_root) {
+void DramKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
     TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
     std::vector<const ll_api::memory*> binaries;
     uint32_t dram_core_type =
@@ -840,7 +840,7 @@ void EthernetKernel::read_binaries(IDevice* device, const std::filesystem::path&
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
 
-void ComputeKernel::read_binaries(IDevice* device, const std::fileystem::path& binary_root) {
+void ComputeKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
     TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
     std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =

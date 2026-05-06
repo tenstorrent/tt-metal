@@ -481,7 +481,7 @@ bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) co
     if (opened) {
         file >> stored_hash;
         if (file.fail()) {
-            open_ec.assign(errno, std::system_category());
+            open_ec = std::make_error_code(std::errc::io_error);
         }
     }
     if (!opened || file.fail()) {
@@ -592,7 +592,7 @@ void JitBuildState::compile_one(
 
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
-    jit_build::utils::FileRenamer log_file(fs::path{obj_path} += ".log");
+    jit_build::utils::FileRenamer log_file(fs::path{obj_path}.concat(".log"));
     tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());

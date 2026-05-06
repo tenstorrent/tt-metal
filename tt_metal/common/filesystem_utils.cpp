@@ -621,7 +621,13 @@ void async_sync_filesystem(const std::filesystem::path& path) {
     if (g_pending_sync.valid()) {
         g_pending_sync.get();
     }
-    g_pending_sync = std::async(std::launch::async, [p = path] { sync_filesystem(p); });
+    g_pending_sync = std::async(std::launch::async, [p = path] {
+        try {
+            sync_filesystem(p);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "async sync_filesystem failed for {}: {}", p.string(), e.what());
+        }
+    });
 }
 
 void wait_for_pending_sync() {
