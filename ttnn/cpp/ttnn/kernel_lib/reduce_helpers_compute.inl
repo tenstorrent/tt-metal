@@ -44,7 +44,17 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_init_short_with_dt(uint32_t old_cbid, uint32_t input_cb, uint32_t scaler_cb) {
     // Reconfigure SRCA data format from old_cbid to input_cb (similar to copy_tile_to_dst_init_short_with_dt)
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, input_cb)));
+    // tt-metal HEAD's `llk_unpack_reconfig_data_format_srca` requires 2 template
+    // args (`<bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target>`);
+    // every other call site in tt-metal HEAD passes
+    // `<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>` (tile_move_copy.h:72,
+    // matmul.h:211/390, tilize.h:126/253, reconfig_data_format.h:53/68).
+    // Without IGNORE, this path fails JIT with template-arg deduction errors
+    // when SDPA-class kernels exercise the Accumulate branch of
+    // reload_accumulator_if_needed under TT_METAL_WATCHER. The MATH variant
+    // doesn't need the extra arg — its signature is `<bool, bool>` (defaulted)
+    // and the 2-arg overload at llk_math_common_api.h:99 still exists in HEAD.
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cbid, input_cb)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, input_cb)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
