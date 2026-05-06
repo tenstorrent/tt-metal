@@ -12,9 +12,14 @@ namespace ttnn::experimental::prim {
 struct YUVConversionProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle compute_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
-        tt::tt_metal::CoreCoord core;
+        uint32_t num_cores;
+        tt::tt_metal::CoreRangeSet core_group_1;
+        tt::tt_metal::CoreRangeSet core_group_2;
+        uint32_t groups_per_core_g1;
+        uint32_t groups_per_core_g2;
+        uint32_t W;
+        uint32_t W2;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
