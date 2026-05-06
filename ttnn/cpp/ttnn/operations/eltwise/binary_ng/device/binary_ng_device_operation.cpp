@@ -254,10 +254,8 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
     (void)args;
     (void)tensor_args;
     if (!program::BinaryNgDramOptimizedProgram::validate_program(args, tensor_args).has_value()) {
-        log_info(tt::LogOp, "Using BinaryNgDramOptimizedProgram");
         return program::BinaryNgDramOptimizedProgram{};
     }
-    log_info(tt::LogOp, "Using BinaryNgProgramFactory");
     return program::BinaryNgProgramFactory{};
 }
 

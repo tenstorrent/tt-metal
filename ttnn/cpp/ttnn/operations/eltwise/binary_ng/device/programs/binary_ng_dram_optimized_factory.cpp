@@ -31,14 +31,47 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::IDevice;
 
+std::map<std::string, std::string> get_compute_defines(
+    ttnn::DataType dtype, const ttnn::operations::binary_ng::OpConfig& op_config) {
+    using namespace ttnn::operations::binary_ng;
+    std::map<std::string, std::string> defines;
+
+    std::optional<std::string> int_data_format;
+    if (dtype == ttnn::DataType::INT32 || dtype == ttnn::DataType::UINT32 || dtype == ttnn::DataType::UINT16) {
+        int_data_format = (dtype == ttnn::DataType::INT32)    ? "Int32"
+                          : (dtype == ttnn::DataType::UINT32) ? "UInt32"
+                                                              : "UInt16";
+    }
+
+    if (op_config.is_sfpu_op()) {
+        auto op = std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op);
+        if (op == OpConfig::SfpuBinaryOp::MUL) {
+            if (int_data_format) {
+                defines["BINARY_SFPU_INIT"] = fmt::format(
+                    "mul_int_tile_init<DataFormat::{}>(); mul_int_binary_init_replay<DataFormat::{}>();",
+                    *int_data_format,
+                    *int_data_format);
+                defines["BINARY_SFPU_OP"] = fmt::format("mul_int_binary_tile_replay<DataFormat::{}>", *int_data_format);
+                return defines;
+            }
+            defines["BINARY_SFPU_INIT"] = "mul_binary_tile_init_replay();";
+            defines["BINARY_SFPU_OP"] = "mul_binary_tile_replay";
+            return defines;
+        }
+    }
+
+    return op_config.as_defines(dtype);
+}
+
 // For compute bound operations, we need to get multiple cores per bank for optimal performance.
 CoreRangeSet get_optimal_wh_dram_core_coords(std::size_t num_cores_per_bank) {
     /*
-    The problem: that "optimal DRAM bank → logical worker" mapping is a fixed physical layout. When dispatch_core_axis =
-    COL, the fast‑dispatch firmware reserves a column of Tensix cores; if any of the DRAM‑bank‑adjacent workers happen
-    to land in that reserved column, the subsequent CreateKernel placement collides with a dispatch core and
-    ProgramImpl::compile fatally asserts. In the ROW configuration those same workers are outside the dispatch row, so
-    the identical program compiles fine. That's exactly why only the COL parametrization fails.
+    The problem: that "optimal DRAM bank → logical worker" mapping is a fixed physical layout. When
+    dispatch_core_axis = COL, the fast‑dispatch firmware reserves a column of Tensix cores; if any of the
+    DRAM‑bank‑adjacent workers happen to land in that reserved column, the subsequent CreateKernel placement
+    collides with a dispatch core and ProgramImpl::compile fatally asserts. In the ROW configuration those same
+    workers are outside the dispatch row, so the identical program compiles fine. That's exactly why only the COL
+    parametrization fails.
     */
     std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = [num_cores_per_bank]() {
         if (num_cores_per_bank == 1) {
@@ -467,7 +500,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     using namespace tt::tt_metal;
 
     //  auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_dram_optimal_cores(args.input_tensor_a.device());
-    auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_optimal_wh_dram_core_coords(1);
+    auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_optimal_wh_dram_core_coords(is_sfpu_op ? 3 : 1);
 
     Program program{};
     auto dtype = tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
@@ -557,7 +590,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
-    auto compute_kernel_defines = op_config.as_defines(a_dtype, true);
+    auto compute_kernel_defines = CMAKE_UNIQUE_NAMESPACE::get_compute_defines(a_dtype, op_config);
 
     // TODO: create a common func and merge with op_config.as_defines(a_dtype);
     {
