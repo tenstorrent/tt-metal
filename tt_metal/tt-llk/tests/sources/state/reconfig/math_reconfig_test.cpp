@@ -36,7 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t next_a = (std::uint32_t)params.formats.pack_src;
     const std::uint32_t next_b = (std::uint32_t)params.formats.pack_dst;
 
-    if (params.CONFIGURE_TEST_RUN_IDX == 0)
+    if (params.RECONFIG_RUN_IDX == 0)
     {
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(
             /* srca_data_format */ next_a,
