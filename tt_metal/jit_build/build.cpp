@@ -131,12 +131,12 @@ void JitBuildEnv::init(
     const std::array<fs::path, 2> sfpi_roots = {this->root_ / "runtime/sfpi", "/opt/tenstorrent/sfpi"};
 
     bool sfpi_found = false;
-    for (unsigned i = 0; i < 2; ++i) {
-        auto gxx = (sfpi_roots[i] / "compiler/bin/riscv-tt-elf-g++").string();
+    for (size_t i = 0; i < 2; ++i) {
+        auto gxx = sfpi_roots[i] / "compiler/bin/riscv-tt-elf-g++";
         if (tt::filesystem::safe_exists(gxx).value_or(false)) {
-            this->gpp_ += gxx + " ";
+            this->gpp_ += gxx.string() + " ";
             this->gpp_include_dir_ = sfpi_roots[i] / "include";
-            log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
+            log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i].string());
             sfpi_found = true;
             break;
         }
