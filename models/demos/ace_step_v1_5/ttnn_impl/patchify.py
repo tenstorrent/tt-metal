@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
+import numpy as np
+
 import ttnn
 
 
@@ -52,6 +54,30 @@ def _maybe_get_state_dict_key(state_dict: dict, candidates: Tuple[str, ...]) -> 
         if k in state_dict:
             return k
     raise KeyError(f"None of the candidate keys were found in state_dict: {candidates}")
+
+
+def _to_numpy_host_array(x):
+    """
+    Convert `x` into a CPU NumPy array for host-side preprocessing.
+
+    This module's weights may come from:
+    - NumPy arrays (already fine)
+    - Torch tensors (including bfloat16, which cannot be implicitly converted to NumPy)
+    """
+
+    # Torch tensors: detach and convert to float32 on CPU before NumPy ops.
+    # Import torch lazily so this file can be imported even in minimal environments.
+    try:
+        import torch  # type: ignore
+
+        if isinstance(x, torch.Tensor):
+            return x.detach().to(dtype=torch.float32, device="cpu").numpy()
+    except Exception:
+        # If torch isn't installed or something unexpected happens, fall through to numpy conversion attempt.
+        pass
+
+    # NumPy arrays / array-likes
+    return np.asarray(x)
 
 
 class TtAceStepPatchEmbed1D:
@@ -129,6 +155,9 @@ class TtAceStepPatchEmbed1D:
         weight_host_tt = ttnn.as_tensor(weight_host, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         # Bias for conv1d/conv2d path is expected in NHWC-like rank-4 form [1,1,1,C]
         bias_host_tt = ttnn.as_tensor(bias_host.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self._weight_host_tt = weight_host_tt
+        self._bias_host_tt = bias_host_tt
+        self._packed_for: tuple[int, int] | None = None  # (batch_size, padded_input_length)
 
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=weights_dtype, shard_layout=None, deallocate_activation=False
@@ -141,23 +170,31 @@ class TtAceStepPatchEmbed1D:
             packer_l1_acc=True,
         )
         self.activation_dtype = activation_dtype
-        # Pre-pack conv weights/bias at init to avoid conv2d "pull back to host" during first forward.
-        # This keeps the entire TTNN forward device-pure (no TTNN->host mid-run transfers).
-        if self.expected_input_length is None:
-            raise RuntimeError(
-                "TtAceStepPatchEmbed1D requires expected_input_length to prepack conv weights for strict device-pure runs"
-            )
-        padded_len = int(((self.expected_input_length + self.patch_size - 1) // self.patch_size) * self.patch_size)
+        # Pre-pack conv weights/bias at init when expected_input_length is known.
+        # This keeps the entire forward pass device-pure (no TTNN->host mid-run transfers).
+        #
+        # When expected_input_length is not provided (e.g. unit tests), we lazily pack on first forward
+        # based on runtime input shape and cache the packed weights.
+        self.weight = None
+        self.bias = None
+        if self.expected_input_length is not None:
+            padded_len = int(((self.expected_input_length + self.patch_size - 1) // self.patch_size) * self.patch_size)
+            self._ensure_packed(batch_size=1, padded_input_length=padded_len)
+
+    def _ensure_packed(self, *, batch_size: int, padded_input_length: int) -> None:
+        if self._packed_for == (batch_size, padded_input_length) and self.weight is not None and self.bias is not None:
+            return
+
         self.weight = ttnn.prepare_conv_weights(
-            weight_tensor=weight_host_tt,
+            weight_tensor=self._weight_host_tt,
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
             weights_format="OIHW",
             in_channels=self.in_channels,
             out_channels=self.out_channels,
-            batch_size=1,
+            batch_size=batch_size,
             input_height=1,
-            input_width=padded_len,
+            input_width=padded_input_length,
             kernel_size=(1, self.patch_size),
             stride=(1, self.patch_size),
             padding=(0, 0),
@@ -170,14 +207,14 @@ class TtAceStepPatchEmbed1D:
             compute_config=self.compute_config,
         )
         self.bias = ttnn.prepare_conv_bias(
-            bias_tensor=bias_host_tt,
+            bias_tensor=self._bias_host_tt,
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
-            batch_size=1,
+            batch_size=batch_size,
             input_height=1,
-            input_width=padded_len,
+            input_width=padded_input_length,
             kernel_size=(1, self.patch_size),
             stride=(1, self.patch_size),
             padding=(0, 0),
@@ -188,16 +225,13 @@ class TtAceStepPatchEmbed1D:
             conv_config=self.conv_config,
             compute_config=self.compute_config,
         )
+        self._packed_for = (batch_size, padded_input_length)
 
     def forward(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:
         if len(hidden_states.shape) != 3:
             raise ValueError(f"Expected hidden_states shape [B, T, C], got {hidden_states.shape}")
         if not ttnn.is_tensor_storage_on_device(hidden_states):
             raise AssertionError("Expected hidden_states to be device-resident (TTNN tensor on device).")
-        if not ttnn.is_tensor_storage_on_device(self.weight):
-            raise AssertionError("Expected proj_in weight to be device-resident.")
-        if not ttnn.is_tensor_storage_on_device(self.bias):
-            raise AssertionError("Expected proj_in bias to be device-resident.")
         if int(hidden_states.shape[-1]) != self.in_channels:
             raise ValueError(f"Expected in_channels={self.in_channels}, got C={hidden_states.shape[-1]}")
 
@@ -207,8 +241,16 @@ class TtAceStepPatchEmbed1D:
         batch_size = int(hidden_states.shape[0])
         input_length = int(hidden_states.shape[1])
 
+        self._ensure_packed(batch_size=batch_size, padded_input_length=input_length)
+
         weight_tensor = self.weight
         bias_tensor = self.bias
+        if weight_tensor is None or bias_tensor is None:
+            raise RuntimeError("Internal error: conv weights/bias were not packed")
+        if not ttnn.is_tensor_storage_on_device(weight_tensor):
+            raise AssertionError("Expected proj_in weight to be device-resident.")
+        if not ttnn.is_tensor_storage_on_device(bias_tensor):
+            raise AssertionError("Expected proj_in bias to be device-resident.")
 
         conv_ret = ttnn.conv1d(
             input_tensor=hidden_states,
@@ -243,6 +285,9 @@ class TtAceStepPatchEmbed1D:
         out = ttnn.squeeze(out, 0)
         out = ttnn.reshape(out, (batch_size, out_length, out.shape[-1]))
         return out, meta
+
+    def __call__(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:
+        return self.forward(hidden_states)
 
 
 class TtAceStepDePatchify1D:
@@ -328,11 +373,12 @@ class TtAceStepDePatchify1D:
         # `torch.nn.ConvTranspose1d` weight layout is [in_channels, out_channels, kernel_size].
         # For each kernel tap i, the slice `torch_weight[:, :, i]` is [in, out] and maps to a contiguous
         # block of `out` outputs in the upsampled time axis.
+        weight_host_np = _to_numpy_host_array(weight_host)
+        bias_host_np = _to_numpy_host_array(bias_host)
+
         w_blocks = []
         for i in range(self.patch_size):
-            w_blocks.append(weight_host[:, :, i])  # [in, out]
-        # NOTE: avoid torch; `weight_host` is expected to be numpy-like (supports concatenate).
-        import numpy as np
+            w_blocks.append(weight_host_np[:, :, i])  # [in, out]
 
         w_io_times_p = np.concatenate(w_blocks, axis=1)  # [in, out*p]
         w2d = np.ascontiguousarray(np.swapaxes(w_io_times_p, 0, 1))  # [out*p, in]
@@ -346,7 +392,7 @@ class TtAceStepDePatchify1D:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(
-            bias_host.reshape(1, 1, 1, -1),
+            bias_host_np.reshape(1, 1, 1, -1),
             dtype=activation_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
@@ -409,3 +455,6 @@ class TtAceStepDePatchify1D:
         if meta.pad_length:
             y = y[:, : meta.original_seq_len, :]
         return y
+
+    def __call__(self, hidden_states: ttnn.Tensor, meta: PatchifyMetadata) -> ttnn.Tensor:
+        return self.forward(hidden_states, meta)

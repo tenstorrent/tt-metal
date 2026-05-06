@@ -155,3 +155,6 @@ class TtAceStepDiTOutputHead:
         modulated_rm = ttnn.to_layout(modulated, ttnn.ROW_MAJOR_LAYOUT)
 
         return self.depatchify.forward(modulated_rm, meta)
+
+    def __call__(self, hidden_states: ttnn.Tensor, temb: ttnn.Tensor, meta: PatchifyMetadata) -> ttnn.Tensor:
+        return self.forward(hidden_states, temb, meta)
