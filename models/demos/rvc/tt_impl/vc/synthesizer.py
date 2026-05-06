@@ -194,24 +194,6 @@ class MultiHeadAttention:
         embeddings = relative_embeddings
         return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
 
-    def _get_absolute_position_index_and_zero_mask_old(
-        self, length: int, b: int, h: int
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        if (length, b, h) in self.index_and_mask_cache:
-            return self.index_and_mask_cache[(length, b, h)]
-        idx_row = torch.arange(start=0, end=length, dtype=torch.int64)
-        idx_col = torch.arange(start=0, end=2 * self.window_size + 1, dtype=torch.int64)
-        index = idx_col.unsqueeze(0) + idx_row.unsqueeze(1) - self.window_size
-        index = index.expand(b, h, length, 2 * self.window_size + 1)
-        zero_mask = torch.logical_and(index >= 0, index < length).to(torch.float32)
-        index = index % length
-
-        zero_mask = torch.nn.functional.pad(zero_mask, (0, max(0, length - (2 * self.window_size + 1))), value=1)
-        zero_mask_tt = ttnn.from_torch(zero_mask, dtype=ttnn.bfloat16, device=self.device)
-        index_tt = ttnn.from_torch(index, dtype=ttnn.uint32, device=self.device)
-        self.index_and_mask_cache[(length, b, h)] = (index_tt, zero_mask_tt)
-        return index_tt, zero_mask_tt
-
     def _get_absolute_position_index_and_zero_mask(
         self, length: int, b: int, h: int
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:

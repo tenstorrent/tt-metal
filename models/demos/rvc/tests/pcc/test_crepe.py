@@ -13,12 +13,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_crepe_model(device):
     torch.manual_seed(0)
-    model_name = "tiny"
     batch_size = 1024
     pcc = 0.96
 
-    torch_predictor = TorchCrepePredictor(model=model_name)
-    tt_predictor = TTCrepePredictor(model=model_name, device=device)
+    torch_predictor = TorchCrepePredictor()
+    tt_predictor = TTCrepePredictor(device=device)
 
     sample_rate = 16000
     hop_length = 160

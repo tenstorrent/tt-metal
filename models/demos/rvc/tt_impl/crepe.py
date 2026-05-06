@@ -235,7 +235,7 @@ class ConvBlock:
 class Crepe:
     """TTNN CREPE model definition."""
 
-    def __init__(self, device: ttnn.Device, model: str = "tiny"):
+    def __init__(self, device: ttnn.Device):
         self.device = device
         if self.device.get_num_devices() > 1:
             self.input_mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=0)
@@ -244,16 +244,9 @@ class Crepe:
             self.input_mesh_mapper = None
             self.output_mesh_composer = None
 
-        if model == "full":
-            in_channels = [1, 1024, 128, 128, 128, 256]
-            out_channels = [1024, 128, 128, 128, 256, 512]
-            self.in_features = 2048
-        elif model == "tiny":
-            in_channels = [1, 128, 16, 16, 16, 32]
-            out_channels = [128, 16, 16, 16, 32, 64]
-            self.in_features = 256
-        else:
-            raise ValueError(f"Model {model} is not supported")
+        in_channels = [1, 128, 16, 16, 16, 32]
+        out_channels = [128, 16, 16, 16, 32, 64]
+        self.in_features = 256
 
         kernel_sizes = [512] + 5 * [64]
         strides = [4] + 5 * [1]
@@ -292,22 +285,21 @@ class Crepe:
         return ttnn.to_torch(tt_x, mesh_composer=self.output_mesh_composer).to(torch.float32)
 
 
-def load_crepe(device: ttnn.Device, capacity="full"):
+def load_crepe(device: ttnn.Device):
     """Load local model weights from the project data directory."""
-    weights_path = Path(__file__).resolve().parent.parent / "data" / f"{capacity}2.safetensors"
-    model = Crepe(device=device, model=capacity)
+    weights_path = Path(__file__).resolve().parent.parent / "data" / "assets" / f"crepe-tiny.safetensors"
+    model = Crepe(device=device)
     state_dict = load_file(weights_path)
     model.load_state_dict(state_dict)
     return model
 
 
 class CrepePredictor:
-    def __init__(self, model="tiny", device: ttnn.Device | None = None):
+    def __init__(self, device: ttnn.Device | None = None):
         if device is None:
             raise ValueError("TTNN CrepePredictor requires a TT device.")
-        self.capacity = model
         self.device = device
-        self.model = load_crepe(device=device, capacity=model)
+        self.model = load_crepe(device=device)
 
     def predict(
         self,

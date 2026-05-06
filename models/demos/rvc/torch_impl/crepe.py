@@ -49,9 +49,8 @@ def viterbi(logits):
 
 
 class CrepePredictor:
-    def __init__(self, model="tiny"):
-        self.capacity = model
-        self.model = load_crepe(model)
+    def __init__(self):
+        self.model = load_crepe()
 
     def predict(
         self,
@@ -258,20 +257,11 @@ class ConvBlock(torch.nn.Module):
 class Crepe(torch.nn.Module):
     """Crepe model definition"""
 
-    def __init__(self, model="tiny"):
+    def __init__(self):
         super().__init__()
-
-        # Model-specific layer parameters
-        if model == "full":
-            in_channels = [1, 1024, 128, 128, 128, 256]
-            out_channels = [1024, 128, 128, 128, 256, 512]
-            self.in_features = 2048
-        elif model == "tiny":
-            in_channels = [1, 128, 16, 16, 16, 32]
-            out_channels = [128, 16, 16, 16, 32, 64]
-            self.in_features = 256
-        else:
-            raise ValueError(f"Model {model} is not supported")
+        in_channels = [1, 128, 16, 16, 16, 32]
+        out_channels = [128, 16, 16, 16, 32, 64]
+        self.in_features = 256
 
         # Shared layer parameters
         kernel_sizes = [512] + 5 * [64]
@@ -297,10 +287,10 @@ class Crepe(torch.nn.Module):
         return output
 
 
-def load_crepe(capacity="full"):
+def load_crepe():
     """Load local model weights from the project assets directory."""
-    weights_path = Path(__file__).resolve().parent.parent / "data" / f"{capacity}2.safetensors"
-    model = Crepe(capacity)
+    weights_path = Path(__file__).resolve().parent.parent / "data" / "assets" / f"crepe-tiny.safetensors"
+    model = Crepe()
     from safetensors.torch import load_file
 
     state_dict = load_file(weights_path)
