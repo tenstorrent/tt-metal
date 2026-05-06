@@ -434,6 +434,7 @@ class Gemma4Model:
         pli_device_tensors=None,
         position_idx_cache=None,
         pli_combined=None,
+        get_last_token=-1,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -548,6 +549,18 @@ class Gemma4Model:
         # Final norm
         hidden_states = self.norm.forward(hidden_states)
 
+        # Slice to the last token tile before lm_head when caller only wants
+        # next-token logits (prefill). Keeps the 262k-vocab matmul output at
+        # 32 rows instead of seq_len rows — without this, prefill at seq_len
+        # >= 4k OOMs DRAM on smaller WH SKUs (lm_head logits = seq_len * vocab
+        # * 2B; at seq=4096 that's 2 GiB, doesn't fit in DRAM with weights).
+        if get_last_token != -1:
+            hidden_states = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last_token, 0),
+                (1, 1, get_last_token + 32, hidden_states.shape[-1]),
+            )
+
         # LM head (column-parallel on vocab dim when TP > 1)
         if self.lm_head_weight is not None:
             logits = ttnn.linear(hidden_states, self.lm_head_weight)
@@ -639,6 +652,8 @@ class Gemma4Model:
     ):
         """Prefill forward — matches tt_transformers Generator interface."""
         seq_len = x.shape[-2]
+        # Pass get_last_token down so the slice happens BEFORE lm_head — the
+        # post-lm_head slice would still allocate full-seq logits first.
         logits = self(
             hidden_states=x,
             position_idx=None,
@@ -647,15 +662,8 @@ class Gemma4Model:
             is_decode=False,
             input_ids_torch=input_ids_torch,
             embeds_torch=embeds_torch,
+            get_last_token=get_last_token,
         )
-
-        # Extract last token tile for next-token prediction
-        if get_last_token != -1:
-            logits = ttnn.slice(
-                logits,
-                (0, 0, get_last_token, 0),
-                (1, 1, get_last_token + 32, logits.shape[-1]),
-            )
 
         return logits
 
