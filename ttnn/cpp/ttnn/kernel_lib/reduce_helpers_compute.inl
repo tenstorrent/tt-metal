@@ -30,15 +30,6 @@ ALWI void reduce_with_matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0)));
 }
 
-// `_with_dt` variants reconfigure the unpacker / math SRCA data format when the
-// previous op (the accumulator-reload `copy_tile`) ran with a different format.
-// They rely on `llk_unpack_reconfig_data_format_srca` / `llk_math_reconfig_data_format_srca`
-// LLKs, which are only present on Gen1 (WH/BH). Quasar manages data-format
-// reconfiguration internally via the DFB metadata and does not expose these LLKs,
-// so the body is empty there. This function is only reachable when the caller
-// passes `Accumulate{...}` to `compute_kernel_lib::reduce`; passing
-// `NoAccumulation{}` (the default) skips the call entirely. Accumulation-reload
-// support on Quasar is a follow-up.
 ALWI void reduce_with_matmul_init_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
@@ -83,10 +74,6 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 // Helper Function Implementations
 // =============================================================================
 
-// See note above on `_with_dt` and Gen1-only LLKs. `-Wtemplate-body` in modern GCC
-// checks non-dependent names in template bodies eagerly, so we have to guard the
-// body even though this template is only instantiated from the accumulation
-// reload path (which our reduce-W kernel doesn't take).
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_init_short_with_dt(uint32_t old_cb_id, uint32_t input_cb_id, uint32_t scaler_cb_id) {
     // Reconfigure SRCA data format from old_cb_id to input_cb_id (similar to copy_tile_to_dst_init_short_with_dt)
