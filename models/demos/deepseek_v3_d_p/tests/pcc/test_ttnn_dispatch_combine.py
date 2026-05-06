@@ -49,7 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        (3200, 7168, 64, 2, 8),
     ],
     ids=["3200-avg"],
 )

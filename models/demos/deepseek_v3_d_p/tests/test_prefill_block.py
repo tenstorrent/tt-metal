@@ -46,11 +46,11 @@ PCC_THRESHOLD_KVPE = 0.999
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 2),
-        ("abc_1k", False, 25 * 1024, 2),
-        ("abc_1k", True, 1024, 2),
+        ("random", False, 1024, 8),
+        ("abc_1k", False, 25 * 1024, 8),
+        ("abc_1k", True, 1024, 8),
     ],
-    ids=["smoke-random", "perf-abc_1k", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-abc_25k", "pcc-abc_1k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
