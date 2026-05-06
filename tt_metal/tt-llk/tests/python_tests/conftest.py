@@ -279,6 +279,7 @@ def pytest_configure(config):
     if (
         not TestConfig.TEST_TARGET.run_simulator
         and TestConfig.ARCH != ChipArchitecture.QUASAR
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
     ):
         override_gprs_used_by_tensix_dump()
 
@@ -592,12 +593,6 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
-
-    if (
-        not TestConfig.TEST_TARGET.run_simulator
-        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
-    ):
-        _send_arc_message("GO_BUSY", TestConfig.TEST_TARGET.device_id)
 
 
 @pytest.fixture(scope="module", autouse=True)
