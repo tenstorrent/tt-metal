@@ -186,8 +186,6 @@ class TTSeamlessM4Tv2Decoder:
         encoder_hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor,
         cross_attention_mask: Optional[ttnn.Tensor] = None,
-        *,
-        skip_final_layer_norm: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -196,11 +194,9 @@ class TTSeamlessM4Tv2Decoder:
             encoder_hidden_states: ``bfloat16`` ``[batch, enc_seq, hidden_size]`` on device.
             causal_attention_mask: ``bfloat16`` additive mask ``[batch, 1, seq, seq]`` on device.
             cross_attention_mask: optional ``bfloat16`` ``[batch, 1, seq, enc_seq]`` on device.
-            skip_final_layer_norm: if True, return hidden states after the last decoder block
-                and omit ``decoder.layer_norm`` (for PCC against the pre-norm stack on deep models).
 
         Returns:
-            Last hidden states ``bfloat16`` ``[batch, seq, hidden_size]`` on device.
+            Last hidden states ``bfloat16`` ``[batch, seq, hidden_size]`` on device (after ``decoder.layer_norm``).
         """
         device = self.device
         parameters = self.parameters
@@ -289,9 +285,6 @@ class TTSeamlessM4Tv2Decoder:
             ff = self._linear(ff, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
             hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff)
-
-        if skip_final_layer_norm:
-            return hidden
 
         hidden = self._layer_norm(
             hidden,
