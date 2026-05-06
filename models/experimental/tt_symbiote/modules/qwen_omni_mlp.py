@@ -3,10 +3,8 @@
 
 from torch import nn
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIReplicatedWColSharded,
-    TTNNLinearIColShardedWAllReduced,
-)
+from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNQwenOmniIColShardedWAllReduced
+from models.experimental.tt_symbiote.modules.linear import TTNNLinearIReplicatedWColSharded
 import ttnn
 from models.experimental.tt_symbiote.core.utils import tree_map
 
@@ -54,7 +52,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
 
         # TP MLP: fc1 col-shard intermediate; fc2 all-reduce to replicated output.
         module.linear_fc1 = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.linear_fc1)
-        module.linear_fc2 = TTNNLinearIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
+        module.linear_fc2 = TTNNQwenOmniIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
 
         module.act_fn = _normalize_qwen_omni_vision_act(torch_mlp)
 
@@ -169,7 +167,7 @@ class TTNNQwen3OmniTalkerResizeMLP(TTNNModule):
         module.intermediate_size = int(torch_mlp.linear_fc1.out_features)
         module.output_hidden_size = int(torch_mlp.linear_fc2.out_features)
         module.linear_fc1 = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.linear_fc1)
-        module.linear_fc2 = TTNNLinearIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
+        module.linear_fc2 = TTNNQwenOmniIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
         module.act_fn = _normalize_qwen_omni_vision_act(torch_mlp)
         return module
 

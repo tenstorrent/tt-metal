@@ -65,8 +65,10 @@ from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import (
     TTNNConv1d,
     TTNNConv3d,
     TTNNConvTranspose1d,
-    TTNNSnakeBeta,
+    TTNNQwen3OmniMoeAudioEncoderConvOutLinear,
     TTNNQwenOmniConv2dNHWC,
+    TTNNQwenOmniLinear,
+    TTNNSnakeBeta,
 )
 from models.experimental.tt_symbiote.modules.qwen_omni_decoder import (
     TTNNQwen3OmniMoeCausalConvNet,
@@ -75,10 +77,7 @@ from models.experimental.tt_symbiote.modules.qwen_omni_decoder import (
     TTNNQwen3OmniMoeConvNeXtBlock,
 )
 
-from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinear,
-    TTNNQwen3OmniMoeAudioEncoderConvOutLinear,
-)
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.qwen_omni_mlp import (
     TTNNQwen3OmniTalkerResizeMLP,
     TTNNQwen3OmniVisionMLP,
@@ -115,7 +114,7 @@ nn_to_ttnn1 = {
     torch.nn.Conv3d: TTNNConv3d,
     torch.nn.Conv1d: TTNNConv1d,
     torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
-    torch.nn.Linear: TTNNLinear,
+    torch.nn.Linear: TTNNQwenOmniLinear,
 }
 
 # Legacy ``NN_TO_TTNN_CODE2WAV`` only had activations / LayerNorm / conv — not Linear (would replace ConvNeXt ``nn.Linear`` pwconvs and break audio decode). Codec-predictor ``Embedding`` is ``nn_to_ttnn3`` only.
@@ -160,14 +159,14 @@ nn_to_ttnn3 = {
 
 
 def _upgrade_audio_encoder_conv_out_linear(thinker):
-    """Retag ``audio_tower.conv_out`` from :class:`TTNNLinear` to :class:`TTNNQwen3OmniMoeAudioEncoderConvOutLinear` via ``tower._modules``."""
+    """Retag ``audio_tower.conv_out`` from :class:`TTNNLinear` / :class:`TTNNQwenOmniLinear` to :class:`TTNNQwen3OmniMoeAudioEncoderConvOutLinear` via ``tower._modules``."""
     tower = getattr(thinker, "audio_tower", None)
     if tower is None:
         return
     co = getattr(tower, "conv_out", None)
     if co is None or type(co) is TTNNQwen3OmniMoeAudioEncoderConvOutLinear:
         return
-    if type(co) is not TTNNLinear:
+    if type(co) not in (TTNNLinear, TTNNQwenOmniLinear):
         return
     tl = co.torch_layer
     new_co = TTNNQwen3OmniMoeAudioEncoderConvOutLinear.from_torch(tl)

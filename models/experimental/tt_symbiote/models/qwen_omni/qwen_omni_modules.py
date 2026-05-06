@@ -12,6 +12,8 @@ from typing import Optional
 import torch
 from torch import nn
 
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
 import ttnn
 from models.tt_cnn.tt.builder import Conv2dConfiguration
 from models.experimental.tt_symbiote.core.module import TTNNModule
@@ -26,6 +28,7 @@ from models.experimental.tt_symbiote.modules.attention import (
     TTNNPagedAttentionKVCache,
 )
 from models.experimental.tt_symbiote.modules.conv import NHWCConvPytorch, TTNNConv2dNHWC
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIColShardedWAllReduced
 from models.experimental.tt_symbiote.modules.tensor import TTNNReshape
 
 
@@ -83,6 +86,132 @@ def _upload_bct_replicated(x_t: torch.Tensor, mesh_device):
         device=mesh_device,
         mesh_mapper=mesh_mapper,
     )
+
+
+def _ttnn_linear_mesh_all_gather_input_if_needed(input_tensor, mesh_dev, in_features: int):
+    """When activations are width-sharded (``last * num_devices == in_features``), gather before ``ttnn.linear``."""
+    if mesh_dev is None or not hasattr(mesh_dev, "get_num_devices") or mesh_dev.get_num_devices() <= 1:
+        return input_tensor
+    last_dim = int(input_tensor.shape[-1])
+    n = int(mesh_dev.get_num_devices())
+    if last_dim != in_features and last_dim * n == in_features:
+        return ttnn.all_gather(
+            input_tensor,
+            dim=-1,
+            cluster_axis=1,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+    return input_tensor
+
+
+@trace_enabled
+class TTNNQwenOmniLinear(TTNNLinear):
+    """Qwen3-Omni ``nn.Linear`` replacement: mesh width all-gather, TorchTTNNTensor upload, replicated readback."""
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """On mesh, default readback can concat the last dim (``out_features * N``); materialize logical width."""
+        if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        def _materialize_one_replica(e):
+            if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
+                return e
+            t = e.ttnn_tensor
+            n = int(t.shape[0])
+            h = int(self.out_features)
+            pt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+            if pt.shape[-1] > h:
+                pt = pt[..., :h]
+            e.elem = pt.contiguous()
+            e.ttnn_tensor = None
+            if getattr(e, "_distributed_tensor_config", None) is not None:
+                e._distributed_tensor_config = None
+            return e
+
+        return tree_map(_materialize_one_replica, output_tensors)
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Forward pass through linear layer."""
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        if isinstance(input_tensor, TorchTTNNTensor):
+            if input_tensor.ttnn_tensor is not None:
+                input_tensor = input_tensor.ttnn_tensor
+            elif input_tensor.elem is not None:
+                dev = self.device
+                mesh_mapper = (
+                    ttnn.ReplicateTensorToMesh(dev)
+                    if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1
+                    else None
+                )
+                input_tensor = ttnn.from_torch(
+                    input_tensor.elem.contiguous().to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=dev,
+                    mesh_mapper=mesh_mapper,
+                )
+            else:
+                raise TypeError("TTNNQwenOmniLinear.forward: TorchTTNNTensor has neither ttnn_tensor nor elem")
+
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        input_tensor = _ttnn_linear_mesh_all_gather_input_if_needed(input_tensor, self.device, self.in_features)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)  # Add batch dimensions if needed
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+        tt_output = ttnn.linear(input_tensor, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
+        return tt_output
+
+
+class TTNNQwen3OmniMoeAudioEncoderConvOutLinear(TTNNQwenOmniLinear):
+    """``audio_tower.conv_out``: same mesh rules as :class:`TTNNQwenOmniLinear`; distinct type for upgrades / tests."""
+
+    @classmethod
+    def from_torch(cls, linear: nn.Linear):
+        new_linear = cls(
+            in_features=linear.in_features,
+            out_features=linear.out_features,
+        )
+        new_linear._fallback_torch_layer = linear
+        new_linear.weight = linear.weight
+        new_linear.bias = linear.bias
+        return new_linear
+
+
+class TTNNQwenOmniIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
+    """Omni vision / talker MLP fc2: after RS+AG the activation is full width per device; bias must be replicated.
+
+    Base :class:`~models.experimental.tt_symbiote.modules.linear.TTNNLinearIColShardedWAllReduced` shards bias
+    like fc1; adding it to the all-reduced output caused 1152 vs 144 style broadcast errors on mesh.
+    """
+
+    def move_weights_to_device_impl(self):
+        if isinstance(self.tt_weight_host, torch.Tensor):
+            self.tt_weight_host = preprocess_linear_weight(
+                self.tt_weight_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+            )
+        if isinstance(self.tt_bias_host, torch.Tensor):
+            self.tt_bias_host = preprocess_linear_bias(
+                self.tt_bias_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
 
 class TTNNSnakeBeta(TTNNModule):
@@ -1425,6 +1554,9 @@ __all__ = [
     "TTNNConv3d",
     "TTNNConvTranspose1d",
     "TTNNConvTranspose2dNHWC",
+    "TTNNQwen3OmniMoeAudioEncoderConvOutLinear",
     "TTNNQwenOmniConv2dNHWC",
+    "TTNNQwenOmniIColShardedWAllReduced",
+    "TTNNQwenOmniLinear",
     "TTNNSnakeBeta",
 ]
