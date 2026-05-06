@@ -17,10 +17,11 @@ from ....utils.test import line_params, ring_params, ring_params_8k
 
 # (label, width, height) — ordered small to large
 RESOLUTIONS = [
-    ("480p", 832, 480),
-    ("720p", 1280, 720),
-    ("1k", 1024, 1024),
-    ("2k", 2048, 2048),
+    # ("480p", 832, 480),
+    # ("720p", 1280, 720),
+    # ("1k", 1024, 1024),
+    # ("2k", 2048, 2048),
+    ("1536p", 1536, 2048),
     # ("4k", 4096, 4096),
 ]
 
@@ -161,8 +162,8 @@ def test_resolution_sweep(
 
 
 def _print_table(results, mesh_shape, sp_factor, tp_factor):
-    col_widths = [12, 12, 14, 10, 12]
-    headers = ["Resolution", "Encoder(s)", "Denoising(s)", "VAE(s)", "Total(s)"]
+    col_widths = [12, 12, 14, 14, 10, 12]
+    headers = ["Resolution", "Encoder(s)", "Denoising(s)", "Step(s)", "VAE(s)", "Total(s)"]
     divider = "-+-".join("-" * w for w in col_widths)
     total_w = sum(col_widths) + 3 * (len(col_widths) - 1)
 
@@ -179,7 +180,7 @@ def _print_table(results, mesh_shape, sp_factor, tp_factor):
     for label, _, _ in RESOLUTIONS:
         r = results.get(label)
         if r is None:
-            cells = [label, "N/A", "N/A", "N/A", "N/A"]
+            cells = [label, "N/A", "N/A", "N/A", "N/A", "N/A"]
         elif "error" in r:
             err_w = total_w - col_widths[0] - 3
             err_msg = r["error"][:err_w]
@@ -190,6 +191,7 @@ def _print_table(results, mesh_shape, sp_factor, tp_factor):
                 label,
                 f"{r['encoder']:.3f}",
                 f"{r['denoising']:.3f}",
+                f"{r['denoising'] / NUM_INFERENCE_STEPS:.3f}",
                 f"{r['vae']:.3f}",
                 f"{r['total']:.3f}",
             ]

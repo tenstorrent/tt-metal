@@ -85,6 +85,9 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
         pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+        # BH on 2x4
+        pytest.param((2, 4), (2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_2x4sp1tp0"),
+        pytest.param((2, 4), (2, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="bh_2x4sp0tp1"),
         # WH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
@@ -99,6 +102,8 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
         pytest.param(1, 31, 40, 80, 512, id="5b-720p"),
         pytest.param(1, 21, 60, 104, 512, id="14b-480p"),
         pytest.param(1, 21, 90, 160, 512, id="14b-720p"),
+        # 1536x2048 at 1 frame: latent T=1, H=2048/8=256, W=1536/8=192 → seq=1*128*96=12288
+        pytest.param(1, 1, 256, 192, 512, id="1536p-1frame"),
     ],
 )
 def test_wan_transformer_block(
