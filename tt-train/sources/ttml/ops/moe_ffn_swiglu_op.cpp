@@ -115,7 +115,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         down_proj_parts.push_back(std::move(down_proj_e));
     }
 
-    auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
+    const auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
     down_proj_parts.clear();
 
     auto out = autograd::create_tensor(y);
@@ -130,7 +130,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    up_proj_parts = std::move(up_proj_parts),
                                    num_experts,
                                    hidden_dim]() mutable {
-        auto dY = out->get_grad();
+        const auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
 
         std::vector<ttnn::Tensor> dX_parts;
@@ -174,7 +174,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             // Down branch (w_down_e is [hidden, intermediate]):
             //   d_activated_e = dY_e @ w_down_e,  dW_down_e = dY_e^T @ activated_e
             auto d_activated_e = ttnn_fixed::matmul(dY_e, w_down_e, /*transpose_a=*/false, /*transpose_b=*/false);
-            auto dW_down_e = ttnn_fixed::matmul(dY_e, activated_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            const auto dW_down_e = ttnn_fixed::matmul(dY_e, activated_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_down[e]->add_grad(dW_down_e);
             activated_e.deallocate();
             dY_e.deallocate();
@@ -186,9 +186,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
             // w_gate_e, w_up_e are [intermediate, hidden]:
             //   dW_gate_e = d_gate_proj_e^T @ X_e,  dW_up_e = d_up_proj_e^T @ X_e
-            auto dW_gate_e = ttnn_fixed::matmul(d_gate_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            const auto dW_gate_e = ttnn_fixed::matmul(d_gate_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_gate[e]->add_grad(dW_gate_e);
-            auto dW_up_e = ttnn_fixed::matmul(d_up_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            const auto dW_up_e = ttnn_fixed::matmul(d_up_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_up[e]->add_grad(dW_up_e);
             X_e.deallocate();
 
@@ -208,7 +208,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         gate_proj_parts.clear();
         up_proj_parts.clear();
 
-        auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
+        const auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
         grouped->add_grad(dX);
     };
 

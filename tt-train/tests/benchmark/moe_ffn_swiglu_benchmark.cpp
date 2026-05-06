@@ -68,7 +68,7 @@ std::vector<ttml::autograd::TensorPtr> build_expert_weight_list(
     out.reserve(E);
     const std::array<std::size_t, 4U> shape{1U, 1U, K, N};
     for (uint32_t e = 0; e < E; ++e) {
-        auto w = ttml::test_utils::make_uniform_xarray<float>(shape, -0.05F, 0.05F, rng());
+        const auto w = ttml::test_utils::make_uniform_xarray<float>(shape, -0.05F, 0.05F, rng());
         out.push_back(ttml::autograd::create_tensor(ttml::core::from_xtensor(w, device), /*requires_grad=*/true));
     }
     return out;
@@ -87,7 +87,7 @@ ttml::autograd::TensorPtr build_grouped_tensor(
             continue;
         }
         const std::array<std::size_t, 4U> slice_shape{1U, 1U, counts[e], H};
-        auto slice = ttml::test_utils::make_uniform_xarray<float>(slice_shape, -1.0F, 1.0F, rng());
+        const auto slice = ttml::test_utils::make_uniform_xarray<float>(slice_shape, -1.0F, 1.0F, rng());
         xt::view(grouped, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
     }
     return ttml::autograd::create_tensor(ttml::core::from_xtensor(grouped, device), /*requires_grad=*/true);
@@ -121,14 +121,14 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     const auto offsets_host = compute_offsets(c.counts);
     const uint32_t T_cap = offsets_host.back();
 
-    auto offsets_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+    const auto offsets_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
 
     // Build weights once and reuse across iterations.
     // [out, in] layout (LinearLayer convention).
-    auto w_gate = build_expert_weight_list(c.E, c.I, c.H, device, rng);
-    auto w_up = build_expert_weight_list(c.E, c.I, c.H, device, rng);
-    auto w_down = build_expert_weight_list(c.E, c.H, c.I, device, rng);
+    const auto w_gate = build_expert_weight_list(c.E, c.I, c.H, device, rng);
+    const auto w_up = build_expert_weight_list(c.E, c.I, c.H, device, rng);
+    const auto w_down = build_expert_weight_list(c.E, c.H, c.I, device, rng);
 
     auto build_grouped = [&]() { return build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng); };
 
@@ -137,9 +137,9 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     fwd_times.reserve(num_measure);
 
     auto run_forward = [&]() -> double {
-        auto grouped = build_grouped();
+        const auto grouped = build_grouped();
         const auto t0 = std::chrono::high_resolution_clock::now();
-        auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
+        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         const auto t1 = std::chrono::high_resolution_clock::now();
         ttml::autograd::ctx().reset_graph();
@@ -158,9 +158,9 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     fb_times.reserve(num_measure);
 
     auto run_fwd_bwd = [&]() -> double {
-        auto grouped = build_grouped();
+        const auto grouped = build_grouped();
         const auto t0 = std::chrono::high_resolution_clock::now();
-        auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
+        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
         out->set_grad(ttml::core::ones_like(out->get_value()));
         out->backward();
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);

@@ -52,16 +52,16 @@ xt::xarray<float> moe_ffn_swiglu_reference(
         }
         const std::size_t row_hi = row_lo + n_rows;
 
-        xt::xarray<float> X = xt::view(grouped, xt::range(row_lo, row_hi), xt::all());
-        xt::xarray<float> Wg = xt::view(w_gate, e, xt::all(), xt::all());
-        xt::xarray<float> Wu = xt::view(w_up, e, xt::all(), xt::all());
-        xt::xarray<float> Wd = xt::view(w_down, e, xt::all(), xt::all());
+        const xt::xarray<float> X = xt::view(grouped, xt::range(row_lo, row_hi), xt::all());
+        const xt::xarray<float> Wg = xt::view(w_gate, e, xt::all(), xt::all());
+        const xt::xarray<float> Wu = xt::view(w_up, e, xt::all(), xt::all());
+        const xt::xarray<float> Wd = xt::view(w_down, e, xt::all(), xt::all());
 
-        xt::xarray<float> G = xt::linalg::tensordot(X, Wg, {1}, {1});  // [n, I]  X @ Wg^T
-        xt::xarray<float> U = xt::linalg::tensordot(X, Wu, {1}, {1});  // [n, I]  X @ Wu^T
-        xt::xarray<float> sigmoid_G = 1.0f / (1.0f + xt::exp(-G));
-        xt::xarray<float> A = (G * sigmoid_G) * U;                     // [n, I]
-        xt::xarray<float> Y = xt::linalg::tensordot(A, Wd, {1}, {1});  // [n, H]  A @ Wd^T
+        const xt::xarray<float> G = xt::linalg::tensordot(X, Wg, {1}, {1});  // [n, I]  X @ Wg^T
+        const xt::xarray<float> U = xt::linalg::tensordot(X, Wu, {1}, {1});  // [n, I]  X @ Wu^T
+        const xt::xarray<float> sigmoid_G = 1.0f / (1.0f + xt::exp(-G));
+        const xt::xarray<float> A = (G * sigmoid_G) * U;                     // [n, I]
+        const xt::xarray<float> Y = xt::linalg::tensordot(A, Wd, {1}, {1});  // [n, H]  A @ Wd^T
 
         xt::view(out, xt::range(row_lo, row_hi), xt::all()) = Y;
     }
@@ -146,15 +146,15 @@ void RunCase(const FfnCase& c) {
     auto t_wu = make_expert_weight_list(w_up, device);
     auto t_wd = make_expert_weight_list(w_down, device);
 
-    auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
-    xt::xarray<float> out_xt = core::to_xtensor(t_out->get_value());  // [1,1,T_cap,H]
+    const auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+    const xt::xarray<float> out_xt = core::to_xtensor(t_out->get_value());  // [1,1,T_cap,H]
 
     // Flatten to [T_cap, H] for comparison.
-    std::vector<std::size_t> out_2d_shape{static_cast<std::size_t>(T_cap), static_cast<std::size_t>(c.H)};
+    const std::vector<std::size_t> out_2d_shape{static_cast<std::size_t>(T_cap), static_cast<std::size_t>(c.H)};
     xt::xarray<float> out_2d = xt::xarray<float>::from_shape(out_2d_shape);
     std::copy(out_xt.begin(), out_xt.end(), out_2d.begin());
 
-    xt::xarray<float> ref = moe_ffn_swiglu_reference(grouped, offsets, c.counts, w_gate, w_up, w_down);
+    const xt::xarray<float> ref = moe_ffn_swiglu_reference(grouped, offsets, c.counts, w_gate, w_up, w_down);
 
     ASSERT_EQ(out_2d.shape(), ref.shape());
     EXPECT_TRUE(xt::all(xt::isfinite(out_2d))) << "non-finite values in output";
@@ -171,7 +171,7 @@ void RunCase(const FfnCase& c) {
         if (pad_hi == pad_lo) {
             continue;
         }
-        xt::xarray<float> pad_slice = xt::view(out_2d, xt::range(pad_lo, pad_hi), xt::all());
+        const xt::xarray<float> pad_slice = xt::view(out_2d, xt::range(pad_lo, pad_hi), xt::all());
         const float max_abs = xt::amax(xt::abs(pad_slice))();
         EXPECT_NEAR(max_abs, 0.0f, 1e-4f) << "pad rows for expert " << e << " not zero";
     }
@@ -259,11 +259,11 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
     auto t_wu = make_expert_weight_list(w_up, device);
     auto t_wd = make_expert_weight_list(w_down, device);
 
-    auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+    const auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
     t_out->set_grad(core::ones_like(t_out->get_value()));
     t_out->backward();
 
-    auto dgrouped = core::to_xtensor(t_grouped->get_grad());
+    const auto dgrouped = core::to_xtensor(t_grouped->get_grad());
     EXPECT_EQ(dgrouped.shape(), grouped_4d.shape());
     EXPECT_TRUE(xt::all(xt::isfinite(dgrouped))) << "non-finite dgrouped";
 
