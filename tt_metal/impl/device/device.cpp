@@ -603,6 +603,10 @@ uint32_t Device::dram_size_per_channel() const {
 
 int Device::get_clock_rate_mhz() const { return MetalEnvAccessor(*env_).impl().get_cluster().get_device_aiclk(id_); }
 
+uint32_t Device::get_arc_timer_heartbeat() const {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_arc_timer_heartbeat(id_);
+}
+
 CoreCoord Device::grid_size() const { return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).grid_size; }
 
 CoreCoord Device::logical_grid_size() const {

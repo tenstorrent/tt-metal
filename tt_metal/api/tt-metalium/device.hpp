@@ -87,6 +87,7 @@ public:
     // This value is queried from the actual hardware via the cluster API
     // and reflects the device's current operating frequency.
     virtual int get_clock_rate_mhz() const = 0;
+    virtual uint32_t get_arc_timer_heartbeat() const = 0;
     virtual CoreCoord grid_size() const = 0;
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;
