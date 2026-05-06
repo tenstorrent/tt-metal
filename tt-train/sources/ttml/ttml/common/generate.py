@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 import ttml
+from ttml.common.config import TransformerConfig
 from ttml.common.utils import round_up_to_tile, build_logits_mask
 import numpy as np
 
@@ -71,9 +72,8 @@ def tokens_to_tensor_kv_cache(tokens: list) -> ttml.autograd.Tensor:
 def generate(
     model,
     prompt_tokens,
-    transformer_config,
+    transformer_config : TransformerConfig,
     temperature=0.0,
-    vocab_size=None,
     composer=None,
 ):
     """Generate text with KV cache for efficient inference.
@@ -105,6 +105,7 @@ def generate(
     prompt_len = len(prompt_tokens)
 
     logits_mask_tensor = None
+    vocab_size=transformer_config.vocab_size
     padded_vocab_size = round_up_to_tile(vocab_size)
     if padded_vocab_size != vocab_size:
         logits_mask_tensor = build_logits_mask(vocab_size, padded_vocab_size)
