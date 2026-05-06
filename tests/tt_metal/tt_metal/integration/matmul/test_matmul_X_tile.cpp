@@ -596,7 +596,7 @@ static void matmul_tile_legacy(
         program_,
         unary_writer_kernel,
         core,
-        {dst_dram_buffer->address(), 0, num_tiles});  // this is M * N in the multi_tile case !!
+        {ctx.dst_dram_buffer->address(), 0, ctx.num_tiles});  // this is M * N in the multi_tile case !!
 
     fixture->RunProgram(mesh_device, workload);
 
