@@ -53,6 +53,9 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
     // FP8 output requires tiled input (untilize+typecast is fused in compute; row-major path has no compute kernel)
     if (operation_attributes.use_fp8_dispatch) {
         TT_FATAL(
+            tensor_args.input_tensor.device()->arch() != tt::ARCH::WORMHOLE_B0,
+            "FP8 dispatch is not supported on Wormhole_B0; use Blackhole or set fp8_output=False");
+        TT_FATAL(
             tensor_args.input_tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR,
             "FP8 output is not supported with ROW_MAJOR input layout; use TILE layout when fp8_output=True");
     }
