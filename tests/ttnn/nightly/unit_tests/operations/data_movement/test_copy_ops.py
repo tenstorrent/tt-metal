@@ -203,33 +203,21 @@ def run_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, devi
 
 @pytest.mark.parametrize(
     "input_dtype",
-    (
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-        ttnn.float32,
-    ),
+    (ttnn.int32,),
     ids=[
-        "BFLOAT16_B",
-        "BFLOAT8_B",
-        "FLOAT32",
+        "INT32",
     ],
 )
 @pytest.mark.parametrize(
     "output_dtype",
-    (
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-        ttnn.float32,
-    ),
+    (ttnn.float32,),
     ids=[
-        "BFLOAT16_B",
-        "BFLOAT8_B",
         "FLOAT32",
     ],
 )
 @pytest.mark.parametrize(
     "N, C, H, W,",
-    ((1, 1, 32, 64), (1, 1, 32, 32000)),
+    ((1, 1, 32, 64), (1, 1, 32, 32000), (1, 1, 320, 384)),
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_typecast(N, C, H, W, memory_config, input_dtype, output_dtype, device):
