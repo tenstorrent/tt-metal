@@ -48,7 +48,7 @@ from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP, TTNNQwen
 from models.experimental.tt_symbiote.modules.qwen_omni_moe import (
     TTNNQwen3OmniThinkerMoE,
 )
-from models.experimental.tt_symbiote.core.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
+from models.experimental.tt_symbiote.models.qwen_omni import apply_qwen3_omni_talker_prepare_inputs_fix
 from models.experimental.tt_symbiote.modules.qwen_omni_attention import (
     TTNNQwen3Attention,
     TTNNQwen3OmniAttention,
@@ -871,7 +871,7 @@ def test_qwen_omni(mesh_device):
     # names (e.g. "Porsche 911"): HF defaults are top_p=1.0 / temperature=0.9 which, combined
     # with bf16 logit drift, occasionally samples low-probability code tokens that the codec
     # renders as audible noise bursts. The values below mirror the residual code-predictor
-    # nucleus configured in core/hf_generation_compat.py so both stages of the talker pipeline
+    # nucleus configured in models/qwen_omni/hf_generation_compat.py so both stages of the talker pipeline
     # stay coherent.
     talker_max_new_tokens = 1024
     talker_do_sample = True
