@@ -194,7 +194,8 @@ bool h_reduce_negate_fits_in_l1(
     uint32_t per_nc_advance;
     if (compute_Wt_g1 == 0 && compute_Wt_g2 == 0) {
         return true;
-    } else if (compute_Wt_g2 == 0) {
+    }
+    if (compute_Wt_g2 == 0) {
         per_nc_advance = compute_Wt_g1;
     } else if (compute_Wt_g1 == 0) {
         per_nc_advance = compute_Wt_g2;
