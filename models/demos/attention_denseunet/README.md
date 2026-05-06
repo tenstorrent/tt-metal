@@ -8,25 +8,24 @@
 
 This demo implements **Attention DenseUNet** using TTNN APIs for segmentation workloads on Tenstorrent hardware.
 
-The model combines:
-
-- DenseNet-style encoder blocks
-- Attention-gated skip connections
-- U-Net decoder with transposed convolutions
-
 Tracking issue / bounty: [#30863](https://github.com/tenstorrent/tt-metal/issues/30863)
 
-## Repo Layout
+## Repo layout
 
 ```text
 models/demos/attention_denseunet/
 ├── README.md
-├── eval/evaluate_iou_dice.py       # IoU/Dice evaluator
-├── reference/model.py              # PyTorch reference model
-├── tt/common.py                    # constants + parameter preprocessing
-├── tt/config.py                    # TTNN configs + optimization presets
-├── tt/model.py                     # TTNN model implementation
-├── demo/demo.py                    # direct CLI demo + pytest demo entry
+├── eval/
+│   ├── prepare_coco_val_subset.py
+│   ├── evaluate_iou_dice.py
+│   ├── perf_benchmark_core.py
+│   ├── generate_perf_sheet.py      # Stage 2 perf CSV by default
+│   └── benchmark_stage2_inference.py
+├── reference/model.py
+├── tt/common.py
+├── tt/config.py
+├── tt/model.py
+├── demo/demo.py
 └── tests/test_attention_denseunet.py
 ```
 
@@ -34,152 +33,141 @@ models/demos/attention_denseunet/
 
 ```bash
 source python_env/bin/activate
+pip install pillow requests loguru pycocotools   # pycocotools only for COCO prep
 ```
 
-If needed:
+---
+
+## COCO IoU / Dice (reproducible)
+
+### Download COCO 2017 val + annotations
 
 ```bash
-pip install pillow requests
+export COCO_ROOT=/path/to/coco2017
+mkdir -p "$COCO_ROOT" && cd "$COCO_ROOT"
+wget -c http://images.cocodataset.org/zips/val2017.zip
+unzip -q val2017.zip && rm -f val2017.zip
+wget -c http://images.cocodataset.org/annotations/annotations_trainval2017.zip
+unzip -q annotations_trainval2017.zip && rm -f annotations_trainval2017.zip
 ```
 
-## Run the Model
+Layout: `$COCO_ROOT/val2017/*.jpg` and `$COCO_ROOT/annotations/instances_val2017.json`.
 
-### 1) PyTorch reference sanity
+### Build subset (default: `person`, 50 images, 256×256)
 
 ```bash
-python models/demos/attention_denseunet/reference/model.py
+python models/demos/attention_denseunet/eval/prepare_coco_val_subset.py \
+  --coco-root "$COCO_ROOT" \
+  --out-dir models/demos/attention_denseunet/eval/datasets/coco_val2017_person_subset \
+  --max-images 50 --height 256 --width 256
 ```
 
-### 2) Direct demo script
-
-PyTorch path (no device):
-
-```bash
-python models/demos/attention_denseunet/demo/demo.py --pytorch --output-name demo_pytorch.png
-```
-
-TTNN path (device):
-
-```bash
-python models/demos/attention_denseunet/demo/demo.py --output-name demo_ttnn.png --optimization-level stage2
-```
-
-By default, the demo uses:
-`http://images.cocodataset.org/val2017/000000039769.jpg`
-
-You can still override with any URL or local path:
-
-```bash
-python models/demos/attention_denseunet/demo/demo.py --image /path/to/image.jpg
-```
-
-Outputs are written to:
-
-- `models/demos/attention_denseunet/demo/pred/*_prob.png`
-- `models/demos/attention_denseunet/demo/pred/*_mask_0p5.png`
-- `models/demos/attention_denseunet/demo/pred/*_mask_adaptive.png`
-- `models/demos/attention_denseunet/demo/pred/*_overlay.png`
-
-### 3) Tests
-
-```bash
-# Main correctness tests (init + inference PCC)
-pytest -v models/demos/attention_denseunet/tests/test_attention_denseunet.py
-
-# Demo tests (TTNN and PyTorch parametrized)
-pytest -v models/demos/attention_denseunet/demo/demo.py
-```
-
-### 4) IoU/Dice evaluation (dataset-backed)
-
-Quick way to prepare a small real dataset (Oxford-IIIT Pet subset):
-
-```bash
-python models/demos/attention_denseunet/eval/prepare_oxford_pets_subset.py \
-  --max-images 20 \
-  --height 256 --width 256
-```
-
-This creates:
-
-```text
-models/demos/attention_denseunet/eval/datasets/oxford_pets_small/
-├── images/
-└── masks/
-```
-
-Dataset used for the README evaluation flow:
-
-- Oxford-IIIT Pet segmentation dataset (small subset created by `prepare_oxford_pets_subset.py`)
-- Foreground masks are derived from trimaps (`class 1` as foreground, others as background)
-
-Expected dataset layout:
-
-```text
-<dataset_root>/
-├── images/
-│   ├── sample1.png
-│   └── sample2.png
-└── masks/
-    ├── sample1.png
-    └── sample2.png
-```
-
-Run evaluator:
+### Evaluate
 
 ```bash
 python models/demos/attention_denseunet/eval/evaluate_iou_dice.py \
-  --image-dir models/demos/attention_denseunet/eval/datasets/oxford_pets_small/images \
-  --mask-dir models/demos/attention_denseunet/eval/datasets/oxford_pets_small/masks \
+  --image-dir models/demos/attention_denseunet/eval/datasets/coco_val2017_person_subset/images \
+  --mask-dir models/demos/attention_denseunet/eval/datasets/coco_val2017_person_subset/masks \
   --height 256 --width 256 \
   --optimization-level stage2 \
-  --output-json models/demos/attention_denseunet/eval/results/oxford_pets_small_metrics.json
+  --output-json models/demos/attention_denseunet/eval/results/coco_metrics.json
 ```
-Note:- oxford_pets_small dataset was installed by me through a script i am not adding that here because you can use any dataset
-You can still use your own dataset by replacing `--image-dir` and `--mask-dir` with
-`<dataset_root>/images` and `<dataset_root>/masks`.
 
-What this reports:
+Optional: `--checkpoint /path/to.pt`.
 
-- TTNN vs PyTorch reference IoU/Dice (always)
-- TTNN vs GT and PyTorch vs GT IoU/Dice (when `--mask-dir` is provided)
+---
 
-If you have trained weights compatible with `reference/model.py`, add:
+## Stage 2 optimizations (demonstrated in code)
+
+**Preset:** `stage2` (`OptimizationLevel.STAGE2`) — default for tests, demo, and eval above.
+
+| What you need to show | What the code does |
+|------------------------|-------------------|
+| **Conv sharding** | For spatial size ≥ 32×32, convs use **height sharding** (`HeightShardedStrategyConfiguration`, `reshard_if_not_optimal=True`, `act_block_h_override=32`). Smaller tensors stay **auto** sharded. See `_select_conv_sharding_strategy` when `optimization_level == STAGE2`. |
+| **Upsample (transposed conv) + sharding** | `transpose_conv2d` sets `Conv2dConfig.shard_layout=HEIGHT_SHARDED` **when the decoder input is already sharded**, so upsampling follows the sharded activation path instead of forcing DRAM interleaved. See `tt/model.py` (`transpose_conv2d`). |
+| **Interleaving vs sharding** | Skip / dense paths use **`concatenate_features(..., use_row_major_layout=True)`**: both branches are moved to **DRAM**, **ROW_MAJOR**, concatenated, then retiled — explicit **interleaved** concat to avoid mixed sharded/interleaved concat errors. The `use_row_major_layout=False` branch can keep **height-sharded L1** concat when both inputs share sharding. See `tt/model.py` (`concatenate_features`). |
+| **L1 beyond default** | (1) **Input tensor** is placed in **`L1_MEMORY_CONFIG`** via `configs.l1_input_memory_config`. (2) Device opens with **`ATTENTION_DENSEUNET_L1_SMALL_SIZE`** (larger L1 carveout for dense blocks). See `tt/config.py` (`build_configs`), `tt/common.py`, `demo/demo.py` / `evaluate_iou_dice.py`. |
+| **Fused Conv + ReLU** | After BN fold, many layers set `activation=UnaryWithParam(RELU)` on **`Conv2dConfiguration`**, so ReLU runs in the TT CNN op where supported. See `_create_conv_config_from_params` (`activation` block) and `TtTransitionDown` (conv then pool). |
+
+### Benchmarks (Stage 2)
+
+**Headline latency** (device-synchronized, mean of N inferences after warmup):
 
 ```bash
---checkpoint /path/to/checkpoint.pt
+python models/demos/attention_denseunet/eval/benchmark_stage2_inference.py \
+  --optimization-level stage2 --height 256 --width 256 --warmup 3 --iterations 10
 ```
 
-## Current Validation Coverage
+**Perf sheet CSV** (same column names as `models/perf/perf_utils.prep_perf_report`; **Stage 2 only** by default):
 
-- Model initialization on device
-- End-to-end TTNN inference
-- Shape parity vs PyTorch
-- PCC check vs PyTorch reference (`>= 0.97`)
+```bash
+python models/demos/attention_denseunet/eval/generate_perf_sheet.py \
+  --output-dir models/demos/attention_denseunet/eval/results
+```
 
-## Optimization Presets in Code
+Produces e.g. `eval/results/perf_attention_denseunet_stage2_YYYY_MM_DD.csv`.
+`Expected *` columns are seeded to measured values; tighten them when you freeze a baseline.
 
-Defined in `tt/config.py`:
+**Kernel-level profiling:** use the TTNN visualizer / Tracy flow described in [TTNN model bring-up](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md) around the same `demo/demo.py` or eval inference path.
 
-- `stage1`: baseline auto-sharding
-- `stage2`: preferred profile currently used by tests
-- `stage3`: aggressive profile for deeper tuning
+## Stage 3 optimizations (implemented)
 
-Current tests run with `OptimizationLevel.STAGE2`.
+Stage 3 is now implemented with additional parallelism and attention-gate tuning on top of Stage 2:
 
-## What Is Implemented vs Pending
+| Focus area | Stage 3 implementation |
+|------------|------------------------|
+| **Encoder/decoder parallelism** | `_select_conv_sharding_strategy` now biases **decoder path convs** (`decoder*`, `upconv*`, `attention*`, `conv_out`) to **block sharding** earlier (from 32×32 maps, non-pointwise) using smaller `act_block_h_override` to increase core-level parallel work. |
+| **Attention gate conv parallelism** | `_create_attention_gate_config` now uses a dedicated stage-aware hook. For Stage 3 on current WH constraints, gate conv sharding is kept conservative (`AutoSharded`) to avoid L1 circular-buffer clashes while decoder path stays aggressively parallelized. |
+| **TM / memory overhead in gates** | Attention gate upsample mode is stage-aware: Stage 3 uses `nearest` (config-driven) in `TtAttentionGate` to reduce resize overhead vs bilinear. Intermediate gate tensors (`theta_x`, `phi_g`, `f`, `attention`, `y`) are explicitly deallocated after use to reduce peak activation footprint. |
+| **Upsample path tuning** | `UpconvConfiguration` now carries Stage 3-specific transposed-conv tuning (`act_block_h_override`, force height-sharded layout hint) applied in `transpose_conv2d`. |
 
-### Implemented (code + tests)
+### Stage 3 benchmark / perf sheet
 
-- TTNN model bring-up and demo
-- PCC-based correctness test against PyTorch
-- Direct single-image demo script path
-- Profiling/visualizer compatible run path
+Generate a Stage 3-only perf sheet:
 
+```bash
+python models/demos/attention_denseunet/eval/generate_perf_sheet.py \
+  --stages stage3 \
+  --height 256 --width 256 \
+  --warmup 3 --iterations 10 \
+  --output-dir models/demos/attention_denseunet/eval/results
+```
+
+This writes:
+
+- `eval/results/perf_attention_denseunet_stage3_YYYY_MM_DD.csv`
+
+Optionally generate side-by-side Stage2/Stage3:
+
+```bash
+python models/demos/attention_denseunet/eval/generate_perf_sheet.py \
+  --stages stage2 stage3 \
+  --height 256 --width 256 \
+  --warmup 3 --iterations 10 \
+  --output-dir models/demos/attention_denseunet/eval/results
+```
+
+### Advanced tuning notes / known issues
+
+- Stage 3 gate upsample uses `nearest` to reduce TM/memory overhead; this may slightly shift logits vs Stage 2 bilinear on edge-heavy masks.
+- A frequent runtime warning may appear (`ttnn::tilize ... legacy sharded optimized program factory`) on current stack; this is known and does not invalidate perf-sheet generation.
+- Performance can vary by board firmware/JIT cache state; keep warmup/iteration counts fixed when comparing Stage 2 vs Stage 3.
+
+---
+
+## Run demo & tests
+
+```bash
+python models/demos/attention_denseunet/demo/demo.py --output-name out.png --optimization-level stage2
+pytest -v models/demos/attention_denseunet/tests/test_attention_denseunet.py
+pytest -v models/demos/attention_denseunet/demo/demo.py
+```
+
+---
 
 ## References
 
-- [TTNN model bring-up tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md)
+- [TTNN model bring-up](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md)
 - [CNN optimization guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/cnn_optimizations.md)
-- [DenseNet paper](https://arxiv.org/abs/1608.06993)
-- [Attention U-Net paper](https://arxiv.org/abs/1804.03999)
+- [DenseNet](https://arxiv.org/abs/1608.06993) · [Attention U-Net](https://arxiv.org/abs/1804.03999)
+
