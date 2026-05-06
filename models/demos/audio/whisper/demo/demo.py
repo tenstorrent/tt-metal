@@ -787,7 +787,7 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "use_per_request_params",
-    [True],
+    [False, True],
 )
 @pytest.mark.parametrize(
     "run_both_batch_sizes",
@@ -824,6 +824,7 @@ def test_demo_for_conditional_generation(
         is_ci_env
         and model_repo == "openai/whisper-large-v3"
         and (compression_ratio_threshold is not None or batch_size_per_device == 2)
+        and not use_per_request_params
     ):
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
@@ -854,6 +855,15 @@ def test_demo_for_conditional_generation(
             return_timestamps=return_timestamps,
         )
 
+    should_check_perf = (
+        is_ci_env
+        and model_repo == "distil-whisper/distil-large-v3"
+        and batch_size_per_device == 1
+        and mesh_device.get_num_devices() == available_devices
+        and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
+        and not use_per_request_params
+    )
+
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,
@@ -865,16 +875,10 @@ def test_demo_for_conditional_generation(
         prompt=prompt,
         batch_size_per_device=batch_size_per_device,
         stream=stream,
-        run_both_batch_sizes=run_both_batch_sizes,
+        run_both_batch_sizes=run_both_batch_sizes and not should_check_perf,
     )
 
-    if (
-        is_ci_env
-        and model_repo == "distil-whisper/distil-large-v3"
-        and batch_size_per_device == 1
-        and mesh_device.get_num_devices() == available_devices
-        and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
-    ):
+    if should_check_perf:
         metrics_dictionary = {
             2: {"prefill_time_to_token": 0.13, "decode_t/s/u": 124.0},
             8: {"prefill_time_to_token": 0.14, "decode_t/s/u": 105.0},
