@@ -19,7 +19,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "test_utils/random_data.hpp"
-#include "utils/memory_utils.hpp"
 
 namespace {
 
@@ -132,9 +131,6 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     auto w_down = build_expert_weight_list(c.E, c.H, c.I, device, rng);
 
     auto build_grouped = [&]() { return build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng); };
-
-    // TODO: re-add DRAM-peak measurement. The current MemoryUsageTracker
-    // integration returned 0 for these op-level captures; needs investigation.
 
     // Forward-only timing pass.
     std::vector<double> fwd_times;
