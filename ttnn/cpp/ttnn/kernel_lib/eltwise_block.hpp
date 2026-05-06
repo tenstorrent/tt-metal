@@ -136,20 +136,15 @@ struct BlockBinaryFpu : BinaryFpuTag {
     static constexpr uint32_t        block_size        = BlockSize;
 
     static ALWI void init() {
+        // Single-arg reconfig — no previous-CB tracking.
         if constexpr (DF == BinaryDataFormatReconfig::Input ||
                       DF == BinaryDataFormatReconfig::InputAndOutput) {
-            if constexpr (OldCbA != 0 && OldCbA != CbA) reconfig_data_format_srca(OldCbA, CbA);
-            else                                        reconfig_data_format_srca(CbA);
-            if constexpr (OldCbB != 0 && OldCbB != CbB) reconfig_data_format_srcb(OldCbB, CbB);
-            else                                        reconfig_data_format_srcb(CbB);
+            reconfig_data_format_srca(CbA);
+            reconfig_data_format_srcb(CbB);
         }
         if constexpr ((DF == BinaryDataFormatReconfig::Output ||
                        DF == BinaryDataFormatReconfig::InputAndOutput) && CbOut != 0) {
-            if constexpr (OldCbOut != 0 && OldCbOut != CbOut) {
-                pack_reconfig_data_format(OldCbOut, CbOut);
-            } else {
-                pack_reconfig_data_format(CbOut);
-            }
+            pack_reconfig_data_format(CbOut);
         }
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles_init(CbA, CbB);

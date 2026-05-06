@@ -108,7 +108,10 @@ struct CopyTile : CopyTileTag {
     // ---- chain pipeline hooks ----
     static ALWI void init() {
         if constexpr (Reconfig == CopyTileReconfig::Input) {
-            copy_tile_to_dst_init_short_with_dt(OldCb, Cb, /*transpose=*/0);
+            // Single-arg reconfig — no previous-CB tracking. Per design: omitting `old_cb`
+            // is good enough vs the two-arg `_with_dt` form.
+            reconfig_data_format_srca(Cb);
+            copy_tile_to_dst_init_short(Cb);
         } else {
             copy_tile_init(Cb);
         }
@@ -184,12 +187,12 @@ struct PackTile : PackTileTag {
     uint32_t output_tile_idx = 0;
 
     static ALWI void init() {
-        if constexpr (Reconfig == PackTileReconfig::Output) {
+        // Single-arg pack reconfig — no previous-CB tracking. (`OutputConditional` retained
+        // for source compatibility but emits the same single-arg call.)
+        if constexpr (Reconfig == PackTileReconfig::Output ||
+                      Reconfig == PackTileReconfig::OutputConditional) {
             pack_reconfig_data_format(Cb);
-        } else if constexpr (Reconfig == PackTileReconfig::OutputConditional) {
-            pack_reconfig_data_format(OldCb, Cb);
         }
-        // None: no pack reconfig.
     }
 
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
@@ -251,10 +254,10 @@ struct PackTileBlock : PackTileTag {
     static constexpr bool     is_upfront   = (Policy == PackTilePolicy::UpfrontReservePushAtEnd);
 
     static ALWI void init() {
-        if constexpr (Reconfig == PackTileReconfig::Output) {
+        // Single-arg pack reconfig — no previous-CB tracking.
+        if constexpr (Reconfig == PackTileReconfig::Output ||
+                      Reconfig == PackTileReconfig::OutputConditional) {
             pack_reconfig_data_format(Cb);
-        } else if constexpr (Reconfig == PackTileReconfig::OutputConditional) {
-            pack_reconfig_data_format(OldCb, Cb);
         }
     }
 
@@ -329,22 +332,16 @@ struct BinaryFpu : BinaryFpuTag {
 
     // ---- init / reconfig ----
     static ALWI void init() {
-        // Input-side reconfig.
+        // Input-side reconfig (single-arg — no previous-CB tracking).
         if constexpr (DfReconfig == BinaryDataFormatReconfig::Input ||
                       DfReconfig == BinaryDataFormatReconfig::InputAndOutput) {
-            if constexpr (OldCbA != 0 && OldCbA != CbA) reconfig_data_format_srca(OldCbA, CbA);
-            else                                        reconfig_data_format_srca(CbA);
-            if constexpr (OldCbB != 0 && OldCbB != CbB) reconfig_data_format_srcb(OldCbB, CbB);
-            else                                        reconfig_data_format_srcb(CbB);
+            reconfig_data_format_srca(CbA);
+            reconfig_data_format_srcb(CbB);
         }
-        // Output-side reconfig (pack).
+        // Output-side reconfig (pack, single-arg).
         if constexpr ((DfReconfig == BinaryDataFormatReconfig::Output ||
                        DfReconfig == BinaryDataFormatReconfig::InputAndOutput) && CbOut != 0) {
-            if constexpr (OldCbOut != 0 && OldCbOut != CbOut) {
-                pack_reconfig_data_format(OldCbOut, CbOut);
-            } else {
-                pack_reconfig_data_format(CbOut);
-            }
+            pack_reconfig_data_format(CbOut);
         }
         // Op-specific init.
         if constexpr (Bcast == BroadcastDim::None) {
@@ -455,13 +452,9 @@ struct DestReuseBinary : DestReuseBinaryTag {
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
         if constexpr (Reconfig == DestReuseReconfig::Input) {
-            if constexpr (ReuseType == DestReuseType::DEST_TO_SRCB) {
-                if constexpr (OldCb != 0 && OldCb != Cb) reconfig_data_format_srca(OldCb, Cb);
-                else                                     reconfig_data_format_srca(Cb);
-            } else {
-                if constexpr (OldCb != 0 && OldCb != Cb) reconfig_data_format_srcb(OldCb, Cb);
-                else                                     reconfig_data_format_srcb(Cb);
-            }
+            // Single-arg reconfig — no previous-CB tracking.
+            if constexpr (ReuseType == DestReuseType::DEST_TO_SRCB) reconfig_data_format_srca(Cb);
+            else                                                     reconfig_data_format_srcb(Cb);
         }
         binary_dest_reuse_tiles_init<et, reuse>(Cb);
     }
@@ -525,12 +518,8 @@ struct UnaryBcast : UnaryBcastTag {
     static ALWI void init() {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
         constexpr uint32_t ocb = (CbOut != 0) ? CbOut : Cb;
-        if constexpr (Reconfig == UnaryBcastReconfig::Input) {
-            constexpr auto old_bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-            constexpr uint32_t old_icb = (OldCb    != 0) ? OldCb    : Cb;
-            constexpr uint32_t old_ocb = (OldCbOut != 0) ? OldCbOut : ocb;
-            reconfigure_unary_bcast<old_bt, bt>(old_icb, Cb, old_ocb, ocb);
-        }
+        // Reconfig path: single-arg-style — `unary_bcast_init` already does srca + ocb reconfig
+        // for the new bcast dim. No previous-CB tracking needed.
         unary_bcast_init<bt>(Cb, ocb);
     }
 
