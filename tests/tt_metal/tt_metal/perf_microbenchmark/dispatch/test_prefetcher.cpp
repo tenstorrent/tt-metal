@@ -30,11 +30,11 @@
 #include <vector>
 
 /*
- * FAST PREFETCHER MICROBENCHMARK SUITE
+ * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)
  *
  * Architecture Overview:
- * This test suite validates the Fast Dispatcher (FD) kernel mechanisms by bypassing the
- * standard high-level Enqueue APIs and directly constructing low-level command sequences.
+ * This test suite validates the Prefetcher kernel in both Fast Dispatch (FD) and Slow Dispatch (SD)
+ * modes by bypassing the standard high-level Enqueue APIs and directly constructing low-level command sequences.
  *
  * The test flow follows a "Shadow Model" pattern:
  * 1. Plan: Determine transfer sizes, destinations, and command types.
@@ -45,10 +45,18 @@
  *    Read back device memory and compare against `Common::DeviceData` to validate the correctness of the command
  * execution.
  *
+ * Execution backends:
+ * - FD: Commands are pushed into the Issue Queue via FDMeshCommandQueue; the Prefetcher relays
+ *   them to the Dispatcher.
+ * - SD: Commands are written to the PCIe hugepage issue buffer; the host notifies the real
+ *   cq_prefetch.cpp kernel via FetchQ entries written through a TLB window. cq_prefetch.cpp
+ *   relays them to cq_dispatch.cpp exactly as in FD, but all hugepage writes and FetchQ entries
+ *   are committed before LaunchProgram so the kernel finds everything ready at startup.
+ *
  * Key Concepts:
- * - Issue Queue: Host-resident ring buffer where commands are written.
+ * - Issue Queue: Host-resident ring buffer where FD commands are written.
  * - Fetch Queue: Device-resident ring buffer (pointers) telling the Prefetcher where to look.
- * - Prefetcher: Kernel that pulls commands from Host/DRAM and relays them.
+ * - Prefetcher: Kernel that pulls commands from Host/DRAM and relays them to the Dispatcher.
  * - Dispatcher: Kernel that parses commands and issues writes/signals to Worker cores.
  */
 
@@ -1978,6 +1986,433 @@ public:
     }
 };
 
+// Throughput-focused test.
+// Stresses the prefetcher "issue queue -> device" path by issuing large paged DRAM writes with inline host payload.
+class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
+
+// Slow Dispatch Prefetcher Tests
+// Validates cq_prefetch.cpp (IS_D_VARIANT=1) in isolation without FD infrastructure.
+// Two modes via PagedReadParams::use_exec_buf:
+//   false - commands written directly to prefetch_d cmddat_q L1
+//   true  - commands written banked to DRAM; a single CQ_PREFETCH_CMD_EXEC_BUF pointer in cmddat_q
+//
+// The upstream semaphore self-loop (MY_UPSTREAM_CB_SEM_ID == UPSTREAM_CB_SEM_ID on the prefetch_d
+// core, initialized to cmd_cb_pages) pre-signals all pages so the kernel sees them immediately.
+template <typename FDFixture>
+class SDPrefetchTestBase : public FDFixture {
+public:
+    void SetUp() override {
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
+        }
+        this->device_ = tt_metal::CreateDevice(0);
+
+        Common::DispatchPayloadGenerator::Config pgcfg;
+        pgcfg.use_coherent_data = this->cfg_.use_coherent_data;
+        pgcfg.perf_test = this->cfg_.perf_test;
+        pgcfg.min_xfer_size_bytes = this->cfg_.min_xfer_size_bytes;
+        pgcfg.max_xfer_size_bytes = this->cfg_.max_xfer_size_bytes;
+        std::random_device rd;
+        pgcfg.seed = rd();
+        this->payload_generator_ = std::make_unique<Common::DispatchPayloadGenerator>(pgcfg);
+        log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
+
+        this->dispatch_buffer_page_size_ = this->cfg_.dispatch_buffer_page_size;
+        this->send_to_all_ = this->cfg_.send_to_all;
+        this->host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+        // Cap inline command size to avoid cmddat_q L1 overflow on the prefetch-d core.
+        this->max_fetch_bytes_ = Common::SD_PREFETCH_SCRATCH_DB_SIZE;
+
+        this->dram_base_ = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
+        this->num_banks_ = this->device_->allocator_impl()->get_num_banks(BufferType::DRAM);
+        this->l1_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1);
+        this->packed_write_max_unicast_sub_cmds_ =
+            this->device_->compute_with_storage_grid_size().x * this->device_->compute_with_storage_grid_size().y;
+
+        this->init_params(this->GetParam());
+    }
+
+    void TearDown() override {
+        if (this->device_) {
+            tt_metal::CloseDevice(this->device_);
+            this->device_ = nullptr;
+        }
+    }
+
+    // Launches cq_prefetch.cpp (combined IS_H_VARIANT+IS_D_VARIANT) + cq_dispatch.cpp under
+    // slow dispatch by writing commands to the PCIe hugepage and notifying the prefetcher via
+    // the FetchQ ring - the same mechanism used by the FD runtime.
+    //
+    // All hugepage writes and FetchQ entries are committed before LaunchProgram so the
+    // kernel finds all data ready when it starts.  num_cores_to_log / wait_for_* match the
+    // FD virtual signature but are unused (LaunchProgram is synchronous).
+    void execute_generated_commands(
+        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
+        Common::DeviceData& device_data,
+        size_t /*num_cores_to_log*/,
+        uint32_t num_iterations,
+        bool /*wait_for_completion*/ = true,
+        bool /*wait_for_host_writes*/ = false) override {
+        using entry_t = DispatchSettings::prefetch_q_entry_type;  // uint16_t
+
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
+        const uint32_t dispatch_buffer_pages =
+            Common::SD_DISPATCH_BUFFER_SIZE_BYTES / Common::SD_DISPATCH_BUFFER_PAGE_SIZE;
+
+        // L1 layout on the prefetch_hd core
+        // Place FetchQ ring + rd_ptr immediately after the first allocatable L1 page.
+        // cmddat_q and scratch_db follow the FetchQ.
+        const uint32_t l1_unrsv = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+        const uint32_t page_size = Common::SD_PREFETCH_CMDDAT_PAGE_SIZE;
+        const uint32_t l1_unrsv_aligned = tt::align(l1_unrsv, page_size);
+
+        // prefetch_q_rd_ptr_addr (4 B) and pcie_rd_ptr_addr (next 4 B) live at l1_unrsv_aligned.
+        // The FetchQ ring starts one full page later so it is page-aligned.
+        const uint32_t prefetch_q_rd_ptr_addr = l1_unrsv_aligned;
+        const uint32_t prefetch_q_base = l1_unrsv_aligned + page_size;
+        const uint32_t prefetch_q_size = Common::SD_PREFETCH_Q_ENTRIES * sizeof(entry_t);
+
+        // cmddat_q: after FetchQ, aligned to host (NOC) alignment.
+        const uint32_t noc_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+        const uint32_t cmddat_q_base = prefetch_q_base + tt::align(prefetch_q_size, noc_align);
+        // Use the same cmddat_q size as the FD runtime (256KB on worker). read_from_pcie issues one DMA per
+        // FetchQ entry, so cmddat_q must be >= max single command size (prefetch_max_cmd_size = 128KB).
+        const uint32_t cmddat_q_bytes = memmap.cmddat_q_size();
+        const uint32_t cmddat_q_pages = tt::align(cmddat_q_bytes / page_size, Common::SD_PREFETCH_CMDDAT_BLOCKS);
+        const uint32_t scratch_db_base = cmddat_q_base + cmddat_q_pages * page_size;
+
+        const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
+        TT_FATAL(
+            scratch_db_base + Common::SD_PREFETCH_SCRATCH_DB_SIZE <= soc_desc.worker_l1_size,
+            "SD prefetch hd: prefetch_q + cmddat_q + scratch_db exceeds worker L1");
+
+        // Hugepage addressing
+        // Use the same hugepage region that the FD runtime uses for the issue queue
+        // (safe since SD mode never runs the FD runtime concurrently).
+        const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+
+        const ChipId mmio_id =
+            tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+        const uint16_t channel =
+            tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
+        char* hugepage_bar_base =
+            static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
+        hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        void* const host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
+
+        // Physical cores
+        const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(Common::sd_prefetch_core);
+        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::sd_dispatch_core);
+        const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
+
+        auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+
+        // prefetch_q_rd_ptr_addr: kernel writes its consumed position here so the host can poll.
+        // Initialise to the ring base so the host-side fence logic sees the ring as empty.
+        const uint32_t init_rd_ptr = prefetch_q_base;
+        cluster.write_core(&init_rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
+        // pcie_rd_ptr_addr (prefetch_q_rd_ptr_addr + 4): initialise to 0.
+        // const uint32_t init_pcie_rd = 0u;
+        // cluster.write_core(
+        //     &init_pcie_rd, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr + sizeof(uint32_t));
+
+        // TLB window for writing FetchQ entries
+        tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
+
+        // Host-side FetchQ write state.
+        uint32_t prefetch_q_dev_ptr = prefetch_q_base;
+        const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
+
+        // Hugepage write state.
+        uint32_t* host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
+        const uint64_t hugepage_issue_end =
+            static_cast<uint64_t>(dev_hugepage_base) + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+
+        const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+
+        // nt_memcpy: non-temporal store of n bytes (n must be a multiple of 64).
+        auto nt_memcpy_local = [&host_align](uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
+            TT_FATAL(n % host_align == 0, "nt_memcpy: size {} not a multiple of {}", n, host_align);
+            for (size_t i = 0; i < n; i += host_align) {
+                for (size_t j = 0; j < host_align; j += sizeof(__m128i)) {
+                    __m128i blk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + j));
+                    _mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + j), blk);
+                }
+            }
+            tt_driver_atomics::sfence();
+        };
+
+        // write_prefetcher_cmd: nt_memcpy cmd to hugepage + write one FetchQ entry via TLB.
+        // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
+        // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
+        auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, entry_t cmd_size_entry) {
+            TT_FATAL(
+                cmd_size_bytes % host_align == 0,
+                "SD prefetch: cmd_size_bytes {} not aligned to host alignment {}",
+                cmd_size_bytes,
+                host_align);
+
+            // Poll for FetchQ ring space (should not spin in normal SD operation).
+            while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
+                uint32_t rd_ptr;
+                cluster.read_core(&rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
+                if (rd_ptr != prefetch_q_dev_ptr) {
+                    break;
+                }
+            }
+
+            // Hugepage wrap: if the command would exceed the issue buffer, reset to base.
+            const uint64_t host_offset =
+                static_cast<uint64_t>(reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
+            if (dev_hugepage_base + host_offset + cmd_size_bytes > hugepage_issue_end) {
+                host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
+            }
+
+            nt_memcpy_local(
+                reinterpret_cast<uint8_t*>(host_mem_ptr), reinterpret_cast<const uint8_t*>(src), cmd_size_bytes);
+            host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
+
+            prefetch_q_tlb->write16(prefetch_q_dev_ptr, cmd_size_entry);
+            prefetch_q_dev_ptr += sizeof(entry_t);
+            if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
+                prefetch_q_dev_ptr = prefetch_q_base;
+            }
+        };
+
+        // Helper: align, pad, and enqueue any HostMemDeviceCommand to hugepage + FetchQ.
+        auto write_cmd = [&](const HostMemDeviceCommand& cmd, bool stall = false) {
+            const uint32_t size = tt::align(cmd.size_bytes(), host_align);
+            std::vector<uint8_t> padded(size, 0u);
+            std::memcpy(padded.data(), cmd.data(), cmd.size_bytes());
+            entry_t entry = static_cast<entry_t>(size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+            if (stall) {
+                entry |= static_cast<entry_t>(1u << 15);
+            }
+            write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(padded.data()), size, entry);
+        };
+
+        if (this->use_exec_buf_) {
+            execute_generated_commands_exec_buf(commands_per_iteration, num_iterations, write_cmd);
+        } else {
+            for (uint32_t i = 0; i < num_iterations; ++i) {
+                for (const auto& cmd : commands_per_iteration) {
+                    const uint32_t size = tt::align(cmd.size_bytes(), host_align);
+                    TT_FATAL(
+                        (size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) <=
+                            (uint32_t)std::numeric_limits<entry_t>::max() >> 1,
+                        "SD prefetch: command size {} B overflows 15-bit FetchQ entry (max {} B)",
+                        size,
+                        (uint32_t)0x7FFF << DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                    write_cmd(cmd);
+                }
+            }
+        }
+
+        // Terminate: dispatch_wait + dispatch_terminate + prefetch_terminate (shared by both paths).
+        // SD mode has no dispatch_s kernel, so build the dispatch terminate manually rather than
+        // using CommandBuilder::build_dispatch_terminate() which conditionally appends a subordinate
+        // terminate that would hang the dispatcher with no downstream to receive it.
+        {
+            DeviceCommandCalculator calc;
+            calc.add_dispatch_wait();
+            calc.add_dispatch_terminate();
+            HostMemDeviceCommand disp_term(calc.write_offset_bytes());
+            disp_term.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+            disp_term.add_dispatch_terminate();
+            write_cmd(disp_term);
+        }
+        write_cmd(CommandBuilder::build_prefetch_terminate());
+
+        // Semaphores
+        tt_metal::Program program = tt_metal::CreateProgram();
+
+        // Slot 0: prefetch_sync_sem - dispatch signals prefetch when a stall round-trip is done.
+        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
+        const uint32_t di_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
+        TT_FATAL(pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
+
+        // Slot 1: downstream_cb_sem on prefetch (init=dispatch_buffer_pages); dispatch_cb_sem on dispatch (init=0).
+        const uint32_t pf_downstream_cb_sem =
+            tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, dispatch_buffer_pages);
+        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
+        TT_FATAL(
+            pf_downstream_cb_sem == di_dispatch_cb_sem,
+            "dispatch_cb sem slot mismatch ({} vs {})",
+            pf_downstream_cb_sem,
+            di_dispatch_cb_sem);
+
+        // Kernel defines and creation
+        auto prefetch_defines = Common::make_sd_prefetch_defines(
+            this->device_,
+            dev_hugepage_base,
+            Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
+            prefetch_q_base,
+            prefetch_q_size,
+            prefetch_q_rd_ptr_addr,
+            cmddat_q_base,
+            cmddat_q_pages,
+            scratch_db_base,
+            dispatch_cb_base,
+            dispatch_buffer_pages,
+            pf_downstream_cb_sem,
+            pf_sync_sem,
+            phys_prefetch,
+            phys_disp);
+        auto prefetch_kernel = tt_metal::CreateKernel(
+            program,
+            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+            {Common::sd_prefetch_core},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .defines = prefetch_defines});
+        tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
+
+        const uint32_t dev_completion_base = dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+        auto dispatch_defines = Common::make_sd_dispatch_defines(
+            this->device_,
+            dispatch_buffer_pages,
+            di_dispatch_cb_sem,
+            di_sync_sem,
+            phys_prefetch,
+            phys_disp,
+            memmap,
+            dev_completion_base,
+            Common::SD_COMPLETION_QUEUE_SIZE);
+        auto dispatch_kernel = tt_metal::CreateKernel(
+            program,
+            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {Common::sd_dispatch_core},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .defines = dispatch_defines});
+        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::sd_dispatch_core, {0u, 0u, 0u});
+
+        // Initialize the dispatcher's completion queue write/read pointers in L1, mirroring
+        // what topology.cpp does for FD mode.  The kernel reads this slot at startup; without
+        // this write it gets a stale or zeroed value and writes completion data to the wrong PCIe address.
+        {
+            const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
+            const uint32_t completion_q_wr_l1 =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+            const uint32_t completion_q_rd_l1 =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+            const uint32_t completion_q0_last_event_l1 =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+            const uint32_t completion_q1_last_event_l1 =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+            const uint32_t completion_wr_ptr_16B = dev_completion_base >> 4;
+            const uint32_t zero = 0u;
+            cluster.write_core(&completion_wr_ptr_16B, sizeof(uint32_t), dispatch_cxy, completion_q_wr_l1);
+            cluster.write_core(&completion_wr_ptr_16B, sizeof(uint32_t), dispatch_cxy, completion_q_rd_l1);
+            cluster.write_core(&zero, sizeof(uint32_t), dispatch_cxy, completion_q0_last_event_l1);
+            cluster.write_core(&zero, sizeof(uint32_t), dispatch_cxy, completion_q1_last_event_l1);
+        }
+
+        device_data.overflow_check(this->device_);
+        tt_metal::detail::LaunchProgram(this->device_, program);
+        // Ensure host CPU sees any PCIe-written completion queue data before validating.
+        tt_driver_atomics::mfence();
+        EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
+    }
+
+private:
+    // Orchestrates exec_buf execution: builds DRAM payload, writes to DRAM, then issues the
+    // exec_buf command with the MSB stall flag so the prefetcher switches to DRAM mode.
+    // Mirrors BasePrefetcherTestFixture::execute_generated_commands_exec_buff for SD.
+    template <typename WriteCmd>
+    void execute_generated_commands_exec_buf(
+        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
+        uint32_t num_iterations,
+        WriteCmd&& write_cmd) {
+        // 1. Concatenate all commands into a single exec_buf payload.
+        std::vector<uint8_t> exec_buf_data;
+        for (uint32_t i = 0; i < num_iterations; i++) {
+            for (const auto& cmd : commands_per_iteration) {
+                const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(cmd.data());
+                const uint8_t* end_ptr = src_ptr + cmd.size_bytes();
+                exec_buf_data.insert(exec_buf_data.end(), src_ptr, end_ptr);
+            }
+        }
+
+        // Append barrier wait to flush all commands before exec_buf_end.
+        DeviceCommandCalculator wait_calc;
+        wait_calc.add_dispatch_wait();
+        HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
+        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
+        exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
+
+        // 2. Append exec_buf_end (terminates DRAM execution and returns to issue queue).
+        DeviceCommandCalculator exec_buf_end_calc;
+        exec_buf_end_calc.add_prefetch_exec_buf_end();
+        HostMemDeviceCommand exec_terminate(exec_buf_end_calc.write_offset_bytes());
+        exec_terminate.add_prefetch_exec_buf_end();
+        const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(exec_terminate.data());
+        exec_buf_data.insert(exec_buf_data.end(), src_ptr, src_ptr + exec_terminate.size_bytes());
+
+        // 3. Write exec_buf data to DRAM, paged across banks.
+        const uint32_t page_size = 1u << this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
+        const uint32_t exec_buf_base_addr = this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
+
+        const size_t size_bytes = exec_buf_data.size();
+        const size_t padded_size_bytes = tt::align(size_bytes, page_size);
+        exec_buf_data.resize(padded_size_bytes, 0u);
+        const uint32_t num_pages = static_cast<uint32_t>(padded_size_bytes) / page_size;
+        log_info(tt::LogTest, "Total exec buf bytes: {} (padded: {})", size_bytes, padded_size_bytes);
+
+        uint32_t data_idx = 0;
+        for (uint32_t page_idx = 0; page_idx < num_pages; ++page_idx) {
+            const uint32_t bank_id = page_idx % this->num_banks_;
+            const uint32_t bank_offset = (page_idx / this->num_banks_) * page_size;
+            const uint32_t addr = exec_buf_base_addr + bank_offset;
+            std::vector<uint8_t> page_data(
+                exec_buf_data.begin() + data_idx, exec_buf_data.begin() + data_idx + page_size);
+            detail::WriteToDeviceDRAMChannel(this->device_, bank_id, addr, page_data);
+            data_idx += page_size;
+        }
+        tt_metal::MetalContext::instance().get_cluster().dram_barrier(this->device_->id());
+
+        // 4. Write exec_buf command with MSB stall flag so prefetcher switches to DRAM execution.
+        DeviceCommandCalculator exec_buf_calc;
+        exec_buf_calc.add_prefetch_exec_buf();
+        HostMemDeviceCommand exec_cmd(exec_buf_calc.write_offset_bytes());
+        exec_cmd.add_prefetch_exec_buf(exec_buf_base_addr, this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
+        write_cmd(exec_cmd, /*stall=*/true);
+    }
+};
+
+class SDPrefetchDRAMToL1TestFixture : public SDPrefetchTestBase<BasePrefetcherTestFixture> {};
+class SDPrefetchPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherPackedReadTestFixture> {};
+class SDPrefetchRandomTestFixture : public SDPrefetchTestBase<RandomTestFixture> {};
+
+class SDPrefetchHostTextFixture : public SDPrefetchTestBase<PrefetcherHostTextFixture> {
+public:
+    // Returns a host pointer to the SD completion queue region in the hugepage.
+    // The dispatch kernel is configured to write to dev_hugepage_base + SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
+    // so this pointer is the host-side view of that same region.
+    void* get_host_completion_ptr() const {
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+        const ChipId mmio_id =
+            tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+        const uint16_t channel =
+            tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
+        char* hugepage_bar_base =
+            static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
+        hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        return hugepage_bar_base + dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+    }
+    uint32_t get_host_completion_size() const { return Common::SD_COMPLETION_QUEUE_SIZE; }
+};
+
+class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
+class SDPrefetchRingbufferReadTestFixture : public SDPrefetchTestBase<PrefetcherRingbufferReadTestFixture> {};
+// SD paged DRAM write throughput: exercises the WRITE_PAGED dispatcher command path
+class SDPrefetchThroughputTestFixture : public SDPrefetchTestBase<PrefetcherThroughputTestFixture> {};
+
 // In this we, we test the terminate command by adding a linear write unicast
 // with a small payload followed by commands to terminate prefetcher and dispatcher.
 // exec_buf enabled execution needs special handling
@@ -2675,10 +3110,6 @@ TEST_P(PrefetcherHostTextFixture, HostSmokeTest) {
         wait_for_host_writes);
 }
 
-// Throughput-focused test.
-// Stresses the prefetcher "issue queue -> device" path by issuing large paged DRAM writes with inline host payload.
-class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
-
 TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     log_info(tt::LogTest, "PrefetcherThroughputTestFixture - HostToDRAMPagedWriteThroughput - Test Start");
 
@@ -2722,7 +3153,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
 
     log_info(
         tt::LogTest,
-        "Throughput workload: {} cmds × {} pages/cmd × {} B/page = {} B total",
+        "Throughput workload: {} cmds x {} pages/cmd x {} B/page = {} B total",
         total_cmds,
         pages_per_cmd,
         page_size_bytes,
@@ -2841,609 +3272,6 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
         }
     }
 }
-
-// All BasePrefetcherTestFixture tests with exec buff enabled / disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    BasePrefetcherTestFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// PrefetcherPackedReadTestFixture tests with exec buff enabled / disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetcherPackedReadTestFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, Common::DRAM_DATA_SIZE_WORDS, true},
-        // With exec buf disabled + higher iterations
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled + higher iterations
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            Common::DRAM_DATA_SIZE_WORDS,
-            true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// PrefetcherLinearPackedReadTestFixture tests with exec buff enabled / disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetcherLinearPackedReadTestFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// PrefetcherHostTextFixture test with exec buff enabled / disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetcherHostTextFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// PrefetcherRingbufferReadTestFixture test with exec buff enabled / disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetcherRingbufferReadTestFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// RandomTestFixture test with exec buff enabled / disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    RandomTestFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, Common::DRAM_DATA_SIZE_WORDS, true},
-        // With exec buf disabled + higher iterations
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        // With exec buf enabled + higher iterations
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            Common::DRAM_DATA_SIZE_WORDS,
-            true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// Runs only with exec buff disabled - RELAY_LINEAR_H must be standalone
-// Uses larger data size (100MB total) to better test DRAM capacity
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetchRelayLinearHTestFixture,
-    ::testing::Values(
-        // With exec buf disabled - 20MB per iteration × 5 iterations = 100MB total
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t),  // 20MB in words
-            false}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// Runs only with exec buff disabled - RELAY_LINEAR_PACKED_H must be standalone
-// Uses larger data size (100MB total) to better test DRAM capacity
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetcherLinearPackedHTestFixture,
-    ::testing::Values(
-        // With exec buf disabled - 20MB per iteration × 5 iterations = 100MB total
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t),  // 20MB in words
-            false}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// PrefetcherThroughputTestFixture test - Runs only with exec buff disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetcherThroughputTestFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// Slow Dispatch Prefetcher Tests
-// Validates cq_prefetch.cpp (IS_D_VARIANT=1) in isolation without FD infrastructure.
-// Two modes via PagedReadParams::use_exec_buf:
-//   false - commands written directly to prefetch_d cmddat_q L1
-//   true  - commands written banked to DRAM; a single CQ_PREFETCH_CMD_EXEC_BUF pointer in cmddat_q
-//
-// The upstream semaphore self-loop (MY_UPSTREAM_CB_SEM_ID == UPSTREAM_CB_SEM_ID on the prefetch_d
-// core, initialized to cmd_cb_pages) pre-signals all pages so the kernel sees them immediately.
-template <typename FDFixture>
-class SDPrefetchTestBase : public FDFixture {
-public:
-    void SetUp() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-            GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
-        }
-        this->device_ = tt_metal::CreateDevice(0);
-
-        Common::DispatchPayloadGenerator::Config pgcfg;
-        pgcfg.use_coherent_data = this->cfg_.use_coherent_data;
-        pgcfg.perf_test = this->cfg_.perf_test;
-        pgcfg.min_xfer_size_bytes = this->cfg_.min_xfer_size_bytes;
-        pgcfg.max_xfer_size_bytes = this->cfg_.max_xfer_size_bytes;
-        std::random_device rd;
-        pgcfg.seed = rd();
-        this->payload_generator_ = std::make_unique<Common::DispatchPayloadGenerator>(pgcfg);
-        log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
-
-        this->dispatch_buffer_page_size_ = this->cfg_.dispatch_buffer_page_size;
-        this->send_to_all_ = this->cfg_.send_to_all;
-        this->host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
-        // Cap inline command size to avoid cmddat_q L1 overflow on the prefetch-d core.
-        this->max_fetch_bytes_ = Common::SD_PREFETCH_SCRATCH_DB_SIZE;
-
-        this->dram_base_ = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
-        this->num_banks_ = this->device_->allocator_impl()->get_num_banks(BufferType::DRAM);
-        this->l1_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1);
-        this->packed_write_max_unicast_sub_cmds_ =
-            this->device_->compute_with_storage_grid_size().x * this->device_->compute_with_storage_grid_size().y;
-
-        this->init_params(this->GetParam());
-    }
-
-    void TearDown() override {
-        if (this->device_) {
-            tt_metal::CloseDevice(this->device_);
-            this->device_ = nullptr;
-        }
-    }
-
-    // Launches cq_prefetch.cpp (combined IS_H_VARIANT+IS_D_VARIANT) + cq_dispatch.cpp under
-    // slow dispatch by writing commands to the PCIe hugepage and notifying the prefetcher via
-    // the FetchQ ring - the same mechanism used by the FD runtime.
-    //
-    // All hugepage writes and FetchQ entries are committed before LaunchProgram so the
-    // kernel finds all data ready when it starts.  num_cores_to_log / wait_for_* match the
-    // FD virtual signature but are unused (LaunchProgram is synchronous).
-    void execute_generated_commands(
-        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
-        Common::DeviceData& device_data,
-        size_t /*num_cores_to_log*/,
-        uint32_t num_iterations,
-        bool /*wait_for_completion*/ = true,
-        bool /*wait_for_host_writes*/ = false) override {
-        using entry_t = DispatchSettings::prefetch_q_entry_type;  // uint16_t
-
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
-        const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
-        const uint32_t dispatch_buffer_pages =
-            Common::SD_DISPATCH_BUFFER_SIZE_BYTES / Common::SD_DISPATCH_BUFFER_PAGE_SIZE;
-
-        // L1 layout on the prefetch_hd core
-        // Place FetchQ ring + rd_ptr immediately after the first allocatable L1 page.
-        // cmddat_q and scratch_db follow the FetchQ.
-        const uint32_t l1_unrsv = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
-        const uint32_t page_size = Common::SD_PREFETCH_CMDDAT_PAGE_SIZE;
-        const uint32_t l1_unrsv_aligned = tt::align(l1_unrsv, page_size);
-
-        // prefetch_q_rd_ptr_addr (4 B) and pcie_rd_ptr_addr (next 4 B) live at l1_unrsv_aligned.
-        // The FetchQ ring starts one full page later so it is page-aligned.
-        const uint32_t prefetch_q_rd_ptr_addr = l1_unrsv_aligned;
-        const uint32_t prefetch_q_base = l1_unrsv_aligned + page_size;
-        const uint32_t prefetch_q_size = Common::SD_PREFETCH_Q_ENTRIES * sizeof(entry_t);
-
-        // cmddat_q: after FetchQ, aligned to host (NOC) alignment.
-        const uint32_t noc_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
-        const uint32_t cmddat_q_base = prefetch_q_base + tt::align(prefetch_q_size, noc_align);
-        // Use the same cmddat_q size as the FD runtime (256KB on worker). read_from_pcie issues one DMA per
-        // FetchQ entry, so cmddat_q must be >= max single command size (prefetch_max_cmd_size = 128KB).
-        const uint32_t cmddat_q_bytes = memmap.cmddat_q_size();
-        const uint32_t cmddat_q_pages = tt::align(cmddat_q_bytes / page_size, Common::SD_PREFETCH_CMDDAT_BLOCKS);
-        const uint32_t scratch_db_base = cmddat_q_base + cmddat_q_pages * page_size;
-
-        const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
-        TT_FATAL(
-            scratch_db_base + Common::SD_PREFETCH_SCRATCH_DB_SIZE <= soc_desc.worker_l1_size,
-            "SD prefetch hd: prefetch_q + cmddat_q + scratch_db exceeds worker L1");
-
-        // Hugepage addressing
-        // Use the same hugepage region that the FD runtime uses for the issue queue
-        // (safe since SD mode never runs the FD runtime concurrently).
-        const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-
-        const ChipId mmio_id =
-            tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
-        const uint16_t channel =
-            tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
-        char* hugepage_bar_base =
-            static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
-        hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
-        void* const host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
-
-        // Physical cores
-        const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(Common::sd_prefetch_core);
-        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::sd_dispatch_core);
-        const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
-
-        auto& cluster = tt_metal::MetalContext::instance().get_cluster();
-
-        // prefetch_q_rd_ptr_addr: kernel writes its consumed position here so the host can poll.
-        // Initialise to the ring base so the host-side fence logic sees the ring as empty.
-        const uint32_t init_rd_ptr = prefetch_q_base;
-        cluster.write_core(&init_rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
-        // pcie_rd_ptr_addr (prefetch_q_rd_ptr_addr + 4): initialise to 0.
-        // const uint32_t init_pcie_rd = 0u;
-        // cluster.write_core(
-        //     &init_pcie_rd, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr + sizeof(uint32_t));
-
-        // TLB window for writing FetchQ entries
-        tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
-
-        // Host-side FetchQ write state.
-        uint32_t prefetch_q_dev_ptr = prefetch_q_base;
-        const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
-
-        // Hugepage write state.
-        uint32_t* host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
-        const uint64_t hugepage_issue_end =
-            static_cast<uint64_t>(dev_hugepage_base) + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
-
-        const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
-
-        // nt_memcpy: non-temporal store of n bytes (n must be a multiple of 64).
-        auto nt_memcpy_local = [&host_align](uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
-            TT_FATAL(n % host_align == 0, "nt_memcpy: size {} not a multiple of {}", n, host_align);
-            for (size_t i = 0; i < n; i += host_align) {
-                for (size_t j = 0; j < host_align; j += sizeof(__m128i)) {
-                    __m128i blk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + j));
-                    _mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + j), blk);
-                }
-            }
-            tt_driver_atomics::sfence();
-        };
-
-        // write_prefetcher_cmd: nt_memcpy cmd to hugepage + write one FetchQ entry via TLB.
-        // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
-        // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
-        auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, entry_t cmd_size_entry) {
-            TT_FATAL(
-                cmd_size_bytes % host_align == 0,
-                "SD prefetch: cmd_size_bytes {} not aligned to host alignment {}",
-                cmd_size_bytes,
-                host_align);
-
-            // Poll for FetchQ ring space (should not spin in normal SD operation).
-            while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
-                uint32_t rd_ptr;
-                cluster.read_core(&rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
-                if (rd_ptr != prefetch_q_dev_ptr) {
-                    break;
-                }
-            }
-
-            // Hugepage wrap: if the command would exceed the issue buffer, reset to base.
-            const uint64_t host_offset =
-                static_cast<uint64_t>(reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
-            if (dev_hugepage_base + host_offset + cmd_size_bytes > hugepage_issue_end) {
-                host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
-            }
-
-            nt_memcpy_local(
-                reinterpret_cast<uint8_t*>(host_mem_ptr), reinterpret_cast<const uint8_t*>(src), cmd_size_bytes);
-            host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
-
-            prefetch_q_tlb->write16(prefetch_q_dev_ptr, cmd_size_entry);
-            prefetch_q_dev_ptr += sizeof(entry_t);
-            if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
-                prefetch_q_dev_ptr = prefetch_q_base;
-            }
-        };
-
-        // Helper: align, pad, and enqueue any HostMemDeviceCommand to hugepage + FetchQ.
-        auto write_cmd = [&](const HostMemDeviceCommand& cmd, bool stall = false) {
-            const uint32_t size = tt::align(cmd.size_bytes(), host_align);
-            std::vector<uint8_t> padded(size, 0u);
-            std::memcpy(padded.data(), cmd.data(), cmd.size_bytes());
-            entry_t entry = static_cast<entry_t>(size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-            if (stall) {
-                entry |= static_cast<entry_t>(1u << 15);
-            }
-            write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(padded.data()), size, entry);
-        };
-
-        if (this->use_exec_buf_) {
-            execute_generated_commands_exec_buf(commands_per_iteration, num_iterations, write_cmd);
-        } else {
-            for (uint32_t i = 0; i < num_iterations; ++i) {
-                for (const auto& cmd : commands_per_iteration) {
-                    const uint32_t size = tt::align(cmd.size_bytes(), host_align);
-                    TT_FATAL(
-                        (size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) <=
-                            (uint32_t)std::numeric_limits<entry_t>::max() >> 1,
-                        "SD prefetch: command size {} B overflows 15-bit FetchQ entry (max {} B)",
-                        size,
-                        (uint32_t)0x7FFF << DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                    write_cmd(cmd);
-                }
-            }
-        }
-
-        // Terminate: dispatch_wait + dispatch_terminate + prefetch_terminate (shared by both paths).
-        // SD mode has no dispatch_s kernel, so build the dispatch terminate manually rather than
-        // using CommandBuilder::build_dispatch_terminate() which conditionally appends a subordinate
-        // terminate that would hang the dispatcher with no downstream to receive it.
-        {
-            DeviceCommandCalculator calc;
-            calc.add_dispatch_wait();
-            calc.add_dispatch_terminate();
-            HostMemDeviceCommand disp_term(calc.write_offset_bytes());
-            disp_term.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-            disp_term.add_dispatch_terminate();
-            write_cmd(disp_term);
-        }
-        write_cmd(CommandBuilder::build_prefetch_terminate());
-
-        // Semaphores
-        tt_metal::Program program = tt_metal::CreateProgram();
-
-        // Slot 0: prefetch_sync_sem - dispatch signals prefetch when a stall round-trip is done.
-        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
-        const uint32_t di_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
-        TT_FATAL(pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
-
-        // Slot 1: downstream_cb_sem on prefetch (init=dispatch_buffer_pages); dispatch_cb_sem on dispatch (init=0).
-        const uint32_t pf_downstream_cb_sem =
-            tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, dispatch_buffer_pages);
-        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
-        TT_FATAL(
-            pf_downstream_cb_sem == di_dispatch_cb_sem,
-            "dispatch_cb sem slot mismatch ({} vs {})",
-            pf_downstream_cb_sem,
-            di_dispatch_cb_sem);
-
-        // Kernel defines and creation
-        auto prefetch_defines = Common::make_sd_prefetch_defines(
-            this->device_,
-            dev_hugepage_base,
-            Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
-            prefetch_q_base,
-            prefetch_q_size,
-            prefetch_q_rd_ptr_addr,
-            cmddat_q_base,
-            cmddat_q_pages,
-            scratch_db_base,
-            dispatch_cb_base,
-            dispatch_buffer_pages,
-            pf_downstream_cb_sem,
-            pf_sync_sem,
-            phys_prefetch,
-            phys_disp);
-        auto prefetch_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            {Common::sd_prefetch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .defines = prefetch_defines});
-        tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
-
-        const uint32_t dev_completion_base = dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
-        auto dispatch_defines = Common::make_sd_dispatch_defines(
-            this->device_,
-            dispatch_buffer_pages,
-            di_dispatch_cb_sem,
-            di_sync_sem,
-            phys_prefetch,
-            phys_disp,
-            memmap,
-            dev_completion_base,
-            Common::SD_COMPLETION_QUEUE_SIZE);
-        auto dispatch_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            {Common::sd_dispatch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .defines = dispatch_defines});
-        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::sd_dispatch_core, {0u, 0u, 0u});
-
-        device_data.overflow_check(this->device_);
-        tt_metal::detail::LaunchProgram(this->device_, program);
-        // Ensure host CPU sees any PCIe-written completion queue data before validating.
-        tt_driver_atomics::mfence();
-        EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
-    }
-
-private:
-    // Orchestrates exec_buf execution: builds DRAM payload, writes to DRAM, then issues the
-    // exec_buf command with the MSB stall flag so the prefetcher switches to DRAM mode.
-    // Mirrors BasePrefetcherTestFixture::execute_generated_commands_exec_buff for SD.
-    template <typename WriteCmd>
-    void execute_generated_commands_exec_buf(
-        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
-        uint32_t num_iterations,
-        WriteCmd&& write_cmd) {
-        // 1. Concatenate all commands into a single exec_buf payload.
-        std::vector<uint8_t> exec_buf_data;
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (const auto& cmd : commands_per_iteration) {
-                const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(cmd.data());
-                const uint8_t* end_ptr = src_ptr + cmd.size_bytes();
-                exec_buf_data.insert(exec_buf_data.end(), src_ptr, end_ptr);
-            }
-        }
-
-        // Append barrier wait to flush all commands before exec_buf_end.
-        DeviceCommandCalculator wait_calc;
-        wait_calc.add_dispatch_wait();
-        HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
-        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-        const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
-        exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
-
-        // 2. Append exec_buf_end (terminates DRAM execution and returns to issue queue).
-        DeviceCommandCalculator exec_buf_end_calc;
-        exec_buf_end_calc.add_prefetch_exec_buf_end();
-        HostMemDeviceCommand exec_terminate(exec_buf_end_calc.write_offset_bytes());
-        exec_terminate.add_prefetch_exec_buf_end();
-        const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(exec_terminate.data());
-        exec_buf_data.insert(exec_buf_data.end(), src_ptr, src_ptr + exec_terminate.size_bytes());
-
-        // 3. Write exec_buf data to DRAM, paged across banks.
-        const uint32_t page_size = 1u << this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
-        const uint32_t exec_buf_base_addr = this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
-
-        const size_t size_bytes = exec_buf_data.size();
-        const size_t padded_size_bytes = tt::align(size_bytes, page_size);
-        exec_buf_data.resize(padded_size_bytes, 0u);
-        const uint32_t num_pages = static_cast<uint32_t>(padded_size_bytes) / page_size;
-        log_info(tt::LogTest, "Total exec buf bytes: {} (padded: {})", size_bytes, padded_size_bytes);
-
-        uint32_t data_idx = 0;
-        for (uint32_t page_idx = 0; page_idx < num_pages; ++page_idx) {
-            const uint32_t bank_id = page_idx % this->num_banks_;
-            const uint32_t bank_offset = (page_idx / this->num_banks_) * page_size;
-            const uint32_t addr = exec_buf_base_addr + bank_offset;
-            std::vector<uint8_t> page_data(
-                exec_buf_data.begin() + data_idx, exec_buf_data.begin() + data_idx + page_size);
-            detail::WriteToDeviceDRAMChannel(this->device_, bank_id, addr, page_data);
-            data_idx += page_size;
-        }
-        tt_metal::MetalContext::instance().get_cluster().dram_barrier(this->device_->id());
-
-        // 4. Write exec_buf command with MSB stall flag so prefetcher switches to DRAM execution.
-        DeviceCommandCalculator exec_buf_calc;
-        exec_buf_calc.add_prefetch_exec_buf();
-        HostMemDeviceCommand exec_cmd(exec_buf_calc.write_offset_bytes());
-        exec_cmd.add_prefetch_exec_buf(exec_buf_base_addr, this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
-        write_cmd(exec_cmd, /*stall=*/true);
-    }
-};
-
-class SDPrefetchDRAMToL1TestFixture : public SDPrefetchTestBase<BasePrefetcherTestFixture> {};
-class SDPrefetchPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherPackedReadTestFixture> {};
-class SDPrefetchRandomTestFixture : public SDPrefetchTestBase<RandomTestFixture> {};
 
 TEST_P(SDPrefetchDRAMToL1TestFixture, DRAMToL1PagedRead) {
     log_info(tt::LogTest, "SDPrefetchDRAMToL1TestFixture - DRAMToL1PagedRead - Test Start");
@@ -3664,41 +3492,6 @@ TEST_P(SDPrefetchRandomTestFixture, RandomTest) {
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    SlowDispatch,
-    SDPrefetchDRAMToL1TestFixture,
-    ::testing::Values(
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
-        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
-    });
-
-INSTANTIATE_TEST_SUITE_P(
-    SlowDispatch,
-    SDPrefetchPackedReadTestFixture,
-    ::testing::Values(
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
-    });
-
-INSTANTIATE_TEST_SUITE_P(
-    SlowDispatch,
-    SDPrefetchRandomTestFixture,
-    ::testing::Values(PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
-    });
-
-class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
-
 TEST_P(SDPrefetchLinearPackedReadTestFixture, LinearPackedReadTest) {
     log_info(tt::LogTest, "SDPrefetchLinearPackedReadTestFixture - LinearPackedReadTest - Test Start");
     const uint32_t num_iterations = 1;
@@ -3732,19 +3525,6 @@ TEST_P(SDPrefetchLinearPackedReadTestFixture, LinearPackedReadTest) {
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    SlowDispatch,
-    SDPrefetchLinearPackedReadTestFixture,
-    ::testing::Values(
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
-    });
-
-class SDPrefetchRingbufferReadTestFixture : public SDPrefetchTestBase<PrefetcherRingbufferReadTestFixture> {};
-
 TEST_P(SDPrefetchRingbufferReadTestFixture, RingbufferReadTest) {
     log_info(tt::LogTest, "SDPrefetchRingbufferReadTestFixture - RingbufferReadTest - Test Start");
     const uint32_t num_iterations = get_num_iterations();
@@ -3761,17 +3541,6 @@ TEST_P(SDPrefetchRingbufferReadTestFixture, RingbufferReadTest) {
     auto commands_per_iteration = generate_ringbuffer_relay_commands(first_worker, dram_alignment, device_data);
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    SlowDispatch,
-    SDPrefetchRingbufferReadTestFixture,
-    ::testing::Values(
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
-    });
 
 // SD end-to-end paged write+read: dispatcher writes to DRAM banks, prefetcher relays back to L1
 class SDPrefetchPagedReadWriteTestFixture : public SDPrefetchTestBase<BasePrefetcherTestFixture> {};
@@ -3795,19 +3564,93 @@ TEST_P(SDPrefetchPagedReadWriteTestFixture, PagedReadWriteTest) {
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    SlowDispatch,
-    SDPrefetchPagedReadWriteTestFixture,
-    ::testing::Values(
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
-        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
-    });
+TEST_P(SDPrefetchHostTextFixture, HostTest) {
+    log_info(tt::LogTest, "SDPrefetchHostTextFixture - HostTest - Test Start");
 
-// SD paged DRAM write throughput: exercises the WRITE_PAGED dispatcher command path
-class SDPrefetchThroughputTestFixture : public SDPrefetchTestBase<PrefetcherThroughputTestFixture> {};
+    const uint32_t max_data_size = DEVICE_DATA_SIZE;
+    const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
+    const uint32_t dram_data_size_words = this->get_dram_data_size_words();
+    const uint32_t num_iterations = this->get_num_iterations();
+
+    std::vector<uint32_t> data(max_data_size_words);
+    for (uint32_t i = 0; i < max_data_size_words; i++) {
+        data[i] = i;
+    }
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
+    const CoreRange worker_range = {first_worker, last_worker};
+
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
+    MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
+    MetalContext::instance().get_cluster().l1_barrier(device_->id());
+
+    void* completion_queue_buffer = get_host_completion_ptr();
+    dirty_host_completion_buffer(completion_queue_buffer, get_host_completion_size());
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, completion_queue_buffer, false, dram_data_size_words, cfg_);
+
+    auto commands_per_iteration = generate_host_write_commands(data, first_worker, l1_base, device_data);
+
+    // SD LaunchProgram is synchronous; no completion-queue write-pointer polling needed.
+    // mfence inside execute_generated_commands ensures CPU sees PCIe-written data before validate.
+    execute_generated_commands(
+        commands_per_iteration,
+        device_data,
+        worker_range.size(),
+        num_iterations,
+        /*wait_for_completion=*/false,
+        /*wait_for_host_writes=*/false);
+}
+
+TEST_P(SDPrefetchHostTextFixture, HostSmokeTest) {
+    log_info(tt::LogTest, "SDPrefetchHostTextFixture - HostSmokeTest - Test Start");
+
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
+    const CoreRange worker_range = {first_worker, last_worker};
+
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+
+    void* completion_queue_buffer = get_host_completion_ptr();
+    dirty_host_completion_buffer(completion_queue_buffer, get_host_completion_size());
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, completion_queue_buffer, false, dram_data_size_words, cfg_);
+
+    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    HelperInfo info{
+        dram_base_, num_banks_, l1_alignment_, packed_write_max_unicast_sub_cmds_, dispatch_buffer_page_size_};
+    SmokeTestHelper helper(device_, device_data, commands_per_iteration, info);
+
+    auto add_host_write_func = [this](Common::DeviceData& device_data) {
+        PrefetcherHostTextFixture::pad_host_data(device_data);
+    };
+
+    for (uint32_t multiplier = 1; multiplier < 3; multiplier++) {
+        helper.add_host_write(multiplier * 32, add_host_write_func);
+        helper.add_host_write(multiplier * 36, add_host_write_func);
+        helper.add_host_write(multiplier * 1024, add_host_write_func);
+        helper.add_host_write(
+            (multiplier * dispatch_buffer_page_size_) - (2 * sizeof(CQDispatchCmd)), add_host_write_func);
+        helper.add_host_write((multiplier * dispatch_buffer_page_size_) - sizeof(CQDispatchCmd), add_host_write_func);
+        helper.add_host_write((multiplier * dispatch_buffer_page_size_), add_host_write_func);
+        helper.add_host_write((multiplier * dispatch_buffer_page_size_) + sizeof(CQDispatchCmd), add_host_write_func);
+    }
+
+    execute_generated_commands(
+        commands_per_iteration,
+        device_data,
+        worker_range.size(),
+        num_iterations,
+        /*wait_for_completion=*/false,
+        /*wait_for_host_writes=*/false);
+}
 
 TEST_P(SDPrefetchThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     log_info(tt::LogTest, "SDPrefetchThroughputTestFixture - HostToDRAMPagedWriteThroughput - Test Start");
@@ -3877,6 +3720,304 @@ TEST_P(SDPrefetchThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), /*num_iterations=*/1U);
 }
 
+// All BasePrefetcherTestFixture tests with exec buff enabled / disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    BasePrefetcherTestFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// PrefetcherPackedReadTestFixture tests with exec buff enabled / disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherPackedReadTestFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, Common::DRAM_DATA_SIZE_WORDS, true},
+        // With exec buf disabled + higher iterations
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS_SMOKE_RANDOM,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled + higher iterations
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS_SMOKE_RANDOM,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// PrefetcherLinearPackedReadTestFixture tests with exec buff enabled / disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherLinearPackedReadTestFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// PrefetcherHostTextFixture test with exec buff enabled / disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherHostTextFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// PrefetcherRingbufferReadTestFixture test with exec buff enabled / disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherRingbufferReadTestFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// RandomTestFixture test with exec buff enabled / disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    RandomTestFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, Common::DRAM_DATA_SIZE_WORDS, true},
+        // With exec buf disabled + higher iterations
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS_SMOKE_RANDOM,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        // With exec buf enabled + higher iterations
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS_SMOKE_RANDOM,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// Runs only with exec buff disabled - RELAY_LINEAR_H must be standalone
+// Uses larger data size (100MB total) to better test DRAM capacity
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetchRelayLinearHTestFixture,
+    ::testing::Values(
+        // With exec buf disabled - 20MB per iteration x 5 iterations = 100MB total
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t),  // 20MB in words
+            false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// Runs only with exec buff disabled - RELAY_LINEAR_PACKED_H must be standalone
+// Uses larger data size (100MB total) to better test DRAM capacity
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherLinearPackedHTestFixture,
+    ::testing::Values(
+        // With exec buf disabled - 20MB per iteration x 5 iterations = 100MB total
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t),  // 20MB in words
+            false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// PrefetcherThroughputTestFixture test - Runs only with exec buff disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherThroughputTestFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchDRAMToL1TestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
+        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchPackedReadTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchRandomTestFixture,
+    ::testing::Values(PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchLinearPackedReadTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchRingbufferReadTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchPagedReadWriteTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
+        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
 INSTANTIATE_TEST_SUITE_P(
     SlowDispatch,
     SDPrefetchThroughputTestFixture,
@@ -3885,7 +4026,30 @@ INSTANTIATE_TEST_SUITE_P(
         PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchHostTextFixture,
+    ::testing::Values(
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" +
+               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
 }  // namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests

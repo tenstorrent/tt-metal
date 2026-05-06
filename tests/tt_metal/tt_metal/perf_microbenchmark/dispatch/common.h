@@ -926,7 +926,7 @@ inline uint32_t clamp_to_max_fetch(
 // Page size and block count reuse the canonical DispatchSettings values.
 // pages-per-block is derived inside cq_dispatch.cpp as DISPATCH_CB_PAGES / DISPATCH_CB_BLOCKS.
 static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BYTES = 768 * 1024;
+static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BYTES = 512 * 1024;
 static constexpr uint32_t SD_PREFETCHER_PAGE_BATCH_SIZE = 1;
 static_assert(SD_DISPATCH_BUFFER_SIZE_BYTES % SD_DISPATCH_BUFFER_PAGE_SIZE == 0);
 static_assert(
@@ -940,9 +940,9 @@ static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::P
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 static constexpr uint32_t SD_PREFETCH_SCRATCH_DB_SIZE = 128 * 1024;
-static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = 8 * 1024 * 1024;
-static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = 4 * 1024 * 1024;
-static constexpr uint32_t SD_PREFETCH_Q_ENTRIES = 1024;
+static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = 256u * 1024u * 1024u;
+static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = 256u * 1024u * 1024u;
+static constexpr uint32_t SD_PREFETCH_Q_ENTRIES = 1534;
 inline constexpr CoreCoord sd_prefetch_core = {0, 0};    // combined prefetch_hd
 inline constexpr CoreCoord sd_prefetch_d_core = {3, 0};  // kept for spoof_prefetch (FD tests)
 
