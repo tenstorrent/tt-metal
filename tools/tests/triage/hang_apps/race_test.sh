@@ -13,8 +13,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/../../../../.build/default"
 
-HANG_APP="${BUILD_DIR}/tools/tests/triage/hang_apps/add_2_integers_hang/Release/triage_hang_app_add_2_integers_hang"
-OPEN_CLOSE="${BUILD_DIR}/tools/tests/triage/hang_apps/open_and_close/Release/triage_open_and_close"
+HANG_APP="${BUILD_DIR}/tools/tests/triage/hang_apps/add_2_integers_hang/Debug/triage_hang_app_add_2_integers_hang"
+OPEN_CLOSE="${BUILD_DIR}/tools/tests/triage/hang_apps/open_and_close/Debug/triage_open_and_close"
 
 echo "=== SafeDeviceGuard race test ==="
 echo "A: $HANG_APP"

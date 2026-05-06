@@ -10,8 +10,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/../../../../.build/default"
-OPEN_CLOSE="${BUILD_DIR}/tools/tests/triage/hang_apps/open_and_close/Release/triage_open_and_close"
-HOLD_DEVICE="${BUILD_DIR}/tools/tests/triage/hang_apps/open_and_close/Release/triage_hold_device"
+OPEN_CLOSE="${BUILD_DIR}/tools/tests/triage/hang_apps/open_and_close/Debug/triage_open_and_close"
+HOLD_DEVICE="${BUILD_DIR}/tools/tests/triage/hang_apps/open_and_close/Debug/triage_hold_device"
 
 export TT_METAL_SAFE_DEVICE_OPEN=1
 export TT_METAL_OPERATION_TIMEOUT_SECONDS=60
