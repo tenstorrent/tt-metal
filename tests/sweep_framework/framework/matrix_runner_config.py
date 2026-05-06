@@ -120,13 +120,6 @@ RUNNER_PROFILES = {
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
     },
-    "galaxy-g04glx03": {
-        "arch": "wormhole_b0",
-        "runs_on": "g04glx03",
-        "runner_label": "g04glx03",
-        "tt_smi_cmd": "tt-smi -r",
-        "matrix_output_key": "galaxy",
-    },
 }
 
 
@@ -143,7 +136,7 @@ TEST_GROUPS = {
     "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
     "blackhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u-blackhole"},
     "lead-models-single-chip": {"runner_profile": "n150"},
-    "lead-models-galaxy": {"runner_profile": "galaxy-g04glx03"},
+    "lead-models-galaxy": {"runner_profile": "galaxy-topology-6u"},
 }
 
 
