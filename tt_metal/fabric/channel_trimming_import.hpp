@@ -23,6 +23,13 @@ namespace tt::tt_fabric {
 using ChannelTrimmingOverrides =
     FabricDatapathUsageL1Results<true, builder_config::MAX_NUM_VCS, builder_config::num_max_sender_channels>;
 
+struct Vc0TrimFastPathInfo {
+    bool terminal_or_source_only = false;
+    bool worker_only_nonforwarding = false;
+    bool terminal_only_nonforwarding = false;
+    bool enable_terminal_speedy_rx = false;
+};
+
 // Key: pack(chip_id, eth_channel_id) → overrides
 using ChannelTrimmingOverrideMap = std::unordered_map<uint64_t, ChannelTrimmingOverrides>;
 
@@ -68,6 +75,13 @@ ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& ya
 
 // Parse a channel trimming global override YAML and return global overrides.
 ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std::string& yaml_path);
+
+// Derive trusted trim-aware VC0 fast-path metadata for a single router after overrides have been resolved.
+// Returns nullopt when VC0 forwarding capture cannot be trusted for fast-path inference.
+std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info(
+    const ChannelTrimmingOverrides& entry,
+    std::size_t actual_sender_channels_vc0,
+    const ChannelTrimmingGlobalOverrides& global_overrides);
 
 // Apply global overrides to a per-router trimming entry using replacement semantics.
 // Sender and receiver overrides are applied independently per VC.
