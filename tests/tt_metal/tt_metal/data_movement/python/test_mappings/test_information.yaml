@@ -893,7 +893,7 @@ tests:
     bandwidth_mode: "combined"
 
   1030:
-    name: "1D Matmul Test 1030 - 4x4 K=1 NOC1 Saturation (in1 512KiB per core, page=8192)"
+    name: "1D Matmul Test 1030 - 4x4 K=8 NOC1 Saturation (in1 512KiB per core, page=2048)"
     bandwidth_mode: "combined"
 
   1031:
