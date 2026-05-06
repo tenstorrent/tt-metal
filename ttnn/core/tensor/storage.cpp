@@ -79,11 +79,7 @@ struct DeviceStorage::MeshTensorHolder {
     States state_;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
-    MeshTensorHolder(MeshTensor mesh_tensor) : state_(Allocated{std::move(mesh_tensor)}) {
-        TT_FATAL(
-            std::get<Allocated>(state_).mesh_tensor_.is_initialized(),
-            "MeshTensor must not be in default constructed state.");
-    }
+    MeshTensorHolder(MeshTensor mesh_tensor) : state_(Allocated{std::move(mesh_tensor)}) {}
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
 

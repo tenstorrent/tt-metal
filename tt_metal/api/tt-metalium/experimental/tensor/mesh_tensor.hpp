@@ -115,11 +115,6 @@ public:
 
     // Getters:
 
-    /**
-     * Returns true if MeshTensor owns device memory (not moved-from).
-     */
-    bool is_initialized() const;
-
     const TensorSpec& tensor_spec() const;
 
     /**
