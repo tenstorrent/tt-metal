@@ -39,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t onepage = 1;
 
     const uint32_t page_bytes = get_local_cb_interface(cb_id_rm).fifo_page_size;
+    const uint32_t valid_row_bytes = W_logical * elem_bytes;
 
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
@@ -48,11 +49,11 @@ void kernel_main() {
     uint32_t end_page = start_page + num_pages;
     for (uint32_t page_id = start_page; page_id < end_page; page_id++) {
         cb_rm.reserve_back(onepage);
-        noc.async_read(tensor_accessor, cb_rm, page_bytes, {.page_id = page_id}, {.offset_bytes = 0});
+        // Read only logical row bytes from source, then zero-fill staging tail.
+        // This prevents tilize from pulling data from the next logical row when W is not tile-aligned.
+        noc.async_read(tensor_accessor, cb_rm, valid_row_bytes, {.page_id = page_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        // Page holds W_padded elements; only the first W_logical are defined. Zero tail so tilize+matmul reduce
-        // along W does not accumulate uninitialized padded columns (narrow rows like W=2).
-        const uint32_t valid_row_bytes = W_logical * elem_bytes;
+        // Staging pages are sized to cover all tiles consumed by tilize_block; zero beyond logical width.
         if (valid_row_bytes < page_bytes) {
             volatile tt_l1_ptr uint8_t* row_base = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_rm.get_write_ptr());
             for (uint32_t b = valid_row_bytes; b < page_bytes; b++) {
