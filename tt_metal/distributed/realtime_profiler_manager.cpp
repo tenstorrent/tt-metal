@@ -238,7 +238,7 @@ void parallel_for_each_device_index(const std::vector<size_t>& indices, Fn&& fn)
     const size_t worker_count = std::min(indices.size(), static_cast<size_t>(std::max(1u, hc)));
     if (worker_count <= 1) {
         for (size_t di : indices) {
-            fn(di);
+            std::forward<Fn>(fn)(di);
         }
         return;
     }
@@ -252,7 +252,7 @@ void parallel_for_each_device_index(const std::vector<size_t>& indices, Fn&& fn)
                 if (k >= indices.size()) {
                     break;
                 }
-                fn(indices[k]);
+                std::forward<Fn>(fn)(indices[k]);
             }
         });
     }
