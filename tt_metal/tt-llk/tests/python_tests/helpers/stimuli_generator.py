@@ -256,7 +256,7 @@ def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=Fa
     if sfpu:
         face_data += 0.1
 
-    return face_data
+    return _exclude_mx_subnormals(face_data, DataFormat.MxFp4)
 
 
 def generate_identity_face_tensor(
