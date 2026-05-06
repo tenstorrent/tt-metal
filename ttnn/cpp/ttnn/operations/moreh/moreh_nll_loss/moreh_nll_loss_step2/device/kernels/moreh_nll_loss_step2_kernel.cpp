@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -26,21 +28,16 @@ void kernel_main() {
     binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
 
 #if defined(DIVISOR)
-    cb_wait_front(cb_divisor, onetile);
-
-    tile_regs_acquire();
-    copy_tile_init_with_dt(cb_divisor);
-    copy_tile(cb_divisor, 0, dst0);
-    recip_tile_init();
-    recip_tile(dst0);
-    tile_regs_commit();
-
-    cb_pop_front(cb_divisor, onetile);
-    cb_reserve_back(cb_divisor_recip, onetile);
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_divisor_recip);
-    tile_regs_release();
-    cb_push_back(cb_divisor_recip, onetile);
+    // PARTIAL migration: cb_divisor_recip = 1 / cb_divisor.
+    //   migrated: CopyTile + Recip + PackTile chain.
+    {
+        using namespace compute_kernel_lib;
+        eltwise_chain(
+            onetile,
+            CopyTile<cb_divisor, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+            Recip<Dst::D0>{},
+            PackTile<cb_divisor_recip, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    }
 #endif
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {

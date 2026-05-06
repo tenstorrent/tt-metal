@@ -141,7 +141,7 @@ void kernel_main() {
             eltwise_chain(
                 onetile,
                 CopyTile<cb_reduce, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                Neg<Dst::D0>{},
+                Negative<Dst::D0>{},
                 PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #else
             eltwise_chain(

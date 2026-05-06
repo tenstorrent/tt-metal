@@ -313,26 +313,26 @@ void kernel_main() {
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
             cb_ydyadd, cb_scaler, cb_ydysum, compute_kernel_lib::ReduceInputBlockShape::single());
 
-        // Compute cb_recip_nrstd
-        // rstd / n -> cb_tmp3
+        // PARTIAL migration: cb_recip_nrstd = cb_n_recip_n[1] * cb_rstd[0] (bcast).
+        //   migrated: BinaryFpu(Mul, Cols|Scalar) + PackTile chain.
         constexpr auto cb_recip_nrstd = cb_tmp3;
-        tile_regs_acquire();
-        cb_reserve_back(cb_recip_nrstd, onetile);
-
-        if (is_lastdim_layernorm) {
-            mul_bcast_cols_init_short_with_dt(cb_n_recip_n, cb_rstd);
-            mul_tiles_bcast_cols(cb_n_recip_n, cb_rstd, 1, 0, dst0);
-        } else {
-            mul_tiles_bcast_scalar_init_short_with_dt(cb_n_recip_n, cb_rstd);
-            mul_tiles_bcast_scalar(cb_n_recip_n, cb_rstd, 1, 0, dst0);
+        {
+            using namespace compute_kernel_lib;
+            constexpr BroadcastDim BCAST_DIM = is_lastdim_layernorm ? BroadcastDim::Col : BroadcastDim::Scalar;
+            using MulBcast = BinaryFpu<
+                cb_n_recip_n, cb_rstd, BinaryFpuOp::Mul, BCAST_DIM,
+                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::Pinned, CbIndexMode::FirstTile, Dst::D0,
+                0, 0, 0, cb_recip_nrstd>;
+            MulBcast elt{};
+            elt.a_tile_idx = 1;
+            eltwise_chain(
+                onetile,
+                elt,
+                PackTile<cb_recip_nrstd, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                         PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
         }
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_recip_nrstd);
-
-        cb_push_back(cb_recip_nrstd, onetile);
-        tile_regs_release();
 
         // Compute cb_dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)

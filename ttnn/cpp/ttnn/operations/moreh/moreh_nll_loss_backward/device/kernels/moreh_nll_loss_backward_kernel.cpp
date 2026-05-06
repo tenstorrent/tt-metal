@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
@@ -25,21 +27,18 @@ void kernel_main() {
     init_sfpu(cb_output_grad, tt::CBIndex::c_16);
 
 #if defined(DIVISOR)
+    // PARTIAL migration: cb_tmp1 = 1 / cb_divisor.
+    //   migrated: CopyTile + Recip + PackTile chain (cb_divisor held — pop at end).
+    //   skipped : main bcast multiplications below (cross-stage scratch handoff).
     cb_wait_front(cb_divisor, onetile);
-    cb_reserve_back(cb_tmp1, onetile);
-
-    tile_regs_acquire();
-    copy_tile_init_with_dt(cb_divisor);
-    copy_tile(cb_divisor, 0, dst0);
-    recip_tile_init();
-    recip_tile(dst0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_tmp1);
-    tile_regs_release();
-
-    cb_push_back(cb_tmp1, onetile);
+    {
+        using namespace compute_kernel_lib;
+        eltwise_chain(
+            onetile,
+            CopyTile<cb_divisor, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
+            Recip<Dst::D0>{},
+            PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    }
 #endif
 
     cb_wait_front(cb_output_grad, onetile);

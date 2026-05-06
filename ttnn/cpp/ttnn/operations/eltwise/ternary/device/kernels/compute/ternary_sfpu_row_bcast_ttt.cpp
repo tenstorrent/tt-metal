@@ -21,6 +21,46 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
+
+namespace {
+// Local chain elements for the ternary SFPU stage:
+//   D[0] = A, D[1] = B, D[2] = C, then TERNARY_SFPU_OP_FUNC(0,1,2,0).
+// Outer scope owns input wait/pop; chain elements use NoWaitNoPop for inputs/outputs.
+template <uint32_t Cb, compute_kernel_lib::Dst DstSlot>
+struct LocalLoadTile : compute_kernel_lib::CopyTileTag {
+    static constexpr uint32_t cb = Cb;
+    static constexpr uint32_t cb_a_id() { return Cb; }
+    static constexpr uint32_t cb_b_id() { return 0; }
+    static constexpr compute_kernel_lib::Dst dst_slot = DstSlot;
+    static constexpr compute_kernel_lib::CopyTilePolicy a_policy() {
+        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
+    }
+    static constexpr compute_kernel_lib::CopyTilePolicy b_policy() {
+        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
+    }
+    static constexpr bool is_upfront = false;
+    static constexpr bool clashes_with_fpu = true;
+    static constexpr uint32_t block_size = 1;
+
+    static ALWI void init() { copy_tile_to_dst_init_short(Cb); }
+    ALWI void wait_per_tile(uint32_t /*i*/) const {}
+    ALWI void wait_upfront(uint32_t /*n*/) const {}
+    ALWI void exec(uint32_t /*i*/) const { copy_tile(Cb, 0, compute_kernel_lib::to_u32(DstSlot)); }
+    ALWI void pop_per_tile(uint32_t /*i*/) const {}
+    ALWI void pop_upfront_end(uint32_t /*n*/) const {}
+};
+
+struct LocalTernarySfpuStage : compute_kernel_lib::DestOnlyTag {
+    static constexpr bool is_upfront = false;
+    static constexpr bool clashes_with_fpu = false;
+    static constexpr uint32_t block_size = 1;
+    static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
+    static ALWI void exec() { TERNARY_SFPU_OP_FUNC(0, 1, 2, 0); }
+};
+}  // namespace
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -124,28 +164,13 @@ void kernel_main() {
         cb_wait_front(cb_eff_b, num_tiles_per_cycle);
         cb_wait_front(cb_eff_c, num_tiles_per_cycle);
 
-        tile_regs_acquire();
-
-        // Load A -> DST[0], B -> DST[1], C -> DST[2]
-        copy_tile_to_dst_init_short(cb_eff_a);
-        copy_tile(cb_eff_a, 0, 0);
-
-        copy_tile_to_dst_init_short(cb_eff_b);
-        copy_tile(cb_eff_b, 0, 1);
-
-        copy_tile_to_dst_init_short(cb_eff_c);
-        copy_tile(cb_eff_c, 0, 2);
-
-        // Execute configured ternary SFPU op
-        TERNARY_SFPU_OP_INIT();
-        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        // Write out result
-        pack_tile(0, cb_out);
-        tile_regs_release();
+        // Migrated stage: ternary SFPU loads + TERNARY_SFPU_OP via chain.
+        using LoadA = LocalLoadTile<cb_eff_a, compute_kernel_lib::Dst::D0>;
+        using LoadB = LocalLoadTile<cb_eff_b, compute_kernel_lib::Dst::D1>;
+        using LoadC = LocalLoadTile<cb_eff_c, compute_kernel_lib::Dst::D2>;
+        using PackOut = compute_kernel_lib::PackTile<cb_out, compute_kernel_lib::Dst::D0,
+                                                     compute_kernel_lib::PackTilePolicy::NoReserveNoPush>;
+        compute_kernel_lib::eltwise_chain(1u, LoadA{}, LoadB{}, LoadC{}, LocalTernarySfpuStage{}, PackOut{});
 
         cb_push_back(cb_out, num_tiles_per_cycle);
 

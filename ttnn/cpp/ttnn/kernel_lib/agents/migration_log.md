@@ -252,3 +252,33 @@ production kernels are blocked on chain API gaps (broadcast support — needed b
 tt-train / binary_ng kernels; multi-tile DEST scratch — needed by binary_ng with
 `num_tiles_per_cycle > 1`; held-DEST recurrence — needed by Adam-family optimizers).
 
+## Partial migrations — moreh / tt-train batch (Run 7 follow-up)
+
+Each entry: `PARTIAL <repo-rel-path> :: migrated: <stage list>; skipped: <stage list> — reason: <reason>`
+
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp :: migrated: rsqrt(var+eps) chain (BinaryFpu(Add) + Rsqrt + PackTile); skipped: xsum/xmm/xmm2/xmm2sum accumulators, gamma/beta bcast loops — reason: in-place CB recurrence + bcast reductions stay raw with `compute_kernel_lib::reduce<>`
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp :: migrated: rsqrt(var+eps) chain (BinaryFpu(Add) + Rsqrt + PackTile); skipped: same as small kernel — reason: same
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_small_kernel.cpp :: migrated: cb_recip_nrstd = n_recip_n[1] * rstd[0] (BinaryFpu(Mul, Cols|Scalar) + Pack), cb_tmp1 = ndymdysum - yydysum (BinaryFpu(Sub) + Pack), cb_dx = tmp1 * recip_nrstd (BinaryFpu(Mul) + Pack); skipped: dycopy mask block, dyadd/ydyadd held-DEST accumulators, xmm/y bcast block, ndy/yydysum bcast + reduces — reason: mid-loop conditional mask, in-place CB recurrence, multi-stage scratch
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_large_kernel.cpp :: migrated: cb_recip_nrstd = n_recip_n[1] * rstd[0] (BinaryFpu(Mul, Cols|Scalar) + Pack), cb_tmp4 = ndymdysum - yydysum (BinaryFpu(Sub) + Pack), cb_dx = tmp4 * recip_nrstd (BinaryFpu(Mul) + Pack); skipped: same as small kernel — reason: same
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp :: migrated: cb_ydy = cb_y * cb_dycopy (BinaryFpu(Mul) + Pack); skipped: dycopy mask block, dyadd/ydyadd held-DEST accumulators, "Just copy" stages, reduce<> — reason: mid-loop mask + held-DEST + with_dt CopyTile reconfig with old_cb=0
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp :: migrated: y = x * clip_coef_clamped scalar bcast (BinaryFpu(Mul, Scalar) + Pack); skipped: nothing — reason: full main loop migrated (broadcast IS supported in chain v1, contradicting earlier log entry)
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_nc/kernels/moreh_norm_nc_kernel.cpp :: migrated: f(x) chain — Copy + (Nez | Abs) + (Negative if MINUS_INF) + Pack across IS_ZERO/MINUS_INF macro permutations; skipped: Add/Max accumulator into cb_cal, final cb_y copy/negative — reason: in-place CB recurrence on cb_cal (cb_pop_front + cb_push_back same CB)
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/moreh_nll_loss_step2_kernel.cpp :: migrated: cb_divisor_recip = 1/cb_divisor (CopyTile(WaitAndPop) + Recip + Pack) under #if defined(DIVISOR); skipped: per-tile negative + WEIGHT/DIVISOR mul-bcast pipeline — reason: cross-stage DEST handoff via temporary CBs
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/moreh_nll_loss_backward_kernel.cpp :: migrated: cb_tmp1 = 1/cb_divisor (CopyTile(NoWaitNoPop) + Recip + Pack) under #if defined(DIVISOR); skipped: main bcast multiplications + negative for tmp2/input_grad — reason: cross-stage scratch handoff and in-loop mul_bcast_scalar with held tmp1
+
+### Already-migrated reference partials (run 7 baseline)
+The following were already partial-migrated in earlier runs and remain unchanged:
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_other/kernels/moreh_norm_other_kernel.cpp :: migrated: |x| chain (CopyTile + Abs + Pack); skipped: power_tile_to_cb, held-DEST add accumulator
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/moreh_norm_h_kernel.cpp :: migrated: copy seed for cb_cal under row_idx==0 branch (CopyTile + Pack); skipped: f(x) mid-loop mask block, held-DEST accumulator
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/moreh_abs_pow_kernel.cpp :: header comment indicates intent; full migration of |x| stage blocked by mid-loop mask injection — left raw
+
+### Skip rationales applied this run (no migration possible under chain v1)
+- moreh_norm/moreh_norm_h, moreh_norm_w (and ord_other/moreh_norm_w): runtime `do_mask_h/w` mid-loop mask injection in |x| stage.
+- moreh_clip_grad_norm_step1: same |x| + mid-loop mask + held-DEST accumulator pattern as moreh_abs_pow.
+- moreh_clip_grad_norm_step2: in-place CB recurrence on cb_x (cb_pop_front + cb_push_back same CB).
+- moreh_layer_norm_backward_input_grad_*: dycopy/xmm mask blocks (mid-loop conditional mask), dyadd/ydyadd held-DEST accumulators (in-place CB recurrence), bcast scratch handoff stages (cb_ndy/cb_yydysum/cb_ndymdysum cross-stage scratch).
+- moreh_softmax_*, moreh_softmax_backward_*: mostly `*_tile_to_cb` moreh helpers (already chain-equivalent), reduce + mask-tile state machines, multi-stage CB pipelines.
+- moreh_bias_backward_*: mid-loop mask + reduce_init/reduce_uninit state machine.
+- moreh_adam, moreh_adamw, moreh_sgd: `*_tiles_to_cb` moreh helpers + held-DEST recurrence on cb_tmp1/cb_tmp2 (cb_pop_front + cb_push_back) for bias correction / sqrt / add-eps stages.
+- tt-train silu_bw, swiglu_elemwise_bw, cross_entropy_*, sgd, adamw: block matmul helpers (`pack_and_push_block`) + multi-stage CB pipelines (HQ rule: keep block matmul on raw).
+
