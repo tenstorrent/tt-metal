@@ -292,7 +292,7 @@ def main() -> None:
         print(f"wer_candidate_num_words={len(candidate_words)}")
         print(f"wer_word_edit_distance={word_edit_distance}")
         print(f"wer={wer:.6f}")
-        print(f"wer_threshold={args.max_wer:.6f}")
+        print(f"wer_threshold={DEFAULT_MAX_WER:.6f}")
         print(f"wer_pass={str(wer_pass).lower()}")
 
     if args.compute_embedding_similarity:

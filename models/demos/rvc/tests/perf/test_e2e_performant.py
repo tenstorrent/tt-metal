@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
@@ -25,7 +26,8 @@ def _require_assets_env() -> None:
 def run_rvc_e2e_inference(device) -> None:
     _require_assets_env()
     model = RVCRunner()
-    inference_config = RVCInferenceConfig(num_secs=33.0)
+    input_duration_sec = 11.0
+    inference_config = RVCInferenceConfig(num_secs=input_duration_sec)
     batch_size = device.get_num_devices()
 
     model.initialize_inference(
@@ -35,9 +37,10 @@ def run_rvc_e2e_inference(device) -> None:
         validation=False,
         performance_runner=True,
     )
-    torch_input_tensor = model.ttnn_pipeline.prepare_audio_input()
-    torch_input_tensor = torch_input_tensor.expand(batch_size, torch_input_tensor.shape[1])
-    inference_iter_count = 10
+    torch_input_tensor = torch.randn(
+        (batch_size, int(input_duration_sec * model.ttnn_pipeline.sr)), dtype=torch.float32
+    )
+    inference_iter_count = 3
 
     t0 = time.time()
     output = None
@@ -81,3 +84,25 @@ def test_rvc_e2e(device):
 )
 def test_rvc_e2e_dp(mesh_device):
     run_rvc_e2e_inference(mesh_device)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64192}], indirect=True)
+def test_rvc_e2e_no_sync(device):
+    _require_assets_env()
+    model = RVCRunner()
+    input_duration_sec = 11.0
+    inference_config = RVCInferenceConfig(num_secs=input_duration_sec)
+    batch_size = device.get_num_devices()
+
+    model.initialize_inference(
+        device,
+        {"inference": inference_config},
+        batch_size=batch_size,
+        validation=False,
+        # performance_runner=True,
+    )
+    torch_input_tensor = torch.randn(
+        (batch_size, int(input_duration_sec * model.ttnn_pipeline.sr)), dtype=torch.float32
+    )
+
+    output = model.run(torch_input_tensor)
