@@ -23,14 +23,15 @@ from models.common.utility_functions import skip_for_blackhole
 
 @skip_for_blackhole("Galaxy 4x8 (Wormhole) only")
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "mesh_device, device_params, all_gather_topology",
     [
         (
+            (4, 8),
             {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
             ttnn.Topology.Linear,
         ),
     ],
-    indirect=["device_params"],
+    indirect=["mesh_device", "device_params"],
     ids=["fabric2d_linear"],
 )
 def test_all_gather_async_broadcast_hang(mesh_device, all_gather_topology):
