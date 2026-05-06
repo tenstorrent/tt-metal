@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# Stability loop for test_mla_loop (100k scaled_sl, balanced, iter25, random weights).
+#
+# Alternates device_params between `line_original` and `line_emb` on each
+# outer iteration so both fabric variants get exercised back-to-back.
+#
+# Each outer iteration:
+#   1. Run the selected pytest node under a wall-clock deadline.
+#   2. If it finishes cleanly (pass or fail) -> run tt-smi -glx_reset and
+#      continue to the next iteration (with the other fabric variant).
+#   3. If it hangs past the deadline -> run ./tools/tt-triage.py -vv against
+#      the live HW (output captured to a per-hang log), then kill -9 the
+#      hung pytest, run tt-smi -glx_reset, and continue to the next iteration.
+#
+# All stdout/stderr is mirrored to a log file. Per-hang triage output goes
+# to a sibling log named like <log>_triage_iter<i>_<variant>.log.
+#
+# Usage:
+#   ./run_mla_stability_100k.sh <num_iterations> [log_file]
+#
+# Must be run from the tt-metal repo root (pytest picks up conftest.py and
+# tt-triage is invoked as ./tools/tt-triage.py).
+
+set -u
+
+NUM_ITERATIONS="${1:?usage: $0 <num_iterations> [log_file]}"
+LOG_FILE="${2:-stability_mla_100k_$(date +%Y%m%d_%H%M%S).log}"
+
+# Generous default — test_mla_loop runs 25 forward passes at 100k seq_len.
+# Override via env if needed: PYTEST_TIMEOUT_SEC=2400 ./run_mla_stability_100k.sh ...
+PYTEST_TIMEOUT_SEC="${PYTEST_TIMEOUT_SEC:-1800}"
+POLL_INTERVAL_SEC=5
+
+# Cap triage so a hung tt-triage.py can't stall the outer loop forever.
+TRIAGE_TIMEOUT_SEC="${TRIAGE_TIMEOUT_SEC:-600}"
+TRIAGE_CMD=("./tools/tt-triage.py" "-vv")
+
+export DEEPSEEK_V3_HF_MODEL="${DEEPSEEK_V3_HF_MODEL:-/mnt/models/deepseek-ai/DeepSeek-R1-0528}"
+
+TEST_PATH="models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_loop"
+# Filter components held fixed across iterations.
+# Test IDs (from @pytest.mark.parametrize):
+#   mesh_device:    8x4
+#   use_pretrained: random
+#   scale_down_sl:  scaled_sl
+#   seq_len:        seq100k
+#   is_balanced:    balanced
+#   num_iterations: iter25
+TEST_FILTER_FIXED='random and scaled_sl and seq100k and balanced and iter25 and 8x4'
+# Variants for device_params, alternated each outer iteration.
+FABRIC_VARIANTS=("line_original" "line_emb")
+
+pass_count=0
+fail_count=0
+hang_count=0
+reset_fail_count=0
+triage_fail_count=0
+hang_log=""  # accumulating "iter<i>(<variant>)" tokens, one per hang
+
+log() { printf '%s\n' "$*" | tee -a "${LOG_FILE}"; }
+
+on_exit() {
+    log ""
+    log "=================================================="
+    log "Stability run ended at $(date -Is)"
+    log "Pass:            ${pass_count}"
+    log "Fail (non-hang): ${fail_count}"
+    log "Hangs:           ${hang_count}${hang_log:+ at ${hang_log}}"
+    log "Triage errors:   ${triage_fail_count}"
+    log "Reset errors:    ${reset_fail_count}"
+    log "Total runs:      $((pass_count + fail_count + hang_count))"
+    log "Log file:        ${LOG_FILE}"
+    log "=================================================="
+}
+trap on_exit EXIT INT TERM
+
+log "=================================================="
+log "MLA stability run started at $(date -Is)"
+log "Outer iterations:            ${NUM_ITERATIONS}"
+log "Pytest deadline (s):         ${PYTEST_TIMEOUT_SEC}"
+log "Triage deadline (s):         ${TRIAGE_TIMEOUT_SEC}"
+log "Triage command:              ${TRIAGE_CMD[*]}"
+log "DEEPSEEK_V3_HF_MODEL=${DEEPSEEK_V3_HF_MODEL}"
+log "Test path:                   ${TEST_PATH}"
+log "Fixed filter:                ${TEST_FILTER_FIXED}"
+log "Fabric variants (alternated):${FABRIC_VARIANTS[*]}"
+log "=================================================="
+
+for (( i=1; i<=NUM_ITERATIONS; i++ )); do
+    variant="${FABRIC_VARIANTS[$(( (i - 1) % ${#FABRIC_VARIANTS[@]} ))]}"
+    test_filter="${TEST_FILTER_FIXED} and ${variant}"
+
+    log ""
+    log "------- Iteration ${i}/${NUM_ITERATIONS} (${variant}) @ $(date -Is) -------"
+    log "Filter: ${test_filter}"
+
+    iter_start=$(date +%s)
+    deadline=$(( iter_start + PYTEST_TIMEOUT_SEC ))
+
+    # Launch pytest in background, tee'ing output into the log.
+    # Process substitution (> >(tee ...)) lets us capture pytest's PID via $!
+    # rather than tee's, so we can poll/leave-alive the right process.
+    pytest -xvs "${TEST_PATH}" -k "${test_filter}" \
+        > >(tee -a "${LOG_FILE}") 2>&1 &
+    pytest_pid=$!
+    # Protect from SIGHUP if the shell ever sets huponexit, so the process
+    # can survive the script exit for inspection.
+    disown -h "${pytest_pid}" 2>/dev/null || true
+    log "Launched pytest pid=${pytest_pid} (deadline ${PYTEST_TIMEOUT_SEC}s)"
+
+    hung=0
+    while kill -0 "${pytest_pid}" 2>/dev/null; do
+        now=$(date +%s)
+        if (( now >= deadline )); then
+            hung=1
+            break
+        fi
+        sleep "${POLL_INTERVAL_SEC}"
+    done
+
+    iter_end=$(date +%s)
+    iter_duration=$(( iter_end - iter_start ))
+
+    if [[ "${hung}" -eq 1 ]]; then
+        hang_count=$((hang_count + 1))
+        hang_log+="${hang_log:+, }iter${i}(${variant})"
+
+        # Per-hang triage log lives next to the main log.
+        log_dir="$(dirname "${LOG_FILE}")"
+        log_base="$(basename "${LOG_FILE}" .log)"
+        triage_log="${log_dir}/${log_base}_triage_iter${i}_${variant}.log"
+
+        log ""
+        log "############################################################"
+        log "### PYTEST HANG DETECTED at iteration ${i}/${NUM_ITERATIONS} (${variant})"
+        log "### duration=${iter_duration}s (deadline=${PYTEST_TIMEOUT_SEC}s)"
+        log "### pytest pid=${pytest_pid} (will be killed after triage)"
+        log "### Running triage: ${TRIAGE_CMD[*]}"
+        log "### Triage log:    ${triage_log}"
+        log "############################################################"
+
+        # Run triage against the still-live HW. timeout(1) caps it so a stuck
+        # triage can't stall the outer loop. Output goes to its own log so
+        # the main stability log stays readable.
+        triage_start=$(date +%s)
+        timeout --kill-after=30s "${TRIAGE_TIMEOUT_SEC}" "${TRIAGE_CMD[@]}" \
+            > "${triage_log}" 2>&1
+        triage_exit=$?
+        triage_duration=$(( $(date +%s) - triage_start ))
+
+        case "${triage_exit}" in
+            0)
+                log "Triage finished OK (${triage_duration}s) -> ${triage_log}"
+                ;;
+            124|137)
+                triage_fail_count=$((triage_fail_count + 1))
+                log "Triage TIMED OUT after ${triage_duration}s (exit=${triage_exit}) -> ${triage_log}"
+                ;;
+            *)
+                triage_fail_count=$((triage_fail_count + 1))
+                log "Triage FAILED (exit=${triage_exit}, ${triage_duration}s) -> ${triage_log}"
+                ;;
+        esac
+
+        # Kill the hung pytest tree (children first, then the leader).
+        log "Killing hung pytest pid=${pytest_pid} and its descendants..."
+        pkill -KILL -P "${pytest_pid}" 2>/dev/null || true
+        kill -9 "${pytest_pid}" 2>/dev/null || true
+        # Give the kernel a moment to reap.
+        for _ in 1 2 3 4 5; do
+            kill -0 "${pytest_pid}" 2>/dev/null || break
+            sleep 1
+        done
+        if kill -0 "${pytest_pid}" 2>/dev/null; then
+            log "WARNING: pytest pid=${pytest_pid} still alive after kill -9"
+        fi
+        wait "${pytest_pid}" 2>/dev/null || true
+
+        log "Running tt-smi -glx_reset after hang..."
+        tt-smi -glx_reset 2>&1 | tee -a "${LOG_FILE}"
+        reset_exit=${PIPESTATUS[0]}
+        if [[ ${reset_exit} -ne 0 ]]; then
+            reset_fail_count=$((reset_fail_count + 1))
+            log "tt-smi -glx_reset FAILED (exit=${reset_exit}) — continuing anyway"
+        else
+            log "tt-smi -glx_reset OK"
+        fi
+
+        # Continue to the next iteration (do not run the post-success
+        # reset path below).
+        continue
+    fi
+
+    # Pytest exited on its own - collect status and classify.
+    wait "${pytest_pid}"
+    pytest_exit=$?
+
+    case "${pytest_exit}" in
+        0)
+            pass_count=$((pass_count + 1))
+            verdict="PASS"
+            ;;
+        *)
+            fail_count=$((fail_count + 1))
+            verdict="FAIL (exit=${pytest_exit})"
+            ;;
+    esac
+    log "Iteration ${i} (${variant}) verdict: ${verdict}, duration=${iter_duration}s"
+
+    # Reset runs unconditionally after a clean pytest exit (pass or fail) -
+    # stressing the reset path is the whole point of the loop.
+    log "Running tt-smi -glx_reset (unconditional after non-hang exit)..."
+    tt-smi -glx_reset 2>&1 | tee -a "${LOG_FILE}"
+    reset_exit=${PIPESTATUS[0]}
+    if [[ ${reset_exit} -ne 0 ]]; then
+        reset_fail_count=$((reset_fail_count + 1))
+        log "tt-smi -glx_reset FAILED (exit=${reset_exit})"
+    else
+        log "tt-smi -glx_reset OK"
+    fi
+done
