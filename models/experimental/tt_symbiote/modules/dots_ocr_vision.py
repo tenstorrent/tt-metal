@@ -421,22 +421,24 @@ class TTNNDotsVisionMLP(TTNNModule):
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
+        # Biases are 1D vectors (≤4608 elements ≈ 18 KB BF16) — pin them in L1 to skip a per-call DRAM hop.
+        bias_mem = ttnn.L1_MEMORY_CONFIG
 
-        def _to_dev(t):
+        def _to_dev(t, mc=mem):
             if t is None:
                 return None
-            return ttnn.to_device(t, self.device, memory_config=mem)
+            return ttnn.to_device(t, self.device, memory_config=mc)
 
         self.compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
         self.tt_fc1_weight = _to_dev(self.tt_fc1_weight)
-        self.tt_fc1_bias = _to_dev(self.tt_fc1_bias)
+        self.tt_fc1_bias = _to_dev(self.tt_fc1_bias, bias_mem)
         self.tt_fc2_weight = _to_dev(self.tt_fc2_weight)
-        self.tt_fc2_bias = _to_dev(self.tt_fc2_bias)
+        self.tt_fc2_bias = _to_dev(self.tt_fc2_bias, bias_mem)
         self.tt_fc3_weight = _to_dev(self.tt_fc3_weight)
-        self.tt_fc3_bias = _to_dev(self.tt_fc3_bias)
+        self.tt_fc3_bias = _to_dev(self.tt_fc3_bias, bias_mem)
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
@@ -559,14 +561,17 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
+        # patch-embed bias (1×1×1×1536, ~3 KB) and norm weight (1×1×48×32, ~3 KB) are tiny;
+        # pin them in L1 so the patch-embed proj/norm avoid a DRAM read for these scalars.
+        small_mem = ttnn.L1_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
         if self.tt_proj_weight is not None:
             self.tt_proj_weight = ttnn.to_device(self.tt_proj_weight, self.device, memory_config=mem)
         if self.tt_proj_bias is not None:
-            self.tt_proj_bias = ttnn.to_device(self.tt_proj_bias, self.device, memory_config=mem)
+            self.tt_proj_bias = ttnn.to_device(self.tt_proj_bias, self.device, memory_config=small_mem)
         if self.tt_norm_weight is not None:
-            self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=mem)
+            self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=small_mem)
 
         self.vision_matmul_compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
@@ -766,20 +771,22 @@ class TTNNDotsVisionAttention(TTNNModule):
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
+        # Biases are 1D vectors (≤4608 elements ≈ 18 KB BF16) — pin them in L1 to skip a per-call DRAM hop.
+        bias_mem = ttnn.L1_MEMORY_CONFIG
 
-        def _to_dev(t):
+        def _to_dev(t, mc=mem):
             if t is None:
                 return None
-            return ttnn.to_device(t, self.device, memory_config=mem)
+            return ttnn.to_device(t, self.device, memory_config=mc)
 
         self.compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
         self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
-        self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
+        self.tt_qkv_bias = _to_dev(self.tt_qkv_bias, bias_mem)
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
-        self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
+        self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias, bias_mem)
 
         self.sdpa_compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
