@@ -147,7 +147,9 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
-    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
+    auto transformed_buffer = input_tensor.host_storage().buffer().transform(
+        compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 
 template <typename Func, typename... Args>
@@ -959,57 +961,60 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
         {out_channels, in_channels * stride[0] * stride[1], padded_kernel_h / stride[0], padded_kernel_w / stride[1]});
 
     auto fold_weights = [&]<typename T>(const tt::tt_metal::HostStorage& storage) {
-        auto folded_storage = storage.transform([&](const tt::tt_metal::HostBuffer& input_host_buffer) {
-            auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
+        auto folded_buffer = storage.buffer().transform(
+            [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
+                auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
 
-            std::vector<T> output_buffer(output_shape.volume(), T(0));
-            int new_h = padded_kernel_h / stride[0];
-            int new_w = padded_kernel_w / stride[1];
-            WeightLayoutThreader::parallel_for_channels(
-                out_channels,
-                in_channels,
-                16,  // Minimum work per thread
-                [&](uint32_t /*out_t*/,
-                    uint32_t /*in_t*/,
-                    uint32_t out_start,
-                    uint32_t out_end,
-                    uint32_t in_start,
-                    uint32_t in_end) {
-                    for (auto oc = out_start; oc < out_end; oc++) {
-                        for (auto ic = in_start; ic < in_end; ic++) {
-                            for (auto kh = 0; kh < kernel_h; kh++) {
-                                for (auto kw = 0; kw < kernel_w; kw++) {
-                                    uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
+                std::vector<T> output_buffer(output_shape.volume(), T(0));
+                int new_h = padded_kernel_h / stride[0];
+                int new_w = padded_kernel_w / stride[1];
+                WeightLayoutThreader::parallel_for_channels(
+                    out_channels,
+                    in_channels,
+                    16,  // Minimum work per thread
+                    [&](uint32_t /*out_t*/,
+                        uint32_t /*in_t*/,
+                        uint32_t out_start,
+                        uint32_t out_end,
+                        uint32_t in_start,
+                        uint32_t in_end) {
+                        for (auto oc = out_start; oc < out_end; oc++) {
+                            for (auto ic = in_start; ic < in_end; ic++) {
+                                for (auto kh = 0; kh < kernel_h; kh++) {
+                                    for (auto kw = 0; kw < kernel_w; kw++) {
+                                        uint32_t src_idx =
+                                            ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
 
-                                    int sh = kh % stride[0];
-                                    int sw = kw % stride[1];
+                                        int sh = kh % stride[0];
+                                        int sw = kw % stride[1];
 
-                                    // Calculate new y,x coordinates
-                                    int y = kh / stride[0];
-                                    int x = kw / stride[1];
+                                        // Calculate new y,x coordinates
+                                        int y = kh / stride[0];
+                                        int x = kw / stride[1];
 
-                                    // Calculate folded input channel index
-                                    int folded_ic_idx = ((sh * stride[1] + sw) * in_channels) + ic;
+                                        // Calculate folded input channel index
+                                        int folded_ic_idx = ((sh * stride[1] + sw) * in_channels) + ic;
 
-                                    // Calculate final destination index
-                                    int dst_idx = (oc * in_channels * stride[0] * stride[1] * new_h * new_w) +
-                                                  (folded_ic_idx * new_h * new_w) + (y * new_w) + x;
+                                        // Calculate final destination index
+                                        int dst_idx = (oc * in_channels * stride[0] * stride[1] * new_h * new_w) +
+                                                      (folded_ic_idx * new_h * new_w) + (y * new_w) + x;
 
-                                    output_buffer[dst_idx] = input_buffer[src_idx];
+                                        output_buffer[dst_idx] = input_buffer[src_idx];
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
 
-            return tt::tt_metal::HostBuffer(std::move(output_buffer));
-        });
-        return Tensor(
-            std::move(folded_storage),
+                return tt::tt_metal::HostBuffer(std::move(output_buffer));
+            },
+            tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        return Tensor(tt::tt_metal::HostTensor(
+            std::move(folded_buffer),
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.tensor_topology());
+            conv_weight_tensor.tensor_topology()));
     };
 
     const auto& storage = conv_weight_tensor.host_storage();

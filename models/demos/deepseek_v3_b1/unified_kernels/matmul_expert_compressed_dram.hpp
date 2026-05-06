@@ -37,7 +37,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
 #ifdef TRISC_PACK
 #include "llk_math_eltwise_unary_sfpu_silu.h"
@@ -823,10 +822,10 @@ struct MatmulExpertCompressedDRAM {
 
                         tile_regs_commit();
                         if constexpr (CTArgs::fuse_silu) {
-                            TTI_SEMWAIT(
+                            PACK(TTI_SEMWAIT(
                                 p_stall::STALL_TDMA | p_stall::STALL_CFG,
                                 semaphore::t6_sem(semaphore::MATH_PACK),
-                                p_stall::STALL_ON_ZERO);
+                                p_stall::STALL_ON_ZERO));
                             PACK(TT_SETC16(
                                 DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
                             for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {

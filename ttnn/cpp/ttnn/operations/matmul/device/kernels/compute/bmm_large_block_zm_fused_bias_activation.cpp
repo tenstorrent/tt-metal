@@ -16,7 +16,9 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#ifdef SFPU_ACTIVATION
+#include "bmm_fused_activation.hpp"
+#endif
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
@@ -208,8 +210,14 @@ void kernel_main() {
 #endif
     experimental::CircularBuffer mm_out_cb(mm_out_cb_id);
 
-#ifdef SFPU_OP_INIT_ACTIVATION
-    SFPU_OP_INIT_ACTIVATION
+#ifdef SFPU_ACTIVATION
+    constexpr KernelActivation activation_type =
+        static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
+    constexpr uint32_t activation_param0 = get_named_compile_time_arg_val("activation_param0");
+    constexpr uint32_t activation_param1 = get_named_compile_time_arg_val("activation_param1");
+    constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
+
+    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -332,16 +340,18 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-// If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
-#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
-                                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                    SFPU_OP_FUNC_ACTIVATION
-                                }
-#endif
                                 tile_regs_commit();
-                                // Pack out to output buffer
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
+
+#if defined SFPU_ACTIVATION and not defined FUSE_BIAS
+                                apply_activation_from_pack<
+                                    activation_type,
+                                    activation_param0,
+                                    activation_param1,
+                                    activation_param2>(out_subblock_num_tiles);
+#else
                                 tile_regs_wait();
+#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                                 PACK((pack_reconfig_data_format(mm_out_cb_id)));
@@ -358,7 +368,6 @@ void kernel_main() {
                                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif
-
                                 uint32_t start_dst_index = 0;
                                 pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
@@ -469,24 +478,31 @@ void kernel_main() {
                                 bias_tile_idx++;
                             }
                         }
-// if there's no SFPU fusion, we commit the regs so packer can start packing
-#ifndef SFPU_OP_INIT_ACTIVATION
                         tile_regs_commit();
-#endif
 
                         mm_partials_cb.pop_front(out_subblock_num_tiles);
 
-// sfpu activation
-#ifdef SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
-                        tile_regs_commit();
-#endif
-
                         // Pack out to output buffer
                         untilize_mode_out_cb.reserve_back(out_subblock_num_tiles);
+
+#ifdef SFPU_ACTIVATION
+                        PACK(TTI_SEMWAIT(
+                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                            semaphore::t6_sem(semaphore::MATH_PACK),
+                            p_stall::STALL_ON_ZERO));
+
+                        // Flip destination register offset for PACKER access
+                        PACK(TT_SETC16(
+                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
+                        }
+
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#else
                         tile_regs_wait();
+#endif
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }

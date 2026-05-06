@@ -28,11 +28,13 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <optional>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
 
@@ -48,6 +50,7 @@ using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ScopedSlowDispatchOverride;
 
 // Shorthand for the per-node-override vararg type (needed at call sites because
 // std::optional<T> can't be brace-init from an initializer-list of T's elements).
@@ -57,14 +60,30 @@ using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
 // Test Fixtures
 // ============================================================================
 
-// Test fixture for ProgramRunParams on Quasar - uses Quasar mock device
+// Test fixture for ProgramRunParams on Quasar - uses Quasar mock device.
+//
+// Forces TT_METAL_SLOW_DISPATCH_MODE so that MeshDevice::create() succeeds against the
+// mock cluster (mock Quasar has no dispatch-core reservation in its descriptor). These
+// tests exercise pure API behavior, so slow dispatch is functionally fine.
 class ProgramRunParamsTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
+        slow_dispatch_override_.emplace();
         //  Configure global mock mode for Quasar
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
+        mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
     }
-    void TearDown() override { experimental::disable_mock_mode(); }
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+        experimental::disable_mock_mode();
+        slow_dispatch_override_.reset();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 // ============================================================================
@@ -139,7 +158,7 @@ inline ProgramRunParams MakeRunParamsForMinimalSpec(
 TEST_F(ProgramRunParamsTestQuasar, UnknownKernelNameFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -158,7 +177,7 @@ TEST_F(ProgramRunParamsTestQuasar, InvalidNodeForKernelFails) {
     NodeCoord node{0, 0};
     NodeCoord wrong_node{1, 1};  // Kernel doesn't run on this node
     ProgramSpec spec = MakeSpecWithRTAs(node, 2, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -177,7 +196,7 @@ TEST_F(ProgramRunParamsTestQuasar, InvalidNodeForKernelFails) {
 TEST_F(ProgramRunParamsTestQuasar, WrongRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Provide wrong count (2 instead of 3)
     auto params = MakeRunParamsForMinimalSpec(node, {1, 2}, {});
@@ -191,7 +210,7 @@ TEST_F(ProgramRunParamsTestQuasar, WrongRuntimeArgsCountFails) {
 TEST_F(ProgramRunParamsTestQuasar, WrongCommonRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Provide wrong common args count (3 instead of 2)
     auto params = MakeRunParamsForMinimalSpec(node, {}, {1, 2, 3});
@@ -207,7 +226,7 @@ TEST_F(ProgramRunParamsTestQuasar, WrongCommonRuntimeArgsCountFails) {
 TEST_F(ProgramRunParamsTestQuasar, MissingKernelParamsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Only provide params for dm_kernel, missing compute_kernel
     ProgramRunParams params;
@@ -223,7 +242,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingKernelParamsFails) {
 TEST_F(ProgramRunParamsTestQuasar, DuplicateKernelParamsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Provide params for dm_kernel twice
     ProgramRunParams params;
@@ -239,7 +258,7 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateKernelParamsFails) {
 TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Don't provide the per-node RTAs (empty runtime_varargs)
     ProgramRunParams params;
@@ -260,7 +279,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
 TEST_F(ProgramRunParamsTestQuasar, DFBSizeOverrideFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
 
@@ -280,7 +299,7 @@ TEST_F(ProgramRunParamsTestQuasar, DFBSizeOverrideFails) {
 TEST_F(ProgramRunParamsTestQuasar, DFBNumEntriesOverrideFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
 
@@ -299,7 +318,7 @@ TEST_F(ProgramRunParamsTestQuasar, DFBNumEntriesOverrideFails) {
 TEST_F(ProgramRunParamsTestQuasar, DuplicateDFBParamsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
 
@@ -315,7 +334,7 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateDFBParamsFails) {
 TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Provide runtime_varargs with duplicate node_coord entries
     ProgramRunParams params;
@@ -339,7 +358,7 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_ZeroRTAs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
 
@@ -349,7 +368,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_ZeroRTAs) {
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_PerNodeRTAsOnly) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {100, 200, 300}, {});
 
@@ -359,7 +378,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_PerNodeRTAsOnly) {
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_CommonRTAsOnly) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {10, 20});
 
@@ -369,7 +388,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_CommonRTAsOnly) {
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_BothRTATypes) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {100, 200, 300}, {10, 20});
 
@@ -384,7 +403,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_BothKernelsWithRTAs) {
         /*dm_common_rtas=*/1,
         /*compute_per_node_rtas=*/3,
         /*compute_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(
         node,
@@ -399,7 +418,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_BothKernelsWithRTAs) {
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_DFBRunParamsWithNoOverrides) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
 
@@ -419,7 +438,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_DFBRunParamsWithNoOverri
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_SameValuesSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/1);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {100, 200}, {10});
 
@@ -432,7 +451,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_SameValuesSucceeds) {
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_DifferentValuesSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/1);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params1 = MakeRunParamsForMinimalSpec(node, {100, 200}, {10});
     auto params2 = MakeRunParamsForMinimalSpec(node, {300, 400}, {20});  // Different values
@@ -446,7 +465,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_DifferentValuesSucceeds) {
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_ChangingCommonRTACountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // First call with 2 common RTAs (matches schema)
     auto params1 = MakeRunParamsForMinimalSpec(node, {}, {10, 20});
@@ -469,7 +488,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_ChangingCommonRTACountFails
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsMultipleTimes_Succeeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Call SetProgramRunParameters multiple times with varying values
     for (uint32_t i = 0; i < 5; i++) {
@@ -511,7 +530,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Create run params with per-node RTAs for both nodes
     ProgramRunParams params;
@@ -555,7 +574,7 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Only provide RTAs for node0, missing node1
     ProgramRunParams params;
@@ -601,7 +620,7 @@ inline ProgramSpec MakeSpecWithNamedArgs(
 TEST_F(ProgramRunParamsTestQuasar, NamedRTAsAndCRTAsSucceed) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr", "output_ptr"}, {"tile_count"});
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -617,7 +636,7 @@ TEST_F(ProgramRunParamsTestQuasar, NamedRTAsAndCRTAsSucceed) {
 TEST_F(ProgramRunParamsTestQuasar, MissingNamedRTAForNodeFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr"}, {});
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -635,7 +654,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingNamedRTAForNodeFails) {
 TEST_F(ProgramRunParamsTestQuasar, MissingDeclaredNamedRTANameFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr", "output_ptr"}, {});
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -654,7 +673,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingDeclaredNamedRTANameFails) {
 TEST_F(ProgramRunParamsTestQuasar, UndeclaredNamedRTAFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr"}, {});
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -672,7 +691,7 @@ TEST_F(ProgramRunParamsTestQuasar, UndeclaredNamedRTAFails) {
 TEST_F(ProgramRunParamsTestQuasar, NamedCRTACountMismatchFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"tile_count", "scale"});
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -712,7 +731,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -743,7 +762,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds)
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{ab, 3}, {node_c, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -772,7 +791,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds
         NumVarargsPerNode{{node_c, 5}};  // node_c is the exception
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -804,7 +823,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) 
         NumVarargsPerNode{{node_b, 0}};  // node_b: no varargs despite scalar default
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // node_b is treated as having no varargs — run-params needs no entry for it.
     ProgramRunParams params;
@@ -824,7 +843,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyAcrossMultipleKernelsSucceeds) {
     spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 1;
     spec.kernels[1].runtime_arguments_schema.num_runtime_varargs = 2;
     spec.kernels[1].runtime_arguments_schema.num_common_runtime_varargs = 2;
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {1, 2, 3}, {99}));
@@ -845,7 +864,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     kernel.runtime_arguments_schema.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -863,7 +882,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
     NodeCoord wrong_node{3, 3};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 1;
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -888,7 +907,7 @@ TEST_F(ProgramRunParamsTestQuasar, AllEmptySchemaSucceeds) {
     // spec.kernels already default to empty named_runtime_args / named_common_runtime_args /
     // compile_time_arg_bindings, num_runtime_varargs = 0, num_common_runtime_varargs = 0,
     // num_runtime_varargs_per_node = nullopt.
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({.kernel_spec_name = "dm_kernel"});
@@ -903,7 +922,7 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr"};
     spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 3;
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
@@ -922,8 +941,22 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
 
 class ProgramRunParamsTestGen1 : public ::testing::Test {
 protected:
-    void SetUp() override { experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1); }
-    void TearDown() override { experimental::disable_mock_mode(); }
+    void SetUp() override {
+        slow_dispatch_override_.emplace();
+        experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+        mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+    }
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+        experimental::disable_mock_mode();
+        slow_dispatch_override_.reset();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 // Create a gen1 ProgramSpec with a specified RTA schema on the DM kernel
@@ -941,7 +974,7 @@ inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& /*node*/, size_t num_pe
 TEST_F(ProgramRunParamsTestGen1, SetRunParamsSucceeds_ZeroRTAs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
 
@@ -951,7 +984,7 @@ TEST_F(ProgramRunParamsTestGen1, SetRunParamsSucceeds_ZeroRTAs) {
 TEST_F(ProgramRunParamsTestGen1, SetRunParamsSucceeds_PerNodeAndCommonRTAs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {100, 200, 300}, {10, 20});
 
@@ -961,7 +994,7 @@ TEST_F(ProgramRunParamsTestGen1, SetRunParamsSucceeds_PerNodeAndCommonRTAs) {
 TEST_F(ProgramRunParamsTestGen1, WrongRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Provide wrong count (2 instead of 3)
     auto params = MakeRunParamsForMinimalSpec(node, {1, 2}, {});
