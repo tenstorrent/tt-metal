@@ -2498,18 +2498,13 @@ class DeepseekGenerator(WarmupForwardMixin):
                 return_hidden=True,
             )
         else:
-            # Pass prompt_len so only the logit at prompt_len-1 is computed,
-            # skipping LMHead for every other transformer chunk.
-            # _forward_prefill now handles multi-row meshes via a post-LMHead
-            # row all-gather, so the shape[0]==1 guard is no longer needed.
-            _prefill_prompt_len = prompt_len if (sample_on_device and prompt_len is not None) else None
             logits_tt = RowBatchedModel.forward_prefill(
                 x=tt_tokens,
                 user_id=user_id,
                 cfg=self.model_run_config_prefill,
                 rope_tensors=rope_tensors,
                 page_tables=page_tables_to_use,
-                prompt_len=_prefill_prompt_len,
+                prompt_len=prompt_len,
             )
             hidden_tt = None
 
@@ -3109,6 +3104,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     user_id=user_id,
                     sample_on_device=sample_on_device,
                     return_last_hidden=False,
+                    prompt_len=token_len,
                 )
                 if sample_on_device:
                     self._validate_and_initialize_sampling(

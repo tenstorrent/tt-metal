@@ -69,29 +69,29 @@ DEFAULT_SAMPLING_TOP_K = 32
 
 
 # Each value is a tuple of (seq_len_threshold, PrefillChunkSizes) pairs, sorted ascending by threshold.
-# TODO: recalculate
+# TODO: 128k can be increased to 1k???
 PREFILL_CHUNK_SIZES = {
     # QUAD
     16: (
-        (0, PrefillChunkSizes(DEFAULT_MAX_SEQ_LEN, DEFAULT_MAX_SEQ_LEN, 2 * 1024)),
-        (32 * 1024, PrefillChunkSizes(32 * 1024, 32 * 1024, 8 * 1024)),
-        (48 * 1024, PrefillChunkSizes(48 * 1024, 48 * 1024, 4 * 1024)),
-        (64 * 1024, PrefillChunkSizes(64 * 1024, 4 * 1024, 4 * 1024)),
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=32 * 1024, mla_chunk=32 * 1024, wkv_b2_chunk=8 * 1024)),
+        (48 * 1024, PrefillChunkSizes(model_chunk=48 * 1024, mla_chunk=48 * 1024, wkv_b2_chunk=4 * 1024)),
+        (64 * 1024, PrefillChunkSizes(model_chunk=64 * 1024, mla_chunk=4 * 1024, wkv_b2_chunk=4 * 1024)),
         # (96 * 1024, PrefillChunkSizes(32 * 1024, 16 * 1024, 2 * 1024)),
         # (112 * 1024, PrefillChunkSizes(16 * 1024, 8 * 1024, 2 * 1024)),
         # (120 * 1024, PrefillChunkSizes(8 * 1024, 4 * 1024, 1 * 1024)),
         # (124 * 1024, PrefillChunkSizes(2 * 1024, 2 * 1024, 1 * 1024)),
-        (128 * 1024, PrefillChunkSizes(1 * 1024, 1024, 512)),
+        (128 * 1024, PrefillChunkSizes(model_chunk=512, mla_chunk=256, wkv_b2_chunk=256)),
     ),
     # DUAL
     8: (
-        (0, PrefillChunkSizes(DEFAULT_MAX_SEQ_LEN, DEFAULT_MAX_SEQ_LEN, 2 * 1024)),
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
         # (16 * 1024, PrefillChunkSizes(16 * 1024, 8 * 1024, 2 * 1024)),
         # (24 * 1024, PrefillChunkSizes(4 * 1024, 1 * 1024, 1 * 1024)),
         # (32 * 1024, PrefillChunkSizes(4 * 1024, 1 * 1024, 1 * 1024)),
     ),
     # TG
-    4: ((0, PrefillChunkSizes(DEFAULT_MAX_SEQ_LEN, DEFAULT_MAX_SEQ_LEN, 2 * 1024)),),
+    4: ((0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),),
 }
 
 
