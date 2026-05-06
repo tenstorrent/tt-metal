@@ -12,7 +12,7 @@ from fuser.fused_operation import FusedOperation
 from fuser.fused_packer import Packer as BasePacker
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import PackGolden
-from helpers.llk_params import DataFormat, PackerReluType
+from helpers.llk_params import PackerReluType
 
 
 class Packer(BasePacker):
@@ -31,7 +31,7 @@ class Packer(BasePacker):
         config: GlobalConfig,
     ) -> torch.Tensor:
         if operation.pack_relu != PackerReluType.NoRelu:
-            intermediate_format = DataFormat.Float16_b
+            intermediate_format = config.sentinel.golden_format.pack_src
             relu_config = PackGolden.generate_relu_config(
                 operation.pack_relu, operation.relu_threshold, intermediate_format
             )

@@ -32,7 +32,7 @@ class Packer(BasePacker):
         config: GlobalConfig,
     ) -> torch.Tensor:
         if operation.pack_relu != PackerReluType.NoRelu:
-            intermediate_format = operation.output.data_format
+            intermediate_format = config.sentinel.golden_format.pack_src
             relu_config = PackGolden.generate_relu_config(
                 operation.pack_relu, operation.relu_threshold, intermediate_format
             )
