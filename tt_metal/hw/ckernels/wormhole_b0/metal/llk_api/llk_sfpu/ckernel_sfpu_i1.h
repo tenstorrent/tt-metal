@@ -23,10 +23,18 @@ namespace ckernel::sfpu {
 //                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
 //              degree-4 minimax fit, max rel err ~1e-8 over [10, 88.5].
 //
+// Code shape (chosen to relieve SFPI LRA budget):
+//   1. Compute polynomial result unconditionally and store to DST.
+//      Polynomial-path intermediates die at the store, freeing LRegs.
+//   2. v_if (|x|>10): overwrite DST with asymptotic result.
+// This is semantically identical to a v_if/v_else split but lets the
+// register allocator schedule the two paths sequentially rather than
+// keeping the polynomial alive across the asymptotic block.
+//
 // Inputs are clamped to [-88.5, 88.5] to avoid exp() overflow.
-// Both paths execute under SFPU predication; v_if/v_else separates the
-// paths to manage register pressure. In-domain accuracy is unchanged.
-// OOD accuracy: ~10⁶ FP32 ULP (clamping) → <50 FP32 ULP (asymptotic).
+// In-domain accuracy is unchanged from the polynomial-only baseline.
+// OOD accuracy: ~10⁶ FP32 ULP (clamping) → <60 FP32 ULP (asymptotic with
+// accurate FP32 exp).
 //
 // APPROXIMATION_MODE: only affects the reciprocal NR iteration count.
 // ======================================================================
@@ -81,12 +89,11 @@ inline void calculate_i1() {
 
         const sfpi::vFloat abs_x = sfpi::setsgn(x, 0);
 
-        // ─── Asymptotic path (|x| > 10) — outlined to limit reg pressure.
-        v_if(abs_x > I1_THRESHOLD) { sfpi::dst_reg[0] = calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x); }
-        v_else {
-            // ─── Polynomial path (|x| ≤ 10) ──────────────────────────────────
+        // ─── Polynomial path (always; valid for |x| ≤ 10) ────────────────
+        // Computed unconditionally and stored — its LRegs are then free
+        // for the asymptotic block to use.
+        {
             const sfpi::vFloat t = x * x;
-
 #ifdef INP_FLOAT32
             sfpi::vFloat numer = PolynomialEvaluator::eval(
                 t,
@@ -115,6 +122,9 @@ inline void calculate_i1() {
 #endif
             sfpi::dst_reg[0] = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }
+
+        // ─── Asymptotic overwrite for OOD lanes (|x| > 10) ───────────────
+        v_if(abs_x > I1_THRESHOLD) { sfpi::dst_reg[0] = calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x); }
         v_endif;
 
         sfpi::dst_reg++;
