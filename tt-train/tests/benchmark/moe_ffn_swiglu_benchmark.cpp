@@ -17,9 +17,9 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
+#include "test_utils/random_data.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace {
@@ -68,11 +68,9 @@ std::vector<ttml::autograd::TensorPtr> build_expert_weight_list(
     uint32_t E, uint32_t K, uint32_t N, ttnn::distributed::MeshDevice* device, std::mt19937& rng) {
     std::vector<ttml::autograd::TensorPtr> out;
     out.reserve(E);
-    auto gen = [&]() { return std::uniform_real_distribution<float>(-0.05F, 0.05F); };
+    const std::array<std::size_t, 4U> shape{1U, 1U, K, N};
     for (uint32_t e = 0; e < E; ++e) {
-        std::vector<std::size_t> shape{1U, 1U, K, N};
-        xt::xarray<float> w = xt::empty<float>(shape);
-        ttml::core::parallel_generate<float>(w, gen, rng());
+        auto w = ttml::test_utils::make_uniform_xarray<float>(shape, -0.05F, 0.05F, rng());
         out.push_back(ttml::autograd::create_tensor(ttml::core::from_xtensor(w, device), /*requires_grad=*/true));
     }
     return out;
@@ -85,16 +83,13 @@ ttml::autograd::TensorPtr build_grouped_tensor(
     const std::vector<uint32_t>& counts,
     ttnn::distributed::MeshDevice* device,
     std::mt19937& rng) {
-    std::vector<std::size_t> shape{1U, 1U, T_cap, H};
-    xt::xarray<float> grouped = xt::zeros<float>(shape);
-    auto gen = [&]() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); };
+    xt::xarray<float> grouped = xt::zeros<float>(std::vector<std::size_t>{1U, 1U, T_cap, H});
     for (uint32_t e = 0; e < counts.size(); ++e) {
         if (counts[e] == 0U) {
             continue;
         }
-        std::vector<std::size_t> slice_shape{1U, 1U, counts[e], H};
-        xt::xarray<float> slice = xt::empty<float>(slice_shape);
-        ttml::core::parallel_generate<float>(slice, gen, rng());
+        const std::array<std::size_t, 4U> slice_shape{1U, 1U, counts[e], H};
+        auto slice = ttml::test_utils::make_uniform_xarray<float>(slice_shape, -1.0F, 1.0F, rng());
         xt::view(grouped, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
     }
     return ttml::autograd::create_tensor(ttml::core::from_xtensor(grouped, device), /*requires_grad=*/true);

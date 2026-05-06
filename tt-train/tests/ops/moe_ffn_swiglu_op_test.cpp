@@ -11,8 +11,8 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 
 namespace {
 
@@ -115,7 +115,6 @@ void RunCase(const FfnCase& c) {
     ASSERT_GT(T_cap, 0U);
 
     auto& rng = autograd::ctx().get_generator();
-    auto gen = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f); };
 
     // 2D grouped ref, zeros everywhere except active per-expert slices.
     xt::xarray<float> grouped =
@@ -124,23 +123,20 @@ void RunCase(const FfnCase& c) {
         if (c.counts[e] == 0U) {
             continue;
         }
-        std::vector<std::size_t> slice_shape{static_cast<std::size_t>(c.counts[e]), static_cast<std::size_t>(c.H)};
-        xt::xarray<float> slice = xt::empty<float>(slice_shape);
-        core::parallel_generate<float>(slice, gen, rng());
+        const std::array<std::size_t, 2U> slice_shape{
+            static_cast<std::size_t>(c.counts[e]), static_cast<std::size_t>(c.H)};
+        auto slice = test_utils::make_uniform_xarray<float>(slice_shape, 0.0f, 1.0f, rng());
         xt::view(grouped, xt::range(offsets[e], offsets[e] + c.counts[e]), xt::all()) = slice;
     }
 
     // [out, in] layout: w_gate/w_up are [E, I, H], w_down is [E, H, I].
-    std::vector<std::size_t> w_gate_up_shape{
+    const std::array<std::size_t, 3U> w_gate_up_shape{
         static_cast<std::size_t>(c.E), static_cast<std::size_t>(c.I), static_cast<std::size_t>(c.H)};
-    std::vector<std::size_t> w_down_shape{
+    const std::array<std::size_t, 3U> w_down_shape{
         static_cast<std::size_t>(c.E), static_cast<std::size_t>(c.H), static_cast<std::size_t>(c.I)};
-    xt::xarray<float> w_gate = xt::empty<float>(w_gate_up_shape);
-    xt::xarray<float> w_up = xt::empty<float>(w_gate_up_shape);
-    xt::xarray<float> w_down = xt::empty<float>(w_down_shape);
-    core::parallel_generate<float>(w_gate, gen, rng());
-    core::parallel_generate<float>(w_up, gen, rng());
-    core::parallel_generate<float>(w_down, gen, rng());
+    auto w_gate = test_utils::make_uniform_xarray<float>(w_gate_up_shape, 0.0f, 1.0f, rng());
+    auto w_up = test_utils::make_uniform_xarray<float>(w_gate_up_shape, 0.0f, 1.0f, rng());
+    auto w_down = test_utils::make_uniform_xarray<float>(w_down_shape, 0.0f, 1.0f, rng());
 
     auto* device = &autograd::ctx().get_device();
 
@@ -238,28 +234,26 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
     const uint32_t T_cap = offsets.back();
 
     auto& rng = autograd::ctx().get_generator();
-    auto gen = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f); };
 
-    xt::xarray<float> grouped_4d = xt::xarray<float>::from_shape(
+    xt::xarray<float> grouped_4d = xt::zeros<float>(
         std::vector<std::size_t>{1U, 1U, static_cast<std::size_t>(T_cap), static_cast<std::size_t>(H)});
-    grouped_4d.fill(0.0f);
     for (uint32_t e = 0; e < E; ++e) {
         if (counts[e] == 0U) {
             continue;
         }
-        std::vector<std::size_t> slice_shape{1U, 1U, static_cast<std::size_t>(counts[e]), static_cast<std::size_t>(H)};
-        xt::xarray<float> slice = xt::empty<float>(slice_shape);
-        core::parallel_generate<float>(slice, gen, rng());
+        const std::array<std::size_t, 4U> slice_shape{
+            1U, 1U, static_cast<std::size_t>(counts[e]), static_cast<std::size_t>(H)};
+        auto slice = test_utils::make_uniform_xarray<float>(slice_shape, 0.0f, 1.0f, rng());
         xt::view(grouped_4d, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
     }
 
     // [out, in] layout: w_gate/w_up are [E, I, H], w_down is [E, H, I].
-    xt::xarray<float> w_gate = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), I, H});
-    xt::xarray<float> w_up = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), I, H});
-    xt::xarray<float> w_down = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), H, I});
-    core::parallel_generate<float>(w_gate, gen, rng());
-    core::parallel_generate<float>(w_up, gen, rng());
-    core::parallel_generate<float>(w_down, gen, rng());
+    auto w_gate = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 3U>{static_cast<std::size_t>(E), I, H}, 0.0f, 1.0f, rng());
+    auto w_up = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 3U>{static_cast<std::size_t>(E), I, H}, 0.0f, 1.0f, rng());
+    auto w_down = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 3U>{static_cast<std::size_t>(E), H, I}, 0.0f, 1.0f, rng());
 
     auto* device = &autograd::ctx().get_device();
 
