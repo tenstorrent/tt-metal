@@ -45,7 +45,6 @@ from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
-from helpers.target_config import TestTargetConfig
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -246,10 +245,9 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
-    TestTargetConfig().update_from_pytest_config(config)
+    TestConfig.TEST_TARGET.update_from_pytest_config(config)
 
     TestConfig.setup_mode(
-        TestTargetConfig(),
         # Pass worker id here, so TestConfig can calculate Tensix tile it will run on
         getattr(config, "workerinput", {}).get("workerid", "master"),
         config.getoption("--compile-consumer", default=False),

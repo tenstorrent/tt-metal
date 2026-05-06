@@ -177,7 +177,7 @@ class TestConfig:
         False  # Should everything be converted to compile-time arguments?
     )
 
-    TEST_TARGET: ClassVar[TestTargetConfig] = None
+    TEST_TARGET: ClassVar[TestTargetConfig] = TestTargetConfig()
 
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
@@ -420,15 +420,12 @@ class TestConfig:
 
     @staticmethod
     def setup_mode(
-        test_target: TestTargetConfig,
         worker_id: str,
         compile_consumer: bool,
         compile_producer: bool,
         stimuli_only: str = None,
         use_stimuli: str = None,
     ):
-
-        TestConfig.TEST_TARGET = test_target
         TestConfig.WORKER_ID = worker_id
 
         if worker_id != "master":
