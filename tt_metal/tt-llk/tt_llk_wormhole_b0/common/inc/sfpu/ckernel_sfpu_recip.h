@@ -27,7 +27,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
     // If in ≠ ±0 and in ≠ ±inf, then x = in * 2**(127-in.Exp).
     // If in = ±0 or in = ±inf, then x = ±1.
     // Then negative_x = -x.
-    sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(in));
+    sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, in);
 
     // Quadratic initial estimate: y = k2 - k1*x + k0*x**2.
     sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x;
