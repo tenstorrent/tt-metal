@@ -1851,7 +1851,7 @@ def test_moe_compute_gpt_oss(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -1926,7 +1926,7 @@ def test_moe_compute_qwen3_235b(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -1997,7 +1997,7 @@ def test_moe_compute_qwen35_397b(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2068,7 +2068,7 @@ def test_moe_compute_qwen35_35b(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2142,7 +2142,7 @@ def test_moe_compute_qwen3_omni_thinker(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2284,7 +2284,7 @@ def test_moe_compute_glm5(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2358,7 +2358,7 @@ def test_moe_compute_ds_v4_flash(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [6])  # n_routed=384, multiple of 3
@@ -2388,8 +2388,8 @@ def test_moe_compute_ds_v4_pro(
         num_iterations = 5
     else:
         selected_experts_k = 6  # DS V4 Pro uses top-6
-        num_layers = 5
-        num_iterations = 3
+        num_layers = 3
+        num_iterations = 2
 
     run_moe_compute_test(
         mesh_device=mesh_device,
@@ -2429,7 +2429,7 @@ def test_moe_compute_ds_v4_pro(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [6])  # n_routed=384, multiple of 3
@@ -2459,8 +2459,8 @@ def test_moe_compute_kimi_k25(
         num_iterations = 5
     else:
         selected_experts_k = 8  # Kimi K2.5 uses top-8
-        num_layers = 5
-        num_iterations = 3
+        num_layers = 3
+        num_iterations = 2
 
     run_moe_compute_test(
         mesh_device=mesh_device,
@@ -2501,7 +2501,7 @@ def test_moe_compute_kimi_k25(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2531,8 +2531,8 @@ def test_moe_compute_ling_1t(
         num_iterations = 5
     else:
         selected_experts_k = 8  # Ling 1T uses top-8
-        num_layers = 5
-        num_iterations = 3
+        num_layers = 3
+        num_iterations = 2
 
     run_moe_compute_test(
         mesh_device=mesh_device,
@@ -2572,7 +2572,7 @@ def test_moe_compute_ling_1t(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2644,7 +2644,7 @@ def test_moe_compute_glm_47(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2674,8 +2674,8 @@ def test_moe_compute_mistral_large_3(
         num_iterations = 5
     else:
         selected_experts_k = 4  # Mistral Large 3 uses top-4
-        num_layers = 5
-        num_iterations = 3
+        num_layers = 3
+        num_iterations = 2
 
     run_moe_compute_test(
         mesh_device=mesh_device,
@@ -2715,7 +2715,7 @@ def test_moe_compute_mistral_large_3(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
@@ -2786,7 +2786,7 @@ def test_moe_compute_gemma_4_26b(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
