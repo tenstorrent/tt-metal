@@ -48,14 +48,15 @@ std::map<std::string, std::string> get_compute_defines(
         if (op == OpConfig::SfpuBinaryOp::MUL) {
             if (int_data_format) {
                 defines["BINARY_SFPU_INIT"] = fmt::format(
-                    "mul_int_tile_init<DataFormat::{}>(); mul_int_binary_init_replay<DataFormat::{}>();",
+                    "mul_int_tile_init<DataFormat::{}>(); init_replay_binary_sfpu_mul_integer<DataFormat::{}>();",
                     *int_data_format,
                     *int_data_format);
-                defines["BINARY_SFPU_OP"] = fmt::format("mul_int_binary_tile_replay<DataFormat::{}>", *int_data_format);
+                defines["BINARY_SFPU_OP"] =
+                    fmt::format("replay_binary_sfpu_mul_integer<DataFormat::{}>", *int_data_format);
                 return defines;
             }
-            defines["BINARY_SFPU_INIT"] = "mul_binary_tile_init_replay();";
-            defines["BINARY_SFPU_OP"] = "mul_binary_tile_replay";
+            defines["BINARY_SFPU_INIT"] = "init_replay_binary_sfpu_mul_float();";
+            defines["BINARY_SFPU_OP"] = "replay_binary_sfpu_mul_float";
             return defines;
         }
     }

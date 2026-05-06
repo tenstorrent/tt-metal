@@ -7,7 +7,7 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
-#include "llk_math_eltwise_binary_sfpu_mul_int_replay.h"
+#include "llk_math_eltwise_binary_sfpu_mul_replay.h"
 #endif
 
 namespace ckernel {
@@ -61,20 +61,20 @@ ALWI void mul_int_tile_init() {
 */
 // clang-format on
 template <DataFormat data_format>
-ALWI void mul_int_binary_init_replay() {
-    MATH((llk_math_eltwise_binary_sfpu_init_replay<data_format>()));
+ALWI void init_replay_binary_sfpu_mul_integer() {
+    MATH((llk_init_replay_binary_sfpu_mul_integer<data_format>()));
 }
 // clang-format off
 /*
  * Drop-in replacement for `mul_int_tile<data_format>(idst0, idst1, odst)`.
  * The format-specific body is baked into the replay buffer by the matching
- * `mul_int_binary_init_replay<data_format>()`. Requires `idst1 == idst0 + 1`
+ * `init_replay_binary_sfpu_mul_integer<data_format>()`. Requires `idst1 == idst0 + 1`
  * and `odst == idst0`, matching the kernel's `(i*2, i*2 + 1, i*2)` pairing.
 */
 // clang-format on
 template <DataFormat data_format>
-ALWI void mul_int_binary_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_run_replay<data_format>(idst0, idst1, odst)));
+ALWI void replay_binary_sfpu_mul_integer(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((llk_replay_binary_sfpu_mul_integer<data_format>(idst0, idst1, odst)));
 }
 
 }  // namespace ckernel

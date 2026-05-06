@@ -9,6 +9,7 @@
 #include "llk_math_eltwise_binary_sfpu_binop.h"
 #include "llk_math_eltwise_binary_sfpu_binary_pow.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "llk_math_eltwise_binary_sfpu_mul_replay.h"
 #endif
 
 namespace ckernel {
@@ -108,5 +109,22 @@ ALWI void gt_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_fp32_ini
 ALWI void le_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_fp32_init())); }
 
 ALWI void ge_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_fp32_init())); }
+
+// Program the MATH-thread replay buffer with one sfpi-iteration body of the
+// SFPU multiply. Must be called once, after `BINARY_SFPU_INIT`, so the SFPU
+// is already configured. Uses `lltt::NoExec` so recording does not emit any
+// actual SFPU work - only the recorded instructions are installed.
+ALWI void init_replay_binary_sfpu_mul_float() {
+    MATH((llk_init_replay_binary_sfpu_mul_float<APPROX, DST_ACCUM_MODE>()));
+}
+
+// Drop-in replacement for `mul_binary_tile(idst0, idst1, odst)` that performs
+// the multiply by replaying the pre-recorded body. Requires `idst1 == idst0 + 1`
+// and `odst == idst0`, which matches the kernel's `(i*2, i*2 + 1, i*2)` layout.
+ALWI void replay_binary_sfpu_mul_float(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((llk_replay_binary_sfpu_mul_float(idst0, idst1, odst)));
+}
 
 }  // namespace ckernel
