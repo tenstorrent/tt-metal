@@ -107,6 +107,34 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
     return make_parameter_dict(out)
 
 
+def _m4t_encoder_self_attn_ffn_layers(encoder, *, device: ttnn.Device) -> list:
+    """Layer parameter dicts shared by text encoder and text-to-unit encoder stacks."""
+    layers = []
+    for layer in encoder.layers:
+        layer_dict = {
+            "self_attn_layer_norm": {
+                "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
+            },
+            "self_attn": {
+                "q_proj": _linear_pair(layer.self_attn.q_proj, device=device),
+                "k_proj": _linear_pair(layer.self_attn.k_proj, device=device),
+                "v_proj": _linear_pair(layer.self_attn.v_proj, device=device),
+                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device),
+            },
+            "ffn_layer_norm": {
+                "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
+            },
+            "ffn": {
+                "fc1": _linear_pair(layer.ffn.fc1, device=device),
+                "fc2": _linear_pair(layer.ffn.fc2, device=device),
+            },
+        }
+        layers.append(make_parameter_dict(layer_dict))
+    return layers
+
+
 def create_text_encoder_parameters(encoder, *, device: ttnn.Device) -> dict:
     """
     Convert [`SeamlessM4Tv2Encoder`] weights to TTNN tensors on ``device``.
@@ -136,33 +164,35 @@ def create_text_encoder_parameters(encoder, *, device: ttnn.Device) -> dict:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    layers = []
-    for layer in encoder.layers:
-        layer_dict = {
-            "self_attn_layer_norm": {
-                "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
-                "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
-            },
-            "self_attn": {
-                "q_proj": _linear_pair(layer.self_attn.q_proj, device=device),
-                "k_proj": _linear_pair(layer.self_attn.k_proj, device=device),
-                "v_proj": _linear_pair(layer.self_attn.v_proj, device=device),
-                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device),
-            },
-            "ffn_layer_norm": {
-                "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
-                "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
-            },
-            "ffn": {
-                "fc1": _linear_pair(layer.ffn.fc1, device=device),
-                "fc2": _linear_pair(layer.ffn.fc2, device=device),
-            },
-        }
-        layers.append(make_parameter_dict(layer_dict))
+    layers = _m4t_encoder_self_attn_ffn_layers(encoder, device=device)
 
     out = {
         "embed_tokens": make_parameter_dict({"weight": embed_tokens_weight}),
         "embed_positions": make_parameter_dict({"weight": embed_positions_weight}),
+        "layers": layers,
+        "layer_norm": make_parameter_dict(
+            {
+                "weight": _ln_to_device(encoder.layer_norm.weight, device=device),
+                "bias": _ln_to_device(encoder.layer_norm.bias, device=device),
+            }
+        ),
+    }
+    return make_parameter_dict(out)
+
+
+def create_text_to_unit_parameters(encoder, *, device: ttnn.Device) -> dict:
+    """
+    Convert the encoder submodule of Transformers
+    [`SeamlessM4Tv2TextToUnitForConditionalGeneration`] — ``model.encoder``, i.e.
+    [`SeamlessM4Tv2Encoder`] with ``is_t2u_encoder=True`` — to TTNN tensors for
+    [`TTSeamlessM4Tv2TextToUnitEncoder`].
+
+    Expects ``encoder.layers`` as [`SeamlessM4Tv2EncoderLayer`] (self-attention + FFN only).
+    Weights cover the transformer stack only (``inputs_embeds`` path; no token or position
+    embeddings on this submodule).
+    """
+    layers = _m4t_encoder_self_attn_ffn_layers(encoder, device=device)
+    out = {
         "layers": layers,
         "layer_norm": make_parameter_dict(
             {
