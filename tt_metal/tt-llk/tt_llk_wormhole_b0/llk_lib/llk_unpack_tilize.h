@@ -48,7 +48,8 @@ inline void _llk_unpack_tilize_init_(
     const std::uint32_t unpack_dst_format = 0,
     const std::uint32_t ct_dim            = 0,
     const std::uint32_t face_r_dim        = FACE_R_DIM,
-    const bool narrow_tile                = false)
+    const bool narrow_tile                = false,
+    const std::uint32_t num_faces         = 4)
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -62,9 +63,6 @@ inline void _llk_unpack_tilize_init_(
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
 
-    // Set face dim
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
-
     // Override default settings to enable tilize mode
     unpack_config_u config   = {0};
     config.f.out_data_format = unpack_dst_format;
@@ -75,8 +73,22 @@ inline void _llk_unpack_tilize_init_(
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
-    TTI_REG2FLOP(
-        1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); // GPR preloaded with  16 | (16 << 16)
+
+    if (face_r_dim == FACE_R_DIM)
+    {
+        const std::uint32_t Tile_x_dim = face_r_dim * num_faces * FACE_C_DIM;
+        const std::uint32_t Tile_z_dim = 1;
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(Tile_x_dim | (Tile_x_dim << 16));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0xffff0000>(0 | (Tile_x_dim << 16));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(Tile_z_dim);
+        TT_SETADCXX(p_setadc::UNP_A, Tile_x_dim - 1, 0x0);
+    }
+    else
+    {
+        TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
+        TTI_REG2FLOP(
+            1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
+    }
 
     _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest);
 }
@@ -206,7 +218,25 @@ inline void _llk_unpack_tilize_(
     // Program srcA and srcB base addresses
     std::uint32_t num_loops = narrow_tile ? 2 : num_faces / 2;
 
-    if (!unpack_to_dest)
+    if (face_r_dim == FACE_R_DIM && !unpack_to_dest)
+    {
+        volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+        std::uint32_t address = base_address + top_face_offset_address;
+        LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
+
+        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+        wait_for_next_context(2);
+
+        const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+        cfg[upk0_reg] = address;
+
+        semaphore_post(semaphore::UNPACK_SYNC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        ckernel::ckernel_template::run();
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        switch_config_context(unp_cfg_context);
+    }
+    else if (!unpack_to_dest)
     {
         unpack_tilize_impl(base_address, num_loops, top_face_offset_address, bot_face_offset_address);
     }
