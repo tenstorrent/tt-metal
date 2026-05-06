@@ -187,7 +187,6 @@ template HostTensor HostTensor::from_span<int32_t>(ttsl::Span<const int32_t>, co
 template HostTensor HostTensor::from_span<uint32_t>(ttsl::Span<const uint32_t>, const TensorSpec&, uint32_t);
 template HostTensor HostTensor::from_span<uint16_t>(ttsl::Span<const uint16_t>, const TensorSpec&, uint16_t);
 template HostTensor HostTensor::from_span<uint8_t>(ttsl::Span<const uint8_t>, const TensorSpec&, uint8_t);
-template HostTensor HostTensor::from_span<float8_e4m3>(ttsl::Span<const float8_e4m3>, const TensorSpec&, float8_e4m3);
 
 template HostTensor HostTensor::from_borrowed_data<bfloat16>(
     ttsl::Span<bfloat16>, const Shape&, MemoryPin, const std::optional<Tile>&);
@@ -201,8 +200,6 @@ template HostTensor HostTensor::from_borrowed_data<uint16_t>(
     ttsl::Span<uint16_t>, const Shape&, MemoryPin, const std::optional<Tile>&);
 template HostTensor HostTensor::from_borrowed_data<uint8_t>(
     ttsl::Span<uint8_t>, const Shape&, MemoryPin, const std::optional<Tile>&);
-template HostTensor HostTensor::from_borrowed_data<float8_e4m3>(
-    ttsl::Span<float8_e4m3>, const Shape&, MemoryPin, const std::optional<Tile>&);
 
 template HostTensor HostTensor::from_vector<bfloat16>(const std::vector<bfloat16>&, const TensorSpec&, bfloat16);
 template HostTensor HostTensor::from_vector<float>(const std::vector<float>&, const TensorSpec&, float);
@@ -210,8 +207,6 @@ template HostTensor HostTensor::from_vector<int32_t>(const std::vector<int32_t>&
 template HostTensor HostTensor::from_vector<uint32_t>(const std::vector<uint32_t>&, const TensorSpec&, uint32_t);
 template HostTensor HostTensor::from_vector<uint16_t>(const std::vector<uint16_t>&, const TensorSpec&, uint16_t);
 template HostTensor HostTensor::from_vector<uint8_t>(const std::vector<uint8_t>&, const TensorSpec&, uint8_t);
-template HostTensor HostTensor::from_vector<float8_e4m3>(
-    const std::vector<float8_e4m3>&, const TensorSpec&, float8_e4m3);
 
 template HostTensor HostTensor::from_vector<bfloat16>(std::vector<bfloat16>&&, const TensorSpec&, bfloat16);
 template HostTensor HostTensor::from_vector<float>(std::vector<float>&&, const TensorSpec&, float);
@@ -219,7 +214,6 @@ template HostTensor HostTensor::from_vector<int32_t>(std::vector<int32_t>&&, con
 template HostTensor HostTensor::from_vector<uint32_t>(std::vector<uint32_t>&&, const TensorSpec&, uint32_t);
 template HostTensor HostTensor::from_vector<uint16_t>(std::vector<uint16_t>&&, const TensorSpec&, uint16_t);
 template HostTensor HostTensor::from_vector<uint8_t>(std::vector<uint8_t>&&, const TensorSpec&, uint8_t);
-template HostTensor HostTensor::from_vector<float8_e4m3>(std::vector<float8_e4m3>&&, const TensorSpec&, float8_e4m3);
 
 template std::vector<float> HostTensor::to_vector() const;
 template std::vector<bfloat16> HostTensor::to_vector() const;

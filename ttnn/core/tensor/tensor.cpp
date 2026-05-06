@@ -248,12 +248,6 @@ template Tensor Tensor::from_span<uint32_t>(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
-template Tensor Tensor::from_span<float8_e4m3>(
-    ttsl::Span<const float8_e4m3> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
-    float8_e4m3 pad_value);
 template Tensor Tensor::from_borrowed_data<float>(
     ttsl::Span<float> buffer,
     const tt::tt_metal::Shape& shape,
@@ -281,11 +275,6 @@ template Tensor Tensor::from_borrowed_data<uint16_t>(
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint32_t>(
     ttsl::Span<uint32_t> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
-template Tensor Tensor::from_borrowed_data<float8_e4m3>(
-    ttsl::Span<float8_e4m3> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
@@ -325,12 +314,6 @@ template Tensor Tensor::from_vector<uint32_t>(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
-template Tensor Tensor::from_vector<float8_e4m3>(
-    std::vector<float8_e4m3>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
-    float8_e4m3 pad_value);
 
 template std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
