@@ -13,6 +13,19 @@ namespace ttnn::operations::generic {
 
 using namespace tt::tt_metal;
 
+tt::tt_metal::ProgramDescriptor GenericOpDeviceOperation::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const tt::tt_metal::distributed::MeshCoordinateRange& mesh_coord_range) {
+    for (const auto& [range, program_descriptor] : operation_attributes.mesh_programs) {
+        if (range == mesh_coord_range) {
+            return program_descriptor;
+        }
+    }
+    TT_FATAL(false, "MeshCoordinateRange {} not found in operation_attributes.mesh_programs", mesh_coord_range);
+}
+
 void verify_no_duplicate_mesh_coord_ranges(
     const tt::tt_metal::experimental::MeshProgramDescriptor::MeshPrograms& mesh_programs) {
     std::unordered_set<ttnn::MeshCoordinateRange> seen;

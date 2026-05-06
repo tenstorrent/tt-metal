@@ -8,6 +8,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 
 #include "generic_op_program_factory.hpp"
+#include "generic_op_device_operation.hpp"
 
 namespace ttnn::operations::generic::program {
 using namespace tt::tt_metal;
@@ -21,8 +22,10 @@ GenericMeshProgramFactory::cached_mesh_workload_t GenericMeshProgramFactory::cre
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, mesh_shared_variables_t> mesh_shared_variables;
 
-    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
-        auto cached_program = create_at(program_descriptor, tensor_args, tensor_return_value);
+    for (const auto& [mesh_coord_range, _] : operation_attributes.mesh_programs) {
+        const tt::tt_metal::ProgramDescriptor program_desc = GenericOpDeviceOperation::create_descriptor(
+            operation_attributes, tensor_args, tensor_return_value, mesh_coord_range);
+        auto cached_program = create_at(program_desc, tensor_args, tensor_return_value);
         mesh_workload.add_program(mesh_coord_range, std::move(cached_program.program));
         mesh_shared_variables[mesh_coord_range] = mesh_shared_variables_t{std::move(cached_program.shared_variables)};
     }

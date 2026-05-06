@@ -22,6 +22,15 @@ struct GenericOpDeviceOperation {
     using tensor_return_value_t = generic::tensor_return_value_t;
     using program_factory_t = std::variant<program::GenericMeshProgramFactory>;
 
+    /// Returns the `ProgramDescriptor` for one mesh sub-program from `mesh_programs`.
+    /// `tensor_args` / `tensor_return_value` are included for API parity with other device ops; the generic op takes
+    /// descriptors from attributes (PyKernel / user-built), not from tensors.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const tt::tt_metal::distributed::MeshCoordinateRange& mesh_coord_range);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
