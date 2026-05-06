@@ -591,8 +591,13 @@ def _compute_config_hash(op_name, op_args, machine_info):
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
 
-def update_master_file(master_file_path, operations, test_source, trace_uid=None):
-    """Update master JSON file with operations"""
+def update_master_file(master_file_path, operations, test_source, trace_uid=None, pytest_args=None):
+    """Update master JSON file with operations.
+
+    pytest_args is recorded per execution alongside trace_uid so the loader
+    can persist it on trace_run.pytest_args. Passing None preserves existing
+    behaviour (older traces simply have pytest_args absent in the JSON).
+    """
     import hashlib
 
     # Load existing master data
@@ -668,6 +673,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                         "machine_info": machine_info,
                         "count": operation.get("execution_count", 1),
                         "trace_uid": trace_uid or operation.get("trace_uid"),
+                        "pytest_args": pytest_args,
                     }
                 ],
             }
@@ -731,7 +737,13 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                     matching_config.pop("machine_info", None)
                     matching_config.pop("execution_count", None)
 
-                # Check if this (source, machine_info) pair already exists
+                # Dedup key is (source, machine_info, trace_uid). Including
+                # trace_uid keeps separate pytest invocations as separate
+                # execution entries even when they share source + hardware
+                # (e.g. flux1 dev and schnell on the same Galaxy). Without
+                # trace_uid here, the second variant would overwrite the
+                # first's pytest_args/trace_uid in the master JSON and the
+                # loader would never see both runs.
                 new_source = test_source
                 new_machine_info = operation.get("machine_info")
                 new_count = operation.get("execution_count", 1)
@@ -739,34 +751,38 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
 
                 found_execution = None
                 for execution in matching_config["executions"]:
-                    if execution["source"] == new_source:
-                        # Check if machine_info matches
-                        exec_machine = execution.get("machine_info")
-                        if exec_machine is None and new_machine_info is None:
+                    if execution["source"] != new_source:
+                        continue
+                    if execution.get("trace_uid") != new_trace_uid:
+                        continue
+                    exec_machine = execution.get("machine_info")
+                    if exec_machine is None and new_machine_info is None:
+                        found_execution = execution
+                        break
+                    if exec_machine and new_machine_info:
+                        # Deep compare machine_info (all fields must match)
+                        exec_machine_str = json.dumps(exec_machine, sort_keys=True, default=str)
+                        new_machine_str = json.dumps(new_machine_info, sort_keys=True, default=str)
+                        if exec_machine_str == new_machine_str:
                             found_execution = execution
                             break
-                        elif exec_machine and new_machine_info:
-                            # Compare complete machine_info (all fields must match)
-                            # Convert to JSON strings for deep comparison
-                            exec_machine_str = json.dumps(exec_machine, sort_keys=True, default=str)
-                            new_machine_str = json.dumps(new_machine_info, sort_keys=True, default=str)
-                            if exec_machine_str == new_machine_str:
-                                found_execution = execution
-                                break
 
                 if found_execution:
-                    # Update existing execution - take max count
+                    # Same (source, machine_info, trace_uid) — same invocation.
+                    # Take max count; pytest_args is constant for a trace_uid.
                     found_execution["count"] = max(found_execution.get("count", 1), new_count)
-                    if new_trace_uid:
-                        found_execution["trace_uid"] = new_trace_uid
+                    if pytest_args is not None:
+                        found_execution["pytest_args"] = pytest_args
                 else:
-                    # Add new execution entry
+                    # New (trace_uid, source, machine_info) tuple — append
+                    # so each invocation's provenance survives in the JSON.
                     matching_config["executions"].append(
                         {
                             "source": new_source,
                             "machine_info": new_machine_info,
                             "count": new_count,
                             "trace_uid": new_trace_uid,
+                            "pytest_args": pytest_args,
                         }
                     )
 
@@ -932,6 +948,10 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         "trace_uid": str(uuid.uuid4()),
         "machine_info": get_machine_info(),
         "trace_count": len(json_files),
+        # Capture the pytest CLI args (everything after `--`) so the loader
+        # can persist them on trace_run.pytest_args. This is what lets users
+        # answer "did I trace model X with these args on this hardware?".
+        "pytest_args": " ".join(extra_args) if extra_args else None,
     }
 
     # Check for HF_MODEL and LLAMA_DIR environment variables
@@ -976,6 +996,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         "trace_files": json_files,
         "trace_dir": trace_dir,
         "trace_uid": metadata["trace_uid"],
+        "pytest_args": metadata.get("pytest_args"),
         "keep_traces": keep_traces,
         "output_dir": output_dir,
         "test_stats": test_stats,
@@ -1333,6 +1354,7 @@ Examples (Import existing traces):
             excluded_operations = get_excluded_operations()
             machine_info = get_machine_info()
             trace_uid = result.get("trace_uid")
+            pytest_args = result.get("pytest_args")
 
             # Extract test source name and possibly override machine_info from metadata
             if args.load:
@@ -1363,10 +1385,13 @@ Examples (Import existing traces):
                         if "machine_info" in metadata:
                             machine_info = metadata["machine_info"]
                             trace_uid = metadata.get("trace_uid", trace_uid)
+                            pytest_args = metadata.get("pytest_args", pytest_args)
                             print(f"📋 Loaded metadata from trace directory")
                             print(f"   Original source: {metadata.get('test_source')}")
                             if metadata.get("trace_uid"):
                                 print(f"   Trace UID: {metadata.get('trace_uid')}")
+                            if metadata.get("pytest_args"):
+                                print(f"   Pytest args: {metadata.get('pytest_args')}")
                             if "machine_info" in metadata and metadata["machine_info"]:
                                 machine_desc = (
                                     metadata["machine_info"][0]
@@ -1472,10 +1497,13 @@ Examples (Import existing traces):
             else:
                 os.makedirs(args.output_dir, exist_ok=True)
                 master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
-            if trace_uid:
-                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source, trace_uid)
-            else:
-                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
+            new_configs_added = update_master_file(
+                master_file,
+                filtered_operations_unique,
+                test_source,
+                trace_uid=trace_uid,
+                pytest_args=pytest_args,
+            )
 
             print(f"📝 Added {new_configs_added} new unique configurations to {master_file}")
             print(f"   Source: {test_source}")
