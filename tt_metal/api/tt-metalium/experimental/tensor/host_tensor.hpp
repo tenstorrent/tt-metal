@@ -65,15 +65,6 @@ public:
      */
     explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
-    /**
-     * Move constructor with new spec and topology.
-     * Moves the buffer from other and uses the provided spec/topology.
-     * This is meant for transition as TTNN-Tensor currently has a two-step construction for HostTensor.
-     *
-     * pre-condition: other must not be in a default-constructed or moved-from state.
-     */
-    HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology);
-
     ~HostTensor();
 
     /**

@@ -30,12 +30,6 @@ HostTensor::HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topolo
         std::move(spec),
         std::move(topology))) {}
 
-HostTensor::HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology) {
-    TT_FATAL(other.impl_ != nullptr, "Cannot move from a default-constructed or moved-from HostTensor.");
-    impl_ = std::make_unique<HostTensorImpl>(std::move(*other.impl_), std::move(spec), std::move(topology));
-}
-
-
 HostTensor::HostTensor(const HostTensor& other) :
     impl_(other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr) {}
 

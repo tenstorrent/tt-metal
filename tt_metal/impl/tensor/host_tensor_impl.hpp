@@ -31,11 +31,6 @@ public:
     HostTensorImpl& operator=(HostTensorImpl&& other) noexcept = default;
     ~HostTensorImpl() = default;
 
-    // Two step construction for HostTensor,
-    // for transient purpose.
-    HostTensorImpl(HostTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
-        buffer_(std::move(other.buffer_)), spec_(std::move(spec)), topology_(std::move(topology)) {}
-
     const DistributedHostBuffer& buffer() const& { return buffer_; }
     DistributedHostBuffer& buffer() & { return buffer_; }
     DistributedHostBuffer buffer() const&& { return buffer_; }
