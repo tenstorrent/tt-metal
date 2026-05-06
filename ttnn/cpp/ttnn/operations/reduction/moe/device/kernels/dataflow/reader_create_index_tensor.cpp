@@ -81,8 +81,8 @@ void kernel_main() {
     uint32_t tile_id = 0;
     uint32_t tile_id_expert = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // expert mask
-        /* Not consumed by compute kernel enable once support is added to compute kernel
+        // Expert mask is not consumed by the compute kernel. Enable back once support is added to the compute kernel.
+        /*
         cb_expert.reserve_back(Wt);
         for (uint32_t j = 0; j < Wt; ++j) {
             noc.async_read(
