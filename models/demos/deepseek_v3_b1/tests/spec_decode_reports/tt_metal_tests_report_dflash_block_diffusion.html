@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DFlash Block Diffusion tt-metal Bringup Tests</title>
+  <style>
+    @page { size: A4 portrait; margin: 8mm 10mm 8mm 10mm; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: #fffff8;
+      color: #111;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Cambria, Georgia, serif;
+      font-size: 8.15pt;
+      line-height: 1.22;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    main { display: grid; grid-template-columns: 1.58fr 1fr; column-gap: 6mm; }
+    h1 { margin: 0 0 1.2mm; font-size: 17pt; line-height: 1.03; font-weight: normal; }
+    h2 { margin: 3mm 0 1mm; font-size: 10.4pt; font-weight: normal; font-style: italic; }
+    p { margin: 0 0 1.2mm; }
+    .meta {
+      border-top: 0.4pt solid #111;
+      border-bottom: 0.4pt solid #999;
+      padding: 1mm 0;
+      margin-bottom: 2.5mm;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 2mm;
+      font-size: 7.3pt;
+    }
+    .label { font-variant: small-caps; letter-spacing: 0.03em; color: #555; }
+    .accent { color: #8a1a1a; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.86em; }
+    table { width: 100%; border-collapse: collapse; margin: 0.7mm 0 1.5mm; }
+    th, td { border-bottom: 0.25pt solid #c8c3ac; padding: 0.55mm 0.8mm 0.45mm 0; vertical-align: top; }
+    thead th {
+      border-top: 0.45pt solid #555;
+      border-bottom: 0.45pt solid #555;
+      font-weight: normal;
+      font-style: italic;
+      color: #333;
+    }
+    .tight td { padding-top: 0.38mm; padding-bottom: 0.32mm; }
+    .aside {
+      border-left: 1.5pt solid #d9b56f;
+      padding-left: 2mm;
+      color: #333;
+    }
+    .aside h2 { margin-top: 0; }
+    .note { color: #555; font-size: 7.35pt; }
+    .workstream { border-left: 2pt solid var(--c); padding-left: 1.4mm; }
+    .host { --c: #9fc7df; }
+    .stage { --c: #a8d4a5; }
+    .combo { --c: #c5addd; }
+    .report { --c: #efb1b5; }
+    .checks { --c: #f1c27d; }
+    ul { margin: 0.4mm 0 1.2mm 3.2mm; padding: 0; }
+    li { margin: 0.25mm 0; }
+    .small { font-size: 7.25pt; line-height: 1.16; }
+  </style>
+</head>
+<body>
+  <h1>DFlash Block Diffusion Bringup Tests</h1>
+  <div class="meta">
+    <div><span class="label">Approach</span><br><code>dflash_block_diffusion</code></div>
+    <div><span class="label">Target</span><br><code>moonshotai/Kimi-K2.5</code></div>
+    <div><span class="label">Branch</span><br><code>jrock/agent-dflash_block_diffusion-tests</code></div>
+    <div><span class="label">Base</span><br><code>origin/main@7aa26e4b1f</code></div>
+  </div>
+
+  <main>
+    <section>
+      <h2>evidence trail</h2>
+      <p>
+        The golden implementation at
+        <code>/Users/jrock/repos/flows/spec-decode-paper-reproduction/dflash_block_diffusion_agent_23/golden_dflash_block_diffusion_agent_23</code>
+        identifies Kimi-K2.5 target execution and a DFlash drafter reference
+        (<code>z-lab/Kimi-K2.5-DFlash</code>). The tt-metal checkout is
+        <code>/Users/jrock/agent/28/tt-metal</code>.
+      </p>
+      <table class="tight">
+        <thead><tr><th>work</th><th>path</th><th>reference</th><th>commit</th></tr></thead>
+        <tbody>
+          <tr class="workstream host">
+            <td>host replay</td>
+            <td><code>tests/unit_tests/test_run_inference_dflash_block_diffusion.py</code></td>
+            <td><code>run_inference_trace.json</code>; golden <code>SpecDecodeManager</code></td>
+            <td><code>cd2425ca4b</code></td>
+          </tr>
+          <tr class="workstream combo">
+            <td>combined drafter</td>
+            <td><code>tests/unit_tests/test_dflash_block_diffusion_combined_drafter.py</code></td>
+            <td><code>stage_combined_drafter.json</code>; generated tiny DFlash chain</td>
+            <td><code>c65141c9bd</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>stage mapping</h2>
+      <table>
+        <thead>
+          <tr><th>stage</th><th>test</th><th>fake boundary</th><th>fixture</th><th>commit</th></tr>
+        </thead>
+        <tbody>
+          <tr class="workstream stage">
+            <td><code>pre_decoder_fused</code></td>
+            <td><code>test_dflash_block_diffusion_stage_pre_decoder_fused.py</code></td>
+            <td><code>fake_pre_decoder_fused_stage</code></td>
+            <td><code>stage_pre_decoder_fused.json</code></td>
+            <td><code>2260b352ae</code></td>
+          </tr>
+          <tr class="workstream stage">
+            <td><code>decoder_layer_0</code></td>
+            <td><code>test_dflash_block_diffusion_stage_decoder_layer_0.py</code></td>
+            <td><code>fake_decoder_layer_stage</code></td>
+            <td><code>stage_decoder_layer_0.json</code></td>
+            <td><code>8013e438f0</code></td>
+          </tr>
+          <tr class="workstream stage">
+            <td><code>decoder_layer_1</code></td>
+            <td><code>test_dflash_block_diffusion_stage_decoder_layer_1.py</code></td>
+            <td><code>fake_decoder_layer_stage</code></td>
+            <td><code>stage_decoder_layer_1.json</code></td>
+            <td><code>b86b89972b</code></td>
+          </tr>
+          <tr class="workstream stage">
+            <td><code>post_decoder_fused</code></td>
+            <td><code>test_dflash_block_diffusion_stage_post_decoder_fused.py</code></td>
+            <td><code>fake_post_decoder_fused_stage</code></td>
+            <td><code>stage_post_decoder_fused.json</code></td>
+            <td><code>7d58bfa763</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>checks</h2>
+      <table class="tight">
+        <thead><tr><th>scope</th><th>command / result</th></tr></thead>
+        <tbody>
+          <tr class="workstream checks"><td>setup</td><td><code>git clone</code>, <code>fetch main jrock/blaze-multi-spec</code>, branch from <code>origin/main</code>, submodules: passed.</td></tr>
+          <tr class="workstream checks"><td>fixtures</td><td><code>python -m json.tool</code> on all DFlash fixtures: passed.</td></tr>
+          <tr class="workstream checks"><td>syntax</td><td><code>python -m py_compile</code> on host, stage, generator, helper, combined tests: passed.</td></tr>
+          <tr class="workstream checks"><td>golden replay</td><td>plain-Python import invocation of all DFlash tests and golden <code>SpecDecodeManager</code> replay: passed.</td></tr>
+          <tr class="workstream checks"><td>pytest</td><td>not run locally; default Python lacks <code>pytest</code>.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <aside class="aside">
+      <h2>branch record</h2>
+      <p><span class="label">Remote</span><br><code>origin git@github.com:tenstorrent/tt-metal.git</code></p>
+      <p><span class="label">Push target</span><br><code>origin/jrock/agent-dflash_block_diffusion-tests</code></p>
+      <p><span class="label">Pre-report tip</span><br><code>c65141c9bd</code></p>
+      <p><span class="label">Report path</span><br><code>models/demos/deepseek_v3_b1/tests/spec_decode_reports/tt_metal_tests_report_dflash_block_diffusion.html</code></p>
+
+      <h2>device fit</h2>
+      <p>
+        The mapped drafter has exactly four stages. One Blackhole Galaxy provides
+        four <code>4x2</code> stage slots, so the smallest viable configuration is
+        <span class="accent">one Galaxy</span>.
+      </p>
+
+      <h2>assumptions</h2>
+      <ul>
+        <li>Fixtures use a deterministic tiny DFlash model, not full Kimi weights.</li>
+        <li>Tests are bringup contracts; they do not run hardware kernels.</li>
+        <li>Main lacks the DFlash production module and dynamic multi-spec host hook.</li>
+      </ul>
+
+      <h2>next steps</h2>
+      <ul>
+        <li>Replace <code>dflash_stage_fake_ops</code> seams with real pipeline stages.</li>
+        <li>Wire <code>ModelPipeline.run_inference</code> to DFlash block proposals.</li>
+        <li>Run the pytest suite in a tt-metal Python environment with pytest installed.</li>
+        <li>Graduate tiny fixtures to hardware PCC checks when device modules exist.</li>
+      </ul>
+
+      <p class="note">
+        Reference branch <code>origin/jrock/blaze-multi-spec</code> was inspected only for
+        <code>test_run_inference.py</code>; no merge, checkout, cherry-pick, or unrelated copy was used.
+      </p>
+    </aside>
+  </main>
+</body>
+</html>
