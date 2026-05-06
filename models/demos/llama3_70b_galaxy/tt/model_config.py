@@ -621,6 +621,12 @@ class TtModelArgs:
             )
         self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
         self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
+        self.model_config["SAMPLING_AG_CONFIG"] = {
+            "allow_force_argmax": True,
+            "num_links": self.model_config["GALAXY_NUM_LINKS"],
+            "topology": self.model_config["CCL_TOPOLOGY"],
+            "cluster_axis": 0,
+        }
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
