@@ -238,12 +238,25 @@ def compute_lead_models_matrix(modules, batch_size):
     for test_group_name in lead_models_group_order:
         label_meshes = [mesh for mesh, group in mesh_test_groups.items() if group == test_group_name]
         batch_label = "+".join(label_meshes) if label_meshes else test_group_name
+        all_mods = routed_modules.get(test_group_name, [])
+        ccl_mods, non_ccl_mods = _split_ccl_modules(all_mods)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             batch_label,
-            routed_modules.get(test_group_name, []),
+            non_ccl_mods,
+            test_group_name,
+            batch_size,
+            LEAD_MODELS_SUITE_NAME,
+            LEAD_MODELS_BATCH_POLICY.get(test_group_name),
+        )
+        _append_routed_group(
+            include_entries,
+            batches,
+            log_groups,
+            f"ccl {batch_label}",
+            ccl_mods,
             test_group_name,
             batch_size,
             LEAD_MODELS_SUITE_NAME,
