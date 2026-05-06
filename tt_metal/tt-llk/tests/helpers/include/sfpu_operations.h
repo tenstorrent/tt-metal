@@ -188,8 +188,8 @@ void call_unary_sfpu_operation(
             (void (*)(std::uint32_t, std::uint32_t)),
             dst_index,
             vector_mode,
-            10,
-            (1.0f / 10.0f));
+            0x41200000u /* alpha = 10.0f */,
+            0x3DCCCCCDu /* alpha_recip = 0.1f */);
     }
     else if constexpr (OPERATION == SfpuType::cosine)
     {
@@ -476,6 +476,7 @@ void call_binary_sfpu_operation(
     // therefore be 8 (one face's worth of SFPU rows), not 32 (a full tile),
     // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
+    static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
     constexpr int PER_FACE_ITERATIONS = 8;
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
