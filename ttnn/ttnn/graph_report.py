@@ -34,7 +34,6 @@ if __package__ in (None, ""):
         CREATE_SOURCE_FILES_TABLE_SQL,
         CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
         get_source_file_id,
-        insert_source_file_id_column,
         normalize_source_path_from_stack_trace,
         read_source_file,
     )
@@ -44,7 +43,6 @@ else:
         CREATE_SOURCE_FILES_TABLE_SQL,
         CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
         get_source_file_id,
-        insert_source_file_id_column,
         normalize_source_path_from_stack_trace,
         read_source_file,
     )
@@ -247,7 +245,6 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     # Source files (deduped); stack_traces optionally reference source_files.id
     cursor.execute(CREATE_SOURCE_FILES_TABLE_SQL)
     cursor.execute(CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL)
-    insert_source_file_id_column(cursor)
 
     # Input/output tensors
     cursor.execute(

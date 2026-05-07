@@ -15,7 +15,6 @@ from .stack_trace_source import (
     CREATE_SOURCE_FILES_TABLE_SQL,
     CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
     get_source_file_id,
-    insert_source_file_id_column,
     normalize_source_path_from_stack_trace,
     read_source_file,
 )
@@ -207,7 +206,6 @@ def get_or_create_sqlite_db(report_path):
     )
     cursor.execute(CREATE_SOURCE_FILES_TABLE_SQL)
     cursor.execute(CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL)
-    insert_source_file_id_column(cursor)
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS input_tensors
                 (operation_id int, input_index int, tensor_id int)"""

@@ -202,22 +202,6 @@ def read_source_file(normalized_path: str) -> str | None:
         return None
 
 
-def insert_source_file_id_column(cursor: sqlite3.Cursor) -> None:
-    """Add ``source_file_id`` to ``stack_traces`` when upgrading a pre-existing database.
-
-    ``CREATE TABLE IF NOT EXISTS`` does not alter legacy two-column ``stack_traces`` tables;
-    without this step, new three-value inserts and indexes on ``source_file_id`` would fail.
-    """
-    cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stack_traces'")
-    if cursor.fetchone() is None:
-        return
-    cursor.execute("PRAGMA table_info(stack_traces)")
-    column_names = {row[1] for row in cursor.fetchall()}
-    if "source_file_id" in column_names:
-        return
-    cursor.execute("ALTER TABLE stack_traces ADD COLUMN source_file_id int REFERENCES source_files(id)")
-
-
 def get_source_file_id(cursor: sqlite3.Cursor, path: str, contents: str) -> int:
     """Insert or ignore (path, contents), then return source_files.id for path."""
     cursor.execute(

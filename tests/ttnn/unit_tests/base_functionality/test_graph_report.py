@@ -3519,31 +3519,6 @@ class TestPythonStackTraceImport:
         assert row is None, "No stack trace should be stored when Python trace is absent"
         conn.close()
 
-    def test_create_database_schema_migrates_legacy_stack_traces(self, tmp_path):
-        """Pre-v3 DBs kept a two-column stack_traces table; schema setup must ALTER ADD COLUMN."""
-        db_path = tmp_path / "db.sqlite"
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute("CREATE TABLE stack_traces (operation_id int, stack_trace text)")
-        c.execute("INSERT INTO stack_traces VALUES (7, 'saved trace')")
-        conn.commit()
-        conn.close()
-
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        graph_report.create_database_schema(c)
-        conn.commit()
-        c.execute("PRAGMA table_info(stack_traces)")
-        col_names = [row[1] for row in c.fetchall()]
-        assert "source_file_id" in col_names
-        c.execute("SELECT operation_id, stack_trace, source_file_id FROM stack_traces WHERE operation_id = 7")
-        assert c.fetchone() == (7, "saved trace", None)
-        graph_report.create_database_schema(c)
-        conn.commit()
-        c.execute("PRAGMA table_info(stack_traces)")
-        assert sum(1 for row in c.fetchall() if row[1] == "source_file_id") == 1
-        conn.close()
-
     def test_operation_source_file_stored_from_python_trace(self, tmp_path):
         source_file = tmp_path / "model.py"
         source_file.write_text("def run():\n    return 1\n", encoding="utf-8")
