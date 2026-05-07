@@ -273,10 +273,9 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
-    if _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
-        check_context()
+    is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
     if (
-        not TestConfig.TEST_TARGET.run_simulator
+        (is_ttsim or not TestConfig.TEST_TARGET.run_simulator)
         and TestConfig.ARCH != ChipArchitecture.QUASAR
         and TestConfig.BUILD_MODE != BuildMode.PRODUCE
     ):
