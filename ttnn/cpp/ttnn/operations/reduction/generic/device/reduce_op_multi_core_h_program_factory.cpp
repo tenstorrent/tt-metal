@@ -71,6 +71,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
     }
+    TT_FATAL(num_cores > 0, "Reduce H requires at least one worker core");
 
     // Current sharding only supports width, and that input and output are sharded
     if (use_width_sharding) {
@@ -381,6 +382,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     } else {
         cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     }
+    TT_FATAL(
+        cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
     if (use_width_sharding) {
         TT_FATAL(NC != 0, "Batch size NC must be non-zero (shape[0]={}, shape[1]={})", shape[0], shape[1]);
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
@@ -427,6 +430,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                     num_cols_read       // output tile start index
                 });
             num_cols_read += num_cols_per_core;
+            if (i == num_cores - 1) {
+                TT_FATAL(
+                    num_cols_read == num_cols,
+                    "Reduce H assigned {} columns across cores, expected {}",
+                    num_cols_read,
+                    num_cols);
+            }
         }
     }
 
