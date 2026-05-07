@@ -217,6 +217,31 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
 
         self._ministral3_config = config
 
+    def slice_rot_mats_prefill(self, start_pos: int, seq_len: int) -> list:
+        """
+        Cos/sin slices ``[1, 1, seq_len, head_dim]`` on device for full prefill starting at ``start_pos``.
+
+        Matches the slicing policy used in ``Transformer.prepare_inputs_prefill`` (pad dim 2 if needed).
+        """
+        mat_len = self.cos_matrix_prefill.shape[2]
+        required_end = start_pos + seq_len
+        if mat_len < required_end:
+            raise RuntimeError(
+                f"RoPE prefill needs positions through {required_end} but cos_matrix_prefill length is {mat_len}; "
+                "build TtMinistral3RotaryEmbedding with a larger max_seq_len."
+            )
+        prefill_start_pos = start_pos
+        slice_end = min(mat_len, required_end)
+        cos_slice = self.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
+        sin_slice = self.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
+        pad_len = max(0, required_end - mat_len)
+        if pad_len > 0:
+            padding = [(0, 0)] * 4
+            padding[2] = (0, pad_len)
+            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+        return [cos_slice, sin_slice]
+
     @property
     def ministral3_config(self) -> Any:
         return self._ministral3_config

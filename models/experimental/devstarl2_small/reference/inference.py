@@ -65,7 +65,7 @@ input = {
             "content": [
                 {
                     "type": "text",
-                    "text": "Can you implement in Python a method to compute the fibonnaci sequence at the `n`th element with `n` a parameter passed to the function ? You should start the sequence from 1, previous values are invalid.\nThen run the Python code for the function for n=5 and give the answer.",
+                    "text": "Can you implement in Python a method to compute the fibonnaci sequence at the `n`th element with `n` a parameter passed to the function ? You should start the sequence from 1, previous values are invalid.\n",
                 }
             ],
         },
