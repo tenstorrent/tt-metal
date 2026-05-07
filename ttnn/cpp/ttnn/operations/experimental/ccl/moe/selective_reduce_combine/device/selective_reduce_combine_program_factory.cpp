@@ -77,8 +77,24 @@ auto launch_mux_workers(
             *occupied_l1_tensor_addr);
     }
 
-    const auto needed_mux_core_range_set =
-        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
+    // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
+    const uint32_t needed_cores = num_links * neighbors.size();
+    const uint32_t available_cores = mux_core_range_set.num_cores();
+
+    // Validate sufficient cores exist before selection to prevent segfault in select_from_corerangeset
+    if (needed_cores > 0) {
+        TT_FATAL(
+            needed_cores <= available_cores,
+            "Not enough mux cores! Needed: {} (num_links={} * neighbors.size()={}), Available: {}. "
+            "mux_core_range_set={}",
+            needed_cores,
+            num_links,
+            neighbors.size(),
+            available_cores,
+            mux_core_range_set.str());
+    }
+
+    const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, needed_cores - 1);
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
