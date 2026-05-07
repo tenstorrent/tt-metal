@@ -1,0 +1,146 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+
+  - rank: 2
+    mesh_id: 0
+    mesh_host_rank: 2
+
+  - rank: 3
+    mesh_id: 0
+    mesh_host_rank: 3
+
+  - rank: 4
+    mesh_id: 1
+    mesh_host_rank: 0
+
+  - rank: 5
+    mesh_id: 1
+    mesh_host_rank: 1
+
+  - rank: 6
+    mesh_id: 1
+    mesh_host_rank: 2
+
+  - rank: 7
+    mesh_id: 1
+    mesh_host_rank: 3
+
+  - rank: 8
+    mesh_id: 2
+    mesh_host_rank: 0
+
+  - rank: 9
+    mesh_id: 2
+    mesh_host_rank: 1
+
+  - rank: 10
+    mesh_id: 2
+    mesh_host_rank: 2
+
+  - rank: 11
+    mesh_id: 2
+    mesh_host_rank: 3
+
+  - rank: 12
+    mesh_id: 3
+    mesh_host_rank: 0
+
+  - rank: 13
+    mesh_id: 3
+    mesh_host_rank: 1
+
+  - rank: 14
+    mesh_id: 3
+    mesh_host_rank: 2
+
+  - rank: 15
+    mesh_id: 3
+    mesh_host_rank: 3
+
+  - rank: 16
+    mesh_id: 4
+    mesh_host_rank: 0
+
+  - rank: 17
+    mesh_id: 4
+    mesh_host_rank: 1
+
+  - rank: 18
+    mesh_id: 4
+    mesh_host_rank: 2
+
+  - rank: 19
+    mesh_id: 4
+    mesh_host_rank: 3
+
+  - rank: 20
+    mesh_id: 5
+    mesh_host_rank: 0
+
+  - rank: 21
+    mesh_id: 5
+    mesh_host_rank: 1
+
+  - rank: 22
+    mesh_id: 5
+    mesh_host_rank: 2
+
+  - rank: 23
+    mesh_id: 5
+    mesh_host_rank: 3
+
+  - rank: 24
+    mesh_id: 6
+    mesh_host_rank: 0
+
+  - rank: 25
+    mesh_id: 6
+    mesh_host_rank: 1
+
+  - rank: 26
+    mesh_id: 6
+    mesh_host_rank: 2
+
+  - rank: 27
+    mesh_id: 6
+    mesh_host_rank: 3
+
+  - rank: 28
+    mesh_id: 7
+    mesh_host_rank: 0
+
+  - rank: 29
+    mesh_id: 7
+    mesh_host_rank: 1
+
+  - rank: 30
+    mesh_id: 7
+    mesh_host_rank: 2
+
+  - rank: 31
+    mesh_id: 7
+    mesh_host_rank: 3
+
+  - rank: 32
+    mesh_id: 8
+    mesh_host_rank: 0
+
+  - rank: 33
+    mesh_id: 8
+    mesh_host_rank: 1
+
+  - rank: 34
+    mesh_id: 8
+    mesh_host_rank: 2
+
+  - rank: 35
+    mesh_id: 8
+    mesh_host_rank: 3
+
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sc36_torus_xy_graph_descriptor.textproto"
