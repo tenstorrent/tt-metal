@@ -91,6 +91,7 @@ enum class SfpuType : std::uint32_t
     silu,
     abs,
     fill,
+    swiglu,
     where
 };
 
