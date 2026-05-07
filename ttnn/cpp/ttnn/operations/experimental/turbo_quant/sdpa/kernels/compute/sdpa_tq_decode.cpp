@@ -185,7 +185,7 @@ inline void typecast_norms_bfp8_to_bf16(uint32_t cb_in, uint32_t cb_out) {
     cb_push_back(cb_out, Sk_chunk_t);
 }
 
-template <uint32_t Sk_chunk_t, uint32_t DHt, uint32_t NumLevels>
+template <uint32_t Sk_chunk_t, uint32_t DHt, uint32_t NumLevels, bool fp32_dst_mode>
 inline void dequant_k_chunk(
     uint32_t cb_k_idx,
     uint32_t cb_k_norms,
@@ -248,7 +248,11 @@ inline void dequant_k_chunk(
             copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
             fill_tile(1, centroids[0]);  // DST 1 = result, initialised to c[0]
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_dest_values<DataFormat::Float32>(0, 2);    // DST 2 = idx (FP32 dst mode)
+                if constexpr (fp32_dst_mode) {
+                    copy_dest_values<DataFormat::Float32>(0, 2);
+                } else {
+                    copy_dest_values<DataFormat::Float16_b>(0, 2);
+                }
                 unary_ge_tile(2, level_bits[lev]);              // DST 2 = (idx >= lev)
                 mul_unary_tile(2, delta_bits[lev]);             // DST 2 *= (c[lev] - c[lev-1])
                 add_binary_tile(1, 2, 1);  // DST 1 += contribution
@@ -285,7 +289,7 @@ inline void dequant_k_chunk(
     }
 }
 
-template <uint32_t Sk_chunk_t, uint32_t vDHt, uint32_t NumLevels>
+template <uint32_t Sk_chunk_t, uint32_t vDHt, uint32_t NumLevels, bool fp32_dst_mode>
 inline void dequant_v_chunk(
     uint32_t cb_v_idx,
     uint32_t cb_v_norms,
@@ -336,7 +340,11 @@ inline void dequant_v_chunk(
             copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
             fill_tile(1, centroids[0]);  // DST 1 = result
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_dest_values<DataFormat::Float32>(0, 2);  // FP32 dst mode
+                if constexpr (fp32_dst_mode) {
+                    copy_dest_values<DataFormat::Float32>(0, 2);
+                } else {
+                    copy_dest_values<DataFormat::Float16_b>(0, 2);
+                }
                 unary_ge_tile(2, level_bits[lev]);
                 mul_unary_tile(2, delta_bits[lev]);
                 add_binary_tile(1, 2, 1);
@@ -425,6 +433,12 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
+    // fp32_dst_mode: program factory sets this iff the ComputeConfig has
+    // fp32_dest_acc_en=true (currently only when num_cores_per_head > 1, i.e. K-split
+    // is active). When OFF, copy_dest_values reads back DST as Float16_b (16-bit
+    // DST registers); when ON, as Float32 (32-bit DST registers). Mismatching the
+    // format with fp32_dest_acc_en garbages the dequant cascade.
+    constexpr bool fp32_dst_mode = get_compile_time_arg_val(32) == 1;
 
     // TQ compile-time args
     constexpr uint32_t TQ_BASE = 33;
@@ -716,7 +730,7 @@ void kernel_main() {
                         if constexpr (!pre_rescaled) {
                             if (!is_ring_chunk) {
                                 // DeviceZoneScopedN("TQ_DEQUANT_K");
-                                dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
+                                dequant_k_chunk<Sk_chunk_t, DHt, num_levels, fp32_dst_mode>(
                                     cb_k_idx,
                                     cb_k_norms,
                                     cb_dq_temp,
@@ -777,7 +791,7 @@ void kernel_main() {
                         if constexpr (!pre_rescaled) {
                             if (!is_ring_chunk) {
                                 // DeviceZoneScopedN("TQ_DEQUANT_V");
-                                dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
+                                dequant_v_chunk<Sk_chunk_t, vDHt, num_levels, fp32_dst_mode>(
                                     cb_v_idx,
                                     cb_v_norms,
                                     cb_dq_temp,

@@ -397,7 +397,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         0,                                // use_attention_sink
         0,                                // use_streaming_compute
         Skt,                              // valid_Skt
-        0,                                // uniform_dataformat = false (mixed BFP4+BF16 formats)
+        cores_per_head > 1 ? 1u : 0u,     // fp32_dst_mode (was uniform_dataformat — repurposed; TQ kernel only)
         // TQ args (index 33+)
         num_levels,
     };
@@ -432,7 +432,14 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         all_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi2,
-            .fp32_dest_acc_en = true,
+            // FP32 dst-acc is required for the K-split (Tier-2A) merge path because the
+            // copy_dest_values cascade in dequant_*_chunk reads back DST registers, which
+            // need FP32 width to preserve the integer-encoded indices across the cascade.
+            // For the legacy single-core path (K==1 = Track A) and the new hybrid fused
+            // path (also K==1), enabling FP32 dst-acc regresses end-to-end token accuracy
+            // from ~82% top-1 to 0% — bisected to commit 8fe227b. Default OFF; flip ON
+            // only when the K-split merge actually runs.
+            .fp32_dest_acc_en = (cores_per_head > 1),
             .math_approx_mode = true,
             .compile_args = compute_ct_args,
             .defines = compute_defines});
