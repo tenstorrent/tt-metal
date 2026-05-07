@@ -55,8 +55,6 @@ consteval DataType convert_to_data_type() {
         return DataType::FLOAT32;
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         return DataType::BFLOAT16;
-    } else if constexpr (std::is_same_v<T, ::float8_e4m3>) {
-        return DataType::FP8_E4M3;
     } else {
         static_assert(sizeof(T) == 0, "Unsupported DataType!");
     }
