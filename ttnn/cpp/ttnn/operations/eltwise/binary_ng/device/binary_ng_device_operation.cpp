@@ -245,7 +245,7 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         input_layout_a,
         input_layout_b,
         output_layout);
-    if (binary_op_type == BinaryOpType::) {
+    if (binary_op_type == BinaryOpType::ISCLOSE) {
         base_hash = ttsl::hash::hash_objects(base_hash, equal_nan);
     }
     return base_hash;
