@@ -188,11 +188,9 @@ class ModelPipeline:
                 page_size_datums=self._page_size_datums,
                 token_type=TokenType.PREFILL,
                 lane_idx=0,
-                window_start_pos=i,
-                num_window_tokens=self.num_speculative_tokens + 1,
                 temperature=self.temperature,
                 top_k=self.top_k,
-                probability_mass_threshold=self.top_p,
+                top_p=self.top_p,
             )
             for i in range(len(tokens))
         ]
@@ -219,7 +217,7 @@ class ModelPipeline:
                 token_type=TokenType.BASE,
                 temperature=self.temperature,
                 top_k=self.top_k,
-                probability_mass_threshold=self.top_p,
+                top_p=self.top_p,
             )
         )
         self.position_id += 1
@@ -309,11 +307,9 @@ class ModelPipeline:
                 expected_position,
                 token_type=TokenType.BASE if lane_idx == 0 else TokenType.SPEC,
                 lane_idx=lane_idx,
-                window_start_pos=window_start_pos,
-                num_window_tokens=required_slots,
                 temperature=self.temperature,
                 top_k=self.top_k,
-                probability_mass_threshold=self.top_p,
+                top_p=self.top_p,
             )
         return required_slots
 
@@ -348,11 +344,6 @@ class ModelPipeline:
             if result.lane_idx in results_by_lane:
                 raise RuntimeError(f"Duplicate speculative lane {result.lane_idx} in one round")
             results_by_lane[result.lane_idx] = result
-
-            if int(result.num_window_tokens) != required_slots:
-                raise RuntimeError(
-                    f"MTP{num_speculative_tokens} requires num_window_tokens={required_slots}, got {result}"
-                )
 
             positions = result.positions
             if len(result.token_ids) < required_slots or len(positions) < required_slots:

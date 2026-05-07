@@ -34,7 +34,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
-from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_NUM_UINT32
+from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES, METADATA_TENSOR_NUM_UINT32
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
@@ -618,7 +618,10 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         ttnn.ShardSpec(final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
     )
     winner_page_bytes = 16
-    scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes + (256 + 8 if enable_mtp else 0)) // 4)
+    scratch_shape_per_device = (
+        1,
+        ((mesh_rows + mesh_cols) * winner_page_bytes + (METADATA_TENSOR_BYTES + 8 if enable_mtp else 0)) // 4,
+    )
     scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -2025,47 +2028,52 @@ def test_d2d_to_d2h_pipeline(
 
 
 def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
-    """Parse a 256-byte DeepseekMetadata output page into a dict.
+    """Parse a 512-byte DeepseekMetadata output page into a dict.
 
-    Layout (64 uint32 words = 256 bytes), kept in lock-step with metadata.hpp:
+    Layout (128 uint32 words = 512 bytes), kept in lock-step with metadata.hpp:
       [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
-      [4] prefill_token_id, [5] lane_idx, [6] window_start_pos,
-      [7] num_window_tokens, [8:13] candidate_token_ids,
-      [13:18] candidate_positions, [18] target_topn_count,
-      [19:29] target_topn_tokens, [29:39] target_topn_probs,
-      [39] temperature, [40] top_k, [41] probability_mass_threshold.
+      [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
+      [8:13] candidate_token_ids, [13:17] prefill_token_id,
+      [17:49] p_top32_indices, [49:65] p_top32_scores,
+      [65:97] q_top32_indices, [97:113] q_top32_scores.
     """
     raw = ttnn.to_torch(output_tensor).to(torch.int32).flatten()
     assert (
         raw.numel() >= METADATA_TENSOR_NUM_UINT32
     ), f"output tensor has {raw.numel()} words, expected >= {METADATA_TENSOR_NUM_UINT32}"
 
+    candidate_token_ids = [int(raw[8 + idx].item()) for idx in range(5)]
+    prefill_token_ids = [int(raw[13 + idx].item()) for idx in range(4)]
+    position_id = int(raw[3].item())
+    candidate_positions = [position_id + idx + 1 for idx in range(5)]
+
     def _u32_to_f32(bits: int) -> float:
         return struct.unpack("<f", struct.pack("<I", bits & 0xFFFFFFFF))[0]
 
-    candidate_token_ids = [int(raw[8 + idx].item()) for idx in range(5)]
-    candidate_positions = [int(raw[13 + idx].item()) for idx in range(5)]
-    target_topn_count = max(0, min(int(raw[18].item()), 10))
-    target_topn_tokens = [int(raw[19 + idx].item()) for idx in range(target_topn_count)]
-    target_topn_probs = [_u32_to_f32(int(raw[29 + idx].item())) for idx in range(target_topn_count)]
+    def _bf16_score_words_to_f32(start_word: int) -> list[float]:
+        scores = []
+        for word_idx in range(16):
+            word = int(raw[start_word + word_idx].item()) & 0xFFFFFFFF
+            for shift in (0, 16):
+                scores.append(_u32_to_f32(((word >> shift) & 0xFFFF) << 16))
+        return scores
 
     return {
         "token_type": int(raw[0].item()),
         "slot_id": int(raw[1].item()),
         "token_id": int(raw[2].item()),
-        "position_id": int(raw[3].item()),
-        "prefill_token_id": int(raw[4].item()),
-        "lane_idx": int(raw[5].item()),
-        "window_start_pos": int(raw[6].item()),
-        "num_window_tokens": int(raw[7].item()),
+        "position_id": position_id,
+        "lane_idx": int(raw[4].item()),
+        "prefill_token_id": prefill_token_ids,
         "candidate_token_ids": candidate_token_ids,
         "candidate_positions": candidate_positions,
-        "target_topn_count": target_topn_count,
-        "target_topn_tokens": target_topn_tokens,
-        "target_topn_probs": target_topn_probs,
-        "temperature": _u32_to_f32(raw[39].item()),
-        "k": int(raw[40].item()),
-        "probability_mass_threshold": _u32_to_f32(raw[41].item()),
+        "temperature": _u32_to_f32(raw[5].item()),
+        "k": int(raw[6].item()),
+        "top_p": _u32_to_f32(raw[7].item()),
+        "p_top32_indices": [int(raw[17 + idx].item()) for idx in range(32)],
+        "p_top32_scores": _bf16_score_words_to_f32(49),
+        "q_top32_indices": [int(raw[65 + idx].item()) for idx in range(32)],
+        "q_top32_scores": _bf16_score_words_to_f32(97),
     }
 
 
@@ -2076,34 +2084,29 @@ def create_input_page(
     slot_id: int,
     temperature: float = 0.0,
     top_k: int = 1,
-    probability_mass_threshold: float = 1.0,
+    top_p: float = 1.0,
     token_type: int = 0,
     lane_idx: int = 0,
-    window_start_pos: int | None = None,
-    num_window_tokens: int = 2,
 ) -> ttnn.Tensor:
-    """Build a TOKEN_META_PAGE_SIZE_BYTES (256B) input page that mirrors
+    """Build a TOKEN_META_PAGE_SIZE_BYTES input page that mirrors
     `model.to_spec_input` exactly so the unit test feeds the pipeline with
     the same DeepseekMetadata layout the demo uses.
 
-    Layout (uint32 word indices, full DeepseekMetadata struct, 64 words = 256 B):
+    Layout (uint32 word indices, full DeepseekMetadata struct):
       [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
-      [4] prefill_token_id, [5] lane_idx, [6] window_start_pos,
-      [7] num_window_tokens, [39] temperature, [40] top_k,
-      [41] probability_mass_threshold.
+      [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
+      [13:17] prefill_token_id.
     """
     page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
     page[0, 0] = token_type
     page[0, 1] = slot_id
     page[0, 2] = token_id
     page[0, 3] = position_id
-    page[0, 4] = prefill_token_id
-    page[0, 5] = lane_idx
-    page[0, 6] = position_id if window_start_pos is None else window_start_pos
-    page[0, 7] = num_window_tokens
-    page[0, 39] = float_to_uint32(temperature)
-    page[0, 40] = top_k
-    page[0, 41] = float_to_uint32(probability_mass_threshold)
+    page[0, 4] = lane_idx
+    page[0, 5] = float_to_uint32(temperature)
+    page[0, 6] = top_k
+    page[0, 7] = float_to_uint32(top_p)
+    page[0, 13] = prefill_token_id
     return ttnn.from_torch(page, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -2240,11 +2243,9 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
                 slot_id=slot_id,
                 temperature=1.0,
                 top_k=1,
-                probability_mass_threshold=1.0,
+                top_p=1.0,
                 token_type=0,
                 lane_idx=0,
-                window_start_pos=base_hidden_pos,
-                num_window_tokens=2,
             )
 
             pipeline.write_token(token_tensor)

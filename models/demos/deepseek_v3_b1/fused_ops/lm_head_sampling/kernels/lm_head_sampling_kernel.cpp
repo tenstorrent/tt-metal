@@ -756,12 +756,9 @@ void kernel_main() {
                                                 uint32_t slot_id = 0,
                                                 uint32_t input_token_id = 0,
                                                 uint32_t input_pos_id = 0,
-                                                uint32_t prefill_token_id = 0,
                                                 uint32_t lane_idx = 0,
-                                                uint32_t window_start_pos = 0,
-                                                uint32_t num_window_tokens = 0,
                                                 const uint32_t* candidate_token_ids = nullptr,
-                                                const uint32_t* candidate_positions = nullptr,
+                                                const uint32_t* prefill_token_ids = nullptr,
                                                 uint32_t metadata_src_addr = 0) {
         volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
         for (uint32_t i = 0; i < deepseek_b1_ops::METADATA_PAGE_WORDS; ++i) {
@@ -769,7 +766,7 @@ void kernel_main() {
         }
         if (metadata_src_addr != 0) {
             volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_src_addr);
-            for (uint32_t i = 18; i <= 41; ++i) {
+            for (uint32_t i = 5; i <= 112; ++i) {
                 page[i] = src[i];
             }
         }
@@ -777,14 +774,15 @@ void kernel_main() {
         page[1] = slot_id;
         page[2] = input_token_id;
         page[3] = input_pos_id;
-        page[4] = prefill_token_id;
-        page[5] = lane_idx;
-        page[6] = window_start_pos;
-        page[7] = num_window_tokens;
-        if (candidate_token_ids != nullptr && candidate_positions != nullptr) {
+        page[4] = lane_idx;
+        if (candidate_token_ids != nullptr) {
             for (uint32_t slot_idx = 0; slot_idx < deepseek_b1_ops::MAX_WINDOW_TOKENS; ++slot_idx) {
                 page[8 + slot_idx] = candidate_token_ids[slot_idx];
-                page[8 + deepseek_b1_ops::MAX_WINDOW_TOKENS + slot_idx] = candidate_positions[slot_idx];
+            }
+        }
+        if (prefill_token_ids != nullptr) {
+            for (uint32_t slot_idx = 0; slot_idx < deepseek_b1_ops::MAX_SPECULATIVE_TOKENS; ++slot_idx) {
+                page[13 + slot_idx] = prefill_token_ids[slot_idx];
             }
         }
     };
@@ -919,7 +917,7 @@ void kernel_main() {
         // Pre-sampling metadata barrier (single source of truth for both stages).
         // The exit-device input core unicasts the DeepseekMetadata struct and
         // increments `metadata_ready_semaphore_id` above. Sampling.hpp reads
-        // temperature / k / probability_mass_threshold off this struct on the
+        // temperature / k / top_p off this struct on the
         // base stage (enable_metadata=True), and the downstream `mtp` /
         // `update_speculative_state` lambdas read candidate/slot fields from it
         // unconditionally. Waiting + clearing here means neither downstream
@@ -1044,8 +1042,8 @@ void kernel_main() {
             uint32_t metadata_src_addr = get_read_ptr(rmsnorm_input_cb) + embedding_size_bytes;
             auto* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_src_addr);
-            uint32_t token_id = (metadata_ptr->prefill_token_id != static_cast<uint32_t>(-1))
-                                    ? metadata_ptr->prefill_token_id
+            uint32_t token_id = (metadata_ptr->prefill_token_id[0] != static_cast<uint32_t>(-1))
+                                    ? metadata_ptr->prefill_token_id[0]
                                     : *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
             cb_reserve_back(emb_cb, e_num_tiles);
             noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
@@ -1215,13 +1213,9 @@ void kernel_main() {
 
             invalidate_l1_cache();
             uint32_t token_type = metadata_ptr->token_type;
-            uint32_t base_token_pos = metadata_ptr->position_id + 1;
             uint32_t input_pos_id = metadata_ptr->position_id;
             uint32_t slot_id = metadata_ptr->slot_id;
             uint32_t lane_idx = metadata_ptr->lane_idx;
-            uint32_t window_start_pos = metadata_ptr->window_start_pos + 1;
-            uint32_t num_window_tokens = metadata_ptr->num_window_tokens != 0 ? metadata_ptr->num_window_tokens
-                                                                              : Core::num_speculative_tokens + 1;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t sampling_socket_cb = get_named_compile_time_arg_val("sampling_socket_cb");
@@ -1233,9 +1227,9 @@ void kernel_main() {
             cb_wait_front(sampling_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(sampling_socket_cb));
             uint32_t candidate_token_ids[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
-            uint32_t candidate_positions[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            uint32_t prefill_token_ids[deepseek_b1_ops::MAX_SPECULATIVE_TOKENS] = {0};
             candidate_token_ids[0] = base_token_id;
-            candidate_positions[0] = base_token_pos;
+            prefill_token_ids[0] = base_token_id;
             cb_reserve_back(eh_gather_dst_cb, 1);
             write_token_metadata_to_socket_cb(
                 eh_gather_dst_cb,
@@ -1243,12 +1237,9 @@ void kernel_main() {
                 slot_id,
                 0,
                 input_pos_id,
-                0,
                 lane_idx,
-                window_start_pos,
-                num_window_tokens,
                 candidate_token_ids,
-                candidate_positions,
+                prefill_token_ids,
                 metadata_output_l1_addr);
             cb_push_back(eh_gather_dst_cb, 1);
             cb_pop_front(sampling_socket_cb, 1);
@@ -1288,22 +1279,17 @@ void kernel_main() {
             invalidate_l1_cache();
             uint32_t base_token_id = metadata_ptr->candidate_token_ids[0];
             uint32_t token_type = metadata_ptr->token_type;
-            uint32_t base_token_pos = metadata_ptr->candidate_positions[0];
             uint32_t slot_id = metadata_ptr->slot_id;
-            uint32_t spec_token_pos = base_token_pos + 1;
             uint32_t input_pos_id = metadata_ptr->position_id;
             uint32_t lane_idx = metadata_ptr->lane_idx;
-            uint32_t window_start_pos = metadata_ptr->window_start_pos;
-            uint32_t num_window_tokens = metadata_ptr->num_window_tokens >= 2 ? metadata_ptr->num_window_tokens
-                                                                              : Core::num_speculative_tokens + 1;
             cb_pop_front(sampling_socket_cb, 1);
 
             uint32_t candidate_token_ids[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
-            uint32_t candidate_positions[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            uint32_t prefill_token_ids[deepseek_b1_ops::MAX_SPECULATIVE_TOKENS] = {0};
             candidate_token_ids[0] = base_token_id;
-            candidate_positions[0] = base_token_pos;
             candidate_token_ids[1] = spec_token_id;
-            candidate_positions[1] = spec_token_pos;
+            prefill_token_ids[0] = base_token_id;
+            prefill_token_ids[1] = spec_token_id;
             cb_reserve_back(sampling_socket_cb, 1);
             write_token_metadata_to_socket_cb(
                 sampling_socket_cb,
@@ -1311,12 +1297,9 @@ void kernel_main() {
                 slot_id,
                 0,
                 input_pos_id,
-                0,
                 lane_idx,
-                window_start_pos,
-                num_window_tokens,
                 candidate_token_ids,
-                candidate_positions,
+                prefill_token_ids,
                 metadata_output_l1_addr);
             cb_push_back(sampling_socket_cb, 1);
         }
