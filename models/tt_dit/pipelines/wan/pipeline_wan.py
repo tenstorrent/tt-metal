@@ -727,12 +727,14 @@ class WanPipeline(PipelineAPIMixin):
         on_event(SectionStart("vae"))
         video_torch = self._vae.decode(latents, output_type=output_type)
 
-        if output_type == "uint8":
+        if output_type == "yuv":
+            # The VAE adapter already returned a numpy uint8 YUV 4:2:0 planar
+            # array (ffmpeg AV_PIX_FMT_YUV420P layout) via fast_device_to_host_yuv.
+            video = video_torch
+        elif output_type == "uint8":
             video = video_torch.numpy()
         elif output_type == "np":
             video = video_torch.float().numpy()
-        else:
-            video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
 
         on_event(SectionEnd("vae"))
         return video

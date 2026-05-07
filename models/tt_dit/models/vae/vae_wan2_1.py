@@ -36,6 +36,7 @@ from ...utils.conv3d import (
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import (
     fast_device_to_host,
+    fast_device_to_host_yuv,
     float_to_uint8,
     float_to_unit_range,
     local_device_to_torch,
@@ -2022,6 +2023,17 @@ class WanVAEDecoderAdapter:
         tt_video_BCTHW, new_logical_h, new_logical_w = self._decoder(
             tt_latents_BTHWC, logical_h, t_chunk_size=self._t_chunk_size, logical_w=logical_w
         )
+
+        if output_type == "yuv":
+            # On-device YUV 4:2:0 conversion + batched D2H + planar concat.
+            # Returns numpy uint8 of shape (T, new_logical_h*W + 2*(new_logical_h/2 * W/2))
+            # in ffmpeg AV_PIX_FMT_YUV420P layout. Height is trimmed to the logical
+            # (un-padded) size on host; width trimming is not applied on this path.
+            return fast_device_to_host_yuv(
+                tt_video_BCTHW,
+                self.device,
+                logical_h=new_logical_h,
+            )
 
         concat_dims = [None, None]
         concat_dims[self._parallel_config.height_parallel.mesh_axis] = 3
