@@ -306,6 +306,17 @@ class ComputePipeline:
 
         return code
 
+    @staticmethod
+    def _pack_relu_config(config: "GlobalConfig", operation: "FusedOperation"):
+        from helpers.golden_generators import PackGolden
+
+        pack_src_format = config.sentinel._pack_format.pack_src
+
+        relu_config = PackGolden.generate_relu_config(
+            operation.pack_relu, operation.relu_threshold, pack_src_format
+        )
+        return f"_llk_pack_relu_config_({relu_config});\n"
+
     def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._pack_constants(operation, config)
 
@@ -316,6 +327,7 @@ class ComputePipeline:
         code += config.sentinel.hw_configure_pack(config, operation)
         code += self._pack_reduce_mask_config()
         code += self.packer().init(operation, config, None, None)
+        code += self._pack_relu_config(config, operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -362,6 +374,7 @@ class ComputePipeline:
         tensor_b = torch.zeros(operation.math.operations[0].src_b.dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
+            config.sentinel.configure_golden(config, operation, op)
             if op.src_a is not None:
                 input_tensor_a = (
                     op.src_a.raw_data
