@@ -1298,40 +1298,42 @@ def generate_codes_ttnn(
 
     # === STEP 5: Pre-allocate ALL trace input tensors, then capture traces ===
     # Pre-allocate all trace input tensors BEFORE any trace capture.
+    # These are persistent buffers H2D'd per-frame and READ inside the trace; keep
+    # them in L1 so the consuming kernel skips a DRAM→L1 staging on every call.
     trace_embed_tt = ttnn.from_torch(
         torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     trace_cos_tt = ttnn.from_torch(
         torch.ones(1, 1, 1, head_dim, dtype=torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     trace_sin_tt = ttnn.from_torch(
         torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     trace_cur_pos_tt = ttnn.from_torch(
         torch.tensor([padded_seq_len], dtype=torch.int32),
         device=device,
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,  # paged_fused_update_cache requires DRAM
     )
     trace_mask_tt = ttnn.from_torch(
         torch.full((1, _talker_num_heads, 1, max_talker_seq_len), float("-inf")),
         device=device,
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     cp_prefill_pos = torch.arange(2)
@@ -1352,7 +1354,7 @@ def generate_codes_ttnn(
         device=device,
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_trace_prefill_mask_host = ttnn.from_torch(
         cp_prefill_mask_host_torch.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
@@ -1362,7 +1364,7 @@ def generate_codes_ttnn(
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     _n_cp_decode = config.num_code_groups - 2
@@ -1376,18 +1378,18 @@ def generate_codes_ttnn(
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         for _ in range(2)
     ]
     cp_trace_decode_cos_tts = [
-        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_cos_h2d
+        ttnn.to_device(h, device, memory_config=ttnn.L1_MEMORY_CONFIG) for h in cp_decode_cos_h2d
     ]
     cp_trace_decode_sin_tts = [
-        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_sin_h2d
+        ttnn.to_device(h, device, memory_config=ttnn.L1_MEMORY_CONFIG) for h in cp_decode_sin_h2d
     ]
     cp_trace_decode_mask_tts = [
-        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_mask_h2d
+        ttnn.to_device(h, device, memory_config=ttnn.L1_MEMORY_CONFIG) for h in cp_decode_mask_h2d
     ]
 
     # === STEP 5: Capture ALL traces (after prefill, KV cache is populated) ===
@@ -2290,7 +2292,7 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_prefill_pos = torch.arange(2)
     cp_trace_prefill_cos_tt, cp_trace_prefill_sin_tt = get_rope_tensors(
