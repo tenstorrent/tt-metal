@@ -203,6 +203,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores_with_work = num_blocks_total;
 
+    // mcast_in0 broadcasts a single M-block across all cores; only the start_core gets in0 sender
+    // runtime args (with output_idx_y == 0), so M must fit within per_core_M.
+    TT_FATAL(
+        num_blocks_y == 1,
+        "matmul_multicore_reuse_mcast_1d requires num_blocks_y == 1 (M <= per_core_M) for mcast_in0. "
+        "Got M={}, per_core_M={}, num_blocks_y={}.",
+        M,
+        per_core_M,
+        num_blocks_y);
+
     uint32_t in0_sender_num_cores = in0_is_sharded ? a.shard_spec().value().grid.num_cores() : 1;
     uint32_t num_cores = in0_is_sharded ? std::max(num_cores_with_work, in0_sender_num_cores) : num_cores_with_work;
 
