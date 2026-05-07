@@ -2,19 +2,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end smoke test for ``LlamaGRPOCompleter.generate_tt_transformers``.
+"""End-to-end smoke test for ``LlamaGRPOCompleter.generate``.
 
-Step 1 of the ttml -> tt-transformers bridge: just verify that we can
-   1. construct a ``LlamaGRPOCompleter`` (loads ttml on the mesh device),
-   2. build a Meta-style state dict via ``ModelArgs.load_state_dict()``,
-   3. call ``completer.init_model(state_dict)`` to build the tt-transformers
-      ``Transformer`` mirror on the same mesh device,
-   4. call ``completer.generate_tt_transformers([prompt_ids])`` and decode
-      the resulting tokens.
+Verifies the simplified completer's full lifecycle on a single device:
+   1. construct a ``LlamaGRPOCompleter`` (opens mesh, loads tokenizer, builds ``ModelArgs``),
+   2. build a Meta-style state dict via ``completer.model_args.load_state_dict()``,
+   3. ``completer.load_weights(state_dict)`` to build the ``Transformer`` + ``Generator``,
+   4. ``completer.generate([prompt_ids], max_new_tokens=...)`` and decode the result.
 
 There's no PCC check here; this is purely the integration smoke test that
-exercises the new public surface. Pairwise PCC against ttml / hf is the
-job of ``pcc_hf_ttml_ttt.py``. Edit the constants below to change the
+exercises the new public surface. Edit the constants below to change the
 checkpoint or the prompt.
 
 Run with:
@@ -46,9 +43,17 @@ sys.path.insert(0, str(REPO_ROOT))
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
 
-PROMPT = "The capital of France is"
-MAX_NEW_TOKENS = 32
+SYSTEM_PROMPT = (
+    "You are an erudite cultural historian. Whenever the user asks about a "
+    "city, country, or landmark, respond with a long, deep-dive explanation "
+    "that uses rich, full sentences (never bullet points). Cover the "
+    "history, geography, architecture, culture, and modern significance of "
+    "the subject across several thorough paragraphs."
+)
+USER_PROMPT = "The capital of France is"
+MAX_NEW_TOKENS = 128
 TEMPERATURE = 0.0  # 0 == greedy
+MAX_SEQ_LEN = 2048
 
 
 # ---------------------------------------------------------------------------
@@ -58,11 +63,10 @@ TEMPERATURE = 0.0  # 0 == greedy
 
 def main() -> int:
     import ttnn
-    from transformers import AutoTokenizer
 
-    from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
+    from ttml.common.config import DeviceConfig, load_config
 
-    from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter
+    from utils.llama_completer import LlamaGRPOCompleter
 
     # tt-transformers expects fabric_config to be set BEFORE any mesh device
     # is opened. ``LlamaGRPOCompleter.setup_device`` opens the mesh inside
@@ -72,70 +76,54 @@ def main() -> int:
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
     config_path = os.path.join(REPO_ROOT, TTML_CONFIG_REL)
-    print(f"[test] loading ttml config: {config_path}")
+    print(f"[test] loading device config: {config_path}")
     raw = load_config(config_path)
-    training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
-    transformer_config = get_model_config(training_config.model_config)
 
-    print(f"[test] building LlamaGRPOCompleter (loads ttml weights from {MODEL_ID})")
+    print(f"[test] building LlamaGRPOCompleter ({MODEL_ID}, max_seq_len={MAX_SEQ_LEN})")
     completer = LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(
-            max_tokens_to_complete=MAX_NEW_TOKENS,
-            temperature=TEMPERATURE,
-        ),
-        transformer_config=transformer_config,
         device_config=device_config,
         model_source=MODEL_ID,
+        max_batch_size=1,
+        max_seq_len=MAX_SEQ_LEN,
     )
 
-    try:
-        # Build the Meta-style state dict that tt-transformers wants. For
-        # step 1 we source the dict from HF (via tt-transformers' own loader).
-        # In a later step this will be replaced by a ttml dump so the mirror
-        # tracks the ttml model's current weights.
-        os.environ["HF_MODEL"] = MODEL_ID
+    print("[test] loading weights via completer.model_args.load_state_dict()")
+    state_dict = completer.model_args.load_state_dict()
+    print(f"[test]   state_dict has {len(state_dict)} tensors")
+    completer.load_weights(state_dict)
 
-        from models.tt_transformers.tt.model_config import ModelArgs
+    tokenizer = completer.tokenizer
+    chat = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": USER_PROMPT},
+    ]
+    prompt_ids = tokenizer.apply_chat_template(
+        chat,
+        add_generation_prompt=True,
+        tokenize=True,
+    )
 
-        print("[test] building Meta-style state_dict via ModelArgs.load_state_dict()")
-        scratch_args = ModelArgs(
-            completer._mesh_device,
-            instruct=True,
-            max_batch_size=1,
-            max_seq_len=2048,
-            cache_hf=True,
-        )
-        state_dict = scratch_args.load_state_dict()
-        print(f"[test]   state_dict has {len(state_dict)} tensors")
+    print(f"[test] system: {SYSTEM_PROMPT!r}")
+    print(f"[test] user:   {USER_PROMPT!r}")
+    print(f"[test] chat-template prompt: {len(prompt_ids)} tokens")
+    print(f"[test] first 16 token ids: {prompt_ids[:16]}")
+    print(f"[test] first 16 tokens:    {tokenizer.convert_ids_to_tokens(prompt_ids[:16])}")
 
-        print("[test] calling completer.init_model(state_dict)")
-        completer.init_model(state_dict, max_seq_len=2048)
-        assert completer.tt_model is not None
+    print(f"[test] tokenizer.decode {tokenizer.decode(prompt_ids)}")
 
-        tokenizer: AutoTokenizer = completer.tokenizer
-        prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
-        print(f"[test] prompt: {PROMPT!r}  ({len(prompt_ids)} tokens)")
+    print(f"[test] generating up to {MAX_NEW_TOKENS} tokens (temperature={TEMPERATURE})")
+    completions = completer.generate(
+        [prompt_ids], max_new_tokens=MAX_NEW_TOKENS, temperature=TEMPERATURE, seed=0, enable_trace=False
+    )
+    assert len(completions) == 1
+    completion_ids = completions[0]
 
-        print(f"[test] generating up to {MAX_NEW_TOKENS} tokens " f"(temperature={TEMPERATURE})")
-        # ``generate`` dispatches to the tt-transformers path automatically
-        # because ``init_model`` populated ``completer.tt_model``.
-        completions = completer.generate([prompt_ids])
-        assert len(completions) == 1
-        completion_ids = completions[0]
-
-        completion_str = tokenizer.decode(completion_ids, skip_special_tokens=False)
-        print()
-        print(f"[test] completion ({len(completion_ids)} tokens):")
-        print(f"  {completion_str!r}")
-        print()
-        print(f"[test] full text: {(PROMPT + completion_str)!r}")
-        return 0
-    finally:
-        # Free the temp cache directory the mirror uses. The completer goes
-        # out of scope right after, but explicit teardown keeps /tmp clean
-        # if the script is re-run in a loop.
-        completer._teardown_tt_model()
+    completion_str = tokenizer.decode(completion_ids, skip_special_tokens=False)
+    print()
+    print(f"[test] completion ({len(completion_ids)} tokens):")
+    print(completion_str)
+    return 0
 
 
 if __name__ == "__main__":
