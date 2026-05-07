@@ -235,7 +235,7 @@
     wh_n150:
       timeout: 3
       tier: 3
-  owner_id: D0ASF0MJ12R # Ashai Reddy Ginuga
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: runtime
 
 - name: Qwen3-Embedding-0.6B e2e tests
@@ -247,7 +247,7 @@
     wh_n150:
       timeout: 3
       tier: 3
-  owner_id: D0ASF0MJ12R # Ashai Reddy Ginuga
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: runtime
 
 # Qwen2.5-72B: disabled, ci-token-matching hanging on CI
