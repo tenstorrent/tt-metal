@@ -629,6 +629,14 @@ class _DeviceSampler:
         self.seed = seed
         if top_k > _SAMPLING_MAX_TOP_K:
             raise ValueError(f"top_k={top_k} exceeds compiled max ({_SAMPLING_MAX_TOP_K})")
+        # ttnn.topk and ttnn.sampling default to 1 core when sub_core_grids is unset,
+        # leaving 32-user-replicated rows serialized. Pass an explicit 32-core grid
+        # (one core per user) so per-row top-k runs in parallel — same pattern as
+        # tt_transformers' SamplingGenerator.
+        _grid_size = device.compute_with_storage_grid_size()
+        self._sub_core_grids = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_grid_size.x - 1, _grid_size.y - 1))]
+        )
         # Per-user param tensors (32 users replicated).
         self.k_tensor = ttnn.from_torch(
             torch.full((_SAMPLING_USERS,), top_k, dtype=torch.int32),
@@ -667,8 +675,29 @@ class _DeviceSampler:
         ``[1,1,32,vocab]`` for the kernel's 32-user requirement.
         """
         logits_32 = ttnn.repeat(logits_tt, ttnn.Shape([1, 1, _SAMPLING_USERS, 1]))
-        topk_values_tt, topk_indices_tt = ttnn.topk(logits_32, k=_SAMPLING_MAX_TOP_K, dim=-1, largest=True, sorted=True)
-        ttnn.deallocate(logits_32)
+        # ttnn.topk's multicore path requires width >= 8192 (multi_core_min_width).
+        # Our CP vocab (2048) and codec vocab (3072) sit below that threshold, forcing
+        # single-core topk at ~570 µs/call. Pad with -inf so padded positions never
+        # appear in top-K → multicore activates → ~65-core run at ~240 µs/call.
+        _vocab = int(logits_32.shape[-1])
+        if _vocab < 8192:
+            logits_padded = ttnn.pad(
+                logits_32,
+                [(0, 0), (0, 0), (0, 0), (0, 8192 - _vocab)],
+                value=-1e30,
+            )
+            ttnn.deallocate(logits_32)
+        else:
+            logits_padded = logits_32
+        topk_values_tt, topk_indices_tt = ttnn.topk(
+            logits_padded,
+            k=_SAMPLING_MAX_TOP_K,
+            dim=-1,
+            largest=True,
+            sorted=True,
+            sub_core_grids=self._sub_core_grids,
+        )
+        ttnn.deallocate(logits_padded)
         indices_rm = ttnn.to_layout(topk_indices_tt, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(topk_indices_tt)
         indices_int32 = ttnn.typecast(indices_rm, ttnn.int32)
@@ -680,6 +709,12 @@ class _DeviceSampler:
             p=self.p_tensor,
             temp=self.temp_tensor,
             seed=self.seed,
+            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(0, 0),
+                _SAMPLING_USERS,
+                self._sub_core_grids,
+                row_wise=True,
+            ),
             output_tensor=out_tok_tt,
         )
         ttnn.deallocate(topk_values_tt)
@@ -846,7 +881,13 @@ def generate_codes_ttnn(
     max_cp_seq_len = 32
 
     # === STEP 1: Pad input to bucket size ===
-    padded_seq_len = get_padded_prefill_len(real_seq_len)
+    # Multiple traced-prefill buckets — short prompts (e.g. 61 tokens) take
+    # bucket 64 to avoid numerical drift from padding deeper into a 128 trace.
+    _TRACED_PREFILL_BUCKETS = (32, 64, 128)
+    if real_seq_len <= _TRACED_PREFILL_BUCKETS[-1]:
+        padded_seq_len = next(b for b in _TRACED_PREFILL_BUCKETS if b >= real_seq_len)
+    else:
+        padded_seq_len = get_padded_prefill_len(real_seq_len)
     print(f"  Input padding: {real_seq_len} -> {padded_seq_len} (bucket)")
 
     if padded_seq_len > real_seq_len:
@@ -856,9 +897,9 @@ def generate_codes_ttnn(
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        inputs_embeds_tt = ttnn.concat([inputs_embeds_tt, pad_zeros], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        inputs_embeds_tt = ttnn.concat([inputs_embeds_tt, pad_zeros], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(pad_zeros)
 
     _TILE = 32
@@ -1059,6 +1100,63 @@ def generate_codes_ttnn(
         )
         cp_kv_zero_hosts.append((k_zero, v_zero))
 
+    # === STEP 3.5: Capture Talker prefill traces for buckets [32, 64, 128] ===
+    # Standard path inside the trace — no prefill_attn_mask, so attention uses
+    # k=freshly projected (sliced, width=bucket) + fused SDPA (is_causal=True).
+    # Numerics identical to non-traced run. Cache write goes through fill_cache
+    # (constant batch_idx=0 → trace-safe).
+    TRACE_PREFILL_BUCKETS = [32, 64, 128]
+    talker_prefill_traces = {}
+    print(f"  Capturing Talker prefill traces for buckets {TRACE_PREFILL_BUCKETS}...")
+    for _bucket in TRACE_PREFILL_BUCKETS:
+        # Persistent input embed buffer (zero-padded; per-call copy_h2d overwrites).
+        _pf_embed_tt = ttnn.from_torch(
+            torch.zeros(1, 1, _bucket, talker_h, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Constant RoPE for positions [0..bucket); baked into trace.
+        _pf_cos_tt, _pf_sin_tt = get_rope_tensors(
+            device, head_dim, _bucket, torch.arange(_bucket), model.talker_config.rope_theta
+        )
+        # Untraced warmup (compiles kernels).
+        _wu_h, _ = model.talker.forward_from_hidden(
+            _pf_embed_tt,
+            _pf_cos_tt,
+            _pf_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            start_pos=0,
+            mode="prefill",
+        )
+        _ = model.talker.get_codec_logits(_wu_h)
+        ttnn.synchronize_device(device)
+
+        _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            _trace_h, _ = model.talker.forward_from_hidden(
+                _pf_embed_tt,
+                _pf_cos_tt,
+                _pf_sin_tt,
+                talker_trans_mat,
+                kv_caches=talker_kv_caches,
+                start_pos=0,
+                mode="prefill",
+            )
+            _trace_logits = model.talker.get_codec_logits(_trace_h)
+        finally:
+            ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+        talker_prefill_traces[_bucket] = {
+            "trace_id": _trace_id,
+            "embed_tt": _pf_embed_tt,
+            "hidden_out": _trace_h,
+            "logits_out": _trace_logits,
+        }
+        print(f"    bucket={_bucket}: trace captured")
+
     # === STEP 4: Run Talker prefill (non-traced, standard path) ===
     # Standard prefill: attention over seq_len (not full cache), much faster.
     # The standard path in attention.py fills the KV cache via to_torch/from_torch,
@@ -1073,37 +1171,110 @@ def generate_codes_ttnn(
     ttnn.synchronize_device(device)
     t_prefill_start = time.time()
 
-    print("  STEP 4: Running Talker prefill forward (28 layers, non-traced)...")
-    prefill_hidden_out, talker_kv_caches = model.talker.forward_from_hidden(
-        inputs_embeds_tt,
-        prefill_cos_tt,
-        prefill_sin_tt,
-        talker_trans_mat,
-        kv_caches=talker_kv_caches,
-        start_pos=0,
-        mode="prefill",
-    )
-    prefill_logits_out = model.talker.get_codec_logits(prefill_hidden_out)
-    ttnn.synchronize_device(device)
-
-    # Track generated code 0 tokens for repetition penalty
     generated_code0_tokens = []
 
-    codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
-    codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
-    token_0 = sample_token(
-        codec_logits_torch,
-        config.temperature,
-        config.top_k,
-        config.greedy,
-        config.repetition_penalty,
-        generated_code0_tokens,
-    )
-    generated_code0_tokens.append(token_0)
-    ttnn.synchronize_device(device)
-    t_prefill_end = time.time()
+    # PCC check: when TT_QWEN3_PCC_TRACE_PREFILL=1, run BOTH non-traced and
+    # traced prefill on the same input and report PCC of the codec logits
+    # at the sample position. Cache state must be reset between the two runs.
+    import os as _os_pcc
 
-    print(f"  Talker prefill done (non-traced): {(t_prefill_end - t_prefill_start)*1000:.1f} ms, token_0={token_0}")
+    _do_pcc = _os_pcc.environ.get("TT_QWEN3_PCC_TRACE_PREFILL", "0") == "1"
+    _ref_logits_torch = None
+    if _do_pcc and padded_seq_len in talker_prefill_traces:
+        # Non-traced reference run (writes cache via fill_cache).
+        _ref_h, _ = model.talker.forward_from_hidden(
+            inputs_embeds_tt,
+            prefill_cos_tt,
+            prefill_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            start_pos=0,
+            mode="prefill",
+        )
+        _ref_logits = model.talker.get_codec_logits(_ref_h)
+        ttnn.synchronize_device(device)
+        _ref_logits_torch = ttnn.to_torch(_ref_logits).squeeze(1).float()
+        # Reset cache so the upcoming traced run starts identically.
+        for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts[:0] + [], talker_kv_caches[:0] + []):
+            pass  # placeholder; we'll reset via fresh zero-host below
+        for layer_kv in talker_kv_caches:
+            k_cache, v_cache = layer_kv
+            _kc_shape = tuple(int(d) for d in k_cache.shape)
+            _vc_shape = tuple(int(d) for d in v_cache.shape)
+            _kz = ttnn.from_torch(
+                torch.zeros(_kc_shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            _vz = ttnn.from_torch(
+                torch.zeros(_vc_shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(_kz, k_cache)
+            ttnn.copy_host_to_device_tensor(_vz, v_cache)
+
+    if padded_seq_len in talker_prefill_traces:
+        _pf = talker_prefill_traces[padded_seq_len]
+        _embed_host_torch = ttnn.to_torch(inputs_embeds_tt)
+        _embed_host = ttnn.from_torch(
+            _embed_host_torch.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(_embed_host, _pf["embed_tt"])
+        ttnn.execute_trace(device, _pf["trace_id"], cq_id=0, blocking=True)
+        prefill_logits_out = _pf["logits_out"]
+        prefill_hidden_out = _pf["hidden_out"]
+        codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
+        if _do_pcc and _ref_logits_torch is not None:
+            _a = _ref_logits_torch[0, real_seq_len - 1, :]
+            _b = codec_logits_torch
+            _pcc = torch.corrcoef(torch.stack([_a.flatten(), _b.flatten()]))[0, 1].item()
+            _max_abs = (_a - _b).abs().max().item()
+            print(f"  [PCC] traced vs non-traced @ pos={real_seq_len-1}: PCC={_pcc:.6f}  max|Δ|={_max_abs:.4f}")
+        token_0 = sample_token(
+            codec_logits_torch,
+            config.temperature,
+            config.top_k,
+            config.greedy,
+            config.repetition_penalty,
+            generated_code0_tokens,
+        )
+        generated_code0_tokens.append(token_0)
+        ttnn.synchronize_device(device)
+        t_prefill_end = time.time()
+        print(
+            f"  Talker prefill done (TRACED bucket={padded_seq_len}): {(t_prefill_end - t_prefill_start)*1000:.1f} ms, token_0={token_0}"
+        )
+    else:
+        print("  STEP 4: Running Talker prefill forward (28 layers, non-traced)...")
+        prefill_hidden_out, talker_kv_caches = model.talker.forward_from_hidden(
+            inputs_embeds_tt,
+            prefill_cos_tt,
+            prefill_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            start_pos=0,
+            mode="prefill",
+        )
+        prefill_logits_out = model.talker.get_codec_logits(prefill_hidden_out)
+        ttnn.synchronize_device(device)
+        codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
+        token_0 = sample_token(
+            codec_logits_torch,
+            config.temperature,
+            config.top_k,
+            config.greedy,
+            config.repetition_penalty,
+            generated_code0_tokens,
+        )
+        generated_code0_tokens.append(token_0)
+        ttnn.synchronize_device(device)
+        t_prefill_end = time.time()
+        print(f"  Talker prefill done (non-traced): {(t_prefill_end - t_prefill_start)*1000:.1f} ms, token_0={token_0}")
 
     if token_0 == config.codec_eos_id:
         print("  EOS at prefill")
@@ -1330,6 +1501,7 @@ def generate_codes_ttnn(
     import os as _os
 
     _device_cp_chain = bool(int(_os.environ.get("TT_QWEN3_DEVICE_CP_CHAIN", "0"))) and not config.greedy
+    _device_cp_sampling = False  # batch=1 regression — see comments above the chain path.
     cp_sampler = None
     if _device_cp_chain:
         cp_sampler = _DeviceSampler(device, top_k=config.top_k, top_p=1.0, temperature=config.temperature)
@@ -1383,6 +1555,9 @@ def generate_codes_ttnn(
                 ttnn.copy(_wu_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
                 ttnn.deallocate(_wu_tok_slice)
                 ttnn.deallocate(_wu_embed_out_4d)
+            elif _device_cp_sampling:
+                _tok_buf = cp_sampler.alloc_token_buf()  # [1,1,1,32] uint32 RM
+                cp_sampler.append_sampling(_wu_cp_dc_logits, _tok_buf)
             else:
                 _tok_buf = None  # CPU sample path: no device token buffer needed.
             cp_decode_token_tts[_buf_i].append(_tok_buf)
@@ -1420,6 +1595,8 @@ def generate_codes_ttnn(
                     ttnn.copy(_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
                     ttnn.deallocate(_tok_slice)
                     ttnn.deallocate(_embed_out_4d)
+                elif _device_cp_sampling:
+                    cp_sampler.append_sampling(_logits_tt, _tok_buf)
             finally:
                 ttnn.end_trace_capture(device, _trace_id, cq_id=0)
             ttnn.synchronize_device(device)
@@ -1542,6 +1719,8 @@ def generate_codes_ttnn(
                 # the previous trace's in-trace ttnn.embedding already wrote our buffer
                 # for trace_i>=1; skip the CPU lookup. We still H2D the FIRST iteration's
                 # input embed (sourced from cp_prefill's sampled `token`).
+                # Chain mode skips H2D for trace_i>=1 (chain wrote it). Sampling-only and
+                # CPU-sample paths always need the host F.embedding + H2D.
                 _need_h2d = (not _device_cp_chain) or _trace_i == 0
                 if _need_h2d:
                     prev_embed_idx = code_idx - 2
@@ -1566,7 +1745,7 @@ def generate_codes_ttnn(
                     trace_cq0_idle = cp_decode_input_ready[_buf_i]
 
                 _dsp = {}
-                if config.greedy or _device_cp_chain:
+                if config.greedy or _device_cp_chain or _device_cp_sampling:
                     # Device wrote the token id; small D2H.
                     _t_dc0 = time.perf_counter()
                     token = _read_device_token(cp_decode_token_tts[_buf_i][_trace_i], index=0)
@@ -2369,9 +2548,9 @@ def run_inference(
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        inputs_embeds_tt = ttnn.concat([inputs_embeds_tt, pad_zeros], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        inputs_embeds_tt = ttnn.concat([inputs_embeds_tt, pad_zeros], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(pad_zeros)
 
     # Allocate fresh Talker KV cache for this request
@@ -2801,7 +2980,7 @@ def run_full_ttnn_tts(
     device = ttnn.open_device(
         device_id=device_id,
         l1_small_size=32768,
-        trace_region_size=100000000,
+        trace_region_size=200000000,
         num_command_queues=_ncq,
     )
     device.enable_program_cache()

@@ -245,6 +245,29 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        # Prefill SDPA via the fused ttnn.transformer.scaled_dot_product_attention.
+        # Bumped to HiFi4 (vs the manual chain's HiFi2) because the fused op runs
+        # on bf16 Q/K/V — the K-amplification from k_norm (gain ≈ 68 → values
+        # ≈ ±260) needs full bf16 multiply mantissa to preserve attention scores
+        # well enough for the AR sampling trajectory. fp32_dest_acc_en keeps the
+        # softmax + matmul accumulation in fp32. Together this gives parity-ish
+        # numerics with the manual fp32 path while avoiding the
+        # repeat_interleave→DRAM bounce + 4 typecasts that cost ~5.5 ms/prefill.
+        self.sdpa_prefill_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        # Explicit SDPA program config (matches tt_transformers for seq<2048).
+        # q_chunk/k_chunk=64 covers all our prefill buckets (32/64/96/128/192/256).
+        self.sdpa_prefill_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=64,
+            k_chunk_size=64,
+        )
+
         # RoPE (P3): default kernel was HiFi4; LoFi + explicit L1 matches linears and avoids DRAM spill.
         self.rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -722,142 +745,141 @@ class Attention(LightweightModule):
                 k_is_cache_alias = True
                 k_seq = k_cache.shape[2]
             else:
-                # Standard prefill: fill cache via PyTorch (not trace-compatible).
-                # The returned k_cache/v_cache tensors may have new addresses if reallocated.
-                # The decode trace is captured AFTER prefill, so it will capture the new addresses.
-                max_seq = k_cache.shape[2]
-                # Torch reference (host pad + from_torch):
-                # k_torch = ttnn.to_torch(k).to(torch.bfloat16)
-                # v_torch = ttnn.to_torch(v).to(torch.bfloat16)
-                # k_padded = torch.zeros(batch_size, self.num_kv_heads, max_seq, self.head_dim, dtype=torch.bfloat16)
-                # v_padded = torch.zeros(batch_size, self.num_kv_heads, max_seq, self.head_dim, dtype=torch.bfloat16)
-                # k_padded[:, :, :k_seq, :] = k_torch
-                # v_padded[:, :, :k_seq, :] = v_torch
-                # ttnn.deallocate(k_cache)
-                # ttnn.deallocate(v_cache)
-                # k_cache = ttnn.from_torch(
-                #     k_padded,
-                #     device=self.device,
-                #     dtype=ttnn.bfloat16,
-                #     layout=ttnn.TILE_LAYOUT,
-                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # )
-                # v_cache = ttnn.from_torch(
-                #     v_padded,
-                #     device=self.device,
-                #     dtype=ttnn.bfloat16,
-                #     layout=ttnn.TILE_LAYOUT,
-                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # )
-                # TTNN: pad seq on device with zeros + concat (avoids update_cache on a fresh buffer, which hung).
-                _kv_dram = ttnn.DRAM_MEMORY_CONFIG
-                if max_seq > k_seq:
-                    _pad_len = max_seq - k_seq
-                    _tail_shape = [batch_size, self.num_kv_heads, _pad_len, self.head_dim]
-                    k_tail = ttnn.zeros(
-                        _tail_shape,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=_kv_dram,
-                    )
-                    v_tail = ttnn.zeros(
-                        _tail_shape,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=_kv_dram,
-                    )
-                    k_new = ttnn.concat([k, k_tail], dim=2, memory_config=_kv_dram)
-                    v_new = ttnn.concat([v, v_tail], dim=2, memory_config=_kv_dram)
-                    ttnn.deallocate(k_tail)
-                    ttnn.deallocate(v_tail)
-                else:
-                    k_new = ttnn.clone(k, memory_config=_kv_dram)
-                    v_new = ttnn.clone(v, memory_config=_kv_dram)
-                ttnn.deallocate(k_cache)
-                ttnn.deallocate(v_cache)
-                k_cache = k_new
-                v_cache = v_new
+                # Standard prefill: write the fresh K/V into the persistent KV cache
+                # in-place via ttnn.fill_cache (matches tt_transformers prefill). The
+                # cache buffer was allocated once at init (allocate_kv_cache) at shape
+                # [B, n_kv, max_seq, D]; fill_cache writes positions [0:k_seq] without
+                # reallocating. Attention itself reads from the freshly projected k/v
+                # (small, fits L1) — the cache is purely a write-through for later decode.
+                ttnn.fill_cache(k_cache, k, 0)
+                ttnn.fill_cache(v_cache, v, 0)
 
             updated_kv_cache = (k_cache, v_cache)
 
+        # ─── Fused prefill SDPA path ──────────────────────────────────────────
+        # ttnn.transformer.scaled_dot_product_attention handles GQA natively
+        # (k/v keep num_kv_heads, no repeat_interleave) and fuses scale + mask +
+        # softmax + matmul. Replaces the ~30-line manual fp32 chain below for
+        # standard causal prefill (Talker prefill). bf16 inputs + fp32 dest acc
+        # + HiFi4 multiply preserves enough precision through k_norm's K
+        # amplification.
+        # Falls back to manual chain for: decode, cp_prefill_mask, custom
+        # prefill_attn_mask — those need explicit handling.
+        _q_seq = int(q.shape[2])
+        _k_seq_inner = int(k_for_attn.shape[2])
+        import os as _os_fused
+
+        _fused_disabled = _os_fused.environ.get("TT_QWEN3_DISABLE_FUSED_SDPA", "0") == "1"
+        _use_fused_prefill_sdpa = (
+            not _fused_disabled
+            and not is_decode
+            and decode_attn_mask is None
+            and cp_prefill_mask is None
+            and prefill_attn_mask is None
+            and _q_seq == _k_seq_inner
+            and _q_seq > 1
+        )
+        if _use_fused_prefill_sdpa:
+            import os as _os_dbg
+
+            if _os_dbg.environ.get("TT_QWEN3_DEBUG_FUSED_SDPA", "0") == "1":
+                print(f"[DBG] using fused prefill SDPA: q.shape={tuple(q.shape)}, k.shape={tuple(k_for_attn.shape)}")
+            attn_output = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k_for_attn,
+                v_for_attn,
+                is_causal=True,
+                scale=self.scale,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_config,
+                program_config=self.sdpa_prefill_program_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
+            if not k_is_cache_alias:
+                ttnn.deallocate(k_for_attn)
+                ttnn.deallocate(v_for_attn)
+            # Skip the manual fp32 SDPA chain below; jump to o_proj path.
+            attn_output_pre_oproj = attn_output  # already bf16, [B, num_heads, S, D]
+
+        # ─── Manual fp32 SDPA path (decode + special-mask prefill) ────────────
         # Typecast Q/K/V to float32 for precise attention.
         # k_norm gamma up to 68 amplifies K to ~260; bfloat16 SDPA loses enough
         # precision to cause completely wrong token predictions (no EOS, model loops).
-        q_f32 = ttnn.typecast(q, dtype=ttnn.float32)
-        ttnn.deallocate(q)
+        if not _use_fused_prefill_sdpa:
+            q_f32 = ttnn.typecast(q, dtype=ttnn.float32)
+            ttnn.deallocate(q)
 
-        # GQA expansion: replicate each KV head num_kv_groups times.
-        # Order: repeat_interleave on bf16 first (half the bandwidth of fp32),
-        # then typecast the expanded tensor. Same math as cast-then-expand but
-        # the layout-bound repeat_interleave moves 2-byte bf16 instead of
-        # 4-byte fp32 elements.
-        if self.num_kv_groups > 1:
-            k_exp_bf16 = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1)
-            v_exp_bf16 = ttnn.repeat_interleave(v_for_attn, self.num_kv_groups, dim=1)
-            if not k_is_cache_alias:
-                ttnn.deallocate(k_for_attn)
-                ttnn.deallocate(v_for_attn)
-            k_exp = ttnn.typecast(k_exp_bf16, dtype=ttnn.float32)
-            v_exp = ttnn.typecast(v_exp_bf16, dtype=ttnn.float32)
-            ttnn.deallocate(k_exp_bf16)
-            ttnn.deallocate(v_exp_bf16)
-        else:
-            k_exp = ttnn.typecast(k_for_attn, dtype=ttnn.float32)
-            v_exp = ttnn.typecast(v_for_attn, dtype=ttnn.float32)
-            if not k_is_cache_alias:
-                ttnn.deallocate(k_for_attn)
-                ttnn.deallocate(v_for_attn)
+            # GQA expansion: replicate each KV head num_kv_groups times.
+            # Order: repeat_interleave on bf16 first (half the bandwidth of fp32),
+            # then typecast the expanded tensor. Same math as cast-then-expand but
+            # the layout-bound repeat_interleave moves 2-byte bf16 instead of
+            # 4-byte fp32 elements.
+            if self.num_kv_groups > 1:
+                k_exp_bf16 = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1)
+                v_exp_bf16 = ttnn.repeat_interleave(v_for_attn, self.num_kv_groups, dim=1)
+                if not k_is_cache_alias:
+                    ttnn.deallocate(k_for_attn)
+                    ttnn.deallocate(v_for_attn)
+                k_exp = ttnn.typecast(k_exp_bf16, dtype=ttnn.float32)
+                v_exp = ttnn.typecast(v_exp_bf16, dtype=ttnn.float32)
+                ttnn.deallocate(k_exp_bf16)
+                ttnn.deallocate(v_exp_bf16)
+            else:
+                k_exp = ttnn.typecast(k_for_attn, dtype=ttnn.float32)
+                v_exp = ttnn.typecast(v_for_attn, dtype=ttnn.float32)
+                if not k_is_cache_alias:
+                    ttnn.deallocate(k_for_attn)
+                    ttnn.deallocate(v_for_attn)
 
-        # Float32 scaled dot-product attention via ttnn.matmul + ttnn.softmax
-        q_seq = q_f32.shape[2]
-        scores = ttnn.matmul(
-            q_f32,
-            k_exp,
-            transpose_b=True,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(q_f32)
-        scores = ttnn.mul(scores, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        if decode_attn_mask is not None:
-            scores = ttnn.add(scores, decode_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-        elif cp_prefill_mask is not None:
-            scores = ttnn.add(scores, cp_prefill_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-        elif prefill_attn_mask is not None:
-            scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-        elif q_seq == k_seq and q_seq > 1:
-            mask_cpu = torch.triu(
-                torch.full((q_seq, k_seq), float("-inf"), dtype=torch.float32),
-                diagonal=1,
-            ).reshape(1, 1, q_seq, k_seq)
-            mask_tt = ttnn.from_torch(
-                mask_cpu,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
+        if not _use_fused_prefill_sdpa:
+            # Float32 scaled dot-product attention via ttnn.matmul + ttnn.softmax
+            q_seq = q_f32.shape[2]
+            scores = ttnn.matmul(
+                q_f32,
+                k_exp,
+                transpose_b=True,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(mask_tt)
+            ttnn.deallocate(q_f32)
+            scores = ttnn.mul(scores, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(scores)
+            if decode_attn_mask is not None:
+                scores = ttnn.add(scores, decode_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            elif cp_prefill_mask is not None:
+                scores = ttnn.add(scores, cp_prefill_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            elif prefill_attn_mask is not None:
+                scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            elif q_seq == k_seq and q_seq > 1:
+                mask_cpu = torch.triu(
+                    torch.full((q_seq, k_seq), float("-inf"), dtype=torch.float32),
+                    diagonal=1,
+                ).reshape(1, 1, q_seq, k_seq)
+                mask_tt = ttnn.from_torch(
+                    mask_cpu,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(mask_tt)
 
-        attn_output_f32 = ttnn.matmul(
-            attn_weights,
-            v_exp,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(attn_weights)
-        ttnn.deallocate(v_exp)
+            attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(scores)
 
-        # Cast back to bfloat16 for output projection.
-        attn_output = ttnn.typecast(attn_output_f32, dtype=ttnn.bfloat16)
-        ttnn.deallocate(attn_output_f32)
+            attn_output_f32 = ttnn.matmul(
+                attn_weights,
+                v_exp,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(attn_weights)
+            ttnn.deallocate(v_exp)
+
+            # Cast back to bfloat16 for output projection.
+            attn_output = ttnn.typecast(attn_output_f32, dtype=ttnn.bfloat16)
+            ttnn.deallocate(attn_output_f32)
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
         use_dram_shard_o = is_decode and seq_len == 1
