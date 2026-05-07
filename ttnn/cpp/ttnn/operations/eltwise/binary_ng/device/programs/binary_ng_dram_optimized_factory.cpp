@@ -31,6 +31,19 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::IDevice;
 
+bool is_op_memory_bound(ttnn::operations::binary::BinaryOpType op, bool is_sfpu) {
+    using namespace ttnn::operations::binary_ng;
+    if (!is_sfpu) {
+        return false;
+    }
+
+    // The following ops are not memory bound
+    return !(
+        op == BinaryOpType::MUL || op == BinaryOpType::ADD || op == BinaryOpType::SUB ||
+        op == BinaryOpType::RIGHT_SHIFT || op == BinaryOpType::LOGICAL_RIGHT_SHIFT || op == BinaryOpType::LEFT_SHIFT ||
+        op == BinaryOpType::BITWISE_OR || op == BinaryOpType::BITWISE_AND || op == BinaryOpType::BITWISE_XOR);
+}
+
 std::map<std::string, std::string> get_compute_defines(
     ttnn::DataType dtype, const ttnn::operations::binary_ng::OpConfig& op_config) {
     using namespace ttnn::operations::binary_ng;
@@ -425,6 +438,10 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
 
     if (a.device()->arch() != tt::ARCH::WORMHOLE_B0) {
         return "Only WH architecture is supported for DRAM optimized program";
+    }
+
+    if (CMAKE_UNIQUE_NAMESPACE::is_op_memory_bound(operation_attributes.binary_op_type, operation_attributes.is_sfpu)) {
+        return "Op is memory bound and not supported for DRAM optimized program";
     }
 
     if (operation_attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
