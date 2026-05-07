@@ -12,7 +12,30 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <map>
+
+#include <tt-metalium/bfloat16.hpp>
+
+namespace {
+
+float get_pad_value(tt::tt_metal::ReduceOpMath reduce_math) {
+    using tt::tt_metal::ReduceOpMath;
+    return reduce_math == ReduceOpMath::MAX   ? -std::numeric_limits<float>::infinity()
+           : reduce_math == ReduceOpMath::MIN ? std::numeric_limits<float>::infinity()
+                                              : 0.0f;
+}
+
+uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::ReduceOpMath op) {
+    const float v = get_pad_value(op);
+    if (df == tt::DataFormat::Float32) {
+        return std::bit_cast<uint32_t>(v);
+    }
+    const uint16_t bf16 = std::bit_cast<uint16_t>(bfloat16::truncate(v));
+    return static_cast<uint32_t>(bf16);
+}
+
+}  // namespace
 
 namespace ttnn::prim {
 
@@ -29,13 +52,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     uint32_t W_logical = logical_shape[3];
     uint32_t W_padded = padded_shape[3];
     uint32_t H = logical_shape[2], NC = logical_shape[1] * logical_shape[0];
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
     // Tilize must cover the full row-major page width (padded last dim).
     uint32_t Wt = (W_padded + tile_width - 1) / tile_width;
-    uint32_t Ht = (H + tile_height - 1) / tile_height;
-    (void)Ht;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
@@ -96,6 +116,18 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
         }}},
     });
 
+    // Template CB filled with per-element padding identity (same as tail fill): 0 for sum/mean, -inf for max, etc.
+    constexpr uint32_t cb_clear_value = tt::CBIndex::c_4;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = src0_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_clear_value),
+            .data_format = src0_cb_data_format,
+            .page_size = src0_single_tile_size,
+        }}},
+    });
+
     uint32_t num_input_tiles = std::max(2U, Wt);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * src0_single_tile_size,
@@ -132,10 +164,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
     tt_metal::Buffer* src_buffer = a.buffer();
+    const uint32_t padding_identity_bits =
+        dense_rm_padding_identity_bits(src0_cb_data_format, operation_attributes.math_op);
     std::vector<uint32_t> reader_compile_time_args = {
         std::bit_cast<uint32_t>(operation_attributes.scaler),
         W_logical,
         src_datum_size,
+        padding_identity_bits,
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
