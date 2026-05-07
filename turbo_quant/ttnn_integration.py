@@ -1030,6 +1030,38 @@ class TTNNTurboQuantCache:
         W = self.recent_window
         centroids = get_codebook(self.head_dim, self.bits, device="cpu", dtype=torch.float32).centroids.tolist()
 
+        # ── Fused-hybrid fast path (Phase 3c, opt-in via TQ_FUSED_HYBRID=1) ──
+        # Single fused kernel call replaces the dual-call + _combine_lse flow.
+        # Ring covers the most recent W positions in BFP8; TQ covers older
+        # positions in BFP4-quantized; the kernel runs one Flash Attention loop
+        # across both with disjoint coverage (no LSE-emphasis-blend math). Saves
+        # ~10-15 ms/tok by eliminating the second SDPA invocation and the
+        # on-device combine ops. Requires W rounded up to a multiple of 128
+        # (kernel chunk size) — host-side validation enforces this.
+        import os as _os
+
+        _use_fused = bool(_os.environ.get("TQ_FUSED_HYBRID", "")) and (W % 128 == 0)
+        if _use_fused:
+            outs = ttnn.experimental.turbo_quant_sdpa_decode(
+                q,
+                self.k_indices_dev[layer_idx],
+                self.k_norms_dev[layer_idx],
+                self.v_indices_dev[layer_idx],
+                self.v_norms_dev[layer_idx],
+                page_table,
+                current_pos,
+                centroids,
+                scale,
+                False,  # pre_rescaled (must be False in hybrid mode)
+                1,  # num_cores_per_head (must be 1 in hybrid mode)
+                False,  # return_lse (no longer needed — combine is in-kernel)
+                W,  # recent_window — triggers the per-chunk source branch
+                self.k_ring_dev[layer_idx],
+                self.v_ring_dev[layer_idx],
+                self.ring_page_table_dev,
+            )
+            return outs[0]
+
         # Trace-friendly fast path: ring_sdpa_pos + old_pos arrived as device
         # tensors. Always run both halves + combine. No host sync.
         if ring_sdpa_pos is not None and old_pos is not None:
