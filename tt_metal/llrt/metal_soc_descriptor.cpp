@@ -4,6 +4,7 @@
 
 #include "llrt/metal_soc_descriptor.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 #include <string>
@@ -170,6 +171,21 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         this->dram_view_address_offsets.push_back(address_offset);
         this->dram_view_eth_cores.push_back(eth_dram_cores);
         this->dram_view_worker_cores.push_back(worker_dram_cores);
+
+        for (size_t noc = 0; noc < worker_dram_cores.size(); noc++) {
+            auto physical_coord =
+                get_dram_core_for_channel(channel, worker_endpoints[noc], tt::CoordSystem::NOC0);
+            log_info(
+                tt::LogMetal,
+                "DRAM view channel {} noc{} worker_endpoint: subchannel {} -> translated ({},{}) physical ({},{})",
+                channel,
+                noc,
+                worker_endpoints[noc],
+                worker_dram_cores[noc].x,
+                worker_dram_cores[noc].y,
+                physical_coord.x,
+                physical_coord.y);
+        }
 
         size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
         size_t preferred_subchannel = worker_endpoints[0];

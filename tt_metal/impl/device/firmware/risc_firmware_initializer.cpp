@@ -372,9 +372,35 @@ std::vector<CoreCoord> RiscFirmwareInitializer::get_dram_fw_cores(tt::ChipId dev
         CoreCoord noc1_preferred = soc_d.get_preferred_worker_core_for_dram_view(bank, 1);
 
         const auto& endpoints = soc_d.dram_bank_endpoint_coords[bank];
+        log_info(
+            tt::LogMetal,
+            "DRAM bank {} endpoint selection: noc0_preferred=({},{}) noc1_preferred=({},{}) num_endpoints={}",
+            bank,
+            noc0_preferred.x,
+            noc0_preferred.y,
+            noc1_preferred.x,
+            noc1_preferred.y,
+            endpoints.size());
+        for (size_t i = 0; i < endpoints.size(); i++) {
+            log_info(
+                tt::LogMetal,
+                "  bank {} endpoint[{}]=({},{}) matches_noc0={} matches_noc1={}",
+                bank,
+                i,
+                endpoints[i].x,
+                endpoints[i].y,
+                endpoints[i] == noc0_preferred,
+                endpoints[i] == noc1_preferred);
+        }
         bool found = false;
         for (const auto& endpoint : endpoints) {
             if (endpoint != noc0_preferred && endpoint != noc1_preferred) {
+                log_info(
+                    tt::LogMetal,
+                    "  bank {} selected unused DRAM FW core: ({},{})",
+                    bank,
+                    endpoint.x,
+                    endpoint.y);
                 fw_cores.push_back(endpoint);
                 found = true;
                 break;
