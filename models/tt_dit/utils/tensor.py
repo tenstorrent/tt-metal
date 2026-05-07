@@ -9,6 +9,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 
 import ttnn
@@ -443,10 +444,7 @@ def _reassemble_2d(
                 # Strided->strided copy in one pass: no .contiguous() materialisation.
                 out[tuple(slices)].copy_(shard.permute(*permute))
 
-            futures = [
-                pool.submit(_scatter_perm, coord, shard)
-                for coord, shard in zip(mesh_coords, shards)
-            ]
+            futures = [pool.submit(_scatter_perm, coord, shard) for coord, shard in zip(mesh_coords, shards)]
             for f in futures:
                 f.result()
             return out
@@ -461,10 +459,7 @@ def _reassemble_2d(
             slices[d1] = slice(c * s1, (c + 1) * s1)
             out[tuple(slices)].copy_(shard)
 
-        futures = [
-            pool.submit(_scatter, coord, shard)
-            for coord, shard in zip(mesh_coords, shards)
-        ]
+        futures = [pool.submit(_scatter, coord, shard) for coord, shard in zip(mesh_coords, shards)]
         for f in futures:
             f.result()
         return out
@@ -649,9 +644,200 @@ def fast_device_to_host(
     trim = tuple(slice(0, d) for d in logical_shape)
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    return _reassemble_2d(
-        mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype, pool=pool
-    )
+    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype, pool=pool)
+
+
+# ---------------------------------------------------------------------------
+# YUV 4:2:0 planar D2H — on-device color conversion + batched D2H + planar concat
+# ---------------------------------------------------------------------------
+
+# BT.601 coefficients for inputs in [-1, 1] -> uint8 [0, 255].
+# Must match yuv_conversion.hpp::yuv_bt601_coefficients() in ttnn experimental.
+_BT601_Y_COEFF = (32.74, 64.28, 12.48, 125.5)
+_BT601_CB_COEFF = (-18.90, -37.10, 56.00, 128.0)
+_BT601_CR_COEFF = (56.00, -46.89, -9.11, 128.0)
+
+
+def _bt601_yuv_coefficients():
+    """Default BT.601 YUV coefficients for ttnn.experimental.yuv_conversion."""
+    return ttnn.experimental.YUVCoefficients(y=list(_BT601_Y_COEFF), cb=list(_BT601_CB_COEFF), cr=list(_BT601_CR_COEFF))
+
+
+def _yuv_planar_d2h(
+    tt_Y: ttnn.Tensor,
+    tt_Cb: ttnn.Tensor,
+    tt_Cr: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    H: int,
+    W: int,
+    T: int,
+    *,
+    pool: ThreadPoolExecutor | None = None,
+) -> np.ndarray:
+    """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
+
+    Per-shard input shapes (kernel-native BHWT with C=1):
+
+      * tt_Y:        ``(1, h_per_y, w_per_y, T)``
+      * tt_Cb/tt_Cr: ``(1, h_per_uv, w_per_uv, T)``
+
+    Output: ``(T, H*W + 2*(H/2 * W/2))`` numpy uint8 — per-frame
+    ``[Y plane | Cb plane | Cr plane]`` in row-major.
+
+    Kicks off all three ``cpu(blocking=False)`` calls before a single
+    ``synchronize_device`` so the reads overlap, then dispatches the 96
+    per-shard scatters across the shared reassembly thread pool using
+    torch's strided-copy backend.  Each scatter is a strided->strided copy
+    (T innermost in source, W innermost in dest) — the ideal would be an
+    on-device permute BHWT->BCTHW so the source becomes contiguous, but
+    ``ttnn.permute`` is currently broken on uint8 multi-device tensors.
+    """
+    Hu, Wu = H // 2, W // 2
+    hw = H * W
+    uv = Hu * Wu
+    row_stride = hw + 2 * uv
+
+    TP, SP = tuple(mesh_device.shape)
+    h_per_y, w_per_y = H // TP, W // SP
+    h_per_uv, w_per_uv = Hu // TP, Wu // SP
+
+    # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
+    host_Y = tt_Y.cpu(blocking=False)
+    host_Cb = tt_Cb.cpu(blocking=False)
+    host_Cr = tt_Cr.cpu(blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+    mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
+
+    def _extract(host_tensor):
+        host_shards = ttnn.get_device_tensors(host_tensor)
+        logical_shape = list(host_shards[0].shape)
+        trim = tuple(slice(0, d) for d in logical_shape)
+        return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+
+    Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
+    Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
+    Cr_shards = _extract(host_Cr)
+
+    # Allocate the planar output and view each plane region as a (T, h, w)
+    # strided torch tensor (no copy, shares storage with `out`).
+    out = np.empty((T, row_stride), dtype=np.uint8)
+    out_t = torch.from_numpy(out)
+    y_view = out_t.as_strided((T, H, W), (row_stride, W, 1), 0)
+    u_view = out_t.as_strided((T, Hu, Wu), (row_stride, Wu, 1), hw)
+    v_view = out_t.as_strided((T, Hu, Wu), (row_stride, Wu, 1), hw + uv)
+
+    if pool is None:
+        pool = _get_default_reassemble_pool()
+
+    def _write(view, shard, r, c, h_per, w_per):
+        # shard (1, h_per, w_per, T) -> squeeze(0).permute(2, 0, 1) -> strided (T, h_per, w_per).
+        src = shard.squeeze(0).permute(2, 0, 1)
+        view[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per].copy_(src)
+
+    futures = []
+    for coord, shard in zip(mesh_coords, Y_shards):
+        r, c = int(coord[0]), int(coord[1])
+        futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y))
+    for coord, shard in zip(mesh_coords, Cb_shards):
+        r, c = int(coord[0]), int(coord[1])
+        futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv))
+    for coord, shard in zip(mesh_coords, Cr_shards):
+        r, c = int(coord[0]), int(coord[1])
+        futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv))
+    for f in futures:
+        f.result()
+
+    return out
+
+
+def fast_device_to_host_yuv(
+    tt_video_BCTHW: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    *,
+    coefficients=None,
+    pool: ThreadPoolExecutor | None = None,
+    debug: bool = False,
+) -> np.ndarray:
+    """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
+
+    Takes a sharded BCTHW bf16 row-major tensor with values in ``[-1, 1]`` —
+    typically the output of the Wan VAE — and returns a single numpy uint8
+    array in ffmpeg ``AV_PIX_FMT_YUV420P`` layout.
+
+    Pipeline:
+      1. Permute BCTHW -> BCHWT (T moves to the last position) and reshape to
+         drop the B=1 dim, landing in CHWT — the layout the YUV kernel expects.
+      2. ``ttnn.experimental.yuv_conversion`` runs on each device's local shard,
+         producing 3 uint8 outputs (Y full-res, Cb/Cr 4:2:0 subsampled).
+      3. Async ``cpu(blocking=False)`` on all three outputs followed by a
+         single ``synchronize_device`` so the D2H reads overlap.
+      4. The 96 per-shard scatters (32 each for Y/Cb/Cr) are dispatched across
+         the shared reassembly thread pool using torch's strided-copy backend
+         (the ``torch_threaded`` pattern from the host-concat benchmarks).
+
+    Output shape: ``(T, H*W + 2*(H/2 * W/2))`` numpy uint8 — one row per frame,
+    ``[Y plane | Cb plane | Cr plane]`` in row-major.
+
+    Args:
+        tt_video_BCTHW: Sharded ttnn tensor with shape ``(1, 3, T, H, W)``,
+            bfloat16, ROW_MAJOR_LAYOUT, sharded ``{axis 0: dim 3 (H), axis 1: dim 4 (W)}``.
+            Values must lie in ``[-1, 1]`` — the YUV kernel's expected range.
+        mesh_device: The mesh device.
+        coefficients: ``ttnn.experimental.YUVCoefficients`` to use for the
+            per-channel weights and offsets.  Defaults to BT.601.
+        pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
+            If ``None``, the module-level lazy default pool is used.
+
+    Returns:
+        ``np.ndarray`` of shape ``(T, H*W + 2*(H/2 * W/2))``, dtype uint8.
+
+    Raises:
+        AssertionError: if ``B != 1``, ``C != 3``, or H/W are not even.
+    """
+    if coefficients is None:
+        coefficients = _bt601_yuv_coefficients()
+
+    # NOTE: ttnn ``.shape`` on a multi-device sharded tensor returns the
+    # per-shard (local) shape, not the global logical shape.  We derive the
+    # global H, W from the mesh shape, assuming H is sharded on axis 0 and W
+    # on axis 1 (the convention this function documents).  All on-device ops
+    # (permute, reshape, yuv_conversion) operate on per-shard semantics, so
+    # we use ``h_per, w_per`` for the reshape target; ``_yuv_planar_d2h``
+    # then takes the global ``H, W`` to size the output buffer.
+    B, C, T, h_per, w_per = tt_video_BCTHW.shape
+    assert B == 1, f"fast_device_to_host_yuv requires B=1, got {B}"
+    assert C == 3, f"fast_device_to_host_yuv requires C=3 (RGB), got {C}"
+    assert (
+        h_per % 2 == 0 and w_per % 2 == 0
+    ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
+
+    TP, SP = tuple(mesh_device.shape)
+    H, W = h_per * TP, w_per * SP
+
+    if debug:
+        print(f"  [yuv-d2h] input per-shard: {list(tt_video_BCTHW.shape)}")
+        print(f"  [yuv-d2h] global H={H}, W={W}, T={T}  (mesh TP={TP}, SP={SP})")
+
+    # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
+    tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
+    if debug:
+        print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
+
+    tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
+    if debug:
+        print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
+
+    # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_CHWT, coefficients)
+    if debug:
+        print(f"  [yuv-d2h] yuv outputs per-shard:")
+        print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
+        print(f"  [yuv-d2h]   Cb: {list(tt_Cb.shape)}")
+        print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
+
+    # 3+4. Batched D2H + planar concat — uses GLOBAL H, W to size the buffer.
+    return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, pool=pool)
 
 
 def upsample(

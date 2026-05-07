@@ -25,10 +25,10 @@ import ttnn
 
 from ...parallel.manager import CCLManager
 from ...utils.tensor import (
-    _get_default_reassemble_pool,
     _reassemble_2d,
-    _to_torch_zero_copy,
+    _yuv_planar_d2h,
     fast_device_to_host,
+    fast_device_to_host_yuv,
     float_to_uint8,
     typed_tensor_2dshard,
 )
@@ -105,93 +105,6 @@ def _host_yuv_reference(rgb_chwt: torch.Tensor):
         return (val + 0.5).clamp(0, 255).to(torch.uint8)
 
     return Y, _subsample(_YUV_CB_COEFF), _subsample(_YUV_CR_COEFF)
-
-
-def _yuv_planar_d2h(
-    tt_Y: ttnn.Tensor,
-    tt_Cb: ttnn.Tensor,
-    tt_Cr: ttnn.Tensor,
-    mesh_device: ttnn.MeshDevice,
-    H: int,
-    W: int,
-    T_: int,
-) -> np.ndarray:
-    """Batched D2H of the YUV outputs into ffmpeg yuv420p planar uint8.
-
-    Caller is expected to have already permuted the kernel outputs from BHWT
-    to BCTHW on device (B=1) — that's much cheaper than reshuffling on host
-    because each per-shard scatter then reads a contiguous ``(T, h, w)``
-    source instead of a strided one.  Per-shard input shapes:
-
-      * tt_Y:        ``(1, T, h_per_y, w_per_y)``
-      * tt_Cb/tt_Cr: ``(1, T, h_per_uv, w_per_uv)``
-
-    Output: ``(T, H*W + 2*(H/2 * W/2))`` numpy uint8 — per-frame
-    ``[Y plane | Cb plane | Cr plane]`` in row-major.
-
-    Kicks off all three ``cpu(blocking=False)`` calls before a single
-    ``synchronize_device`` so the reads overlap, then dispatches the 96
-    per-shard scatters across the shared reassembly thread pool using
-    torch's strided-copy backend (the ``torch_threaded`` pattern that won
-    every host-concat benchmark).
-    """
-    Hu, Wu = H // 2, W // 2
-    hw = H * W
-    uv = Hu * Wu
-    row_stride = hw + 2 * uv
-
-    TP, SP = tuple(mesh_device.shape)
-    h_per_y, w_per_y = H // TP, W // SP
-    h_per_uv, w_per_uv = Hu // TP, Wu // SP
-
-    # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
-    host_Y = tt_Y.cpu(blocking=False)
-    host_Cb = tt_Cb.cpu(blocking=False)
-    host_Cr = tt_Cr.cpu(blocking=False)
-    ttnn.synchronize_device(mesh_device)
-
-    mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
-
-    def _extract(host_tensor):
-        host_shards = ttnn.get_device_tensors(host_tensor)
-        logical_shape = list(host_shards[0].shape)
-        trim = tuple(slice(0, d) for d in logical_shape)
-        return [_to_torch_zero_copy(s)[trim] for s in host_shards]
-
-    Y_shards = _extract(host_Y)  # each (1, T, h_per_y, w_per_y) — post-permute CTHW
-    Cb_shards = _extract(host_Cb)  # each (1, T, h_per_uv, w_per_uv)
-    Cr_shards = _extract(host_Cr)
-
-    # Allocate the planar output and view each plane region as a (T, h, w)
-    # strided torch tensor (no copy, shares storage with `out`).
-    out = np.empty((T_, row_stride), dtype=np.uint8)
-    out_t = torch.from_numpy(out)
-    y_view = out_t.as_strided((T_, H, W), (row_stride, W, 1), 0)
-    u_view = out_t.as_strided((T_, Hu, Wu), (row_stride, Wu, 1), hw)
-    v_view = out_t.as_strided((T_, Hu, Wu), (row_stride, Wu, 1), hw + uv)
-
-    pool = _get_default_reassemble_pool()
-
-    def _write(view, shard, r, c, h_per, w_per):
-        # shard (1, T, h_per, w_per) -> squeeze(0) -> contiguous (T, h_per, w_per).
-        # No host-side permute: the CTHW layout was set up on device.
-        src = shard.squeeze(0)
-        view[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per].copy_(src)
-
-    futures = []
-    for coord, shard in zip(mesh_coords, Y_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y))
-    for coord, shard in zip(mesh_coords, Cb_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv))
-    for coord, shard in zip(mesh_coords, Cr_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv))
-    for f in futures:
-        f.result()
-
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +263,90 @@ class TestFastDeviceToHost:
             print(f"  Average time:  {avg_s * 1000:.1f} ms")
             print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
 
+    def test_yuv_correctness(self, mesh_device, num_links, device_params, topology, height, width):
+        """fast_device_to_host_yuv: BCTHW bf16 [-1,1] -> on-device YUV 4:2:0 -> planar uint8.
+
+        Compares the full pipeline (on-device permute + YUV kernel + batched D2H +
+        planar concat) against a PyTorch BT.601 reference assembled into the same
+        ``[Y | Cb | Cr]`` planar layout that ``fast_device_to_host_yuv`` emits.
+        """
+        Hu, Wu = height // 2, width // 2
+        hw = height * width
+        uv = Hu * Wu
+
+        gen = torch.Generator().manual_seed(42)
+        # BCTHW bf16 in [-1, 1] — same value range the YUV kernel and the Wan VAE produce.
+        ref_bcthw = torch.rand(B, C, T, height, width, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+
+        # Host reference: convert BCTHW (1, 3, T, H, W) -> CHWT (3, H, W, T) and run
+        # the same BT.601 conversion the kernel does.
+        ref_chwt = ref_bcthw.squeeze(0).permute(0, 2, 3, 1)  # (3, H, W, T)
+        ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(ref_chwt)
+        # ref_Y: (H, W, T); ref_Cb/Cr: (H/2, W/2, T).
+
+        # Build the expected planar (T, hw + 2*uv) buffer in the same layout as
+        # the function's output: per-frame [Y | Cb | Cr], T outermost.
+        expected = np.empty((T, hw + 2 * uv), dtype=np.uint8)
+        expected[:, :hw] = ref_Y.permute(2, 0, 1).reshape(T, hw).numpy()
+        expected[:, hw : hw + uv] = ref_Cb.permute(2, 0, 1).reshape(T, uv).numpy()
+        expected[:, hw + uv :] = ref_Cr.permute(2, 0, 1).reshape(T, uv).numpy()
+
+        tt_tensor = _shard_to_device(ref_bcthw, mesh_device)
+        actual = fast_device_to_host_yuv(tt_tensor, mesh_device, debug=True)
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank != 0:
+            return
+
+        assert actual.shape == expected.shape, f"shape: {actual.shape} vs {expected.shape}"
+
+        diff = np.abs(actual.astype(np.int32) - expected.astype(np.int32))
+        y_diff = diff[:, :hw]
+        cb_diff = diff[:, hw : hw + uv]
+        cr_diff = diff[:, hw + uv :]
+
+        print(f"\n--- fast_device_to_host_yuv correctness ({height}x{width}) ---")
+        print(f"  Y : max err {int(y_diff.max())}, mean err {y_diff.mean():.4f}")
+        print(f"  Cb: max err {int(cb_diff.max())}, mean err {cb_diff.mean():.4f}")
+        print(f"  Cr: max err {int(cr_diff.max())}, mean err {cr_diff.mean():.4f}")
+
+        assert int(y_diff.max()) <= 1, f"Y max err {int(y_diff.max())} > 1"
+        assert int(cb_diff.max()) <= 2, f"Cb max err {int(cb_diff.max())} > 2"
+        assert int(cr_diff.max()) <= 2, f"Cr max err {int(cr_diff.max())} > 2"
+
+    def test_yuv_performance(self, mesh_device, num_links, device_params, topology, height, width):
+        """Time fast_device_to_host_yuv: on-device YUV + batched D2H + planar concat."""
+        n_iters = 10
+        Hu, Wu = height // 2, width // 2
+
+        gen = torch.Generator().manual_seed(42)
+        ref_bcthw = torch.rand(B, C, T, height, width, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+        tt_tensor = _shard_to_device(ref_bcthw, mesh_device)
+
+        # Warmup (also forces program cache population).
+        fast_device_to_host_yuv(tt_tensor, mesh_device)
+        ttnn.synchronize_device(mesh_device)
+
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            fast_device_to_host_yuv(tt_tensor, mesh_device)
+        ttnn.synchronize_device(mesh_device)
+        end = time.perf_counter()
+
+        avg_s = (end - start) / n_iters
+        output_bytes = T * (height * width + 2 * Hu * Wu)
+        throughput_gbs = (output_bytes / avg_s) / 1e9
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            print(f"\n--- fast_device_to_host_yuv performance ({height}x{width}, root=0) ---")
+            print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
+            print(f"  Output shape:  (T={T}, plane_bytes={output_bytes // T}) uint8 yuv420p")
+            print(f"  Output size:   {output_bytes / 1e6:.1f} MB")
+            print(f"  Iterations:    {n_iters}")
+            print(f"  Average time:  {avg_s * 1000:.1f} ms")
+            print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
+
 
 # ---------------------------------------------------------------------------
 # TestYUVConversionMesh — on-device YUV + D2H + planar concat on a 4x8 mesh
@@ -389,22 +386,6 @@ class TestYUVConversionMesh:
     def _coefficients():
         return ttnn.experimental.YUVCoefficients(y=list(_YUV_Y_COEFF), cb=list(_YUV_CB_COEFF), cr=list(_YUV_CR_COEFF))
 
-    @staticmethod
-    def _yuv_to_cthw(tt_Y, tt_Cb, tt_Cr):
-        """Permute YUV outputs from BHWT (1, H, W, T) to BCTHW (1, T, H, W).
-
-        This is much cheaper than reshuffling on host: each device just permutes
-        its local shard, no cross-device communication.  The resulting per-shard
-        layout has T outermost in source memory, which makes the host scatter
-        a contiguous-source -> strided-dest copy (numpy/torch fast path) instead
-        of a fully-strided one.
-        """
-        return (
-            ttnn.permute(tt_Y, (0, 3, 1, 2)),
-            ttnn.permute(tt_Cb, (0, 3, 1, 2)),
-            ttnn.permute(tt_Cr, (0, 3, 1, 2)),
-        )
-
     def test_correctness(self, mesh_device, num_links, device_params, topology):
         """CHWT bf16 -> on-device YUV -> per-component D2H -> compare to host."""
         H, W, T_ = 720, 1280, 81
@@ -418,13 +399,10 @@ class TestYUVConversionMesh:
         ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
         tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, self._coefficients())
-        # On-device permute BHWT -> BCTHW so the host scatter reads a contiguous
-        # (T, h, w) source.  See `_yuv_to_cthw` docstring.
-        tt_Y, tt_Cb, tt_Cr = self._yuv_to_cthw(tt_Y, tt_Cb, tt_Cr)
 
-        # After permute the kernel outputs are (1, T, H, W) and (1, T, H/2, W/2).
-        # Mesh axis 0 -> tensor dim 2 (H), mesh axis 1 -> tensor dim 3 (W).
-        concat_dims = [2, 3]
+        # Y is (1, H, W, T); Cb/Cr are (1, H/2, W/2, T).  Mesh axis 0 -> tensor
+        # dim 1 (H), mesh axis 1 -> tensor dim 2 (W).
+        concat_dims = [1, 2]
         dev_Y = fast_device_to_host(tt_Y, mesh_device, concat_dims, ccl_manager=ccl_manager)
         dev_Cb = fast_device_to_host(tt_Cb, mesh_device, concat_dims, ccl_manager=ccl_manager)
         dev_Cr = fast_device_to_host(tt_Cr, mesh_device, concat_dims, ccl_manager=ccl_manager)
@@ -434,15 +412,14 @@ class TestYUVConversionMesh:
             return  # Non-root ranks: nothing to verify
 
         assert dev_Y is not None and dev_Cb is not None and dev_Cr is not None
-        assert dev_Y.shape == torch.Size([1, T_, H, W]), f"Y shape {dev_Y.shape}"
-        assert dev_Cb.shape == torch.Size([1, T_, Hu, Wu]), f"Cb shape {dev_Cb.shape}"
-        assert dev_Cr.shape == torch.Size([1, T_, Hu, Wu]), f"Cr shape {dev_Cr.shape}"
+        assert dev_Y.shape == torch.Size([1, H, W, T_]), f"Y shape {dev_Y.shape}"
+        assert dev_Cb.shape == torch.Size([1, Hu, Wu, T_]), f"Cb shape {dev_Cb.shape}"
+        assert dev_Cr.shape == torch.Size([1, Hu, Wu, T_]), f"Cr shape {dev_Cr.shape}"
 
-        # dev_* are (1, T, H, W) post-permute.  Squeeze B and bring back to
-        # HWT order so they line up with the host reference.
-        dev_Y_hwt = dev_Y.squeeze(0).permute(1, 2, 0).contiguous()  # (H, W, T)
-        dev_Cb_hwt = dev_Cb.squeeze(0).permute(1, 2, 0).contiguous()  # (H/2, W/2, T)
-        dev_Cr_hwt = dev_Cr.squeeze(0).permute(1, 2, 0).contiguous()
+        # dev_* are (1, H, W, T); ref_* are (H, W, T).  Squeeze B and compare directly.
+        dev_Y_hwt = dev_Y.squeeze(0)  # (H, W, T)
+        dev_Cb_hwt = dev_Cb.squeeze(0)  # (H/2, W/2, T)
+        dev_Cr_hwt = dev_Cr.squeeze(0)
 
         # Spot-check a few positions before the full diff so a failure points
         # at the data flow rather than the comparison expression.
@@ -478,9 +455,6 @@ class TestYUVConversionMesh:
 
         def _convert_and_planar():
             tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
-            # On-device permute BHWT -> BCTHW: cheap on device, makes the host
-            # scatter a contiguous-source -> strided-dest copy.
-            tt_Y, tt_Cb, tt_Cr = self._yuv_to_cthw(tt_Y, tt_Cb, tt_Cr)
             return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T_)
 
         # Warmup (also forces JIT/program-cache population).
