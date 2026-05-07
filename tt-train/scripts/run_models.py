@@ -22,6 +22,7 @@ import yaml
 import tt_train_metrics
 import analyze_memory
 import analyze_steps
+from model_tracer.generic_ops_tracer import get_machine_info
 
 
 def _verify_path(path: str, allowed_root: str) -> str:
@@ -46,18 +47,6 @@ def get_git_commit_hash() -> str:
     repo = git.Repo(search_parent_directories=True)
     sha = repo.head.object.hexsha
     return sha
-
-
-def get_card_type() -> str:
-    """Get the card type by reading from the sysfs or from CI_RUNNER_LABEL. Return exception if fails."""
-    tt_card_type = Path("/sys/class/tenstorrent/tenstorrent!0/tt_card_type")
-    if tt_card_type.exists() and tt_card_type.is_file():
-        with open(tt_card_type, "r") as card_type:
-            return card_type.read().strip().lower()
-    elif card_type := get_env("CI_RUNNER_LABEL", required=False):
-        return card_type.read().strip().lower()
-    else:
-        raise Exception(f"Cannot read {tt_card_type} and CI_RUNNER_LABEL is empty.")
 
 
 def run_and_save_log(cmd: list[str], log_path: Path) -> int:
@@ -158,8 +147,9 @@ def main() -> int:
     git_commit_hash = get_git_commit_hash()
 
     # Get additional metadata
-    arch_name = get_env("CI_ARCH_NAME", required=False)
-    card_type = get_card_type()
+    machine_info = get_machine_info()
+    arch_name = machine_info["board_type"]
+    card_type = machine_info["device_series"]
 
     # Create output directory to store metrics
     output_dir = Path(_verify_path(parsed_args.output_dir, tt_metal_runtime_root))
