@@ -31,21 +31,22 @@ class MeshDevice;
  * MeshTensor is a device memory object. The user’s mental model of MeshTensor is an owning handle to
  * device-allocated memory.
  *
- * MeshTensor should have RAII semantics with unique ownership:
- * - Device memory resource lifetime == object lifetime
- *   - Device memory is allocated on construction, and released on destruction.
- *   - The programmer explicitly manages the device-allocated memory lifetime.
- *   - This can be tricky in an asynchronous runtime environment. For now, the focus is on the programmer to correctly
- *     manage MeshTensor lifetime around queue synchronization events.
- * - Movable (RAII transfer of ownership)
- * - Non-copyable
- * - No equality/inequality operator. (If we did add this, equality would mean the same underlying allocation – no value
- *   semantics)
- *
  * Invariants of MeshTensor:
- * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
- *   pointers to the underlying storage and associated MeshDevice. Please note that this invariant isn't guaranteed
- *   currently, see: #38375
+ * - MeshTensor is the sole owner of the underlying device memory.
+ * - MeshTensor object lifetime is the same as the underlying device memory lifetime. An instance of MeshTensor maps to
+ * a single allocated device memory.
+ * - The underlying device memory is always allocated, large enough to hold the tensor, and laid out in a way
+ *   that conforms to the TensorSpec (page size, buffer type, memory layout).
+ *
+ * Notes:
+ * - MeshTensor is non-copyable but movable due to the unique ownership model.
+ * - To "deallocate" a MeshTensor, simply let the MeshTensor go out of scope.
+ * - The programmer is responsible for managing MeshTensor lifetime around queue synchronization events,
+ *   which can be tricky in an asynchronous runtime environment.
+ * - There is no invariant between a MeshTensor and it's associated TensorTopology.
+ *
+ * Note: A moved-from MeshTensor is in a valid but unspecified state. All member functions except destruction and
+ * assignment will fail on a moved-from instance.
  */
 class MeshTensor {
 public:
@@ -97,19 +98,13 @@ public:
 
     // End special member functions
 
-    // Deallocation related:
-
     /**
      * Return the underlying device storage MeshBuffer.
-     *
-     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     const distributed::MeshBuffer& mesh_buffer() const;
 
     /**
      * Get the device the allocated device memory is on.
-     *
-     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     distributed::MeshDevice& device() const;
 
@@ -119,8 +114,6 @@ public:
 
     /**
      * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     *
-     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     const TensorTopology& tensor_topology() const;
 
@@ -147,16 +140,14 @@ public:
 
     /**
      * Get the size in bytes of a single element held in the tensor.
-     *
-     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     std::size_t element_size() const;
 
     Strides strides() const;
 
-    // Update the topology of the MeshTensor post construction.
-    // TODO(river): Is this a good idea? Would a move constructor be better?
-    // Is a MeshTensor with a new tensor topology fundamentally different?
+    /**
+     * Update the topology of the MeshTensor post construction.
+     */
     void update_tensor_topology(TensorTopology tensor_topology);
 
     /**
