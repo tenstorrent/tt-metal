@@ -35,6 +35,27 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 
 #endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
+// optimized_branchless_comp : if BitwiseCompare(x, value) --> 1, else 0
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_fp32_fast() {
+    // Branchless FP32 comparison using integer magics
+    for (int d = 0; d < ITERATIONS; d++) {
+        vInt val_a = reinterpret_cast<vInt&>(dst_reg[0]);
+        vInt zero = 0;
+        vInt res = 0;
+
+        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            v_if (val_a > zero) {
+               res = 1;
+            }
+            v_endif;
+        }
+
+        dst_reg[0] = reinterpret_cast<vFloat&>(res);
+        dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
     const vFloat zero = 0.0f;
