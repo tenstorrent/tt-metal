@@ -64,25 +64,7 @@ from models.experimental.tt_symbiote.utils.device_management import DeviceInit
 
 logger = logging.getLogger(__name__)
 
-# ``DistributedConfig`` / ``DistributedTensorConfig`` are defined in ``run_config``; imported here so
-# callers can import Omni mesh types from ``qwen_omni_modules`` or ``distributed_config``.
-
-
-def refresh_qwen_omni_distributed_config_aliases() -> None:
-    """Drop any cached copies of shim ``DistributedConfig`` / ``DistributedTensorConfig`` globals.
-
-    Gr00t's ``patch_run_config_for_gr00t`` swaps ``run_config.DistributedConfig``; if something had
-    materialized attributes on ``qwen_omni.distributed_config``, clear them so lazy module
-    accessors (PEP 562) keep tracking ``run_config``.
-    """
-    import sys
-
-    modname = "models.experimental.tt_symbiote.models.qwen_omni.distributed_config"
-    shim = sys.modules.get(modname)
-    if shim is None:
-        return
-    shim.__dict__.pop("DistributedConfig", None)
-    shim.__dict__.pop("DistributedTensorConfig", None)
+# ``DistributedConfig`` / ``DistributedTensorConfig`` come from ``run_config`` above for Omni callers.
 
 
 def _tensor_shardable_for_default_mesh_config(mesh_device, tensor) -> bool:
@@ -162,7 +144,6 @@ _QWEN_OMNI_NORMALRUN_TO_TORCH_PATCHED = False
 def ensure_qwen_omni_normalrun_to_torch_slice() -> None:
     """Patch :meth:`NormalRun.to_torch` for Omni dim-0 slice after ``ttnn.to_torch`` when configured."""
     global _QWEN_OMNI_NORMALRUN_TO_TORCH_PATCHED
-    refresh_qwen_omni_distributed_config_aliases()
     if _QWEN_OMNI_NORMALRUN_TO_TORCH_PATCHED:
         return
     from models.experimental.tt_symbiote.core.run_config import NormalRun
@@ -204,7 +185,6 @@ class QwenOmniDeviceInit(DeviceInit):
 
     @classmethod
     def init_state_impl(cls, device):
-        refresh_qwen_omni_distributed_config_aliases()
         ensure_qwen_omni_normalrun_to_torch_slice()
         return QwenOmniDistributedConfig(device)
 
@@ -5626,7 +5606,6 @@ __all__ = [
     "DistributedConfig",
     "DistributedTensorConfig",
     "QwenOmniDistributedConfig",
-    "refresh_qwen_omni_distributed_config_aliases",
     "QwenOmniReplicatedMeshTensorConfig",
     "distributed_config_col_sharded_last_dim",
     "ensure_qwen_omni_normalrun_to_torch_slice",
