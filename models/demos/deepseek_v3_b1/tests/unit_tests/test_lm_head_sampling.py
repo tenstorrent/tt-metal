@@ -2031,7 +2031,7 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
     """Parse a 256-byte DeepseekMetadata output page into a dict.
 
     Layout (64 uint32 words = 256 bytes), kept in lock-step with metadata.hpp:
-      [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
+      [0] token_type, [1] request_id, [2] token_id, [3] position_id,
       [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
       [8:13] candidate_token_ids, [13:17] prefill_token_ids,
       [17:32] p_top15_indices, [32:40] p_top15_scores,
@@ -2062,7 +2062,7 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
 
     return {
         "token_type": int(raw[0].item()),
-        "slot_id": int(raw[1].item()),
+        "request_id": int(raw[1].item()),
         "token_id": int(raw[2].item()),
         "position_id": position_id,
         "lane_idx": int(raw[4].item()),
@@ -2083,7 +2083,7 @@ def create_input_page(
     token_id: int,
     position_id: int,
     prefill_token_ids: int | list[int],
-    slot_id: int,
+    request_id: int,
     temperature: float = 0.0,
     top_k: int = 1,
     top_p: float = 1.0,
@@ -2095,13 +2095,13 @@ def create_input_page(
     the same DeepseekMetadata layout the demo uses.
 
     Layout (uint32 word indices, full DeepseekMetadata struct):
-      [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
+      [0] token_type, [1] request_id, [2] token_id, [3] position_id,
       [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
       [13:17] prefill_token_ids.
     """
     page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
     page[0, 0] = token_type
-    page[0, 1] = slot_id
+    page[0, 1] = request_id
     page[0, 2] = token_id
     page[0, 3] = position_id
     page[0, 4] = lane_idx
@@ -2211,7 +2211,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
     pid = pipeline.my_mesh_id
     logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
 
-    slot_id = 23
+    request_id = 23
 
     pipeline.setup_and_run()
     logger.debug(f"[TEST P{pid}] setup_and_run complete")
@@ -2246,7 +2246,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
                 token_id=iteration,
                 position_id=base_hidden_pos,
                 prefill_token_ids=int(base_token_ids[iteration].item()),
-                slot_id=slot_id,
+                request_id=request_id,
                 temperature=1.0,
                 top_k=1,
                 top_p=1.0,
@@ -2262,7 +2262,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
             got_base_tokens.append(page["candidate_token_ids"][0])
             got_spec_tokens.append(page["candidate_token_ids"][1])
             assert page["token_type"] == 0, f"Trace row {iteration} returned non-BASE token_type={page}"
-            assert page["slot_id"] == slot_id, f"Trace row {iteration} returned wrong slot_id: {page}"
+            assert page["request_id"] == request_id, f"Trace row {iteration} returned wrong request_id: {page}"
             assert (
                 page["candidate_positions"][0] == expected_base_pos
             ), f"Trace row {iteration} base position mismatch: expected={expected_base_pos}, got={page}"

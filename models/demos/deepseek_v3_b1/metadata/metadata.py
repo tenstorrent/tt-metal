@@ -36,7 +36,7 @@ class DeepseekMetadata:
 
     # Fixed metadata page layout, one uint32 per scalar field:
     #   [0] token_type
-    #   [1] slot_id
+    #   [1] request_id
     #   [2] token_id
     #   [3] position_id
     #   [4] lane_idx
@@ -50,7 +50,7 @@ class DeepseekMetadata:
     #   [40:55] q_top15_indices
     #   [55:63] q_top15_scores, two bf16/uint16 scores per uint32 word
     token_type: int = 0
-    slot_id: int = 0
+    request_id: int = 0
     token_id: int = 0
     position_id: int = 0
     lane_idx: int = 0
@@ -91,7 +91,7 @@ class DeepseekMetadata:
 
         values = [
             int(self.token_type),
-            int(self.slot_id),
+            int(self.request_id),
             int(self.token_id),
             int(self.position_id),
             int(self.lane_idx),

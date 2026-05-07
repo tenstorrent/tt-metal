@@ -130,7 +130,7 @@ class AttentionBlock:
             return normalized * gamma
 
         position_id = metadata.position_id
-        slot_id = metadata.slot_id
+        slot_id = metadata.request_id
         # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
         input_layernorm = rmsnorm(input_tensor, gamma_tensor)
         matmul_result = input_layernorm @ matmul_weights_tensor

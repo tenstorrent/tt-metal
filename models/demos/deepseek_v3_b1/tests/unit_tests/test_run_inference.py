@@ -60,7 +60,7 @@ class _TraceBackedModel:
         self,
         token_id: int,
         prefill_token_ids: int | list[int],
-        user_id: int,
+        request_id: int,
         position_id: int,
         token_type: int,
         lane_idx: int = 0,
@@ -75,7 +75,7 @@ class _TraceBackedModel:
             "token_id": int(token_id),
             "type": TOKEN_TYPE_NAME_BY_VALUE[int(token_type)],
             "pos": int(position_id),
-            "user_id": int(user_id),
+            "request_id": int(request_id),
             "prefill_id": int(prefill_token_ids[0] if isinstance(prefill_token_ids, list) else prefill_token_ids),
         }
         if self._capture_dynamic_fields:
@@ -116,7 +116,7 @@ def _validate_token(token: dict, context: str) -> None:
 
 
 def _validate_packet(packet: dict, context: str) -> None:
-    _require_exact_keys(packet, ("user_id", "type", "token_0", "token_1"), context)
+    _require_exact_keys(packet, ("request_id", "type", "token_0", "token_1"), context)
     assert packet["type"] in TOKEN_TYPE_BY_NAME, f"{context}.type must be PREFILL, BASE or SPEC, got {packet['type']!r}"
     _validate_token(packet["token_0"], f"{context}.token_0")
     _validate_token(packet["token_1"], f"{context}.token_1")
@@ -126,7 +126,7 @@ def _validate_dynamic_packet(packet: dict, context: str) -> None:
     _require_exact_keys(
         packet,
         (
-            "user_id",
+            "request_id",
             "type",
             "lane_idx",
             "window_start_pos",
@@ -152,14 +152,14 @@ def _validate_dynamic_packet(packet: dict, context: str) -> None:
 
 
 def _validate_expected_write(write: dict, context: str) -> None:
-    _require_exact_keys(write, ("token_id", "type", "pos", "user_id", "prefill_id"), context)
+    _require_exact_keys(write, ("token_id", "type", "pos", "request_id", "prefill_id"), context)
     assert write["type"] in TOKEN_TYPE_BY_NAME, f"{context}.type must be PREFILL, BASE or SPEC, got {write['type']!r}"
 
 
 def _validate_dynamic_expected_write(write: dict, context: str) -> None:
     _require_exact_keys(
         write,
-        ("token_id", "type", "pos", "user_id", "prefill_id", "lane_idx", "window_start_pos", "num_window_tokens"),
+        ("token_id", "type", "pos", "request_id", "prefill_id", "lane_idx", "window_start_pos", "num_window_tokens"),
         context,
     )
     assert write["type"] in TOKEN_TYPE_BY_NAME, f"{context}.type must be PREFILL, BASE or SPEC, got {write['type']!r}"
@@ -182,7 +182,7 @@ def _normalize_expected_write(write: dict) -> dict:
         "token_id": int(write["token_id"]),
         "type": write["type"],
         "pos": int(write["pos"]),
-        "user_id": int(write["user_id"]),
+        "request_id": int(write["request_id"]),
         "prefill_id": int(write["prefill_id"]),
     }
     if "lane_idx" in write:
@@ -281,7 +281,7 @@ def _packet_to_decode_result(packet: dict, *, force_prefill: bool = False) -> De
         return DecodeResult(
             token_type=token_type,
             tokens=candidate_tokens,
-            user_id=int(packet["user_id"]),
+            request_id=int(packet["request_id"]),
             lane_idx=int(packet["lane_idx"]),
             position_id=int(packet["window_start_pos"]) + int(packet["lane_idx"]) - 1,
             p_top15_indices=[int(token) for token in packet["target_topn_tokens"]],
@@ -298,7 +298,7 @@ def _packet_to_decode_result(packet: dict, *, force_prefill: bool = False) -> De
             CandidateToken(int(token_0["token_id"]), token_0_pos),
             CandidateToken(int(token_1["token_id"]), int(token_1["pos"])),
         ],
-        user_id=int(packet["user_id"]),
+        request_id=int(packet["request_id"]),
         lane_idx=lane_idx,
         position_id=token_0_pos - 1,
     )

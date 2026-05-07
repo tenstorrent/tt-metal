@@ -753,7 +753,7 @@ void kernel_main() {
     // Write one fixed DeepseekMetadata page into the given CB.
     auto write_token_metadata_to_socket_cb = [](uint32_t cb,
                                                 uint32_t token_type,
-                                                uint32_t slot_id = 0,
+                                                uint32_t request_id = 0,
                                                 uint32_t input_token_id = 0,
                                                 uint32_t input_pos_id = 0,
                                                 uint32_t lane_idx = 0,
@@ -771,18 +771,18 @@ void kernel_main() {
             }
         }
         page[0] = token_type;
-        page[1] = slot_id;
+        page[1] = request_id;
         page[2] = input_token_id;
         page[3] = input_pos_id;
         page[4] = lane_idx;
         if (candidate_token_ids != nullptr) {
-            for (uint32_t slot_idx = 0; slot_idx < deepseek_b1_ops::MAX_WINDOW_TOKENS; ++slot_idx) {
-                page[8 + slot_idx] = candidate_token_ids[slot_idx];
+            for (uint32_t candidate_idx = 0; candidate_idx < deepseek_b1_ops::MAX_WINDOW_TOKENS; ++candidate_idx) {
+                page[8 + candidate_idx] = candidate_token_ids[candidate_idx];
             }
         }
         if (prefill_token_ids != nullptr) {
-            for (uint32_t slot_idx = 0; slot_idx < deepseek_b1_ops::MAX_SPECULATIVE_TOKENS; ++slot_idx) {
-                page[13 + slot_idx] = prefill_token_ids[slot_idx];
+            for (uint32_t candidate_idx = 0; candidate_idx < deepseek_b1_ops::MAX_SPECULATIVE_TOKENS; ++candidate_idx) {
+                page[13 + candidate_idx] = prefill_token_ids[candidate_idx];
             }
         }
     };
@@ -864,7 +864,7 @@ void kernel_main() {
             //         reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_src);
             //     invalidate_l1_cache();
             //     DPRINT << "MD_INPUT iter=" << iteration_count << " pos=" << md->position_id << " slot=" <<
-            //     md->slot_id
+            //     md->request_id
             //            << " tok=" << md->token_id << " top_k=" << md->top_k << ENDL();
             // }
 
@@ -1214,7 +1214,7 @@ void kernel_main() {
             invalidate_l1_cache();
             uint32_t token_type = metadata_ptr->token_type;
             uint32_t input_pos_id = metadata_ptr->position_id;
-            uint32_t slot_id = metadata_ptr->slot_id;
+            uint32_t request_id = metadata_ptr->request_id;
             uint32_t lane_idx = metadata_ptr->lane_idx;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
@@ -1234,7 +1234,7 @@ void kernel_main() {
             write_token_metadata_to_socket_cb(
                 eh_gather_dst_cb,
                 token_type,
-                slot_id,
+                request_id,
                 0,
                 input_pos_id,
                 lane_idx,
@@ -1279,7 +1279,7 @@ void kernel_main() {
             invalidate_l1_cache();
             uint32_t base_token_id = metadata_ptr->candidate_token_ids[0];
             uint32_t token_type = metadata_ptr->token_type;
-            uint32_t slot_id = metadata_ptr->slot_id;
+            uint32_t request_id = metadata_ptr->request_id;
             uint32_t input_pos_id = metadata_ptr->position_id;
             uint32_t lane_idx = metadata_ptr->lane_idx;
             cb_pop_front(sampling_socket_cb, 1);
@@ -1294,7 +1294,7 @@ void kernel_main() {
             write_token_metadata_to_socket_cb(
                 sampling_socket_cb,
                 token_type,
-                slot_id,
+                request_id,
                 0,
                 input_pos_id,
                 lane_idx,
