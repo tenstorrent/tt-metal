@@ -45,8 +45,11 @@ In addition to the six scheduled pipelines above, the same 3-tier
 infrastructure already hosts **sweep** and **device-perf** pipelines.
 These exist on `main` and follow the **same registry-driven approach**
 as e2e / unit, but are **not yet on a daily cron** — they're only
-runnable via `workflow_dispatch`. **You can register tests in them
-today** following the same steps as the `e2e` and `unit` pipelines. Automated schedule can be enabled once we have tests in these.
+runnable via `workflow_dispatch`.
+
+**You can register tests in them today**, following the same steps as
+the `e2e` and `unit` pipelines. Automated schedules will be enabled
+once these registries have tests.
 
 | Pipeline | Workflow | Registry |
 |---|---|---|
@@ -61,7 +64,8 @@ registry filename and the corresponding workflow file you edit.
 
 ### Which tier should I assign to my model?
 
-Confirm with model owner / leadership on the tier prioritization. See [`models/model_ci_tiers.md`](./model_ci_tiers.md) for tier definition.
+The tier (1, 2, or 3) is a product/leadership decision, set by the model
+lead. See [Tier assignment](#tier-assignment) below for the criteria.
 
 ---
 
@@ -72,7 +76,7 @@ When porting `<your-model>`:
 - **1. Get a tier assignment** from the model lead (1, 2, or 3).
 - **2. Add the model to `models/model_ci_tiers.md`** under the
   appropriate tier table, with the SKUs it runs on.
-- **3. Migrate existent tests** off the old single-card / T3000 / Galaxy
+- **3. Migrate existing tests** off the old single-card / T3000 / Galaxy
   pipelines (`t3k_*_tests.yaml`, `galaxy_*_tests.yaml`,
   blackhole-specific demo files, etc.) into the matching tiered
   registry:
@@ -89,19 +93,27 @@ When porting `<your-model>`:
   identifier for the registry's `model:` and the workflow filter
   enum (see [Naming](#naming)).
 - **6. Add the model to the workflow's `workflow_dispatch.inputs.model`
-  enum** for both e2e and unit (whichever you registered).
-  Example: Tier 2 e2e -> `.github/workflows/models-t2-e2e-tests.yaml`.
-  This enables model filtering.
-- **7. Update test timeouts** in the configuration yamls.
-  Make sure that these are small (around measured test time + 10% buffer)
-  to avoid CI overhead
-- **8. Verify the time-budget table** in
-  `.github/time_budget.yaml` covers the SKUs your tests need.
-  This typically means you'll have to remove budget from the previous test
-  place to the new one.
+  enum** for every test type you registered (e2e / unit / sweep /
+  device-perf). Example: Tier 2 e2e →
+  `.github/workflows/models-t2-e2e-tests.yaml`. This enables model
+  filtering on manual dispatch.
+- **7. Set tight test timeouts** in the registry yamls
+  (`tests/pipeline_reorg/models_*_tests.yaml`). Use the measured test
+  time plus a reasonable margin for runner variance (~15%) —
+  generous timeouts count against the shared CI budget.
+- **8. Verify the time-budget table** in `.github/time_budget.yaml`
+  covers the SKUs your tests need. When porting from a legacy pipeline
+  this typically means *moving* budget from the legacy pipeline's
+  section to the tiered pipeline's section, not adding net new budget,
+  unless new tests were added.
 - **9. Set a valid Slack `owner_id` and `team`** on every entry.
-- **10. (Future)** Once the centralized targets YAML exists, add
-  the model's accuracy and performance targets there. See
+- **10. Bake performance / accuracy assertions into the test itself**
+  (e.g. `assert pcc > 0.99`, `assert tokens_per_second >= …`) so
+  regressions fail the run. Tier 3 models are exempt from perf
+  targets, but accuracy assertions still apply. Once the centralized
+  targets YAML
+  ([#42671](https://github.com/tenstorrent/tt-metal/issues/42671))
+  ships, those numbers will migrate there. See
   [Performance / accuracy targets](#performance--accuracy-targets).
 - **11. Run the pipeline manually** (`workflow_dispatch`) end-to-end
   before merging. Schedule will pick it up automatically afterwards.
@@ -135,10 +147,9 @@ Once decided, record it in:
 
 ## Updating `models/model_ci_tiers.md`
 
-[`models/model_ci_tiers.md`](./model_ci_tiers.md) is the **canonical
-human-readable index**. It lists every supported model by tier with the
-SKU(s) it runs on. Every model added to the tiered CI **must** also
-appear here.
+[`models/model_ci_tiers.md`](./model_ci_tiers.md) lists every
+supported model by tier with the SKU(s) it runs on.
+Every model added to the tiered CI **must** also appear here.
 
 Add your model under the table for its tier with the SKU column
 matching the SKUs declared in the registry YAML — e.g.:
@@ -151,6 +162,12 @@ Use **N150 / N300 / T3000 / WH LoudBox / WH Galaxy** in the SKU column
 (human-readable hardware names, matching neighbouring rows), not the
 internal `wh_n150` / `wh_llmbox_perf` SKU keys.
 
+> **Note:** the 3-tier CI is wormhole-only today. **Blackhole SKUs**
+> (`bh_p100`, `bh_p150`, `bh_loudbox`, `bh_quietbox`, …) will be
+> added to the tiered registries / workflows / `model_ci_tiers.md`
+> at a later stage. Until then, keep Blackhole tests in their existing
+> location and don't pre-emptively add BH rows to the tiered index.
+
 ---
 
 ## Migrating tests off legacy pipelines
@@ -161,12 +178,18 @@ If your model is currently running in any of:
   `t3k_unit_tests.yaml`, `t3k_demo_tests.yaml`, `t3k_perf_tests.yaml`,
   `t3k_integration_tests.yaml`
 - `tests/pipeline_reorg/galaxy_*_tests.yaml`
-- `tests/pipeline_reorg/blackhole_demo_tests.yaml`
 - single-card / standalone workflow files
+- or any other relevant pipelines
 
 …remove the entry from the legacy file and re-create it in the
-appropriate tiered registry (`models_e2e_tests.yaml` or
-`models_unit_tests.yaml`).
+appropriate tiered registry:
+
+- `tests/pipeline_reorg/models_e2e_tests.yaml` — end-to-end demos.
+- `tests/pipeline_reorg/models_unit_tests.yaml` — module correctness.
+- `tests/pipeline_reorg/models_sweep_tests.yaml` — sweep tests
+  (Tier 1 / 2; manual-only today, scheduled later).
+- `tests/pipeline_reorg/models_device_perf_tests.yaml` — device-perf
+  tests (Tier 1; manual-only today, scheduled later).
 
 **Do not leave a duplicate entry in the legacy file.** Two entries
 means the test runs twice on every nightly cron, which wastes hardware
@@ -230,8 +253,9 @@ Match the standard already used by neighbouring models:
 
 ## Standard env conventions
 
-All tiered CI jobs use the same shared paths so weights and cache are
-re-usable across runs. Use these in your `cmd:` block:
+All tiered CI jobs should use the same shared paths so weights and
+cache are re-usable across runs. Exceptions need approval from the
+CI owners with a clear justification. Use these in your `cmd:` block:
 
 | Env var | Value | Purpose |
 |---|---|---|
@@ -239,10 +263,6 @@ re-usable across runs. Use these in your `cmd:` block:
 | `HF_MODEL` | `<HF/Org>/<HF-Name>` | The HuggingFace checkpoint id, e.g. `meta-llama/Llama-3.3-70B-Instruct`. |
 | `TT_CACHE_PATH` | `/mnt/MLPerf/huggingface/tt_cache/<HF/Org>/<HF-Name>` | TT-side compiled-kernel / weight-conversion cache. The path must mirror `HF_MODEL` so caches don't collide between models. |
 | `MESH_DEVICE` (only when needed) | `T3K` / `TG` / `N300` / etc. | When a test needs a non-default mesh shape. Most single-device runs can omit this. |
-
-Diverging from these paths is a CI bug — runners do not have writable
-arbitrary disk locations and other models will hit a cold cache on
-every run if a shared sub-directory gets clobbered.
 
 ---
 
@@ -300,8 +320,13 @@ If you skip this step, the registry entry will still run on the daily
 cron, but **`workflow_dispatch` users will not be able to select your
 model** from the dropdown — only run "all" or another model.
 
-If your model runs on both e2e and unit, it must be added to both
-workflow files (`models-tN-e2e-tests.yaml` and `models-tN-unit-tests.yaml`).
+If your model runs on multiple test types (any combination of e2e,
+unit, sweep, device-perf), it must be added to **every** matching
+workflow file's `model` enum:
+- `.github/workflows/models-tN-e2e-tests.yaml`
+- `.github/workflows/models-tN-unit-tests.yaml`
+- `.github/workflows/models-tN-sweep-tests.yaml` (Tier 1 / 2 only)
+- `.github/workflows/models-t1-device-perf-tests.yaml` (Tier 1 only)
 
 ---
 
@@ -311,6 +336,10 @@ workflow files (`models-tN-e2e-tests.yaml` and `models-tN-unit-tests.yaml`).
 runtime** per pipeline + SKU. Per-job timeouts in the registry must
 sum to within that budget, otherwise the pipeline cannot fit on the
 allocated hardware in a single nightly slot.
+
+(For porting-specific guidance on moving budget from a legacy pipeline
+to the tiered one, see [step 8](#step-by-step-checklist) of the
+checklist.)
 
 If your new entries push a SKU over budget, either:
 - Tighten your `timeout:` to the minimum that holds with margin, or
@@ -351,11 +380,11 @@ When that lands, every tiered model will be expected to declare:
 - **Accuracy** target (e.g. minimum PCC, minimum eval score, expected
   generation token-matching).
 - **Performance** target (e.g. minimum tokens/s, maximum prefill latency)
-  per SKU.
+  per SKU — **Tier 3 models are exempt from perf targets.**
 
 For now:
 - Bake the assertions into your test (e.g. `assert pcc > 0.99`,
-  `assert tokens_per_second >= …`) so regressions still fail the run.
+  `assert tokens_per_second >= …`) where applicable.
 - Note your target numbers in the PR description that adds the model
   to tiered CI, so they can be migrated into the centralized YAML
   cleanly when it ships.
@@ -385,6 +414,11 @@ the report and is green on the next nightly cycle.
 
 ## Quick reference: files you will touch
 
+To verify before merge, dispatch the
+[`all-model-tests`](https://github.com/tenstorrent/tt-metal/actions/workflows/all-model-tests.yaml)
+pipeline filtered to your tier + type + the new `model:` identifier
+(see step 11).
+
 | File | What changes |
 |---|---|
 | `models/model_ci_tiers.md` | Add a row under the matching tier table. |
@@ -397,4 +431,4 @@ the report and is green on the next nightly cycle.
 | `.github/workflows/models-tN-sweep-tests.yaml` | Same, if you registered a sweep test (Tier 1/2). |
 | `.github/workflows/models-t1-device-perf-tests.yaml` | Same, if you registered a device-perf test. |
 | `.github/time_budget.yaml` | Verify or extend the budget for the SKU you target. |
-| Legacy `t3k_*` / `galaxy_*` / `blackhole_*` YAMLs | **Remove** any old entries for this model. |
+| Legacy `t3k_*` / `galaxy_*` YAMLs | **Remove** any old entries for this model. (Blackhole legacy yamls stay untouched until BH support lands in the 3-tier CI.) |
