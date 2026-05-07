@@ -14,6 +14,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import (
+    FABRIC_1D,
+    L1_SMALL,
+    P300_DEVICE_CONFIGS,
+    QB_DEVICE_CONFIGS,
+    select,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config, get_ep_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import compare_exact, validate_composed
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
@@ -46,28 +53,14 @@ def torch_masked_bincount(
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [
-        pytest.param(
-            (1, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
-            id="single",
-        ),
-        pytest.param(
-            (1, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 2), topology="linear"),
-            id="linear-1x2",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="mesh-1x4"),
-            id="linear-1x4",
-        ),
+    select(QB_DEVICE_CONFIGS, "single")
+    + select(P300_DEVICE_CONFIGS, "linear-1x2")
+    + select(QB_DEVICE_CONFIGS, "linear-1x4")
+    + [
+        # Preserve existing mark: mesh_shape=(4,2) differs from device shape (2,4)
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": FABRIC_1D, "l1_small_size": L1_SMALL},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
         ),

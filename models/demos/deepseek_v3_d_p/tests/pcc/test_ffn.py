@@ -16,6 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import TP_QB_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -24,24 +25,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("batch_seq_len", [4096, 3200], ids=["4K", "3.2K"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
-        ),
-    ],
+    TP_QB_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 def test_ffn_pcc(

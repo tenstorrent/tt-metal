@@ -14,11 +14,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    create_fabric_router_config,
-    extract_mesh_config,
-    get_max_payload_size,
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import (
+    LB_MESH_CONFIGS,
+    P300_MESH_CONFIGS,
+    QB_MESH_CONFIGS,
+    select,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
 
 
 def torch_offset_cumsum(
@@ -74,52 +76,9 @@ def torch_offset_cumsum(
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (2, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2x1",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4x1",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-            id="mesh-2x4",
-        ),
-    ],
+    select(P300_MESH_CONFIGS, "linear-2-1link")
+    + select(QB_MESH_CONFIGS, "linear-4-1link")
+    + select(LB_MESH_CONFIGS, "mesh-4x2", "mesh-2x4"),
     indirect=["mesh_device", "device_params"],
 )
 def test_offset_cumsum(

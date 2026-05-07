@@ -17,10 +17,10 @@ from tracy import signpost
 import ttnn
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import LB_MESH_CONFIGS, QB_MESH_CONFIGS, select
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_gate_outputs,
@@ -49,52 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-    ],
+    select(LB_MESH_CONFIGS, "linear-8-1link", "mesh-4x2", "mesh-2x4") + select(QB_MESH_CONFIGS, "linear-4-1link"),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])

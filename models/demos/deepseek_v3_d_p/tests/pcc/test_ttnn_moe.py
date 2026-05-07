@@ -22,10 +22,10 @@ from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import GLX_MESH_CONFIGS, LB_MESH_CONFIGS, select
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     create_gate_weights,
     create_shared_expert_weights,
     create_torch_expert_weights,
@@ -68,41 +68,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
+    select(LB_MESH_CONFIGS, "linear-8-1link", "mesh-4x2") + GLX_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 def test_ttnn_moe(
@@ -125,9 +91,6 @@ def test_ttnn_moe(
     Both TtMoe and TorchMoe create their gate internally from gate_weights
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
-
-    mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
-    # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
 
     profiler.clear()
     profiler.start("test_ttnn_moe")

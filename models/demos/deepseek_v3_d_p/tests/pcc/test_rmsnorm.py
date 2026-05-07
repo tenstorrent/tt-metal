@@ -18,6 +18,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import TP_QB_DEVICE_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -27,20 +28,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
-        ),
-    ],
+    TP_QB_DEVICE_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, epsilon, num_links):

@@ -26,10 +26,14 @@ import ttnn
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import (
+    GLX_MESH_CONFIGS,
+    LB_MESH_CONFIGS,
+    SINGLE_DEVICE_CONFIG,
+    select,
+)
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
@@ -71,37 +75,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 @pytest.mark.parametrize("isl_total", [1024])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (1, 1),
-            {},
-            1,
-            ttnn.Topology.Linear,
-            id="mesh-1x1",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
+    SINGLE_DEVICE_CONFIG + select(LB_MESH_CONFIGS, "mesh-2x4") + GLX_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)

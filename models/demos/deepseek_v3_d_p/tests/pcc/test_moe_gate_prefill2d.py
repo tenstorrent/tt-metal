@@ -13,13 +13,17 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import (
+    GLX_MESH_CONFIGS,
+    LB_MESH_CONFIGS,
+    QB_MESH_CONFIGS,
+    select,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
-    create_fabric_router_config,
     create_gate_weights,
     get_ep_mesh_composer,
     get_gate_outputs,
-    get_max_payload_size,
     get_sp_mesh_composer,
     load_gate_weights_from_hf,
 )
@@ -96,52 +100,7 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (2, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="mesh-2x2",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
+    select(QB_MESH_CONFIGS, "mesh-2x2") + select(LB_MESH_CONFIGS, "mesh-4x2", "mesh-2x4") + GLX_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 def test_forward_pass(

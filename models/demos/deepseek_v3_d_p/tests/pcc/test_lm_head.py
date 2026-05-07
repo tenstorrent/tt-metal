@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import TP_LM_HEAD_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -62,32 +63,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="1x4-ring",
-        ),
-        pytest.param(
-            (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="ring"),
-            id="2x2-ring",
-        ),
-        pytest.param(
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
-            id="2x4-linear",
-        ),
-    ],
+    TP_LM_HEAD_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 def test_lm_head(
