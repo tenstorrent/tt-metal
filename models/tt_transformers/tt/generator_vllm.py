@@ -247,6 +247,77 @@ class HybridAttentionForCausalLM(Generator):
         num_layers = len(self.model[0].layers)
         return [page_table] * num_layers
 
+    def _chunk_page_tables_per_dp(self, page_tables_per_layer):
+        """Split a global per-layer list along DP into one per-layer list
+        per submesh.
+
+        The plugin pads each per-layer table to the global
+        ``(max_num_seqs * data_parallel, max_num_blocks_per_req)`` shape
+        (see ``TTModelRunner._block_tables_per_layer``); warmup likewise
+        builds a global-batch tensor. ``Generator.decode_forward`` already
+        does ``torch.chunk(page_table, self.data_parallel, 0)`` for the
+        legacy single-page-table path before the per-submesh
+        ``prepare_inputs_decode``; the hybrid bridge has to do the
+        equivalent so each submesh's ``_page_tables_to_ttnn`` receives a
+        per-DP slice whose batch dim matches the submesh's K/V tensors.
+        Without this, ``paged_update_cache`` asserts a batch-size mismatch
+        on multi-DP runs.
+        """
+        if page_tables_per_layer is None:
+            return None
+        dp = self.data_parallel
+        if dp <= 1:
+            return [page_tables_per_layer]
+        per_submesh = [list() for _ in range(dp)]
+        for pt in page_tables_per_layer:
+            if pt is None or isinstance(pt, ttnn.Tensor):
+                # Already-resolved or absent entries pass through unchanged
+                # to every submesh — chunking only applies to torch tensors
+                # carrying global batch.
+                for s in per_submesh:
+                    s.append(pt)
+                continue
+            chunks = torch.chunk(pt, dp, dim=0)
+            for s, c in zip(per_submesh, chunks):
+                s.append(c)
+        return per_submesh
+
+    def _route_per_layer_page_tables(self, per_submesh_page_tables):
+        """Stash each submesh's per-layer page-table list on its model
+        handle for the duration of a forward call.
+
+        ``Generator``'s prefill/decode paths invoke
+        ``model[i].ttnn_prefill_forward`` / ``ttnn_decode_forward`` from
+        many sites (warmup, trace capture, traced replay, etc.) without
+        forwarding an arbitrary kwarg. Threading the per-layer list through
+        every site would be a wide change for a feature only this hybrid
+        bridge consumes, so we use a localised attribute injection: each
+        model reads ``getattr(self, "_active_page_tables_per_layer", None)``
+        when its own kwarg is None. ``per_submesh_page_tables[i]`` is the
+        per-layer slice that submesh ``i`` should see; ``None`` clears the
+        stash entirely (legacy fallback).
+        """
+
+        class _Stash:
+            def __init__(self, models, per_submesh):
+                self._models = models
+                self._per_submesh = per_submesh
+
+            def __enter__(self):
+                if self._per_submesh is None:
+                    return
+                for m, value in zip(self._models, self._per_submesh):
+                    m._active_page_tables_per_layer = value
+
+            def __exit__(self, *_):
+                if self._per_submesh is None:
+                    return
+                for m in self._models:
+                    if hasattr(m, "_active_page_tables_per_layer"):
+                        del m._active_page_tables_per_layer
+
+        return _Stash(self.model, per_submesh_page_tables)
+
 
 def initialize_vllm_text_transformer(
     hf_config,
@@ -749,54 +820,28 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
     def cache_path(self):
         return self.model_args[0].model_cache_path
 
-    def _route_per_layer_page_tables(self, page_tables_per_layer):
-        """See :class:`GptOssForCausalLM._route_per_layer_page_tables`.
-
-        Localised attribute injection so the per-layer list reaches the
-        many ``ttnn_*_forward`` call sites in :class:`Generator` without
-        threading a feature-specific kwarg through every one of them.
-        """
-
-        class _Stash:
-            def __init__(self, models, value):
-                self._models = models
-                self._value = value
-
-            def __enter__(self):
-                if self._value is None:
-                    return
-                for m in self._models:
-                    m._active_page_tables_per_layer = self._value
-
-            def __exit__(self, *_):
-                if self._value is None:
-                    return
-                for m in self._models:
-                    if hasattr(m, "_active_page_tables_per_layer"):
-                        del m._active_page_tables_per_layer
-
-        return _Stash(self.model, page_tables_per_layer)
-
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         # Push the per-layer block IDs into the persistent device buffers
         # *before* entering ``Generator.prefill_forward_text`` — that path
         # may execute a captured trace, which reads block IDs from the
         # persistent addresses and forbids in-trace writes. Allocation
         # itself happens lazily in ``Transformer._page_tables_to_ttnn``
         # the first time the inner forward runs (warmup compile).
-        if page_tables_per_layer is not None:
-            for m in self.model:
-                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
-        with self._route_per_layer_page_tables(page_tables_per_layer):
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
             return super().prefill_forward_text(**kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
-        if page_tables_per_layer is not None:
-            for m in self.model:
-                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
-        with self._route_per_layer_page_tables(page_tables_per_layer):
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
             # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
             # NotImplementedError placeholder; route to ``Generator``'s
             # actual decode implementation.
@@ -835,57 +880,25 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _route_per_layer_page_tables(self, page_tables_per_layer):
-        """Context-manager-style helper: stash the per-layer list on each TT
-        model in ``self.model`` for the duration of a forward call.
-
-        ``Generator``'s prefill/decode paths invoke
-        ``model[i].ttnn_prefill_forward`` / ``ttnn_decode_forward`` from many
-        sites (warmup, trace capture, traced replay, etc.) without forwarding
-        an arbitrary kwarg. Threading ``page_tables_per_layer`` through every
-        site would be a wide change for a feature only this hybrid bridge
-        consumes, so we use a localised attribute injection instead: the
-        models read ``getattr(self, "_active_page_tables_per_layer", None)``
-        when their own kwarg is None.
-        """
-
-        class _Stash:
-            def __init__(self, models, value):
-                self._models = models
-                self._value = value
-
-            def __enter__(self):
-                if self._value is None:
-                    return
-                for m in self._models:
-                    m._active_page_tables_per_layer = self._value
-
-            def __exit__(self, *_):
-                if self._value is None:
-                    return
-                for m in self._models:
-                    if hasattr(m, "_active_page_tables_per_layer"):
-                        del m._active_page_tables_per_layer
-
-        return _Stash(self.model, page_tables_per_layer)
-
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         # See ``Gemma3ForConditionalGeneration.prefill_forward`` for why
         # the persistent-buffer update has to happen *before* the inner
         # decode/prefill path that may run captured traces.
-        if page_tables_per_layer is not None:
-            for m in self.model:
-                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
-        with self._route_per_layer_page_tables(page_tables_per_layer):
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
             return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
-        if page_tables_per_layer is not None:
-            for m in self.model:
-                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
-        with self._route_per_layer_page_tables(page_tables_per_layer):
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
             # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
             # NotImplementedError placeholder; route to ``Generator``'s
             # actual decode implementation.

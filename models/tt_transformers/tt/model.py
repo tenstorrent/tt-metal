@@ -609,6 +609,21 @@ class Transformer(LightweightModule):
             page_tables_per_layer=page_tables_per_layer,
         )
 
+    def _page_table_mesh_mapper(self, B):
+        """Mesh mapper for per-layer page tables, matching the layout that
+        :meth:`prepare_decode_inputs_host` uses for the legacy single
+        ``page_table`` kwarg: shard the batch dim across mesh axis 1 on
+        Galaxy when ``B>1``, replicate otherwise. The hybrid bridge
+        chunks the global page table per-DP before calling into a
+        submesh, so ``B`` here is the per-DP batch — same value the
+        legacy path sees on entry to ``prepare_decode_inputs_host``.
+        """
+        return ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
+            mesh_shape=self.args.cluster_shape,
+        )
+
     def _page_tables_to_ttnn(self, page_tables_per_layer):
         """Resolve a per-layer list of ``torch.Tensor`` page tables to a
         list of *persistent* ttnn device tensors (allocate-only).
@@ -650,7 +665,7 @@ class Transformer(LightweightModule):
                         device=self.mesh_device,
                         dtype=ttnn.int32,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
                     )
                 )
             self._persistent_per_layer_page_tables = persistent
@@ -679,7 +694,7 @@ class Transformer(LightweightModule):
                 device=None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
             )
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 

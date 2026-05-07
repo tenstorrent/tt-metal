@@ -422,6 +422,20 @@ class Model:
 
         return logits
 
+    def _page_table_mesh_mapper(self, B):
+        """Mesh mapper for per-layer page tables, matching the layout that
+        :meth:`prepare_decode_inputs_host` uses for the legacy single
+        ``page_table`` kwarg: shard the batch dim across mesh axis 0 when
+        ``users_row_sharded`` (and ``B>1``), replicate otherwise. The
+        hybrid bridge chunks the global page table per-DP before
+        reaching this submesh, so ``B`` is the per-DP batch — same as
+        what the legacy path sees on entry to
+        ``prepare_decode_inputs_host``.
+        """
+        if self.users_row_sharded and B > 1:
+            return ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
+        return ttnn.ReplicateTensorToMesh(self.mesh_device)
+
     def _page_tables_to_ttnn(self, page_tables_per_layer):
         """Resolve a per-layer torch list to *persistent* ttnn device
         tensors (allocate-only) — see
@@ -449,7 +463,7 @@ class Model:
                         device=self.mesh_device,
                         dtype=ttnn.int32,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
                     )
                 )
             self._persistent_per_layer_page_tables = persistent
@@ -473,7 +487,7 @@ class Model:
                 device=None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
             )
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 
