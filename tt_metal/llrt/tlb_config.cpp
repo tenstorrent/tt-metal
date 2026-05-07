@@ -25,8 +25,8 @@ namespace ll_api {
 
 namespace wormhole {
 
-int32_t get_static_tlb_size() {
-    return 1 << 20;
+uint64_t get_static_tlb_size() {
+    return 1ULL << 20;
 }
 
 }  // namespace wormhole
@@ -36,8 +36,8 @@ namespace blackhole {
 static constexpr uint32_t NUM_PORTS_PER_DRAM_CHANNEL = 3;
 static constexpr uint32_t NUM_DRAM_CHANNELS = 8;
 
-int32_t get_static_tlb_size() {
-    return 2 * (1 << 20);
+uint64_t get_static_tlb_size() {
+    return 2 * (1ULL << 20);
 }
 
 // Returns last port of dram channel passed as the argument to align with dram_preferred_worker_endpoint
@@ -50,13 +50,13 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 
 namespace quasar {
 
-int32_t get_static_tlb_size() { return 2 * (1 << 20); }
+uint64_t get_static_tlb_size() { return 4ULL * (1ULL << 30); }
 
 }  // namespace quasar
 
 void configure_static_tlbs(
     tt::ARCH arch, tt::ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
-    using get_static_tlb_size_ptr = std::int32_t (*)();
+    using get_static_tlb_size_ptr = uint64_t (*)();
     get_static_tlb_size_ptr get_static_tlb_size;
 
     // Need to set these values based on arch because UMD does not expose architecture_implementation
