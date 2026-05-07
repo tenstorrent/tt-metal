@@ -1,4 +1,4 @@
-"""Tokenize local SlimPajama-6B parquet shards with the TinyLlama tokenizer.
+"""Tokenize local SlimPajama-627B parquet shards with the TinyLlama tokenizer.
 
 Reads parquet files from ``--input-dir`` (default
 ``/data/awliu/datasets/SlimPajama-6B/data``), routes them to splits by filename
@@ -18,7 +18,7 @@ time each shard can be opened with ``np.memmap(path, dtype=np.uint16, mode='r')`
 Usage:
     python dataset_preprocessing.py
     python dataset_preprocessing.py --splits validation
-    python dataset_preprocessing.py --num-proc 16 --shard-tokens 134217728
+    python dataset_preprocessing.py --num-proc 16 --shard-tokens 2049*16384
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ import numpy as np
 import pyarrow.parquet as pq
 from transformers import AutoTokenizer
 
-DEFAULT_INPUT_DIR = "/data/awliu/datasets/SlimPajama-6B/data"
-DEFAULT_OUTPUT_DIR = "/data/awliu/datasets/SlimPajama-6B-tokenized"
+DEFAULT_INPUT_DIR = "/data/awliu/datasets/SlimPajama-627B_Reupload/data"
+DEFAULT_OUTPUT_DIR = "/data/awliu/datasets/SlimPajama-627B-tokenized"
 TOKENIZER_NAME = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
 SPLITS = ("train", "validation", "test")
 DTYPE = np.uint16
@@ -257,8 +257,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--shard-tokens",
         type=int,
-        default=134_217_728,
-        help="Tokens per .bin shard (default: 2^27 = ~256 MiB at uint16).",
+        default=2049 * 16384,
+        help="Tokens per .bin shard (default: 2049*16384 = ~33.6M, matching litgpt/TinyLlama PackedDataset convention).",
     )
     parser.add_argument(
         "--batch-size",

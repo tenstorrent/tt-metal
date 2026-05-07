@@ -267,12 +267,16 @@ def read_file_to_str(file_path: str) -> str:
         return f.read()
 
 
-def create_warmup_linear_scheduler(optimizer, total_steps: int):
-    """Create warmup + linear decay scheduler."""
+def create_warmup_linear_scheduler(optimizer, total_steps: int, base_lr: float):
+    """Create warmup + linear decay scheduler.
+
+    base_lr must be the peak LR from config — not optimizer.get_lr() — so resume
+    works: on resume the optimizer's LR is temporarily set to the decayed
+    checkpoint LR, and reading it here would re-decay on top of that.
+    """
     warmup_factor = 0.1
     warmup_steps = int(total_steps * warmup_factor)
     linear_decay_steps = total_steps - warmup_steps
-    base_lr = optimizer.get_lr()
 
     def compute_lr(step: int) -> float:
         adjusted = step + 1
@@ -388,6 +392,34 @@ class _PackedTokenizerStub:
             "Pre-tokenized datasets do not ship a runtime tokenizer. "
             "Add an HF tokenizer adapter for tokenizer={!r} to use --prompt.".format(self.name)
         )
+
+
+class _HFTokenizerAdapter:
+    """Wraps a HuggingFace tokenizer to satisfy sample_greedy's interface.
+
+    sample_greedy expects ``encode(str) -> list[int]``, ``decode(list[int]) -> str``,
+    and a ``stoi`` dict it consults for prompt padding. HF tokenizers don't
+    expose ``stoi`` directly, so we build one from ``get_vocab()``.
+    """
+
+    def __init__(self, hf_name: str):
+        from transformers import AutoTokenizer  # lazy import; only needed for --prompt
+
+        self._hf = AutoTokenizer.from_pretrained(hf_name, use_fast=True)
+        self.name = hf_name
+        self.vocab_size = self._hf.vocab_size
+        self.bos_id = self._hf.bos_token_id
+        self.eos_id = self._hf.eos_token_id
+        # sample_greedy reads stoi[" "] for padding; HF's get_vocab maps str -> id.
+        self.stoi = self._hf.get_vocab()
+
+    def encode(self, text: str):
+        # add_special_tokens=False matches the preprocessing pipeline (which
+        # injects BOS/EOS manually around each document, not via the tokenizer).
+        return self._hf(text, add_special_tokens=False)["input_ids"]
+
+    def decode(self, ids):
+        return self._hf.decode(list(ids), skip_special_tokens=True)
 
 
 class PackedTokenDataset:
@@ -1762,11 +1794,21 @@ def main():
                 model_config,
                 training_config,
                 loaded_step,
+                _opt_state,
+                _opt_lr,
+                _train_iter_state,
             ) = load_model_from_checkpoint(
                 args.model_path,
             )
             seq_len = model_config.max_sequence_length
             dataset = []  # Not needed for inference
+
+            # Pre-tokenized-dataset checkpoints store a stub tokenizer (no
+            # encode/decode). For --prompt we need a real one; load the HF
+            # tokenizer named in the stub and swap it in.
+            if isinstance(tokenizer, _PackedTokenizerStub) and tokenizer.name:
+                print(f"   - Loading HF tokenizer for inference: {tokenizer.name}")
+                tokenizer = _HFTokenizerAdapter(tokenizer.name)
 
             print(f"   - Model loaded from step {loaded_step}")
             print(f"   - Vocabulary size: {model_config.vocab_size}")
@@ -2027,7 +2069,10 @@ def main():
         print("\n4. Setting up learning rate scheduler...")
         compute_lr = None
         if training_config.scheduler_type == "warmup_linear":
-            compute_lr, warmup_steps, decay_steps = create_warmup_linear_scheduler(optimizer, training_config.max_steps)
+            peak_lr = float(yaml_config["training_config"]["optimizer"]["lr"])
+            compute_lr, warmup_steps, decay_steps = create_warmup_linear_scheduler(
+                optimizer, training_config.max_steps, peak_lr
+            )
             print(f"   - Scheduler: warmup_linear")
             print(f"   - Warmup steps: {warmup_steps}")
             print(f"   - Decay steps: {decay_steps}")
