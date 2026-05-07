@@ -36,7 +36,7 @@ struct MatmulShape {
 
 std::ostream& operator<<(std::ostream& os, const MatmulShape& s) { return os << s.M << "x" << s.K << "x" << s.N; }
 
-class MatmulSweepFixture : public ttnn::TTNNFixtureWithSuiteDevice<MatmulSweepFixture>,
+class MatmulSweepFixture : public ttnn::TTNNUnitMeshCQSharedFixture,
                            public ::testing::WithParamInterface<MatmulShape> {};
 
 TEST_P(MatmulSweepFixture, MatmulSweep) {

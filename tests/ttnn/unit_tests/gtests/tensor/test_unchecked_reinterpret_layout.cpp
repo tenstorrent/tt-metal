@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 // ---------------------------------------------------------------------------
 
 class UncheckedReinterpretLayoutDeviceTest
-    : public ttnn::TTNNFixtureWithSuiteDevice<UncheckedReinterpretLayoutDeviceTest> {};
+    : public ttnn::TTNNUnitMeshCQSharedFixture {};
 
 TEST_F(UncheckedReinterpretLayoutDeviceTest, TileToRowMajorPreservesShapeAndDtype) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};

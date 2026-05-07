@@ -198,7 +198,7 @@ inline float tanh_bw_expected_bf16_daz(float grad, float x) {
 // Test Fixture
 // =============================================================================
 
-class TanhBwUlpTest : public TTNNFixtureWithDevice {};
+class TanhBwUlpTest : public TTNNUnitMeshCQSharedFixture {};
 
 /**
  * Run tanh_bw on device with a single value, return the output.

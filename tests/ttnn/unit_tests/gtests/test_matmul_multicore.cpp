@@ -53,7 +53,7 @@ struct MatmulMulticoreParam {
     int N;
 };
 
-class MatmulMulticoreFixture : public TTNNFixtureWithSuiteDevice<MatmulMulticoreFixture>,
+class MatmulMulticoreFixture : public TTNNUnitMeshCQSharedFixture,
                                public testing::WithParamInterface<MatmulMulticoreParam> {};
 
 // Verify that MatmulMultiCoreProgramFactory produces accurate results.

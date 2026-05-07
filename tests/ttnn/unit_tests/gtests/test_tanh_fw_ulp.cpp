@@ -238,7 +238,7 @@ inline float tanh_expected_bf16_daz(float x) {
 // Test Fixture
 // =============================================================================
 
-class TanhFwUlpTest : public TTNNFixtureWithDevice {};
+class TanhFwUlpTest : public TTNNUnitMeshCQSharedFixture {};
 
 float run_tanh_fw_single(tt::tt_metal::distributed::MeshDevice& device, float input_val) {
     ttnn::Shape shape({1, 1, 32, 32});

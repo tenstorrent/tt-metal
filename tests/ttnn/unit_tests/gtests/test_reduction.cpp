@@ -30,7 +30,7 @@ struct SumTensorParameter {
     int w;
 };
 
-class SumTensorLastDimFixture : public TTNNFixtureWithSuiteDevice<SumTensorLastDimFixture>,
+class SumTensorLastDimFixture : public TTNNUnitMeshCQSharedFixture,
                                 public testing::WithParamInterface<SumTensorParameter> {};
 
 TEST_P(SumTensorLastDimFixture, SumTensorCorrectly) {
@@ -63,7 +63,7 @@ INSTANTIATE_TEST_SUITE_P(
     SumTensorLastDimFixture,
     ::testing::Values(SumTensorParameter{3100, 63}, SumTensorParameter{3200, 64}));
 
-class SumTensorFirstDimFixture : public TTNNFixtureWithSuiteDevice<SumTensorFirstDimFixture>,
+class SumTensorFirstDimFixture : public TTNNUnitMeshCQSharedFixture,
                                  public testing::WithParamInterface<SumTensorParameter> {};
 
 TEST_P(SumTensorFirstDimFixture, SumTensorCorrectly) {
@@ -96,7 +96,7 @@ INSTANTIATE_TEST_SUITE_P(
     SumTensorFirstDimFixture,
     ::testing::Values(SumTensorParameter{63, 3100}, SumTensorParameter{64, 3200}));
 
-class SumTensorBothDimsFixture : public TTNNFixtureWithSuiteDevice<SumTensorBothDimsFixture>,
+class SumTensorBothDimsFixture : public TTNNUnitMeshCQSharedFixture,
                                  public testing::WithParamInterface<SumTensorParameter> {};
 
 TEST_P(SumTensorBothDimsFixture, SumTensorCorrectly) {
@@ -129,7 +129,7 @@ struct MinMaxTensorParameter {
     int offset;
 };
 
-class MinMaxTensorLastDimFixture : public TTNNFixtureWithSuiteDevice<MinMaxTensorLastDimFixture>,
+class MinMaxTensorLastDimFixture : public TTNNUnitMeshCQSharedFixture,
                                    public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorLastDimFixture, MinMaxTensorCorrectly) {
@@ -189,7 +189,7 @@ INSTANTIATE_TEST_SUITE_P(
         MinMaxTensorParameter{3100, 63, -128},
         MinMaxTensorParameter{3200, 64, -128}));
 
-class MinMaxTensorFirstDimFixture : public TTNNFixtureWithSuiteDevice<MinMaxTensorFirstDimFixture>,
+class MinMaxTensorFirstDimFixture : public TTNNUnitMeshCQSharedFixture,
                                     public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorFirstDimFixture, MinMaxTensorCorrectly) {
@@ -248,7 +248,7 @@ INSTANTIATE_TEST_SUITE_P(
         MinMaxTensorParameter{63, 3100, -128},
         MinMaxTensorParameter{64, 3200, -128}));
 
-class MinMaxTensorBothDimsFixture : public TTNNFixtureWithSuiteDevice<MinMaxTensorBothDimsFixture>,
+class MinMaxTensorBothDimsFixture : public TTNNUnitMeshCQSharedFixture,
                                     public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorBothDimsFixture, MinMaxTensorCorrectly) {
