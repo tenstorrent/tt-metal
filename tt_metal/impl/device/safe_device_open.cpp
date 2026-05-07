@@ -87,7 +87,8 @@ SafeDeviceGuard::SafeDeviceGuard(const std::vector<tt::ChipId>& device_ids)
         if (locked_) {
             try {
                 mutex_.unlock();
-            } catch (...) {
+            } catch (const std::exception& e) {
+                log_warning(tt::LogMetal, "SafeDeviceGuard: mutex unlock failed during cleanup: {}", e.what());
             }
             locked_ = false;
         }

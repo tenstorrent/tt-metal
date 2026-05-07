@@ -28,7 +28,9 @@ std::string mesh_key(std::vector<tt::ChipId> ids) {
     std::sort(ids.begin(), ids.end());
     std::string key;
     for (size_t i = 0; i < ids.size(); ++i) {
-        if (i > 0) key += '-';
+        if (i > 0) {
+            key += '-';
+        }
         key += std::to_string(ids[i]);
     }
     return key;
@@ -42,7 +44,7 @@ std::string mutex_shm_name(std::vector<tt::ChipId> ids) {
     return std::string(tt::umd::RobustMutex::SHM_FILE_PREFIX) + "tt-metal-mesh-" + mesh_key(std::move(ids));
 }
 
-void wipe_shm(std::vector<tt::ChipId> ids) {
+void wipe_shm(const std::vector<tt::ChipId>& ids) {
     shm_unlink(dirty_shm_name(ids).c_str());
     shm_unlink(mutex_shm_name(ids).c_str());
 }
