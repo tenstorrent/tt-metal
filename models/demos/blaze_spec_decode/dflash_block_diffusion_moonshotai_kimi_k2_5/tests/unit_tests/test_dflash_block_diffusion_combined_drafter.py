@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_stage_fake_ops import (
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
     assert_close,
-    fake_combined_drafter,
+    golden_combined_drafter,
     load_stage_fixture,
 )
 
@@ -19,7 +19,7 @@ FIXTURE_PATH = FIXTURE_DIR / "stage_combined_drafter.json"
 
 def test_dflash_block_diffusion_combined_drafter_matches_golden_fixture() -> None:
     fixture = load_stage_fixture(FIXTURE_PATH, "combined_drafter")
-    actual = fake_combined_drafter(fixture, FIXTURE_DIR)
+    actual = golden_combined_drafter(fixture, FIXTURE_DIR)
     expected = fixture["expected"]
 
     assert fixture["mapping"] == (

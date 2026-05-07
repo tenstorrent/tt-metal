@@ -11,6 +11,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
+    golden_accepted_after_anchor,
+)
+
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "dflash_block_diffusion"
 RUN_INFERENCE_TRACE = FIXTURE_DIR / "run_inference_trace.json"
@@ -131,11 +135,7 @@ class _DFlashTraceBackedPipeline:
             assert verified.anchor_pos == start
             posterior_token_ids = [token.token_id for token in verified.target_posterior]
 
-            matches = [
-                draft_token_id == target_token_id
-                for draft_token_id, target_token_id in zip(block_token_ids[1:], posterior_token_ids[:-1])
-            ]
-            accepted_after_anchor = _leading_true_count(matches)
+            accepted_after_anchor = golden_accepted_after_anchor(block_token_ids, posterior_token_ids)
             committed = accepted_after_anchor + 1
             acceptance_lengths.append(committed)
             num_accepts += accepted_after_anchor
@@ -178,15 +178,6 @@ class _DFlashTraceBackedPipeline:
                 top_k=int(params["top_k"]),
                 probability_mass_threshold=float(params["top_p"]),
             )
-
-
-def _leading_true_count(values: list[bool]) -> int:
-    count = 0
-    for value in values:
-        if not value:
-            break
-        count += 1
-    return count
 
 
 def _require_keys(value: dict, keys: tuple[str, ...], context: str) -> None:

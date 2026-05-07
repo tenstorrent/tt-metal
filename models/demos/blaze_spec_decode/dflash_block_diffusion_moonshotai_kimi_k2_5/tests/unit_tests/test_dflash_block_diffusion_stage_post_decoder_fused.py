@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_stage_fake_ops import (
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
     assert_close,
-    fake_post_decoder_fused_stage,
+    golden_post_decoder_fused_stage,
     load_stage_fixture,
 )
 
@@ -23,7 +23,7 @@ FIXTURE_PATH = (
 
 def test_dflash_block_diffusion_stage_post_decoder_fused_matches_golden_fixture() -> None:
     fixture = load_stage_fixture(FIXTURE_PATH, "post_decoder_fused")
-    actual = fake_post_decoder_fused_stage(fixture)
+    actual = golden_post_decoder_fused_stage(fixture)
     expected = fixture["expected"]
 
     assert fixture["mapping"] == "DFlash final norm, drafter lmhead/sampling, and host packet construction"

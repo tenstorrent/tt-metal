@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_stage_fake_ops import (
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
     assert_close,
-    fake_decoder_layer_stage,
+    golden_decoder_layer_stage,
     load_stage_fixture,
 )
 
@@ -35,7 +35,7 @@ def _layer_index_from_fixture_path(path: Path) -> int:
 def test_dflash_block_diffusion_stage_decoder_layer_matches_golden_fixture(fixture_path: Path) -> None:
     layer_idx = _layer_index_from_fixture_path(fixture_path)
     fixture = load_stage_fixture(fixture_path, f"decoder_layer_{layer_idx}")
-    actual = fake_decoder_layer_stage(fixture)
+    actual = golden_decoder_layer_stage(fixture)
 
     num_layers = int(fixture["config"]["num_hidden_layers"])
     assert 0 <= layer_idx < num_layers

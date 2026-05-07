@@ -100,34 +100,34 @@
       <h2>stage mapping</h2>
       <table>
         <thead>
-          <tr><th>stage</th><th>test</th><th>fake boundary</th><th>fixture</th><th>commit</th></tr>
+          <tr><th>stage</th><th>test</th><th>golden boundary</th><th>fixture</th><th>commit</th></tr>
         </thead>
         <tbody>
           <tr class="workstream stage">
             <td><code>pre_decoder_fused</code></td>
             <td><code>test_dflash_block_diffusion_stage_pre_decoder_fused.py</code></td>
-            <td><code>fake_pre_decoder_fused_stage</code></td>
+            <td><code>golden_pre_decoder_fused_stage</code></td>
             <td><code>stage_pre_decoder_fused.json</code></td>
             <td><code>2260b352ae</code></td>
           </tr>
           <tr class="workstream stage">
             <td><code>decoder_layer_0</code></td>
             <td><code>test_dflash_block_diffusion_stage_decoder_layer.py[0]</code></td>
-            <td><code>fake_decoder_layer_stage</code></td>
+            <td><code>golden_decoder_layer_stage</code></td>
             <td><code>stage_decoder_layer_0.json</code></td>
             <td><code>8013e438f0</code></td>
           </tr>
           <tr class="workstream stage">
             <td><code>decoder_layer_1</code></td>
             <td><code>test_dflash_block_diffusion_stage_decoder_layer.py[1]</code></td>
-            <td><code>fake_decoder_layer_stage</code></td>
+            <td><code>golden_decoder_layer_stage</code></td>
             <td><code>stage_decoder_layer_1.json</code></td>
             <td><code>b86b89972b</code></td>
           </tr>
           <tr class="workstream stage">
             <td><code>post_decoder_fused</code></td>
             <td><code>test_dflash_block_diffusion_stage_post_decoder_fused.py</code></td>
-            <td><code>fake_post_decoder_fused_stage</code></td>
+            <td><code>golden_post_decoder_fused_stage</code></td>
             <td><code>stage_post_decoder_fused.json</code></td>
             <td><code>7d58bfa763</code></td>
           </tr>
@@ -170,7 +170,7 @@
 
       <h2>next steps</h2>
       <ul>
-        <li>Replace <code>dflash_stage_fake_ops</code> seams with real pipeline stages.</li>
+        <li>Use <code>dflash_golden_ops</code> as the golden reference while wiring real pipeline stages.</li>
         <li>Wire <code>ModelPipeline.run_inference</code> to DFlash block proposals.</li>
         <li>Run the pytest suite in a tt-metal Python environment with pytest installed.</li>
         <li>Graduate tiny fixtures to hardware PCC checks when device modules exist.</li>

@@ -12,10 +12,14 @@ import sys
 
 import torch
 
+REPO_ROOT = Path(__file__).resolve().parents[7]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-DEFAULT_GOLDEN_PATH = Path(
-    "/Users/jrock/repos/flows/spec-decode-paper-reproduction/"
-    "dflash_block_diffusion_agent_23/golden_dflash_block_diffusion_agent_23"
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
+    DFlashConfig,
+    KimiDFlashDraftModel,
+    RMSNorm,
 )
 
 
@@ -28,16 +32,7 @@ def _write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
-    x_f = x.float()
-    return weight.float() * x_f * torch.rsqrt(x_f.pow(2).mean(dim=-1, keepdim=True) + eps)
-
-
-def build_fixtures(golden_path: Path, output_dir: Path) -> None:
-    sys.path.insert(0, str(golden_path))
-    from golden_dflash.config import DFlashConfig
-    from golden_dflash.draft_model import KimiDFlashDraftModel
-
+def build_fixtures(output_dir: Path) -> None:
     torch.manual_seed(28028)
     config = DFlashConfig.tiny(
         vocab_size=16,
@@ -59,7 +54,10 @@ def build_fixtures(golden_path: Path, output_dir: Path) -> None:
     base_norm_weight = torch.randn(config.hidden_size).abs() + 0.1
     target_lm_head_weight = torch.randn(config.vocab_size, config.hidden_size)
 
-    base_normed = _rms_norm(base_hidden, base_norm_weight, config.rms_norm_eps)
+    base_norm = RMSNorm(config.hidden_size, config.rms_norm_eps).eval()
+    with torch.no_grad():
+        base_norm.weight.copy_(base_norm_weight)
+    base_normed = base_norm(base_hidden)
     base_logits = base_normed @ target_lm_head_weight.T
     base_token_id = int(torch.argmax(base_logits, dim=-1)[0].item())
 
@@ -227,10 +225,9 @@ def build_fixtures(golden_path: Path, output_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate tiny DFlash block-diffusion stage fixtures.")
-    parser.add_argument("--golden-path", type=Path, default=DEFAULT_GOLDEN_PATH)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent)
     args = parser.parse_args()
-    build_fixtures(args.golden_path, args.output_dir)
+    build_fixtures(args.output_dir)
 
 
 if __name__ == "__main__":
