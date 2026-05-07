@@ -278,7 +278,7 @@ def main() -> int:
             model_name=model_name,
             model_filename=model_filename,
             binary_name=binary,
-            args=" ".join(args),
+            args=" ".join(args + extra_args),
             git_commit_hash=git_commit_hash,
             model_dram_mb=memory_data["model"],
             optimizer_dram_mb=memory_data["optimizer"],
