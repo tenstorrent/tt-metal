@@ -24,8 +24,6 @@ Multi-device (mesh) support:
 
 from __future__ import annotations
 
-import time
-
 import numpy as np
 import torch
 from loguru import logger
@@ -43,50 +41,6 @@ from .tile_utils import (
     ttnn_quantize_fn,
     unpack_bfp_tile,
 )
-
-# ---------------------------------------------------------------------------
-# Build-phase timing accumulators
-# ---------------------------------------------------------------------------
-# Module-level pack/upload wall-clock counters, populated by
-# ``_pack_single_device`` / ``_pack_multi_device`` and the per-core / lockstep
-# upload helpers.  Callers (e.g. ``prepare_compressed_sram_slots``) snapshot
-# these via ``reset_build_timing_stats()`` / ``get_build_timing_stats()`` to
-# split the SRAM "build" phase into host-side BFP packing vs device upload.
-#
-# ``pack_s`` is further decomposed by ``_compress_shard`` into:
-#   - ``gather_s``    : numpy slice + copy into the per-format flat float32 buffer
-#   - ``cpp_pack_s``  : the ``_PACK_FN[fmt](...)`` C++ call itself
-#   - ``scatter_s``   : numpy view-slice of the packed buffer back into per-tile slots
-# These three should sum to roughly ``pack_s`` modulo the small Python loop
-# overhead in ``_compress_shard`` (the ``by_fmt`` build, allocations, etc.),
-# letting us pinpoint which sub-step is the bottleneck without re-running.
-#
-# Cost when not consumed: a few ``time.perf_counter()`` calls per
-# ``_compress_shard`` invocation (~50 ns each).  Negligible.
-_BUILD_TIMING_STATS: dict = {
-    "pack_s": 0.0,
-    "upload_s": 0.0,
-    "n_calls": 0,
-    "gather_s": 0.0,
-    "cpp_pack_s": 0.0,
-    "scatter_s": 0.0,
-}
-
-
-def reset_build_timing_stats() -> None:
-    """Zero the module-level pack/upload accumulators."""
-    _BUILD_TIMING_STATS["pack_s"] = 0.0
-    _BUILD_TIMING_STATS["upload_s"] = 0.0
-    _BUILD_TIMING_STATS["n_calls"] = 0
-    _BUILD_TIMING_STATS["gather_s"] = 0.0
-    _BUILD_TIMING_STATS["cpp_pack_s"] = 0.0
-    _BUILD_TIMING_STATS["scatter_s"] = 0.0
-
-
-def get_build_timing_stats() -> dict:
-    """Return a snapshot of the current pack/upload accumulators."""
-    return dict(_BUILD_TIMING_STATS)
-
 
 # Format index → mantissa bits lookup (matches COMPRESSED_FORMATS ordering)
 _FMT_IDX_TO_MANT_BITS = {idx: BFP_MANT_BITS[fmt] for idx, fmt in enumerate(COMPRESSED_FORMATS) if fmt in BFP_MANT_BITS}
@@ -354,7 +308,6 @@ class CompressedTensor:
         at the default to free those buffers as soon as device upload
         finishes.
         """
-        _BUILD_TIMING_STATS["n_calls"] += 1
         result = assigner.assign(tensor, quantize_fn)
         return cls(
             tensor,
@@ -384,7 +337,6 @@ class CompressedTensor:
         Bypasses CompressedTensorAssigner — uses the provided assignment directly.
         See :meth:`from_torch` for ``keep_packed_data``.
         """
-        _BUILD_TIMING_STATS["n_calls"] += 1
         return cls(
             tensor,
             assignment,
@@ -630,7 +582,6 @@ class CompressedTensor:
         self._per_device_shape = self.shape
 
         # Compress each shard's tiles
-        _t = time.perf_counter()
         shard_data, shard_data_sizes = [], []
         tile_formats = []
         for _core, page_indices in shard_mapping:
@@ -640,7 +591,6 @@ class CompressedTensor:
             shard_data.append(tile_data_list)
             shard_data_sizes.append(shard_bytes)
             tile_formats.extend(tile_format_list)
-        _BUILD_TIMING_STATS["pack_s"] += time.perf_counter() - _t
         self._per_device_tile_formats[coord0] = tile_formats
 
         self._packed_shard_data[coord0] = shard_data
@@ -816,7 +766,6 @@ class CompressedTensor:
         replicated_axes = self._get_replicated_axes()
         packed_cache = {}  # {shard_key: coord} — first coord packed for each unique shard key
 
-        _t = time.perf_counter()
         for coord, dev_tensor, dev_assignment in per_device_slices:
             coord_tuple = tuple(coord[i] for i in range(self._mesh_shape.dims()))
             shard_key = tuple(coord_tuple[ax] for ax in range(len(coord_tuple)) if ax not in replicated_axes)
@@ -855,7 +804,6 @@ class CompressedTensor:
             self._per_device_core_assignment[coord] = self._build_core_assignment_from(shard_mapping, dev_assignment)
             self._per_device_assignment_flat[coord] = dev_assignment
             packed_cache[shard_key] = coord
-        _BUILD_TIMING_STATS["pack_s"] += time.perf_counter() - _t
 
         self._finalize_uploads(memory_config, assignment_memory_config, device)
 
@@ -871,9 +819,7 @@ class CompressedTensor:
         either by :meth:`_pack_single_device` / :meth:`_pack_multi_device`
         on cold runs, or by :meth:`from_packed_artifacts` on warm cache
         loads) and dispatches to the existing per-core / lockstep upload
-        helpers.  Time spent here is accumulated into
-        ``_BUILD_TIMING_STATS['upload_s']`` so the prepare-side breakdown
-        keeps separating pack vs upload.
+        helpers.
         """
         all_shard_data = self._packed_shard_data
         all_shard_sizes = self._packed_shard_sizes
@@ -892,7 +838,6 @@ class CompressedTensor:
         logical_shape = ttnn.Shape(list(self.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
 
-        _t = time.perf_counter()
         if self._num_devices > 1:
             if per_core_allocation:
                 self._pack_multi_device_per_core(
@@ -957,7 +902,6 @@ class CompressedTensor:
                         device=device,
                         memory_config=assign_mem,
                     )
-        _BUILD_TIMING_STATS["upload_s"] += time.perf_counter() - _t
 
         # Drop post-pack host buffers unless the caller explicitly opts in
         # (cache cold-write path).  Without this, a ``prepare_*`` loop that
@@ -1484,7 +1428,6 @@ class CompressedTensor:
             # already float32 (from ``_to_2d``) so no dtype conversion is
             # needed here.
             n_tiles = len(members)
-            _t_gather = time.perf_counter()
             tiles_flat = np.empty(n_tiles * tile_elems, dtype=np.float32)
             for k, (_, page_idx) in enumerate(members):
                 tr = page_idx // tiles_w
@@ -1493,7 +1436,6 @@ class CompressedTensor:
                     tr * tile_hw : (tr + 1) * tile_hw,
                     tc * tile_hw : (tc + 1) * tile_hw,
                 ].ravel()
-            _BUILD_TIMING_STATS["gather_s"] += time.perf_counter() - _t_gather
 
             # One batched C++ pack call for all tiles of this format.
             # Note: the binding holds the Python GIL for the duration of the
@@ -1504,9 +1446,7 @@ class CompressedTensor:
             # see ``weights/cache/sram_compressed_cache.py``) skips this step
             # entirely.
             pack_fn = _PACK_FN[fmt]
-            _t_cpp = time.perf_counter()
             packed_u32 = np.asarray(pack_fn(tiles_flat, row_major_input=True))
-            _BUILD_TIMING_STATS["cpp_pack_s"] += time.perf_counter() - _t_cpp
             packed_bytes = packed_u32.view(np.uint8)
             per_tile_bytes = bfp_tile_packed_size(fmt)
             assert packed_bytes.size == per_tile_bytes * n_tiles, (
@@ -1522,12 +1462,10 @@ class CompressedTensor:
             # caller.  Downstream consumers (``_concat_shards_padded``,
             # ``_create_per_core_tensors``) iterate or concatenate these
             # arrays and don't require independently-owned memory.
-            _t_scatter = time.perf_counter()
             for k, (slot, _) in enumerate(members):
                 tile_data_list[slot] = packed_bytes[k * per_tile_bytes : (k + 1) * per_tile_bytes]
                 tile_format_list[slot] = fmt
                 total_bytes += per_tile_bytes
-            _BUILD_TIMING_STATS["scatter_s"] += time.perf_counter() - _t_scatter
 
         return tile_data_list, tile_format_list, total_bytes
 
