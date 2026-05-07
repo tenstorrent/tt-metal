@@ -71,6 +71,8 @@ def _bootstrap_ttml_extension() -> None:
         try:
             os.symlink(so_path, os.path.join(src_pkg, os.path.basename(so_path)))
         except FileExistsError:
+            # Concurrent pytest workers may race on this symlink; the operation
+            # is idempotent so the loser of the race can safely continue.
             pass
 
     # ttnn pre-loads the shared libs that _ttml depends on

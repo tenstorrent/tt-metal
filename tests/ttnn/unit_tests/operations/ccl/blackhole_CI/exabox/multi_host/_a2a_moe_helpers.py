@@ -315,16 +315,6 @@ def run_all_to_all_dispatch_test(
 
     mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
-    compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
-    subdevice_shard_cores_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(compute_grid[0] - 1, compute_grid[1] - 1),
-            ),
-        }
-    )
-
     expert_indices_tensors = []
     expert_mapping_tensors = []
     input_tensors = []
@@ -420,7 +410,6 @@ def run_all_to_all_dispatch_test(
         output_tensors.append(tt_output_tensor)
         metadata_tensors.append(tt_metadata_tensor)
 
-    ccl_sub_device_crs = subdevice_shard_cores_grid
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
