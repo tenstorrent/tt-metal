@@ -7,6 +7,14 @@ on:
         description: "Actually close resolved issues (false = dry-run)"
         type: boolean
         default: false
+      check-passing-only:
+        description: "Fast mode: close passing jobs deterministically without AI"
+        type: boolean
+        default: false
+      llm-backend:
+        description: "LLM backend: 'copilot' or 'cursor'"
+        required: false
+        default: "copilot"
       issue-repo:
         description: "Repository containing the open auto-triage issues"
         required: false
