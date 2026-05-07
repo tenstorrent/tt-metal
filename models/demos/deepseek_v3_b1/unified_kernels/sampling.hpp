@@ -1557,40 +1557,25 @@ struct TopKSampling {
                         }
 
                         if constexpr (CTArgs::copy_probabilities) {
-                            // Scatter the 32 rescaled top-P probabilities out of the two-face
-                            // tile layout into the contiguous `p_scores[32]` metadata slot,
-                            // and copy the 32 winning indices into `p_indices[32]`. Entries
-                            // beyond `K` are left as whatever is in the tile (garbage, as
-                            // documented in metadata.hpp).
-                            //
-                            // Issue all three packet writes back-to-back so the NOC engine can
-                            // overlap them, then drain with a single barrier:
-                            //   * scores face 0 (tile elems  0..15) -> p_scores[ 0..15]
-                            //   * scores face 1 (tile elems 16..31) -> p_scores[16..31]
-                            //   * winner indices (32 contiguous u32) -> p_indices[ 0..31]
-                            constexpr uint32_t HALF_SCORES_BYTES = 16 * sizeof(uint16_t);
-                            constexpr uint32_t FACE_BYTES_OFFSET = FACE_ELEMS * sizeof(uint16_t);
-
-                            const uint32_t scores_src_face0 = get_read_ptr(CTArgs::softmax_out_cb);
-
-                            const uint32_t scores_dst_face0 =
-                                CTArgs::metadata_output_l1_addr + offsetof(deepseek_b1_ops::DeepseekMetadata, p_scores);
-
-                            noc_async_write_one_packet(
-                                scores_src_face0, get_noc_addr(scores_dst_face0), HALF_SCORES_BYTES);
-                            const uint32_t scores_src_face1 = scores_src_face0 + FACE_BYTES_OFFSET;
-                            const uint32_t scores_dst_face1 = scores_dst_face0 + HALF_SCORES_BYTES;
-                            noc_async_write_one_packet(
-                                scores_src_face1, get_noc_addr(scores_dst_face1), HALF_SCORES_BYTES);
-
-                            const uint32_t indices_src_l1 =
-                                get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes;
-                            const uint32_t indices_dst_l1 = CTArgs::metadata_output_l1_addr +
-                                                            offsetof(deepseek_b1_ops::DeepseekMetadata, p_indices);
-                            noc_async_write_one_packet(
-                                indices_src_l1, get_noc_addr(indices_dst_l1), 32 * sizeof(uint32_t));
-
-                            noc_async_write_barrier();
+                            // Copy the top relaxed-acceptance candidates into the fixed metadata page.
+                            // Probabilities are stored as float32 bit patterns so the host can parse
+                            // them without bf16-specific unpacking.
+                            auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(
+                                CTArgs::metadata_output_l1_addr);
+                            uint32_t topn = std::min(
+                                static_cast<uint32_t>(deepseek_b1_ops::RELAXED_ACCEPT_TOPN), static_cast<uint32_t>(K));
+                            metadata_ptr->target_topn_count = topn;
+                            for (uint32_t i = 0; i < deepseek_b1_ops::RELAXED_ACCEPT_TOPN; ++i) {
+                                if (i < topn) {
+                                    uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
+                                    float prob_f = (i < kept_tokens) ? bf16_to_float(prob_u16[tile_idx]) : 0.0f;
+                                    metadata_ptr->target_topn_tokens[i] = global_indices[i];
+                                    metadata_ptr->target_topn_probs[i] = float_to_bits(prob_f);
+                                } else {
+                                    metadata_ptr->target_topn_tokens[i] = 0;
+                                    metadata_ptr->target_topn_probs[i] = 0;
+                                }
+                            }
                         }
 
                         cb_pop_front(CTArgs::softmax_out_cb, 1);

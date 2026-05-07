@@ -14,23 +14,25 @@ from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 # ---------------------------------------------------------------------------
 # DeepseekMetadata binary layout (see models/demos/deepseek_v3_b1/metadata/metadata.hpp):
-#   bytes 0..63   : 13 scalar fields + 3 uint32 padding words (64B header)
-#   bytes 64..191 : p_indices[32] (uint32)   -> 128B
-#   bytes 192..255: p_scores[32]  (uint16)   ->  64B packed bfloat16
+#   words 18      : target_topn_count
+#   words 19..28  : target_topn_tokens[10]
+#   words 29..38  : target_topn_probs[10] (float32 bit patterns)
+#   words 39..41  : temperature, top_k, probability_mass_threshold
 # ---------------------------------------------------------------------------
 _METADATA_BYTES = 256
 _METADATA_U32_WORDS = _METADATA_BYTES // 4  # 64
-_METADATA_P_INDICES_OFFSET = 64
-_METADATA_P_SCORES_OFFSET = 192
+_METADATA_TARGET_TOPN_COUNT_WORD = 18
+_METADATA_TARGET_TOPN_TOKENS_WORD = 19
+_METADATA_TARGET_TOPN_PROBS_WORD = 29
+_METADATA_TARGET_TOPN_CAPACITY = 10
+_METADATA_TEMPERATURE_WORD = 39
+_METADATA_TOP_K_WORD = 40
+_METADATA_TOP_P_WORD = 41
 
 
-def _decode_p_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
+def _decode_target_topn_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
     """
-    Extract (p_indices[:k], p_scores[:k]) from the device-side metadata tensor.
-
-    For a single-device tensor pass device_idx=None.  For a mesh tensor, pass
-    the index of the final (producing) device, which selects the right shard.
-    The returned `p_scores` is torch.bfloat16 and `p_indices` is torch.int64.
+    Extract target_topn metadata from the device-side metadata tensor.
     """
     if device_idx is None:
         meta_torch = ttnn.to_torch(ttnn_metadata)
@@ -43,21 +45,15 @@ def _decode_p_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
         len(meta_bytes) == _METADATA_BYTES
     ), f"metadata tensor must be exactly {_METADATA_BYTES}B; got {len(meta_bytes)}"
 
-    p_indices_np = np.frombuffer(
-        meta_bytes[_METADATA_P_INDICES_OFFSET : _METADATA_P_INDICES_OFFSET + 4 * k],
-        dtype=np.uint32,
-    ).copy()
-    p_scores_u16 = np.frombuffer(
-        meta_bytes[_METADATA_P_SCORES_OFFSET : _METADATA_P_SCORES_OFFSET + 2 * k],
-        dtype=np.uint16,
-    ).copy()
-
-    # Reinterpret bf16 bit-pattern as fp32 by promoting to the high 16 bits.
-    p_scores_f32 = (p_scores_u16.astype(np.uint32) << 16).view(np.float32).copy()
+    meta_words = np.frombuffer(meta_bytes, dtype=np.uint32).copy()
+    topn = min(int(meta_words[_METADATA_TARGET_TOPN_COUNT_WORD]), k, _METADATA_TARGET_TOPN_CAPACITY)
+    token_words = meta_words[_METADATA_TARGET_TOPN_TOKENS_WORD : _METADATA_TARGET_TOPN_TOKENS_WORD + topn]
+    prob_words = meta_words[_METADATA_TARGET_TOPN_PROBS_WORD : _METADATA_TARGET_TOPN_PROBS_WORD + topn]
+    probs_f32 = prob_words.astype(np.uint32).view(np.float32).copy()
 
     return (
-        torch.from_numpy(p_indices_np.astype(np.int64)),
-        torch.from_numpy(p_scores_f32).to(torch.bfloat16),
+        torch.from_numpy(token_words.astype(np.int64)),
+        torch.from_numpy(probs_f32),
     )
 
 
@@ -72,7 +68,7 @@ def _assert_p_metadata_matches_golden(
     rand_value: float,
     device_idx: int | None = None,
 ):
-    """Compare kernel-written p_scores/p_indices against the PyTorch golden."""
+    """Compare kernel-written target_topn metadata against the PyTorch golden."""
     _, _, p_scores_golden, p_indices_golden = SamplingOp.golden(
         torch_scores,
         torch_indices,
@@ -83,20 +79,25 @@ def _assert_p_metadata_matches_golden(
         return_p_metadata=True,
     )
 
-    p_indices_kernel, p_scores_kernel = _decode_p_metadata(ttnn_metadata, k=k, device_idx=device_idx)
+    topn = min(k, _METADATA_TARGET_TOPN_CAPACITY)
+    p_indices_kernel, p_scores_kernel = _decode_target_topn_metadata(ttnn_metadata, k=k, device_idx=device_idx)
+    p_indices_golden = p_indices_golden[:topn]
+    p_scores_golden = p_scores_golden[:topn].float()
 
-    logger.info(f"Kernel p_indices[:{k}]: {p_indices_kernel.tolist()}")
-    logger.info(f"Golden p_indices[:{k}]: {p_indices_golden.tolist()}")
-    logger.info(f"Kernel p_scores[:{k}]: {p_scores_kernel.float().tolist()}")
-    logger.info(f"Golden p_scores[:{k}]: {p_scores_golden.float().tolist()}")
+    logger.info(f"Kernel target_topn_tokens[:{topn}]: {p_indices_kernel.tolist()}")
+    logger.info(f"Golden target_topn_tokens[:{topn}]: {p_indices_golden.tolist()}")
+    logger.info(f"Kernel target_topn_probs[:{topn}]: {p_scores_kernel.float().tolist()}")
+    logger.info(f"Golden target_topn_probs[:{topn}]: {p_scores_golden.float().tolist()}")
 
     assert p_indices_kernel.tolist() == p_indices_golden.tolist(), (
-        f"p_indices mismatch:\n  kernel: {p_indices_kernel.tolist()}\n" f"  golden: {p_indices_golden.tolist()}"
+        f"target_topn_tokens mismatch:\n  kernel: {p_indices_kernel.tolist()}\n"
+        f"  golden: {p_indices_golden.tolist()}"
     )
     rtol = 2e-2
     atol = 2e-3
     assert torch.allclose(p_scores_kernel.float(), p_scores_golden.float(), rtol=rtol, atol=atol), (
-        f"p_scores not allclose at rtol={rtol}, atol={atol}:\n  kernel: {p_scores_kernel.float().tolist()}\n"
+        f"target_topn_probs not allclose at rtol={rtol}, atol={atol}:\n"
+        f"  kernel: {p_scores_kernel.float().tolist()}\n"
         f"  golden: {p_scores_golden.float().tolist()}, max_abs_error: {torch.max(torch.abs(p_scores_kernel.float() - p_scores_golden.float()))}, max_rel_error: {torch.max(torch.abs(p_scores_kernel.float() - p_scores_golden.float()) / p_scores_golden.float())}"
     )
 
@@ -418,19 +419,14 @@ def _build_metadata_tensor(device, final_core, k: int, p: float, temperature: fl
     Build a single-core L1 tensor matching the `DeepseekMetadata` struct layout
     (see models/demos/deepseek_v3_b1/metadata/metadata.hpp).
 
-    The struct is 256B total:
-      - 13 leading scalar fields (52B) + 3 uint32 padding (12B) = 64B header
-      - p_indices[32] uint32 (128B)
-      - p_scores[32]  uint16 (64B, packed bfloat16)
-
     We pack everything into a 1x64 uint32 tensor (256B) with the sampling-
-    relevant fields at indices 10/11/12. Remaining words are zeroed so the
+    relevant fields at indices 39/40/41. Remaining words are zeroed so the
     test can predict what the kernel will overwrite.
     """
     metadata_words = torch.zeros((1, _METADATA_U32_WORDS), dtype=torch.uint32)
-    metadata_words[0, 10] = float_to_uint32(temperature)
-    metadata_words[0, 11] = int(k)
-    metadata_words[0, 12] = float_to_uint32(p)
+    metadata_words[0, _METADATA_TEMPERATURE_WORD] = float_to_uint32(temperature)
+    metadata_words[0, _METADATA_TOP_K_WORD] = int(k)
+    metadata_words[0, _METADATA_TOP_P_WORD] = float_to_uint32(p)
 
     final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
     metadata_shard_spec = ttnn.ShardSpec(final_core_grid, (1, _METADATA_U32_WORDS), ttnn.ShardOrientation.ROW_MAJOR)

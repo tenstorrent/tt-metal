@@ -362,6 +362,7 @@ def _create_mtp_module_trace_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """4-stage trace pipeline matching the demo spec-decode socket topology."""
 
@@ -371,6 +372,7 @@ def _create_mtp_module_trace_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=weight_provider.load_spec(device),
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def stage_1(device: ttnn.MeshDevice):
@@ -381,6 +383,7 @@ def _create_mtp_module_trace_pipeline_configuration(
             mtp_weights=weight_provider.load_mtp(device),
             send_mtp_output_downstream=True,
             embedding_weights=weight_provider.load_real_embedding(device),
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def stage_2(device: ttnn.MeshDevice):
@@ -2025,14 +2028,12 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
     """Parse a 256-byte DeepseekMetadata output page into a dict.
 
     Layout (64 uint32 words = 256 bytes), kept in lock-step with metadata.hpp:
-      words  0..15 : header
-        [0]  token_type       [1]  tok0_id      [2]  tok0_pos
-        [3]  tok1_id          [4]  tok1_pos     [5]  slot_id
-        [6]  token_id         [7]  position_id  [8]  prefill_token_id
-        [9]  reserved         [10] temperature  [11] k
-        [12] probability_mass_threshold         [13..15] _pad0..2
-      words 16..47 : p_indices[32]  (uint32)
-      words 48..63 : p_scores[32]   (bf16 packed as uint16, 2 per uint32)
+      [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
+      [4] prefill_token_id, [5] lane_idx, [6] window_start_pos,
+      [7] num_window_tokens, [8:13] candidate_token_ids,
+      [13:18] candidate_positions, [18] target_topn_count,
+      [19:29] target_topn_tokens, [29:39] target_topn_probs,
+      [39] temperature, [40] top_k, [41] probability_mass_threshold.
     """
     raw = ttnn.to_torch(output_tensor).to(torch.int32).flatten()
     assert (
@@ -2042,25 +2043,29 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
     def _u32_to_f32(bits: int) -> float:
         return struct.unpack("<f", struct.pack("<I", bits & 0xFFFFFFFF))[0]
 
-    p_indices = raw[16:48].tolist()
-    scores_packed = raw[48:64].contiguous().view(torch.bfloat16)
-    p_scores = scores_packed.float().tolist()
+    candidate_token_ids = [int(raw[8 + idx].item()) for idx in range(5)]
+    candidate_positions = [int(raw[13 + idx].item()) for idx in range(5)]
+    target_topn_count = max(0, min(int(raw[18].item()), 10))
+    target_topn_tokens = [int(raw[19 + idx].item()) for idx in range(target_topn_count)]
+    target_topn_probs = [_u32_to_f32(int(raw[29 + idx].item())) for idx in range(target_topn_count)]
 
     return {
         "token_type": int(raw[0].item()),
-        "tok0_id": int(raw[1].item()),
-        "tok0_pos": int(raw[2].item()),
-        "tok1_id": int(raw[3].item()),
-        "tok1_pos": int(raw[4].item()),
-        "slot_id": int(raw[5].item()),
-        "token_id": int(raw[6].item()),
-        "position_id": int(raw[7].item()),
-        "prefill_token_id": int(raw[8].item()),
-        "temperature": _u32_to_f32(raw[10].item()),
-        "k": int(raw[11].item()),
-        "probability_mass_threshold": _u32_to_f32(raw[12].item()),
-        "p_indices": p_indices,
-        "p_scores": p_scores,
+        "slot_id": int(raw[1].item()),
+        "token_id": int(raw[2].item()),
+        "position_id": int(raw[3].item()),
+        "prefill_token_id": int(raw[4].item()),
+        "lane_idx": int(raw[5].item()),
+        "window_start_pos": int(raw[6].item()),
+        "num_window_tokens": int(raw[7].item()),
+        "candidate_token_ids": candidate_token_ids,
+        "candidate_positions": candidate_positions,
+        "target_topn_count": target_topn_count,
+        "target_topn_tokens": target_topn_tokens,
+        "target_topn_probs": target_topn_probs,
+        "temperature": _u32_to_f32(raw[39].item()),
+        "k": int(raw[40].item()),
+        "probability_mass_threshold": _u32_to_f32(raw[41].item()),
     }
 
 
@@ -2073,39 +2078,32 @@ def create_input_page(
     top_k: int = 1,
     probability_mass_threshold: float = 1.0,
     token_type: int = 0,
+    lane_idx: int = 0,
+    window_start_pos: int | None = None,
+    num_window_tokens: int = 2,
 ) -> ttnn.Tensor:
     """Build a TOKEN_META_PAGE_SIZE_BYTES (256B) input page that mirrors
     `model.to_spec_input` exactly so the unit test feeds the pipeline with
     the same DeepseekMetadata layout the demo uses.
 
     Layout (uint32 word indices, full DeepseekMetadata struct, 64 words = 256 B):
-      [0]  token_type           (0 = BASE, 1 = SPEC)
-      [1]  tok0_id              (output, kernel-written)
-      [2]  tok0_pos / TOKEN0_POSITION_ID
-      [3]  tok1_id              (output)
-      [4]  tok1_pos             (output)
-      [5]  slot_id / USER_ID
-      [6]  token_id             (embedding lookup id)
-      [7]  position_id
-      [8]  prefill_token_id     (-1 = decode mode, otherwise prefill embedding override)
-      [9]  reserved
-      [10] temperature          (fp32 bits)
-      [11] k (top-K)            (clamped to [1, 32] inside the kernel)
-      [12] probability_mass_threshold (fp32 bits, clamped to [0, 1])
-      [13..15] padding
-      [16..47] p_indices[32]    (output)
-      [48..63] p_scores[32]     (output, bf16 packed)
+      [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
+      [4] prefill_token_id, [5] lane_idx, [6] window_start_pos,
+      [7] num_window_tokens, [39] temperature, [40] top_k,
+      [41] probability_mass_threshold.
     """
     page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
     page[0, 0] = token_type
-    page[0, 2] = position_id
-    page[0, 5] = slot_id
-    page[0, 6] = token_id
-    page[0, 7] = position_id
-    page[0, 8] = prefill_token_id
-    page[0, 10] = float_to_uint32(temperature)
-    page[0, 11] = top_k
-    page[0, 12] = float_to_uint32(probability_mass_threshold)
+    page[0, 1] = slot_id
+    page[0, 2] = token_id
+    page[0, 3] = position_id
+    page[0, 4] = prefill_token_id
+    page[0, 5] = lane_idx
+    page[0, 6] = position_id if window_start_pos is None else window_start_pos
+    page[0, 7] = num_window_tokens
+    page[0, 39] = float_to_uint32(temperature)
+    page[0, 40] = top_k
+    page[0, 41] = float_to_uint32(probability_mass_threshold)
     return ttnn.from_torch(page, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -2235,38 +2233,40 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
             )
             assert mtp_input_pos > 0, f"Trace row {iteration} has invalid position_id={mtp_input_pos}"
 
-            torch_token = torch.zeros(1, token_meta_words, dtype=torch.uint32)
-            torch_token[0, 0] = 0
-            torch_token[0, 2] = mtp_input_pos - 1
-            torch_token[0, 5] = slot_id
-            torch_token[0, 6] = iteration
-            torch_token[0, 7] = base_hidden_pos
-            torch_token[0, 8] = int(base_token_ids[iteration].item())
-            torch_token[0, 10] = float_to_uint32(1.0)
-            torch_token[0, 11] = 1
-            torch_token[0, 12] = float_to_uint32(1.0)
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            token_tensor = create_input_page(
+                token_id=iteration,
+                position_id=base_hidden_pos,
+                prefill_token_id=int(base_token_ids[iteration].item()),
+                slot_id=slot_id,
+                temperature=1.0,
+                top_k=1,
+                probability_mass_threshold=1.0,
+                token_type=0,
+                lane_idx=0,
+                window_start_pos=base_hidden_pos,
+                num_window_tokens=2,
+            )
 
             pipeline.write_token(token_tensor)
             logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
             pipeline.read_output(output_tensor)
             page = parse_output_page(output_tensor)
 
-            got_base_tokens.append(page["tok0_id"])
-            got_spec_tokens.append(page["tok1_id"])
+            got_base_tokens.append(page["candidate_token_ids"][0])
+            got_spec_tokens.append(page["candidate_token_ids"][1])
             assert page["token_type"] == 0, f"Trace row {iteration} returned non-BASE token_type={page}"
             assert page["slot_id"] == slot_id, f"Trace row {iteration} returned wrong slot_id: {page}"
             assert (
-                page["tok0_pos"] == expected_base_pos
+                page["candidate_positions"][0] == expected_base_pos
             ), f"Trace row {iteration} base position mismatch: expected={expected_base_pos}, got={page}"
             assert (
-                page["tok1_pos"] == expected_spec_pos
+                page["candidate_positions"][1] == expected_spec_pos
             ), f"Trace row {iteration} spec position mismatch: expected={expected_spec_pos}, got={page}"
 
             logger.info(
                 f"[TEST P{pid}] iter {iteration} "
-                f"base={page['tok0_id']} pos={page['tok0_pos']} "
-                f"spec={page['tok1_id']} pos={page['tok1_pos']} "
+                f"base={page['candidate_token_ids'][0]} pos={page['candidate_positions'][0]} "
+                f"spec={page['candidate_token_ids'][1]} pos={page['candidate_positions'][1]} "
                 f"trace_base={int(base_token_ids[iteration].item())} "
                 f"trace_spec={int(spec_token_ids[iteration].item())}"
             )
