@@ -153,10 +153,12 @@ def build_lm_head_lazy_weights(
     max_columns_per_device: int = 8192,
     dtype: ttnn.DataType = ttnn.bfloat8_b,
     cache_dir: Path | None = None,
-) -> list[LazyWeight]:
+) -> tuple[list[LazyWeight], list[int], list[ttnn.MemoryConfig]]:
     """
     Column-split LM head for ``LMHead1D`` (adapted from ``LMHead1D.from_model_args`` math, no v1 args).
     ``lm_head_weight`` shape: ``[vocab_size, dim]`` (HF).
+
+    Returns ``(lazy_weights, split_sizes, weights_memcfgs)`` for ``LMHead1DConfig`` DRAM-sharded matmuls.
     """
     num_devices = mesh_device.get_num_devices()
     torch_w = lm_head_weight.T.contiguous().to(torch.bfloat16)
@@ -182,6 +184,7 @@ def build_lm_head_lazy_weights(
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
     output_weights: list[LazyWeight] = []
+    weights_memcfgs: list[ttnn.MemoryConfig] = []
     for i, split_size in enumerate(split_sizes):
         device_splits = []
         for device_idx in range(num_devices):
@@ -190,6 +193,7 @@ def build_lm_head_lazy_weights(
             device_splits.append(torch_w[:, start:end])
         combined = torch.cat(device_splits, dim=-1)
         mem_cfg = dram_sharded_memcfg(dim, math.ceil(combined.shape[-1] / num_devices))
+        weights_memcfgs.append(mem_cfg)
         name = f"lm_head_split_{i}_{combined.shape[-1]}"
         output_weights.append(
             LazyWeight(
@@ -205,4 +209,4 @@ def build_lm_head_lazy_weights(
                 cache_dir_weight_name=(cache_dir, name) if cache_dir else None,
             )
         )
-    return output_weights
+    return output_weights, split_sizes, weights_memcfgs
