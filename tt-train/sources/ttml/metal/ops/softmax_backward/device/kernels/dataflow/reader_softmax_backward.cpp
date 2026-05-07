@@ -34,8 +34,8 @@ void kernel_main() {
     const uint32_t src1_tile_size = get_tile_size(src1_cb_id);
 
     // Create tensor accessors
-    const auto softmax_output_accessor = TensorAccessor(softmax_output_args, softmax_output_addr, src0_tile_size);
-    const auto upstream_grad_accessor = TensorAccessor(upstream_grad_args, upstream_grad_addr, src1_tile_size);
+    const auto softmax_output_accessor = TensorAccessor(softmax_output_args, softmax_output_addr);
+    const auto upstream_grad_accessor = TensorAccessor(upstream_grad_args, upstream_grad_addr);
 
     // Generate a column vector of ones for matmul-based reduction (BF16 only)
     generate_mm_scaler(ones_cb_id, BF16_ONE_PACKED);

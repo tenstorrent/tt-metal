@@ -205,7 +205,7 @@ namespace tt::tt_metal {
 // This is meant to exercise noc_inline_dw_write API
 TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
     CoreCoord start_core{0, 0};
-    const uint32_t stream_id = 0;
+    const uint32_t stream_id = 32;
     const uint32_t stream_reg = 4;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {

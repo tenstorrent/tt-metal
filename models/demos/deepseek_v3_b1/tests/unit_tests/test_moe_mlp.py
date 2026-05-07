@@ -85,28 +85,7 @@ class RoutedExpertTensors(NamedTuple):
 # ============================================================================
 # Constants (namespaced by usage)
 # ============================================================================
-class RoutedExpert:
-    M = 1
-    K = 7168
-    N_PER_CORE = 32  # routing matmul width per core
-    NUM_CORES = 8  # routing matmul cores
-    GATE_PROJ_N = 2048
-    GATE_EPS = 1e-20
-    GATE_SCALING_FACTOR = 2.5
-    TILE_W = 32  # for padding math
-    FINAL_OUTPUT_WIDTH_PER_CORE = 32 * 32  # 1024
-    INPUT_CORE_Y = 9  # for ttnn.CoreCoord(device_grid_size.x - 1, INPUT_CORE_Y)
-    SEED = 0
-    GATE_PROJ_EXPERT_SEED = 0
-    UP_PROJ_EXPERT_SEED = 256
-    DOWN_PROJ_EXPERT_SEED = 512
-
-
-class SharedExpert:
-    K_PARALLEL = 8
-    N_PARALLEL = 8
-    N_PER_CORE = 64  # N = N_PER_CORE * DownProj.NUM_MATMUL_CORES in helper
-    SEED = 100
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
 
 
 class SDPA:

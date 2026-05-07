@@ -7,7 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
-#include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -46,7 +47,7 @@ inline void calculate_sigmoid() {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
             if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
             }
 
             sfpi::dst_reg[0] = result;

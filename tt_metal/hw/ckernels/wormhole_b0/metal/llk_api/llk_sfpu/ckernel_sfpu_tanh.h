@@ -8,6 +8,8 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_sigmoid.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -145,7 +147,7 @@ inline void calculate_tanh() {
                 result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
             }
 
             sfpi::dst_reg[0] = result;

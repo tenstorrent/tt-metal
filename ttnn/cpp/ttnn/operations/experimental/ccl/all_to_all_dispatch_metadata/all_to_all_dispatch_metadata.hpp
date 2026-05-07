@@ -36,6 +36,7 @@ std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata(
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
+    const std::optional<std::vector<uint32_t>>& shared_expert_ids = std::nullopt,
     std::optional<uint32_t> axis = std::nullopt,
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors = std::nullopt,
     std::optional<uint32_t> num_links = std::nullopt,

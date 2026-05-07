@@ -16,7 +16,7 @@ void kernel_main() {
     const uint32_t bank_base_address = get_common_arg_val<uint32_t>(base_idx_crta);
     const uint32_t num_dev_pages = get_common_arg_val<uint32_t>(base_idx_crta + 1);
 
-    auto tensor_accessor = TensorAccessor(args, bank_base_address, page_size);
+    auto tensor_accessor = TensorAccessor(args, bank_base_address);
     constexpr uint32_t one_tile = 1;
     for (uint32_t i = 0; i < num_dev_pages; ++i) {
         cb_wait_front(cb_id, one_tile);

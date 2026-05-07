@@ -126,12 +126,12 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 #endif
 
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 #ifdef FUSE_BIAS
-    const auto s3 = TensorAccessor(in3_args, in3_tensor_addr, bias_single_tile_size_bytes);
+    const auto s3 = TensorAccessor(in3_args, in3_tensor_addr);
 #endif
     // WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;

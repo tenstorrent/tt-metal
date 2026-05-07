@@ -29,25 +29,25 @@ namespace {
     std::visit(
         tt::stl::overloaded{
             [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
             },
             [](const std::shared_ptr<std::vector<uint16_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
             },
             [](const std::shared_ptr<std::vector<int32_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
             },
             [](const std::shared_ptr<std::vector<uint32_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
             },
             [](const std::shared_ptr<std::vector<float>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
             },
             [](const std::shared_ptr<std::vector<bfloat16>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
             },
-            [](const void* /*value*/) { log_info(tt::LogMetalTrace, "HostDataType contains: const void*"); },
-            [](auto&&) { log_info(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
+            [](const void* /*value*/) { log_debug(tt::LogMetalTrace, "HostDataType contains: const void*"); },
+            [](auto&&) { log_debug(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
         data);
 }
 }  // namespace

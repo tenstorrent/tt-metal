@@ -377,7 +377,8 @@ void py_module(nb::module_& m) {
         nb::kw_only(),
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
-        nb::arg("layout") = tt::tt_metal::Layout::TILE);
+        nb::arg("layout") = tt::tt_metal::Layout::TILE,
+        nb::arg("mesh_mapper") = std::nullopt);
 
     m.def(
         "randn",
@@ -388,7 +389,8 @@ void py_module(nb::module_& m) {
         nb::kw_only(),
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
-        nb::arg("layout") = tt::tt_metal::Layout::TILE);
+        nb::arg("layout") = tt::tt_metal::Layout::TILE,
+        nb::arg("mesh_mapper") = std::nullopt);
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));

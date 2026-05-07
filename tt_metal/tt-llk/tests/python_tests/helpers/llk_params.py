@@ -77,7 +77,7 @@ class MathOperation(Enum):
     Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
-    Neg = OpSpec("neg", MathOpType.SFPU_UNARY)
+    Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
     Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)

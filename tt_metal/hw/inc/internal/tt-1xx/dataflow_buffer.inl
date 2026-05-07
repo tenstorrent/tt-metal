@@ -108,6 +108,10 @@ inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const { 
 
 inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const { return cb_pages_available_at_front(logical_dfb_id_, num_pages); }
 
+inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
+    noc.async_write_barrier();
+}
+
 #endif
 
 inline void DataflowBuffer::finish_impl() {}

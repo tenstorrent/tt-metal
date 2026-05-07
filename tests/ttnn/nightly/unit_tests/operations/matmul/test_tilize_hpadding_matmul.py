@@ -59,4 +59,5 @@ def run_tilize_matmul_test(M, K, N, device):
 
 @skip_for_blackhole("Hanging on BH, see #12349")
 def test_tilize_hpadding_matmul(device):
+    torch.manual_seed(0)
     run_tilize_matmul_test(4, 32 * 9, 32, device)

@@ -54,7 +54,6 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
         case UnaryOpType::ERF:
-        case UnaryOpType::ERFC:
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:

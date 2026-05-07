@@ -38,7 +38,7 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
-            dfb.read_in(noc, src_dram, {.bank_id = src_bank_id, .addr = tlocal_src_addr});
+            noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(src_dram, dfb, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
 #else
             dfb.reserve_back(ublock_size_tiles);
             noc.async_read(src_dram, dfb, ublock_size_bytes, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});

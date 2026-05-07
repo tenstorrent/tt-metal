@@ -97,6 +97,7 @@ void kernel_main() {
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
+    experimental::CircularBuffer cb_in_rm(cb_id_in_rm);
 
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
@@ -104,19 +105,19 @@ void kernel_main() {
     const uint32_t src0_page_bytes = get_tile_size(cb_id_in0);
 #endif
 
-    const auto src_a = TensorAccessor(src0_args, src_addr, src0_page_bytes);
+    const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
+    const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 
     // Generate constant tiles for layernorm compute
@@ -129,8 +130,9 @@ void kernel_main() {
         generate_reduce_scaler(cb_scaler, scaler);
         const auto partial_last_tile_cols = W % tile_width;
         if (partial_last_tile_cols > 0 && !use_welford) {
+            experimental::CircularBuffer cb_scaler_buf(cb_scaler);
             norm::kernel_util::dataflow::generate_partial_reduce_scaler(
-                cb_scaler, scaler, partial_last_tile_cols, tile_height, tile_width);
+                noc, cb_scaler_buf, scaler, partial_last_tile_cols, tile_height, tile_width);
         }
     }
 
@@ -145,7 +147,7 @@ void kernel_main() {
         // ROW_MAJOR: push one tile-row of row-major data into cb_in_rm (block-by-block).
         // The compute kernel's TILIZE_IN block converts cb_in_rm → cb_in before processing.
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {

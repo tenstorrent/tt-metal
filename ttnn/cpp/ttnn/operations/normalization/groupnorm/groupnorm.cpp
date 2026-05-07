@@ -17,44 +17,58 @@ using ttnn::operations::normalization::find_expected_dram_grid;
 
 // Validates that the requested core grid satisfies the DRAM group-norm constraints.
 // If the requested grid is invalid, fatals with an error suggesting the largest valid sub-grid.
-void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht, int num_groups) {
+void validate_dram_grid(
+    const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht, int num_groups, uint32_t num_batches) {
     uint32_t nvc = compute_num_virtual_cols(requested.x, num_groups, W);
     if (nvc > 0) {
         uint32_t rows_per_y = requested.x / nvc;
         if (rows_per_y > 0) {
             uint32_t num_virtual_rows = rows_per_y * requested.y;
-            if (Ht >= num_virtual_rows && Ht % num_virtual_rows == 0) {
-                // Valid grid found
+            if (Ht >= num_virtual_rows && Ht % num_virtual_rows == 0 &&
+                (num_virtual_rows < num_batches || num_virtual_rows % num_batches == 0)) {
                 return;
             }
         }
     }
 
-    auto suggested = find_expected_dram_grid(requested.x, requested.y, W, num_groups, Ht * ttnn::types::TILE_SIZE);
+    auto suggested =
+        find_expected_dram_grid(requested.x, requested.y, W, num_groups, Ht * ttnn::types::TILE_SIZE, num_batches);
+
+    uint32_t nvc_for_msg = compute_num_virtual_cols(requested.x, num_groups, W);
+    uint32_t nvr_for_msg = nvc_for_msg > 0 ? (requested.x / nvc_for_msg) * requested.y : 0;
 
     // User supplied invalid grid, but suggested a valid grid
     if (suggested.has_value()) {
         TT_THROW(
             "group_norm: Requested core_grid (x={}, y={}) is invalid for the input dimensions "
-            "(Ht={}, W={}, num_groups={}). The grid must satisfy "
-            "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht, and "
-            "Ht must be divisible by num_virtual_rows (otherwise remainder tiles are dropped). "
+            "(Ht={}, W={}, num_groups={}, num_batches={}). The grid must satisfy: "
+            "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht, "
+            "Ht must be divisible by num_virtual_rows, and "
+            "num_virtual_rows must be divisible by num_batches (for uniform multicast groups). "
+            "Computed num_virtual_rows={}, num_virtual_cols={}. "
             "The largest valid grid that fits is (x={}, y={}).",
             requested.x,
             requested.y,
             Ht,
             W,
             num_groups,
+            num_batches,
+            nvr_for_msg,
+            nvc_for_msg,
             suggested->x,
             suggested->y);
     } else {
         TT_THROW(
             "group_norm: Cannot find any valid core grid for the given configuration. "
-            "Input height in tiles (Ht={}) is too small for any grid with W={}, num_groups={}. "
+            "Input height in tiles (Ht={}) is too small for any grid with W={}, num_groups={}, "
+            "num_batches={}. Computed num_virtual_rows={}, num_virtual_cols={}. "
             "Requested grid was (x={}, y={}).",
             Ht,
             W,
             num_groups,
+            num_batches,
+            nvr_for_msg,
+            nvc_for_msg,
             requested.x,
             requested.y);
     }
@@ -234,7 +248,7 @@ Tensor group_norm(
         } else {
             const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
             auto dram_grid = ttnn::operations::normalization::find_expected_dram_grid(
-                dev_grid.x, dev_grid.y, input_padded_shape[3], num_groups, nhw);
+                dev_grid.x, dev_grid.y, input_padded_shape[3], num_groups, nhw, input_padded_shape[0]);
             TT_FATAL(
                 dram_grid.has_value(),
                 "group_norm: Could not determine a valid DRAM core grid for channels={}, num_groups={}, nhw={}. "
@@ -253,7 +267,7 @@ Tensor group_norm(
     if (!input_tensor.is_sharded()) {
         const uint32_t W = input_padded_shape[3];
         const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
-        validate_dram_grid(core_grid.value(), W, Ht, num_groups);
+        validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }
 
     // auto generate mask tensor if both input_mask and negative_mask are not provided

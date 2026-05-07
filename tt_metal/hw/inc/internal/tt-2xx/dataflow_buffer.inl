@@ -19,7 +19,7 @@
 namespace experimental {
 
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : local_dfb_interface_(g_dfb_interface[logical_dfb_id]), logical_dfb_id_(logical_dfb_id) {}
+    : local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)), logical_dfb_id_(logical_dfb_id) {}
 
 inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interface_.entry_size; }
 
@@ -157,80 +157,32 @@ inline void DataflowBuffer::finish_impl() {
 }
 
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
-    // return byte address (wr_ptr is 16B address on Gen1XX)
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
+           local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_offset;
+#elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr;
+#else
+    // Unpack TRISC does not use wr_ptr; return ring base for any accidental caller.
+    ASSERT(false);
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
+#endif
 }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
-    // return byte address (rd_ptr is 16B address on Gen1XX)
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
+           local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_offset;
+#elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr;
+#else
+    // Pack TRISC does not use rd_ptr; return ring base for any accidental caller.
+    ASSERT(false);
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
+#endif
 }
 
 #ifndef COMPILE_FOR_TRISC
-
-template <typename Src>
-inline void DataflowBuffer::read_in(
-    const Noc& noc, const Src& src, const typename noc_traits_t<Src>::src_args_type& src_args) {
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
-    uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-    uint8_t tc_id = dfb::get_counter_id(packed_tc);
-
-    // Wait for entries that were previously read across all transaction ids to be posted. Need to do this because HW
-    // doesn't track pending posts. When this condition is met, we know previous reads were committed.
-    while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
-
-    // Make sure there is space for the new tile
-    while (fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
-
-    noc.async_read<Noc::TxnIdMode::ENABLED>(src, *this, get_entry_size(), src_args, {}, NOC_UNICAST_WRITE_VC, local_dfb_interface_.txn_ids[ptxn_id_index_]);
-
-    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += (local_dfb_interface_.stride_size);
-    if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
-    }
-
-    ptiles_read_++;
-    // Move to next txn id when we have read in num tiles per DM producer.
-    // This is safe because we ensure previously read entries are posted before reading in more data
-    if (ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
-        ptxn_id_index_ = (ptxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
-        ptxn_id_loop_cnt_++;
-    }
-
-    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
-}
-
-template <typename Dst>
-inline void DataflowBuffer::write_out(
-    const Noc& noc, const Dst& dst, const typename noc_traits_t<Dst>::dst_args_type& dst_args) {
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
-    uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-    uint8_t tc_id = dfb::get_counter_id(packed_tc);
-
-    // Wait for entries that were previously written across all transaction ids to be acked. Need to do this because HW
-    // doesn't track pending acks. When this condition is met, we know previous writes were issued.
-    while (fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
-
-    while (fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
-
-    noc.async_write<Noc::TxnIdMode::ENABLED>(*this, dst, get_entry_size(), {}, dst_args, NOC_UNICAST_WRITE_VC, local_dfb_interface_.txn_ids[ctxn_id_index_]);
-
-    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += (local_dfb_interface_.stride_size);
-    if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
-    }
-
-    ctiles_written_++;
-    // Move to next txn id when the DM has written its threshold per transaction id.
-    // This is safe because we ensure previous writes are acked before trying to write more data
-    if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
-        ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
-        ctxn_id_loop_cnt_++;
-    }
-
-    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
-}
-
 template <bool is_producer>
 inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index) {
     // Determine the txn_id for the last batch. If transactions_issued lands exactly on
@@ -314,6 +266,129 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
             }
         }
     }
+}
+
+
+// Consumer barrier: waits outbound write from DFB writes to arrive at their destination
+// Falls back to a full barrier when no txn_ids are assigned
+inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
+    if (local_dfb_interface_.num_txn_ids == 0) {
+        noc.async_write_barrier();
+        return;
+    } else {
+        for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
+            noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(local_dfb_interface_.txn_ids[i]);
+        }
+    }
+}
+
+// Preamble for implicit-sync read: spin until previous reads are posted and there is space in the tile counters.
+// Returns the txn_id to stamp on the next NOC read.
+inline uint32_t DataflowBuffer::prepare_implicit_read() {
+    ASSERT(local_dfb_interface_.num_txn_ids > 0);
+    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
+    uint8_t tc_id = dfb::get_counter_id(packed_tc);
+    while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    while (fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    return local_dfb_interface_.txn_ids[ptxn_id_index_];
+}
+
+// Postamble for implicit-sync read: advance wr_ptr, tile/txn counters, and tc_idx.
+inline void DataflowBuffer::commit_implicit_read() {
+    ASSERT(local_dfb_interface_.num_txn_ids > 0);
+    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += local_dfb_interface_.stride_size;
+    if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr >=
+        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
+        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr =
+            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
+    }
+    ptiles_read_++;
+    if (ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
+        ptxn_id_index_ = (ptxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
+        ptxn_id_loop_cnt_++;
+    }
+    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+}
+
+// Preamble for implicit-sync write: spin until previous writes are acked and data is available in the tile counters.
+// Returns the txn_id to stamp on the next NOC write.
+inline uint32_t DataflowBuffer::prepare_implicit_write() {
+    ASSERT(local_dfb_interface_.num_txn_ids > 0);
+    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
+    uint8_t tc_id = dfb::get_counter_id(packed_tc);
+    while (fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    while (fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    return local_dfb_interface_.txn_ids[ctxn_id_index_];
+}
+
+// Postamble for implicit-sync write: advance rd_ptr, tile/txn counters, and tc_idx.
+inline void DataflowBuffer::commit_implicit_write() {
+    ASSERT(local_dfb_interface_.num_txn_ids > 0);
+    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += local_dfb_interface_.stride_size;
+    if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr >=
+        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
+        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr =
+            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
+    }
+    ctiles_written_++;
+    if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
+        ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
+        ctxn_id_loop_cnt_++;
+    }
+    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+}
+
+// Out-of-line definitions of Noc DFB-specific implicit-sync overloads.
+// These are member functions of Noc but must be defined here because they need the complete
+// DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
+
+template <Noc::TxnIdMode txn_id_mode, typename Src>
+std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+Noc::async_read(
+    const Src& src,
+    DataflowBuffer& dst,
+    const typename noc_traits_t<Src>::src_args_type& src_args,
+    const DataflowBufferArgs& dst_args) const {
+    uint32_t txn_id = dst.prepare_implicit_read();
+    noc_async_read_set_trid(txn_id, noc_id_);
+    while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
+    noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
+        get_src_ptr<AddressType::NOC>(src, src_args),
+        get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+        dst.get_entry_size(),
+        noc_id_,
+        NOC_UNICAST_WRITE_VC);
+    dst.commit_implicit_read();
+}
+
+template <Noc::TxnIdMode txn_id_mode, typename Dst>
+std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+Noc::async_write(
+    DataflowBuffer& src,
+    const Dst& dst,
+    const DataflowBufferArgs& src_args,
+    const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
+    uint32_t txn_id = src.prepare_implicit_write();
+    auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+    auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
+    ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
+        noc_id_,
+        write_cmd_buf,
+        src_addr,
+        dst_noc_addr,
+        src.get_entry_size(),
+        NOC_UNICAST_WRITE_VC,
+        false,   // mcast
+        false,   // linked
+        1,       // num_dests
+        true,    // multicast_path_reserve
+        false,   // posted == false (Noc::ResponseMode::NON_POSTED)
+        txn_id);
+    src.commit_implicit_write();
 }
 
 #endif  // !COMPILE_FOR_TRISC

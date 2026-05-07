@@ -55,6 +55,8 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<4>();
     uint32_t read_size = stick_size;
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
     // pre-populate packet headers
@@ -113,7 +115,7 @@ void kernel_main() {
                 cb_wait_front(cb_output_id, 1);
                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
 
                 pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
                 if (direction) {
@@ -168,7 +170,7 @@ void kernel_main() {
                                                 num_sticks_per_outer_dim +
                                             stick_start_id;
                     for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                        uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+                        uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
 
                         dst_stick_id++;
@@ -190,7 +192,7 @@ void kernel_main() {
                 cb_wait_front(cb_output_id, 1);
                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
 
                 dst_stick_id++;

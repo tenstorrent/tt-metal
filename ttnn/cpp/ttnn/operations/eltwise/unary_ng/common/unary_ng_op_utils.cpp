@@ -257,7 +257,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         case UnaryOpType::SQRT: return {"sqrt_tile_init();", fmt::format("sqrt_tile<{1}>({0});", idst, param0_raw)};
         case UnaryOpType::ERF: return make_fast_approx("erf", param0_raw, idst);
-        case UnaryOpType::ERFC: return make_fast_approx("erfc", param0_raw, idst);
+        case UnaryOpType::ERFC: return make_simple("erfc", idst);
         case UnaryOpType::LOG: return make_fast_approx("log", param0_raw, idst);
         case UnaryOpType::LOG10:
         case UnaryOpType::LOG2: {

@@ -76,15 +76,12 @@ inline void _llk_math_eltwise_unary_sfpu_init_()
 
 /**
  * @brief Runs SFPU operation for a tile (default 32x32)
- * @tparam APPROXIMATE: Some sfpu functions have 2 implementations
- * either less accurate and more performant mode, or more accurate but less performant mode
- * APPROXIMATE flag is set for more performant but less accurate mode
  * @param: sfpu_func: function pointer to the sfpu functions to run, can look at list of functions here: common/inc/sfpu/cmath_sfpu*
  * @param: dst_tile_index: Starting tile index in the destination register, values = 0 - 15
  * @param: args: variable number of args can be passed into this function, that will be passed
  * to the SFPU function pointer
  */
-template <bool APPROXIMATE, class F, class... ARGS>
+template <class F, class... ARGS>
 inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args)
 {
     _llk_math_eltwise_unary_sfpu_start_(dst_tile_index);

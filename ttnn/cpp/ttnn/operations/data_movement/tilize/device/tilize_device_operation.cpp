@@ -61,6 +61,23 @@ bool can_use_sharded_optimized_factories(
         return false;  // Sharded tilize does not support sub core grid specification
     }
 
+    // The sharded factories place kernels on every core in the shard grid.
+    // If the grid extends beyond the compute grid (e.g. includes dispatch cores),
+    // kernel placement will fail.  Fall back to the default factory which
+    // distributes work across the compute grid and accesses shards via NoC.
+    auto* device = input_tensor.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRangeSet compute_grid(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    const auto& shard_grid = input_tensor.shard_spec().value().grid;
+    if (!compute_grid.contains(shard_grid)) {
+        log_debug(
+            tt::LogOp,
+            "ttnn::tilize: Shard grid {} extends beyond compute grid {}x{}, falling back to default factory",
+            shard_grid.str(),
+            grid_size.x,
+            grid_size.y);
+        return false;
+    }
     return true;
 }
 }  // namespace
@@ -136,17 +153,11 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
-    auto output_padded_shape = output_layout.compute_padded_shape(
-        input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
-                                        // padded_shape due to having a differrent shard_spec.
+
     return {TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            operation_attributes.output_dtype,
-            PageConfig(Layout::TILE),
-            operation_attributes.output_mem_config,
-            input_tensor.logical_shape(),
-            output_padded_shape))};
+        TensorLayout(
+            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
 }
 
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(

@@ -37,7 +37,7 @@ inline void calculate_cube_root() {
         // f = (0x548c2b4b - i * 1.0/3.0) / 256.0 + 2^23
         //   = (0x548c2b4b/256.0 - i * 1.0/3.0/256.0) + 2^23
 
-        sfpi::vFloat f = sfpi::int32_to_float(sfpi::reinterpret<sfpi::vInt>(x), 0);
+        sfpi::vFloat f = sfpi::int32_to_float(sfpi::reinterpret<sfpi::vInt>(x), sfpi::RoundMode::NearestEven);
 
         f = f * negative_third_256 + magic;
 
@@ -64,7 +64,7 @@ inline void calculate_cube_root() {
             d = sfpi::setsgn(d, a);
             y = d * (t * t);
 
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven));
         }
         sfpi::dst_reg++;
     }

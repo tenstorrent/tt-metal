@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -76,6 +77,36 @@ def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> 
         shuffled = shuffled[:, :, :N]
 
     return shuffled.reshape(*orig_shape)
+
+
+def shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarray:
+    """Apply the same tile permutation as shuffle_dram_tiles to a BSPM assignment array.
+
+    Args:
+        assignment: ``(tiles_h, tiles_w)`` int8 tile format codes in logical order.
+        num_banks: Number of DRAM banks (``device.dram_grid_size().x``).
+
+    Returns:
+        ``(tiles_h, tiles_w)`` int8 array in DRAM-shuffled order — same counts, reordered.
+    """
+    tiles_h, tiles_w = assignment.shape
+    if tiles_w % num_banks != 0:
+        raise ValueError(
+            f"shuffle_dram_assignment requires tiles_w ({tiles_w}) to be evenly divisible "
+            f"by num_banks ({num_banks})"
+        )
+    per_N_tiles = tiles_w // num_banks
+    K_tiles = tiles_h
+    num_tiles_per_shard = K_tiles * per_N_tiles
+
+    i = np.arange(num_tiles_per_shard)
+    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+
+    result = np.empty_like(assignment)
+    for b in range(num_banks):
+        shard = assignment[:, b * per_N_tiles : (b + 1) * per_N_tiles].ravel()
+        result[:, b * per_N_tiles : (b + 1) * per_N_tiles] = shard[source_idx].reshape(K_tiles, per_N_tiles)
+    return result
 
 
 def shared_down_torch_for_cache(
@@ -193,30 +224,26 @@ def fuse_gate_up(
 
     gate_up_dict = overlap_tensors(
         [
-            [
-                OverlapEntry(
-                    "gate_proj",
-                    gate_preprocessed,
-                    replace(
-                        cfg.gate_shard_spec,
-                        raw_tensor_shape=tuple(gate_preprocessed.shape),
-                        dtype=dtype,
-                        logical_tensor_shape=cfg.gate_proj_shape,
-                    ),
+            OverlapEntry(
+                "gate_proj",
+                gate_preprocessed,
+                replace(
+                    cfg.gate_shard_spec,
+                    raw_tensor_shape=tuple(gate_preprocessed.shape),
+                    dtype=dtype,
+                    logical_tensor_shape=cfg.gate_proj_shape,
                 ),
-            ],
-            [
-                OverlapEntry(
-                    "up_proj",
-                    up_preprocessed,
-                    replace(
-                        cfg.up_shard_spec,
-                        raw_tensor_shape=tuple(up_preprocessed.shape),
-                        dtype=dtype,
-                        logical_tensor_shape=cfg.up_proj_shape,
-                    ),
+            ),
+            OverlapEntry(
+                "up_proj",
+                up_preprocessed,
+                replace(
+                    cfg.up_shard_spec,
+                    raw_tensor_shape=tuple(up_preprocessed.shape),
+                    dtype=dtype,
+                    logical_tensor_shape=cfg.up_proj_shape,
                 ),
-            ],
+            ),
         ],
         device=device,
         move_to_device=move_to_device,

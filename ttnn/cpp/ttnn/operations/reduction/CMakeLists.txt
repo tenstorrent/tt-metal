@@ -60,6 +60,8 @@ target_sources(
         generic/device/reduce_op_multi_core_w_program_factory.cpp
         generic/device/reduce_op.cpp
         generic/device/common.cpp
+        generic/device/welford_reduce_device_operation.cpp
+        generic/device/welford_reduce_program_factory.cpp
         generic/generic_reductions.cpp
         prod/device/prod_all_device_operation.cpp
         prod/device/prod_nc_op.cpp

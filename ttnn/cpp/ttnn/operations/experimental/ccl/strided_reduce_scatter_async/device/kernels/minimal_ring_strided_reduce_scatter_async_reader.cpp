@@ -102,7 +102,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -122,7 +122,7 @@ void kernel_main() {
     arg_idx += intermediate_rt_increment;
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 #endif
 #ifdef FUSE_MM_OP_SIGNALER
     size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -148,8 +148,8 @@ void kernel_main() {
     constexpr auto addcmul_a_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2>();
     constexpr uint32_t ct_offset_a = addcmul_a_tensor_args.num_compile_time_args();
     constexpr auto addcmul_b_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2 + ct_offset_a>();
-    auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address, page_size);
-    auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address, page_size);
+    auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address);
+    auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address);
     // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
     // b tile index (broadcast):     batch * slice_Wt + col_in_slice  (b has 1 row per batch)
     // b tile index (non-broadcast): same as a  (b has full N rows per batch)

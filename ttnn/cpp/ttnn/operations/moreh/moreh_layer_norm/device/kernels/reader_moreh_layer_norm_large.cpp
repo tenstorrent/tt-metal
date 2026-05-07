@@ -33,16 +33,16 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
 
 #ifdef GAMMA_HAS_VALUE
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamm_addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+    const auto gamm_addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 
 #ifdef BETA_HAS_VALUE
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto beta_addrg = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
+    const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 #endif
 
     fill_cb_with_value(cb_id_scaler, scaler);

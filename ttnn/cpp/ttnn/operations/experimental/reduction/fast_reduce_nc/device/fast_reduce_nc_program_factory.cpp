@@ -125,6 +125,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
             }
         }
     }
+    bool use_sub_core_grids = operation_attributes.sub_core_grids.has_value() && !divide_by_shards;
     auto
         [num_cores_to_be_used,
          all_cores,
@@ -132,8 +133,11 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
          core_group_2,
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] =
-            divide_by_shards ? dspec.core_groups_tuple()
-                             : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
+            divide_by_shards
+                ? dspec.core_groups_tuple()
+                : (use_sub_core_grids
+                       ? tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_output_tiles)
+                       : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 
@@ -248,8 +252,23 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     // It is taken into account in the num_cols_per_core_group variables and
     // the tile_offset is incremented by it for the reader to adjust it's
     // reading pattern.
+    std::vector<CoreCoord> ordered_cores;
+    if (use_sub_core_grids) {
+        for (const auto& range : all_cores.ranges()) {
+            for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    ordered_cores.emplace_back(x, y);
+                }
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+            ordered_cores.emplace_back(i % num_cores_x, i / num_cores_x);
+        }
+    }
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+        CoreCoord core = ordered_cores[i];
 
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
@@ -288,7 +307,8 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
         {/* reader_kernel_id = */ reader_kernel_id,
          /* writer_kernel_id = */ writer_kernel_id,
          /* num_cores_to_be_used = */ num_cores_to_be_used,
-         /* num_cores_x = */ num_cores_x}};
+         /* num_cores_x = */ num_cores_x,
+         /* ordered_cores = */ std::move(ordered_cores)}};
 }
 
 void FastReduceNCProgramFactory::override_runtime_arguments(
@@ -302,12 +322,11 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     const auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    const auto& num_cores_x = cached_program.shared_variables.num_cores_x;
-
+    const auto& ordered_cores = cached_program.shared_variables.ordered_cores;
     auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+        CoreCoord core = ordered_cores[i];
         auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
         reader_kernel_args[0] = input_buffer->address();
         auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];

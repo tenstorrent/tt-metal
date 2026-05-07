@@ -28,8 +28,6 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // single-tile ublocks
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
@@ -39,13 +37,13 @@ void kernel_main() {
 
 #ifndef IN0_SHARDED
     uint32_t i = 0;
-    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 #else
     cb_reserve_back(cb_id_in0, num_tiles);
     cb_push_back(cb_id_in0, num_tiles);
 #endif
 
-    const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
 #ifdef BCAST_SCALAR
     cb_reserve_back(cb_id_in1, onetile);

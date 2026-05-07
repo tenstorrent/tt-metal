@@ -9,7 +9,6 @@
 
 void kernel_main() {
     constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
-    constexpr uint32_t input_row_page_size = get_named_compile_time_arg_val("input_row_page_size");
     constexpr uint32_t bytes_to_read_per_row = get_named_compile_time_arg_val("bytes_to_read_per_row");
 
     uint32_t rt_args_idx = 0;
@@ -18,8 +17,7 @@ void kernel_main() {
     const uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
 
     constexpr auto input_tensor_accessor_args = TensorAccessorArgs<0>();
-    const auto input_tensor_accessor =
-        TensorAccessor(input_tensor_accessor_args, input_tensor_address, input_row_page_size);
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_address);
 
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 

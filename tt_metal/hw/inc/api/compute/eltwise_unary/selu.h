@@ -34,6 +34,6 @@ ALWI void selu_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void selu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_selu_init<APPROX>())); }
+ALWI void selu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_selu_init())); }
 
 }  // namespace ckernel

@@ -53,6 +53,7 @@ enum class EnvVarID {
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
@@ -218,6 +219,12 @@ enum class EnvVarID {
     // ALLOCATOR CONFIGURATION
     // ========================================
     TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
+
+    // ========================================
+    // SHM TRACKING
+    // ========================================
+    TT_METAL_SHM_TRACKING_DISABLED,  // Disable shared memory tracking for tt-smi
+    TT_METAL_SHM_VERBOSE,            // Enable verbose logging for SHM tracking
 };
 
 // Environment variable name for TT-Metal root directory
@@ -427,6 +434,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             if (this->simulator_path.empty()) {
                 this->runtime_target_device_ = tt::TargetDevice::Mock;
             }
+            break;
+
+        // TT_METAL_EMULE_MODE
+        // Enable emulated mode: creates SWEmuleChip (with real memory-backed I/O)
+        // instead of MockChip.  Requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set.
+        // Automatically forces slow dispatch mode.
+        // Default: Disabled
+        // Usage: export TT_METAL_EMULE_MODE=1
+        case EnvVarID::TT_METAL_EMULE_MODE:
+            this->runtime_target_device_ = tt::TargetDevice::Emule;
+            // Emulated mode requires slow dispatch (no HWCommandQueue)
+            this->using_slow_dispatch = true;
+            this->fast_dispatch = false;
             break;
 
         // TT_METAL_VISIBLE_DEVICES
@@ -1445,6 +1465,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (lockstep-only allocation)
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
+
+        // TT_METAL_SHM_TRACKING_DISABLED
+        // Disable shared memory tracking for tt-smi.
+        // Default: 0 (SHM tracking enabled)
+        // Usage: export TT_METAL_SHM_TRACKING_DISABLED=1
+        case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED: this->shm_tracking_disabled = is_env_enabled(value); break;
+
+        // TT_METAL_SHM_VERBOSE
+        // Enable verbose logging for SHM tracking.
+        // Default: 0 (disabled)
+        // Usage: export TT_METAL_SHM_VERBOSE=1
+        case EnvVarID::TT_METAL_SHM_VERBOSE: this->shm_verbose = is_env_enabled(value); break;
     }
 }
 
@@ -1457,6 +1489,11 @@ void RunTimeOptions::InitializeFromEnvVars() {
         if (value) {
             HandleEnvVar(id, value);
         }
+    }
+
+    // Validate emulated mode configuration
+    if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
+        TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
     }
 
     // Set inspector log path

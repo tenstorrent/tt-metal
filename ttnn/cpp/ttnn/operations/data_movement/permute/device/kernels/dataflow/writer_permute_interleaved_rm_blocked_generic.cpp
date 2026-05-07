@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // Compile-time constants
@@ -27,10 +28,10 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
     constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr uint32_t output_tensor_page_size = get_named_compile_time_arg_val("output_tensor_page_size");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_in(cb_id_in);
 
     // Precompute bytes-per-block along X
     constexpr uint32_t x_block_size_bytes = x_block_size * element_size;
@@ -47,7 +48,7 @@ void kernel_main() {
     const uint32_t end_block = get_arg_val<uint32_t>(2);
 
     // Interleaved address configuration for the destination
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_tensor_page_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     // Input shape, permutation, and destination strides
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
@@ -134,8 +135,8 @@ void kernel_main() {
         }
 
         // Wait for the transposed block data to be ready in the input CB
-        cb_wait_front(cb_id_in, w_block_size);
-        uint32_t transposed_buffer_read_addr = get_read_ptr(cb_id_in);
+        cb_in.wait_front(w_block_size);
+        uint32_t transposed_buffer_read_addr = cb_in.get_read_ptr();
 
         // Iterate over the W dimension elements
         for (uint32_t w = w_start; w < w_end; ++w) {
@@ -163,6 +164,6 @@ void kernel_main() {
         noc_async_write_barrier();
 
         // Pop the block from the input circular buffer, as we're done writing it
-        cb_pop_front(cb_id_in, w_block_size);
+        cb_in.pop_front(w_block_size);
     }
 }

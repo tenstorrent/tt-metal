@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - functional_unet
           - stable_diffusion
           - sentence_bert
           - resnet50

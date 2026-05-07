@@ -20,7 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     const ttnn::Tensor& query,          // input Q (needed for gradients)
     const ttnn::Tensor& key,            // input K (needed for gradients)
     const ttnn::Tensor& value,          // input V (needed for gradients)
-    const ttnn::Tensor& intermediates,  // From forward pass (max_val, 1/sum_exp values)
+    const ttnn::Tensor& intermediates,  // From forward pass (FP32 logsumexp per row)
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,

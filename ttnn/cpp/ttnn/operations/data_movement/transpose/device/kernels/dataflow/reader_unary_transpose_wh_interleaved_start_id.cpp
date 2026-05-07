@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -23,7 +26,10 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_id_in0);
 
     uint32_t ht = start_ht;
     uint32_t wt = start_wt;
@@ -31,12 +37,11 @@ void kernel_main() {
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(i_tile, s, l1_write_addr);
-        noc_async_read_barrier();
+        cb.reserve_back(onetile);
+        noc.async_read(s, cb, tile_bytes, {.page_id = i_tile}, {.offset_bytes = 0});
+        noc.async_read_barrier();
 
-        cb_push_back(cb_id_in0, onetile);
+        cb.push_back(onetile);
         i_tile += Wt;  // stride in H
         ht += 1;
         if (ht == Ht) {

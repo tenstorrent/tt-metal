@@ -38,8 +38,7 @@ inline void llk_math_matmul_no_mop(
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
-inline void llk_math_matmul_reinit_no_mop(
-    const bool transpose = false) {
+inline void llk_math_matmul_reinit_no_mop(const bool transpose = false) {
     matmul_configure_addrmod_reinit<math_fidelity, THROTTLE_LEVEL>(transpose);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

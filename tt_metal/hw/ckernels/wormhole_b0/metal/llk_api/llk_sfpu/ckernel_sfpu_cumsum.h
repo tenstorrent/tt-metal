@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_cumsum.h"
+#include "sfpu/ckernel_sfpu_cumsum.h"
 
 using namespace sfpi;
 

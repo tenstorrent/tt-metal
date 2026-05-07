@@ -40,7 +40,7 @@ void kernel_main() {
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
     constexpr auto output_tensor_args = TensorAccessorArgs<8>();
-    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr, page_size);
+    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr);
 
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.

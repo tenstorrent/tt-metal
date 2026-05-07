@@ -8,7 +8,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -484,7 +484,11 @@ def run_ring_joint_sdpa(
     "device_params, all_gather_topology",
     [
         (
-            {"trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -851,11 +855,17 @@ def run_ring_joint_sdpa_perf(
     "device_params, all_gather_topology",
     [
         (
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+            },
             ttnn.Topology.Linear,
         ),
         (
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+            },
             ttnn.Topology.Ring,
         ),
     ],

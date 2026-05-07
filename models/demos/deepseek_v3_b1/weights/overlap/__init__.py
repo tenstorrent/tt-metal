@@ -7,6 +7,7 @@
 from models.demos.deepseek_v3_b1.weights.overlap.packing import (
     OverlapEntry,
     OverlappedTensor,
+    assert_uniform_per_core_addresses,
     overlap_tensors,
 )
 from models.demos.deepseek_v3_b1.weights.overlap.spec import (
@@ -18,6 +19,7 @@ __all__ = [
     "OverlapEntry",
     "OverlappedTensor",
     "OverlappedTensorSpec",
+    "assert_uniform_per_core_addresses",
     "max_shard_bytes",
     "overlap_tensors",
 ]

@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_attn = 4;
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
 
-    const auto addr_mask = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
+    const auto addr_mask = TensorAccessor(mask_args, mask_addr);
     experimental::CircularBuffer cb_id_attn_obj(cb_id_attn);
 
 #if CAUSAL_MASK
@@ -55,7 +55,7 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 #endif
 
-    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src0_args, src_addr);
 
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;

@@ -129,6 +129,34 @@ class TestTypecast:
         assert_with_pcc(torch_golden, torch_output, pcc=pcc)
 
 
+@pytest.mark.parametrize("tt_output_dtype", [ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32])
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+def test_typecast_zero_fp_to_int(device, pt_input_dtype, tt_input_dtype, tt_output_dtype):
+    """Regression: fp32/bf16 zero must typecast to integer 0 for all int output types.
+
+    SFPEXEXP has a hardware quirk for zero/subnormal inputs: biased_exp=0
+    returns an incorrect unbiased value, causing naive kernels to produce
+    incorrect results (e.g. 2 for fp32->uint8) for 0.0 inputs.  The random
+    inputs in test_run_eltwise_typecast_op are vanishingly unlikely to include
+    exact zero, so this dedicated test ensures the corner case is always covered
+    across all supported integer output types.
+    """
+    shape = [1, 1, 32, 32]
+    torch_input = torch.zeros(shape, dtype=pt_input_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.typecast(tt_input, tt_input_dtype, tt_output_dtype)
+    result = ttnn.to_torch(tt_output)
+
+    assert torch.all(result == 0), f"0.0 -> {tt_output_dtype} produced non-zero values: {result.unique().tolist()}"
+
+
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 def test_typecast_bf16_to_bfp8_b(device):
     torch.manual_seed(0)
@@ -572,3 +600,55 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     npu_result = ttnn.to_torch(output_tensor)
     expected = torch_input.int()
     assert torch.equal(npu_result, expected)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [120, 104],  # width=104, not divisible by 32 (WAN 480p per-device shard)
+        [81, 120, 104],
+        [3, 81, 120, 104],
+        [1, 3, 81, 120, 104],
+        [10, 40],  # width=40, not divisible by 32
+        [5, 8],  # width=8, less than one tile row
+    ],
+)
+def test_typecast_rm_non_aligned_width(shape, device):
+    """ROW_MAJOR bfloat16→uint8 typecast with width not divisible by 32."""
+    torch.manual_seed(42)
+    torch_input = (torch.rand(shape) * 200).to(torch.bfloat16)
+    expected = torch_input.to(torch.uint8)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    result = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.uint8))
+    assert torch.equal(result, expected), f"mismatch for shape {shape}"
+
+
+def test_typecast_rm_chunked_program_cache(device):
+    """Regression: program cache hit on ROW_MAJOR typecast must not hang when num_rows % num_cores != 0."""
+    torch.manual_seed(0)
+
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    shape = [num_cores + 1, 64]
+
+    torch_input = (torch.rand(shape) * 100).to(torch.bfloat16)
+    expected = torch_input.to(torch.uint8)
+
+    for i in range(2):
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output_tensor = ttnn.typecast(input_tensor, ttnn.uint8)
+        result = ttnn.to_torch(output_tensor)
+        assert torch.equal(result, expected), f"typecast correctness check failed on call {i + 1}"

@@ -11,6 +11,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/experimental/pack_block.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -72,6 +73,9 @@ struct GatherReduce {
         uint32_t gather_reduce_half_num_cores;
         uint32_t dst_cb_id;
         uint32_t half_size_bytes;
+        uint32_t sender_idx =
+            0;  // explicit per-core index; 0 means compute from grid (only valid for rectangular grids)
+        uint32_t noc;
     };
 
     struct ComputeArgs {
@@ -84,25 +88,29 @@ struct GatherReduce {
     using RTArgs = unified_kernels::SelectByRISCV<SenderArgs, ReceiverArgs, ComputeArgs>;
 
 #if defined(COMPILE_FOR_TRISC)
+    // in_cb and out_cb use 32x32 tiles.  Each half is padded to a whole
+    // number of 32x32 tiles so the half boundary is tile-aligned.
+    // num_tiles is the 32x32 tile count per half (e.g. 2 for 56 rows).
     static inline void add_half_tiles(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         reconfig_data_format<false, true>(in_cb, in_cb);
         pack_reconfig_data_format<true>(out_cb);
+        pack_block_contiguous_init(out_cb);
         add_tiles_init(in_cb, in_cb);
         cb_wait_front(in_cb, 2 * num_tiles);
-        cb_reserve_back(out_cb, num_tiles);
+        {
+            DeviceZoneScopedN("add-tiles");
+            cb_reserve_back(out_cb, num_tiles);
 
-        // Process tiles - element-wise add
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < num_tiles; i++) {
-            add_tiles(in_cb, in_cb, i, num_tiles + i, i);
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                add_tiles(in_cb, in_cb, i, num_tiles + i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block_contiguous(0, out_cb, num_tiles);
+            cb_push_back(out_cb, num_tiles);
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < num_tiles; i++) {
-            pack_tile(i, out_cb);
-        }
-        cb_push_back(out_cb, num_tiles);
-        tile_regs_release();
 
         cb_pop_front(in_cb, 2 * num_tiles);
     }
@@ -116,7 +124,7 @@ struct GatherReduce {
     // IsReduceCore: compile-time flag for reduce cores
     // pop_src: whether to pop the source CB after sending
     // ========================================================================
-    template <bool IsSenderCore, bool IsReceiverCore, bool IsReduceCore, bool pop_src>
+    template <bool IsSenderCore, bool IsReceiverCore, bool IsReduceCore, bool pop_src, bool UsePerCoreSenderIdx = false>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
@@ -128,17 +136,25 @@ struct GatherReduce {
             // NCRISC (Sender) - DataMovementProcessor.RISCV_1
             // ================================================================
             if constexpr (IsSenderCore) {
-                const auto half_info = unified_kernels::get_split_half_core_info<true>(
-                    args.gather_reduce_grid_start_x,
-                    args.gather_reduce_grid_start_y,
-                    args.gather_reduce_grid_end_x,
-                    args.gather_reduce_grid_end_y,
-                    args.gather_reduce_half_num_cores);
+                ASSERT(noc_mode == DM_DYNAMIC_NOC || args.noc == noc_index);
+                unified_kernels::SplitHalfCoreInfo half_info;
+                if constexpr (UsePerCoreSenderIdx) {
+                    const bool is_half0 = args.sender_idx < args.gather_reduce_half_num_cores;
+                    half_info = {
+                        is_half0, is_half0 ? args.sender_idx : (args.sender_idx - args.gather_reduce_half_num_cores)};
+                } else {
+                    half_info = unified_kernels::get_split_half_core_info<true>(
+                        args.gather_reduce_grid_start_x,
+                        args.gather_reduce_grid_start_y,
+                        args.gather_reduce_grid_end_x,
+                        args.gather_reduce_grid_end_y,
+                        args.gather_reduce_half_num_cores);
+                }
                 uint32_t dst_base_addr = get_write_ptr(args.dst_cb_id);
                 uint32_t dst_offset =
                     (half_info.is_half0 ? 0 : args.half_size_bytes) + half_info.half_local_idx * args.data_size_bytes;
 
-                const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
+                const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0, args.noc);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(dst_base_addr + dst_offset);
                 uint64_t dst_sem_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
@@ -148,16 +164,16 @@ struct GatherReduce {
                 // Get source address from CB
                 uint32_t src_addr = get_read_ptr(args.src_cb);
 
-                noc_async_write_one_packet<true, true>(src_addr, dst_data_noc_addr, args.data_size_bytes);
+                noc_async_write_one_packet<true, true>(src_addr, dst_data_noc_addr, args.data_size_bytes, args.noc);
                 // BH does not support posted atomics due to a bug
-                noc_semaphore_inc(dst_sem_noc_addr, 1);
-                noc_async_posted_writes_flushed();
+                noc_semaphore_inc(dst_sem_noc_addr, 1, args.noc);
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
+                    noc_async_posted_writes_flushed(args.noc);
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
-                noc_async_atomic_barrier();
+                noc_async_atomic_barrier(args.noc);
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================

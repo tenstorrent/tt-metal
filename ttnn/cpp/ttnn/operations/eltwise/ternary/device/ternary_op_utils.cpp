@@ -757,11 +757,11 @@ ttnn::Shape compute_broadcasted_output_ternary(
             dim_b,
             dim_c);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 dim_a == dim_b && dim_b == dim_c,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}, dim c: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}, dim c: {}",
                 i,
                 largest_rank,
                 dim_a,

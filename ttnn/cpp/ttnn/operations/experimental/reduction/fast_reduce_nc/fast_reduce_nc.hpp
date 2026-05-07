@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::experimental::reduction {
 
@@ -14,6 +15,7 @@ ttnn::Tensor fast_reduce_nc(
     ttsl::Span<const int32_t> dims,
     const std::optional<const Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::experimental::reduction

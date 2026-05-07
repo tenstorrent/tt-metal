@@ -19,6 +19,16 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+# Fabric packet payload limits (conservative round values below hardware maximums).
+MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
+MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
+
+
+def get_max_payload_size() -> int:
+    """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
+    return MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH
 
 
 @dataclass
@@ -370,6 +380,7 @@ def initialize_test_inputs(
     validate: bool = True,
     num_dispatch_groups: int = 1,
     skip_x_initialization: bool = False,
+    seed: int = None,
 ):
     """
     Initialize test inputs (x, weights, indices) with random data.
@@ -389,6 +400,9 @@ def initialize_test_inputs(
         weights: Router weights (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     """
+
+    if seed is not None:
+        torch.manual_seed(seed)
 
     input_shape = (dispatch_group_size, seq_len_per_chip, emb_dim)
     x = torch.randn(input_shape, dtype=torch.bfloat16) if not skip_x_initialization else None
@@ -626,6 +640,52 @@ def create_gate_weights(
     return {
         "weight": weight,
         "e_score_correction_bias": torch.randn(num_routed_experts, dtype=dtype) * 0.01,
+    }
+
+
+def load_gate_weights_from_hf(
+    model_id: str,
+    layer_idx: int,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict:
+    """
+    Load MoE gate (router) weights from a HuggingFace checkpoint.
+
+    Args:
+        model_id: HuggingFace model ID or local checkpoint path
+        layer_idx: Transformer layer index (must be an MoE layer, i.e. >= 3 for DeepSeek-V3)
+        dtype: Target dtype for the returned tensors
+
+    Returns dict matching MoEGate / ``create_gate_weights`` format:
+        "weight": (n_routed_experts, dim) — HF convention
+        "e_score_correction_bias": (n_routed_experts,)
+
+    Raises:
+        FileNotFoundError: If checkpoint files cannot be found
+        KeyError: If the expected gate keys are missing (e.g. non-MoE layer)
+    """
+    from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+    prefix = f"model.layers.{layer_idx}.mlp.gate."
+    state_dict = load_hf_state_dict_filtered(model_id, [prefix])
+
+    weight_key = f"model.layers.{layer_idx}.mlp.gate.weight"
+    bias_key = f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"
+
+    if weight_key not in state_dict:
+        raise KeyError(f"Gate weight not found at {weight_key}. Layer {layer_idx} may not be an MoE layer.")
+    if bias_key not in state_dict:
+        raise KeyError(f"Gate bias not found at {bias_key}. Layer {layer_idx} may not be an MoE layer.")
+
+    gate_weight = state_dict[weight_key].to(dtype)
+    gate_bias = state_dict[bias_key].to(dtype)
+
+    logger.info(
+        f"Loaded gate weights from {model_id} layer {layer_idx}: weight={gate_weight.shape}, bias={gate_bias.shape}"
+    )
+    return {
+        "weight": gate_weight,
+        "e_score_correction_bias": gate_bias,
     }
 
 

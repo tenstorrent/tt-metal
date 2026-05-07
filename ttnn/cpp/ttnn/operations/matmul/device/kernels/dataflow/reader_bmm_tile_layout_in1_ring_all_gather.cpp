@@ -117,7 +117,7 @@ void kernel_main() {
     // Address setup
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in1(cb_id_in1);

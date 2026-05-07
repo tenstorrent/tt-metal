@@ -4,12 +4,17 @@
 
 """Shared CCL unit-test helpers for DeepSeek B1 tests."""
 
+import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import torch
+from loguru import logger
+from tracy import signpost
 
 import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,88 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def parse_positive_env_int(name: str, value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be > 0, got {parsed}")
+    return parsed
+
+
+def get_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return parse_positive_env_int(name, value)
+
+
+def get_num_links_env_params(
+    env_name: str,
+    defaults: list[int],
+    *,
+    validate: Callable[[int], None] | None = None,
+) -> list[int]:
+    value = os.getenv(env_name)
+    if value is None or value.strip() == "":
+        return list(defaults)
+    parsed = parse_positive_env_int(env_name, value)
+    if validate is not None:
+        validate(parsed)
+    return [parsed]
+
+
+def run_trace_benchmark(
+    mesh_device,
+    op: Callable[[], Any],
+    *,
+    num_warmup_iter: int,
+    num_iter: int,
+    profiler_name: str,
+    cq_id: int = 0,
+):
+    profiler = BenchmarkProfiler()
+
+    logger.info("Compiling model")
+    result = op()
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Capturing warmup trace")
+    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=cq_id)
+    for _ in range(num_warmup_iter):
+        result = op()
+    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=cq_id)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=cq_id)
+    for _ in range(num_iter):
+        result = op()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=cq_id)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Executing warmup trace...")
+    profiler.start(f"{profiler_name}-warmup")
+    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id_warmup)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end(f"{profiler_name}-warmup")
+
+    logger.info("Starting Trace perf test...")
+    signpost("start")
+    try:
+        profiler.start(f"{profiler_name}-trace")
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.synchronize_device(mesh_device)
+        profiler.end(f"{profiler_name}-trace")
+    finally:
+        signpost("stop")
+
+    return result
 
 
 def build_broadcast_test_inputs(

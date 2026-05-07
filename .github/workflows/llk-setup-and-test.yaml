@@ -35,11 +35,6 @@ on:
         required: false
         default: false
         type: boolean
-      use_durations:
-        description: "Use previously collected test durations for balanced splitting"
-        required: false
-        default: false
-        type: boolean
       compile_time_args:
         description: "Convert every runtime argument into compile time argument and compile all variants like that"
         required: false
@@ -61,7 +56,7 @@ permissions:
   contents: read
 
 env:
-  LLK_PATH: tt_metal/third_party/tt_llk
+  LLK_PATH: tt_metal/tt-llk
 
 jobs:
   generate-matrix:
@@ -90,8 +85,6 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -101,22 +94,6 @@ jobs:
           cd tests
           ./setup_testing_env.sh
           cd ..
-
-      # Step 2.5: Download test duration data for balanced splitting
-      # Downloads the latest available artifact from main branch only
-      - name: Download test duration data
-        if: ${{ inputs.use_durations }}
-        uses: dawidd6/action-download-artifact@v12
-        continue-on-error: true
-        with:
-          workflow: llk-collect-test-durations.yaml
-          workflow_conclusion: success
-          branch: main
-          name: test-durations-${{ contains(inputs.runs_on, 'n150') && 'wormhole' || 'blackhole' }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/
-          if_no_artifact_found: warn
-          search_artifacts: true
-          check_artifacts: true
 
       # Step 3: Run the tests
       - name: Run tests
@@ -145,14 +122,6 @@ jobs:
           SPEED_OF_LIGHT_FLAG=""
           if [[ "${{ inputs.compile_time_args }}" == "true" ]]; then
             SPEED_OF_LIGHT_FLAG="--speed-of-light"
-          fi
-
-          DURATIONS_FLAG=""
-          if [[ "${{ inputs.use_durations }}" == "true" ]] && [[ -f ".test_durations" ]]; then
-            DURATIONS_FLAG="--durations-path=.test_durations"
-            echo "Using duration-based test splitting from .test_durations"
-          else
-            echo "Duration file not found or not enabled, using default splitting"
           fi
 
           echo "Compiling artefacts"

@@ -39,7 +39,7 @@ if str(_REPO_ROOT) not in sys.path:
 from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
-from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.cache import BspmVariant, CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
@@ -275,7 +275,7 @@ def _warm(
     hf_revision: str,
     schema_version: int,
     bspm_dir: Path | None = None,
-    bspm_variant: str = "B",
+    bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
 ) -> None:
     _ensure_fabric_env()
@@ -448,7 +448,7 @@ def main() -> int:
             hf_revision=args.hf_revision,
             schema_version=args.schema_version,
             bspm_dir=args.bspm_dir,
-            bspm_variant=args.bspm_variant,
+            bspm_variant=BspmVariant(args.bspm_variant),
             bspm_budget=args.bspm_budget,
         )
         logger.info("Warm complete in {:.3f}s", time.perf_counter() - t_all)

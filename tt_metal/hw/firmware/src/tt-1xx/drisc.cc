@@ -27,8 +27,8 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 

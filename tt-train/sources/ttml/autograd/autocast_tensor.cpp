@@ -43,6 +43,11 @@ const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision prefer
         return m_full_precision_tensor;
     }
 
+    // TODO: Lazy precision caching can leave the FULL/FLOAT32 view stale
+    // after in-place updates that mutate only the BF16 tensor (e.g. optimizer step).
+    // Revisit cache invalidation/refresh strategy so both views stay coherent.
+    // Tracking: #41657
+
     if (preferred_precision == PreferredPrecision::HALF) {
         if (!has_half()) {
             m_half_precision_tensor = ttnn::typecast(m_full_precision_tensor, ttnn::DataType::BFLOAT16);

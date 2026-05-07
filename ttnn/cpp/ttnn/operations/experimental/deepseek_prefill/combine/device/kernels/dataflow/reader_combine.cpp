@@ -74,8 +74,13 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Batch configuration (index 33)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(33);
+    // Number of dispatch groups (index 34)
+    constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(34);
+
+    // TensorAccessorArgs for all 4 tensors (starting at index 35)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<35>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -105,7 +110,7 @@ void kernel_main() {
     DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
 #if INIT_ZEROS
     // Hybrid row zero-init: this core zeroes its assigned page range, then waits for idle row cores
@@ -141,8 +146,7 @@ void kernel_main() {
     noc_semaphore_set(barrier_sem_ptr, 0);
 
     // Read expert token counts
-    const auto experts_tok_counter_addr_gen =
-        TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr, aligned_experts_tok_counter_page_size);
+    const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);
     cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
     uint32_t counter_base_addr = get_write_ptr(cb_experts_tok_counter_id);
     for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
@@ -151,27 +155,30 @@ void kernel_main() {
     }
     noc_async_read_barrier();
 
-    // Expert token counts are laid out as [n_dispatch_groups, experts_per_dispatch_group]
-    // where each dispatch group is a mesh column (all rows in that column).
-    // Row-major linearization: linearized_mesh_coord = mesh_row * mesh_cols + mesh_col
-    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;  // position within dispatch group
-    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;  // which dispatch group
-    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * mesh_rows;
-    constexpr uint32_t offset = mesh_col * experts_per_dispatch_group + mesh_row * experts_per_chip;
+    // Expert token counts: flat [num_routed_experts] array per device.
+    // Decompose linearized_mesh_coord into (row, col) using physical mesh dims,
+    // then map col -> dispatch_group_idx via modulo num_dispatch_groups.
+    // This handles DP replicas (ndg < mesh_cols) where multiple columns share the same group.
+    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;
+    constexpr uint32_t dispatch_group_idx = mesh_col % num_dispatch_groups;
+    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * num_chips;
+    constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
-    // Set up scratch buffers for batched reads
-    constexpr uint32_t read_batch_size = 8;
+    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
+    // overwrites the same region at offsets [0, batch_count) without push/pop.
+    // DRAM reads are batched to saturate DRAM bandwidth, while the scratch-to-writer-CB
+    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
+    // and measured faster in practice.
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
 
-    const auto dispatched_buffer_addr_gen =
-        TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
-    const auto dispatched_metadata_addr_gen =
-        TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
+    const auto dispatched_buffer_addr_gen = TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr);
+    const auto dispatched_metadata_addr_gen = TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr);
 
     constexpr auto expert_stride = max_dispatched_tokens_per_expert;
 

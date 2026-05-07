@@ -851,7 +851,12 @@ MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, ChipId chip_id) con
     return MeshCoordinate(ns, ew);
 }
 
-ChipId MeshGraph::coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const {
+ChipId MeshGraph::coordinate_to_chip(
+    MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank) const {
+    if (host_rank.has_value()) {
+        auto offset = get_coord_range(mesh_id, host_rank).start_coord();
+        coordinate = MeshCoordinate(offset[0] + coordinate[0], offset[1] + coordinate[1]);
+    }
     const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
     return (coordinate[0] * mesh_shape[1]) + coordinate[1];
 }

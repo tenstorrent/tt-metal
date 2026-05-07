@@ -41,7 +41,6 @@ void kernel_main() {
     constexpr bool src_is_dram = (bool)get_compile_time_arg_val(2);
     constexpr bool dst_offsets_is_dram = (bool)get_compile_time_arg_val(3);
     constexpr bool dst_totals_is_dram = (bool)get_compile_time_arg_val(4);
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t offsets_page_size = get_compile_time_arg_val(6);
     constexpr uint32_t totals_page_size = get_compile_time_arg_val(7);
     constexpr uint32_t W = get_compile_time_arg_val(8);
@@ -49,15 +48,15 @@ void kernel_main() {
 
     constexpr uint32_t src_accessor_offset = 10;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
-    const auto src_accessor = TensorAccessor(src_args, src_addr, input_page_size);
+    const auto src_accessor = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t dst_offsets_args_offset = src_args.next_compile_time_args_offset();
     constexpr auto dst_offsets_args = TensorAccessorArgs<dst_offsets_args_offset>();
-    const auto dst_offsets_accessor = TensorAccessor(dst_offsets_args, dst_offsets_addr, offsets_page_size);
+    const auto dst_offsets_accessor = TensorAccessor(dst_offsets_args, dst_offsets_addr);
 
     constexpr uint32_t dst_totals_args_offset = dst_offsets_args.next_compile_time_args_offset();
     constexpr auto dst_totals_args = TensorAccessorArgs<dst_totals_args_offset>();
-    const auto dst_totals_accessor = TensorAccessor(dst_totals_args, dst_totals_addr, totals_page_size);
+    const auto dst_totals_accessor = TensorAccessor(dst_totals_args, dst_totals_addr);
 
     uint32_t out_cb_addr = get_write_ptr(cb_id_out0);
     volatile tt_l1_ptr uint32_t* running_sum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_cb_addr);

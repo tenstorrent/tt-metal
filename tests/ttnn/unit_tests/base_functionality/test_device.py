@@ -76,3 +76,14 @@ def test_dispatch_context_init_and_terminate(mesh_device, dtype, layout):
         ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=memory_config).cpu()
 
     assert ttnn_tensor.shape == tensor.shape
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+def test_async_sd_state_preserved_across_fd(mesh_device):
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    assert ttnn.device.is_asynchronous_slow_dispatch_enabled(mesh_device)
+
+    with ttnn.device.setup_fast_dispatch(mesh_device):
+        pass
+
+    assert ttnn.device.is_asynchronous_slow_dispatch_enabled(mesh_device)

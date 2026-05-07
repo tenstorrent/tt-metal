@@ -23,9 +23,9 @@ from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
-    RoutedExpert,
     create_routed_expert_tensors,
     create_shared_expert_tensors,
     extract_routed_expert_output,
@@ -124,6 +124,9 @@ def test_bcast_moe_reduce_pipeline(
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0
+    ), "embedding_size_bytes must be divisible by num_gate_proj_cores"
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
@@ -634,6 +637,9 @@ def test_persistent_mode_pipeline(
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0
+    ), "embedding_size_bytes must be divisible by num_gate_proj_cores"
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)

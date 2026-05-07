@@ -13,6 +13,7 @@
 //   6. Aggregate type enforcement (designated initializers)
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <type_traits>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -31,6 +32,8 @@ using test_helpers::BindDFBToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
+using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorker;
 
@@ -133,6 +136,40 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"}, {"dfb_0", "dfb_1"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
+    NodeCoord node{0, 0};
+
+    const std::vector<std::string> invalid_names = {
+        "",               // empty
+        "has-dash",       // hyphen
+        "has space",      // whitespace
+        "1starts_digit",  // leading digit
+        "has.dot",        // punctuation
+        "class",          // C++ keyword
+        "namespace",      // C++ keyword
+        "int",            // C++ keyword
+        "_Foo",           // reserved: underscore + uppercase
+        "__foo",          // reserved: leading double underscore
+        "foo__bar",       // reserved: embedded double underscore
+    };
+
+    for (const auto& bad_name : invalid_names) {
+        ProgramSpec spec;
+        spec.program_id = "test_program";
+
+        auto kernel = MakeMinimalDMKernel("kernel", node);
+        auto dfb = MakeMinimalDFB("dfb", node);
+
+        BindDFBToKernel(kernel, "dfb", bad_name, KernelSpec::DFBEndpointType::PRODUCER);
+
+        spec.kernels = {kernel};
+        spec.dataflow_buffers = {dfb};
+        spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"}, {"dfb"})};
+
+        EXPECT_ANY_THROW(MakeProgramFromSpec(spec)) << "Expected rejection for name: '" << bad_name << "'";
+    }
 }
 
 TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
@@ -313,7 +350,6 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-// Remove once WH/BH is implemented
 TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     NodeCoord node{0, 0};
 
@@ -487,6 +523,29 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnknownDFBF
 
     auto dfb = MakeMinimalDFB("dfb", node);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"}, {"dfb"})};
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer", node);
+    auto consumer = MakeMinimalComputeKernel("consumer", node);
+    auto dfb = MakeMinimalDFB("dfb", node);
+
+    // Legacy block-float format; not supported on Quasar.
+    dfb.data_format_metadata = tt::DataFormat::Bfp8;
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -720,9 +779,11 @@ TEST_F(ProgramSpecTestQuasar, DFBNotInAnyWorkerSpecFails) {
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
-// These verify that valid configurations succeed.
-// NOTE: Program creation needs full HAL support.
-// TODO: Enable these tests with a Quasar mock device.
+// These verify that valid ProgramSpec configurations produce a Program without throwing.
+// They exercise the full MakeProgramFromSpec pipeline, but only on mock device.
+//
+// Coverage gaps (JIT compilation, device-side execution) are covered by HW tests.
+// (see test_program_spec_hw.cpp)
 
 TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
@@ -851,7 +912,7 @@ TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
     auto dfb1 = MakeMinimalDFB("dfb1", node);
     dfb1.data_format_metadata = tt::DataFormat::Float16_b;
     auto dfb2 = MakeMinimalDFB("dfb2", node);
-    dfb2.data_format_metadata = tt::DataFormat::Bfp8_b;
+    dfb2.data_format_metadata = tt::DataFormat::Int8;
 
     BindDFBToKernel(producer, "dfb1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(producer, "dfb2", "out2", KernelSpec::DFBEndpointType::PRODUCER);
@@ -924,8 +985,7 @@ TEST_F(ProgramSpecTestQuasar, SourceCodeKernelSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Change to inline source code
-    spec.kernels[0].source = "void kernel_main() {}";
-    spec.kernels[0].source_type = KernelSpec::SourceType::SOURCE_CODE;
+    spec.kernels[0].source = KernelSpec::SourceCode{"void kernel_main() {}"};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1208,8 +1268,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
     // Demonstrates constructing KernelSpec with designated initializers
     KernelSpec dm_kernel{
         .unique_id = "my_dm_kernel",
-        .source = "void kernel_main() {}",
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .target_nodes = NodeCoord{0, 0},
         .num_threads = 2,
         .config_spec =
@@ -1224,8 +1283,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
 
     KernelSpec compute_kernel{
         .unique_id = "my_compute_kernel",
-        .source = "void kernel_main() {}",
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .target_nodes = NodeRange{{0, 0}, {1, 1}},
         .num_threads = 4,
         .compiler_options =
@@ -1308,8 +1366,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
             {
                 KernelSpec{
                     .unique_id = "producer",
-                    .source = "void kernel_main() {}",
-                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .target_nodes = NodeCoord{0, 0},
                     .dfb_bindings =
                         {
@@ -1327,8 +1384,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                 },
                 KernelSpec{
                     .unique_id = "consumer",
-                    .source = "void kernel_main() {}",
-                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .target_nodes = NodeCoord{0, 0},
                     .dfb_bindings =
                         {
@@ -1404,6 +1460,213 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
         .producer_consumer_map = {{NodeCoord{0, 0}, NodeCoord{1, 0}}},
     };
     EXPECT_EQ(remote_info.producer_consumer_map.size(), 1u);
+}
+
+// ============================================================================
+// SECTION 7: Gen1 (WH/BH) Tests
+// ============================================================================
+
+// Test fixture for ProgramSpec on Wormhole - uses WORMHOLE_B0 mock device
+class ProgramSpecTestGen1 : public ::testing::Test {
+protected:
+    void SetUp() override { experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1); }
+    void TearDown() override { experimental::disable_mock_mode(); }
+};
+
+TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
+    // Two DM kernels on different processors (RISCV_0 producer, RISCV_1 consumer)
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "dm_only_program";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    auto dfb = MakeMinimalDFB("dfb", node);
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"}, {"dfb"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, TwoDMKernelsDifferentProcessorsSucceeds) {
+    // RISCV_0 and RISCV_1 on the same node — should succeed
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "two_dm_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", node, DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", node, DataMovementProcessor::RISCV_1);
+
+    spec.kernels = {k0, k1};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"k0", "k1"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, MultiThreadedDMKernelFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", node);
+    kernel.num_threads = 2;
+
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not support multi-threaded kernels")));
+}
+
+TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalComputeKernel("compute_kernel", node);
+    kernel.num_threads = 2;
+
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"compute_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not support multi-threaded kernels")));
+}
+
+TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
+    // On gen1, a DM kernel that only has Gen2DataMovementConfig must be rejected
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config
+    auto kernel = MakeMinimalDMKernel("dm_kernel", node);
+
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must specify a Gen1 DM config")));
+}
+
+TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
+    // Two DM kernels both targeting RISCV_0 on the same node
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", node, DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", node, DataMovementProcessor::RISCV_0);  // conflict
+
+    spec.kernels = {k0, k1};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"k0", "k1"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+}
+
+// WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
+//   - Fast dispatch: compute_grid = 8x8 (y in [0,7]; one row reserved for dispatch)
+//   - Slow dispatch: compute_grid = 8x9 (y in [0,8]; full logical tensix grid, no rows reserved)
+//
+// The apparent grid size is different in slow dispatch vs. fast dispatch mode. CI runs with
+// both, so choose OOB coordinates that will fail in both cases.
+//
+// These tests use the WH mock device, not real hardware.
+
+TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
+    // y=9 is just outside the 9-row slow-dispatch grid (also outside the 8-row fast-dispatch grid).
+    const NodeCoord oob_node{0, 9};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", oob_node);
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", oob_node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
+    // x=8 is just outside the 8-column grid (same in fast and slow dispatch).
+    const NodeCoord oob_node{8, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", oob_node);
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", oob_node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
+    // Bounds checking applies to DFBs as well as kernels. The kernel itself is on a
+    // valid node, but the DFB it produces to targets an OOB node.
+    const NodeCoord valid_node{0, 0};
+    const NodeCoord oob_node{0, 9};  // just outside the 9-row slow-dispatch grid
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", valid_node);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", valid_node, DataMovementProcessor::RISCV_1);
+    auto dfb = MakeMinimalDFB("dfb_0", oob_node);  // DFB on OOB node
+
+    BindDFBToKernel(producer, "dfb_0", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_0", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", valid_node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
+    // Structural validation (CollectSpecData) must catch this on gen1 too
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("dm_kernel", node, DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("dm_kernel", node, DataMovementProcessor::RISCV_1);  // duplicate name
+
+    spec.kernels = {k0, k1};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name")));
 }
 
 }  // namespace

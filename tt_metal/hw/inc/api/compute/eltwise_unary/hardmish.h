@@ -38,6 +38,6 @@ ALWI void hardmish_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_hardm
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardmish_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardmish_init<APPROX>())); }
+ALWI void hardmish_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardmish_init())); }
 
 }  // namespace ckernel

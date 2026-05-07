@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -54,12 +54,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -72,6 +72,8 @@ def run(
     input_a_layout,
     input_a_memory_config,
     dim=None,
+    output_memory_config=None,
+    memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -81,7 +83,11 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    output_memory_config = kwargs.get("output_memory_config", None)
+
+    # Resolve output_memory_config before build_op_kwargs so it sees the final value
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config
     )  # op_kwargs available but op does not accept extra kwargs
@@ -89,13 +95,21 @@ def run(
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
+    # Ensure shape is at least 2D for TILE_LAYOUT compatibility
+    if len(shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
+        shape = (1, shape[0])
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
     # In V2 format, dim comes as arg1 (positional parameter)
+    pos_args = extract_positional_args(kwargs)
     if dim is None:
-        dim = kwargs.get("arg1", 0)
+        dim = pos_args.get(1, 0)
+    # Handle __ABSENT__ sentinel from V2 loader
+    if dim == "__ABSENT__":
+        dim = 0
     torch_output_tensor = torch.squeeze(torch_input_tensor_a, dim=dim)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

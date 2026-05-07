@@ -27,6 +27,9 @@ TEST_F(IntermeshSplit2x2FabricFixture, RandomizedInterMeshUnicast) {
 }
 
 TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_0) {
+    uint32_t mesh0_rank = multihost_utils::get_rank_for_mesh_id(0);
+    uint32_t mesh1_rank = multihost_utils::get_rank_for_mesh_id(1);
+
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 2)};
@@ -44,11 +47,16 @@ TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_0) {
             mcast_req_nodes[i % num_mcast_reqs],
             mcast_start_nodes[(i / num_mcast_groups) % num_mcast_groups],
             routing_info,
-            mcast_group_node_ids[(i / num_mcast_groups) % num_mcast_groups]);
+            mcast_group_node_ids[(i / num_mcast_groups) % num_mcast_groups],
+            mesh0_rank,
+            mesh1_rank);
     }
 }
 
 TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_1) {
+    uint32_t mesh0_rank = multihost_utils::get_rank_for_mesh_id(0);
+    uint32_t mesh1_rank = multihost_utils::get_rank_for_mesh_id(1);
+
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{1}, 1), FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 3), FabricNodeId(MeshId{1}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 3)};
@@ -67,8 +75,8 @@ TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_1) {
             mcast_start_nodes[(i / num_mcast_groups) % num_mcast_groups],
             routing_info,
             mcast_group_node_ids[(i / num_mcast_groups) % num_mcast_groups],
-            1,
-            0);
+            mesh1_rank,
+            mesh0_rank);
     }
 }
 
@@ -105,6 +113,9 @@ TEST_F(InterMeshDual2x4FabricFixture, RandomizedInterMeshUnicast) {
 }
 
 TEST_F(InterMeshDual2x4FabricFixture, MultiMeshSouthMulticast_0) {
+    uint32_t mesh0_rank = multihost_utils::get_rank_for_mesh_id(0);
+    uint32_t mesh1_rank = multihost_utils::get_rank_for_mesh_id(1);
+
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 1), FabricNodeId(MeshId{1}, 2)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -118,11 +129,20 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshSouthMulticast_0) {
 
     for (uint32_t i = 0; i < 500; i++) {
         multihost_utils::InterMeshLineMcast(
-            this, mcast_req_nodes[i % num_mcast_reqs], mcast_start_nodes[i % num_mcast_groups], routing_info, mcast_group_node_ids[i % num_mcast_groups]);
+            this,
+            mcast_req_nodes[i % num_mcast_reqs],
+            mcast_start_nodes[i % num_mcast_groups],
+            routing_info,
+            mcast_group_node_ids[i % num_mcast_groups],
+            mesh0_rank,
+            mesh1_rank);
     }
 }
 
 TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_0) {
+    uint32_t mesh0_rank = multihost_utils::get_rank_for_mesh_id(0);
+    uint32_t mesh1_rank = multihost_utils::get_rank_for_mesh_id(1);
+
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{0}, 5), FabricNodeId(MeshId{0}, 6)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 5), FabricNodeId(MeshId{1}, 6)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -136,11 +156,20 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_0) {
 
     for (uint32_t i = 0; i < 500; i++) {
         multihost_utils::InterMeshLineMcast(
-            this, mcast_req_nodes[i % num_mcast_reqs], mcast_start_nodes[i % num_mcast_groups], routing_info, mcast_group_node_ids[i % num_mcast_groups]);
+            this,
+            mcast_req_nodes[i % num_mcast_reqs],
+            mcast_start_nodes[i % num_mcast_groups],
+            routing_info,
+            mcast_group_node_ids[i % num_mcast_groups],
+            mesh0_rank,
+            mesh1_rank);
     }
 }
 
 TEST_F(InterMeshDual2x4FabricFixture, MultiMeshSouthMulticast_1) {
+    uint32_t mesh0_rank = multihost_utils::get_rank_for_mesh_id(0);
+    uint32_t mesh1_rank = multihost_utils::get_rank_for_mesh_id(1);
+
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{1}, 1), FabricNodeId(MeshId{1}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 2)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -154,11 +183,20 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshSouthMulticast_1) {
 
     for (uint32_t i = 0; i < 500; i++) {
         multihost_utils::InterMeshLineMcast(
-            this, mcast_req_nodes[i % num_mcast_reqs], mcast_start_nodes[i % num_mcast_groups], routing_info, mcast_group_node_ids[i % num_mcast_groups], 1, 0);
+            this,
+            mcast_req_nodes[i % num_mcast_reqs],
+            mcast_start_nodes[i % num_mcast_groups],
+            routing_info,
+            mcast_group_node_ids[i % num_mcast_groups],
+            mesh1_rank,
+            mesh0_rank);
     }
 }
 
 TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
+    uint32_t mesh0_rank = multihost_utils::get_rank_for_mesh_id(0);
+    uint32_t mesh1_rank = multihost_utils::get_rank_for_mesh_id(1);
+
     std::vector<FabricNodeId> mcast_req_nodes = {FabricNodeId(MeshId{1}, 5), FabricNodeId(MeshId{1}, 6)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{0}, 5), FabricNodeId(MeshId{0}, 6)};
     std::vector<McastRoutingInfo> routing_info = {
@@ -172,7 +210,13 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
 
     for (uint32_t i = 0; i < 500; i++) {
         multihost_utils::InterMeshLineMcast(
-            this, mcast_req_nodes[i % num_mcast_reqs], mcast_start_nodes[i % num_mcast_groups], routing_info, mcast_group_node_ids[i % num_mcast_groups], 1, 0);
+            this,
+            mcast_req_nodes[i % num_mcast_reqs],
+            mcast_start_nodes[i % num_mcast_groups],
+            routing_info,
+            mcast_group_node_ids[i % num_mcast_groups],
+            mesh1_rank,
+            mesh0_rank);
     }
 }
 

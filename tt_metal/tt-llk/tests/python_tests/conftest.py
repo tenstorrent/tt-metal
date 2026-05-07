@@ -76,62 +76,6 @@ def init_llk_home():
 init_llk_home()
 
 
-def check_hardware_headers():
-    """Check if hardware-specific headers have been downloaded for the current architecture."""
-
-    arch_name = TestConfig.ARCH.value
-    header_dir = TestConfig.LLK_ROOT / "tests" / "hw_specific" / arch_name / "inc"
-
-    required_headers = [
-        "core_config.h",
-        "cfg_defines.h",
-        "dev_mem_map.h",
-        "tensix.h",
-        "tensix_types.h",
-    ]
-    required_headers_quasar = [
-        "core_config.h",
-        "cfg_defines.h",
-        "dev_mem_map.h",
-        "t6_debug_map.h",
-        "t6_mop_config_map.h",
-        "tensix_types.h",
-        "tensix.h",
-        "tt_t6_trisc_map.h",
-    ]
-
-    # Quasar has a somewhat different set of headers
-    if TestConfig.ARCH == ChipArchitecture.QUASAR:
-        required_headers = required_headers_quasar
-
-    # Check if header directory exists
-    if not header_dir.exists():
-        pytest.exit(
-            f"ERROR: Hardware-specific header directory not found: {header_dir}\n\n"
-            f"SOLUTION: Run the setup script to download required headers:\n"
-            f"  cd {TestConfig.LLK_ROOT}/tests\n"
-            f"  ./setup_testing_env.sh\n",
-            returncode=1,
-        )
-
-    # Check for required headers
-    missing_headers = []
-    for header in required_headers:
-        if not (header_dir / header).exists():
-            missing_headers.append(header)
-
-    if missing_headers:
-        pytest.exit(
-            f"ERROR: Missing required hardware headers for {arch_name}:\n"
-            + "\n".join(f"  {header}" for header in missing_headers)
-            + "\n\n"
-            f"SOLUTION: Run the setup script to download missing headers:\n"
-            f"  cd {TestConfig.LLK_ROOT}/tests\n"
-            f"  ./setup_testing_env.sh\n",
-            returncode=1,
-        )
-
-
 @pytest.fixture()
 def regenerate_cpp(request):
     return not request.config.getoption("--skip-codegen")
@@ -314,7 +258,6 @@ def pytest_configure(config):
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
-        check_hardware_headers()
         if os.path.exists(log_file):
             os.remove(log_file)
 

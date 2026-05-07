@@ -8,8 +8,6 @@ void kernel_main() {
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
     constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
-    constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
-    constexpr uint32_t bias_page_size = get_named_compile_time_arg_val("bias_page_size");
 
     // Get scores and bias tensor accessors
     constexpr auto scores_args = TensorAccessorArgs<0>();
@@ -20,8 +18,8 @@ void kernel_main() {
     const uint32_t start_height_tile = get_arg_val<uint32_t>(2);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(3);
 
-    const auto scores_accessor = TensorAccessor(scores_args, scores_addr, scores_page_size);
-    const auto bias_accessor = TensorAccessor(bias_args, bias_addr, bias_page_size);
+    const auto scores_accessor = TensorAccessor(scores_args, scores_addr);
+    const auto bias_accessor = TensorAccessor(bias_args, bias_addr);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;

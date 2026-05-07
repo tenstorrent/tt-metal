@@ -23,12 +23,12 @@ void kernel_main() {
 
     // param_out
     constexpr auto param_out_args = TensorAccessorArgs<0>();
-    auto param_out = TensorAccessor(param_out_args, param_out_addr, get_tile_size(cb_param_out));
+    auto param_out = TensorAccessor(param_out_args, param_out_addr);
 
 // param_out
 #if defined(MOMENTUM)
     constexpr auto momentum_out_args = TensorAccessorArgs<param_out_args.next_compile_time_args_offset()>();
-    auto momentum_out = TensorAccessor(momentum_out_args, momentum_out_addr, get_tile_size(cb_momentum_out));
+    auto momentum_out = TensorAccessor(momentum_out_args, momentum_out_addr);
 #endif
 
     uint32_t l1_read_addr;

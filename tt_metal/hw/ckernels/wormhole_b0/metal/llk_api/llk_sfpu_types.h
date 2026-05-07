@@ -156,4 +156,5 @@ enum class SfpuType {
     xielu,
     lgamma,
     polygamma,
+    ne,
 };

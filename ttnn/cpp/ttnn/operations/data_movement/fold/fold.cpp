@@ -49,11 +49,11 @@ std::vector<Tensor> fold_with_transpose_(
     auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
     auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
 
-    log_info(tt::LogOp, "padded_c: {}", padded_c);
-    log_info(tt::LogOp, "padded_h: {}", padded_h);
-    log_info(tt::LogOp, "padded_w: {}", padded_w);
-    log_info(tt::LogOp, "padded_h32: {}", padded_h32);
-    log_info(tt::LogOp, "padded_w32: {}", padded_w32);
+    log_debug(tt::LogOp, "padded_c: {}", padded_c);
+    log_debug(tt::LogOp, "padded_h: {}", padded_h);
+    log_debug(tt::LogOp, "padded_w: {}", padded_w);
+    log_debug(tt::LogOp, "padded_h32: {}", padded_h32);
+    log_debug(tt::LogOp, "padded_w32: {}", padded_w32);
 
     auto L1_mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};

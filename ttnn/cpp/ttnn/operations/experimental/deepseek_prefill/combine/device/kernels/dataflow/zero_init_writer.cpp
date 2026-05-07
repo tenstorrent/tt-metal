@@ -40,7 +40,7 @@ void kernel_main() {
         sender_sem_noc_addrs[c] = get_noc_addr(noc_x, noc_y, zi_done_sem_l1_offset);
     }
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     fill_zero_buffer(cb_zero_buffer_id);
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
