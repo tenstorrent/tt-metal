@@ -91,6 +91,7 @@ def _allowed_stack_trace_source_roots(
     try:
         add(str(Path.home()))
     except RuntimeError:
+        # Best-effort allowlist construction: some environments cannot resolve a home directory.
         pass
     add(sys_prefix)
     if sys_base_prefix != sys_prefix:
@@ -104,6 +105,7 @@ def _allowed_stack_trace_source_roots(
         for d in site.getsitepackages():
             add(d)
     except (AttributeError, OSError):
+        # Best-effort only: this API may be unavailable or fail on some Python/runtime setups.
         pass
     try:
         add(site.getusersitepackages())
