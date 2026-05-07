@@ -3113,20 +3113,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                         enable_trace=enable_trace,
                     )
 
-                    sliced_prefill_logits = self._slice_last_token_logits(
-                        prefill_logits, token_len, expand_to_batch=True
-                    )
-                    sampled_tokens = self._sample_tokens_device(sliced_prefill_logits, user_slots=[user_id])
+                    sampled_tokens = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
                     try:
                         if sampled_tokens is not None:
                             ttnn.deallocate(sampled_tokens)
                     except Exception as e:
                         logger.warning(f"Failed to deallocate sampled tokens: {e}")
-                    try:
-                        if sliced_prefill_logits is not None:
-                            ttnn.deallocate(sliced_prefill_logits)
-                    except Exception as e:
-                        logger.warning(f"Failed to deallocate sliced prefill logits: {e}")
                     try:
                         if prefill_logits is not None:
                             ttnn.deallocate(prefill_logits)

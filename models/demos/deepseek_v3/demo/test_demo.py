@@ -345,7 +345,7 @@ def _demo_case(
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name=None,
+            artifact_name="quad_long_ctx_128k_ds1_results",
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,

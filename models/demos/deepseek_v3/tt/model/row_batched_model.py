@@ -477,12 +477,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             page_tables,
             strict=True,
         ):
-            # logger.info(f"{BlockClass} ({i}) starting...")
             x = BlockClass.forward_prefill(
                 x, user_id, block_cfg, rope_tensors, page_table, chunk_start_idx=chunk_start_idx
             )
-            # logger.info(f"{BlockClass} ({i}) finished")
-            # i += 1
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
