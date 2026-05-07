@@ -28,10 +28,9 @@ from models.demos.deepseek_v3_b1.demo.pipeline import PipelineConfiguration
 from models.demos.deepseek_v3_b1.demo.stage import (
     TOKEN_META_PAGE_SIZE_BYTES,
     BaseLMHeadStage,
-    EmbeddingStage,
     PassthroughPayload,
     PassthroughStage,
-    SpecLMHeadStage,
+    SpecLMHeadWithEmbeddingStage,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
@@ -274,6 +273,36 @@ def _compute_reference_topk_from_hidden_rows(
     return torch.stack(rows, dim=0).to(torch.int64)
 
 
+def _compute_mtp_module_hidden_rows(
+    hf_state_dict,
+    base_hidden_rows: torch.Tensor,
+    base_token_ids: torch.Tensor,
+) -> torch.Tensor:
+    mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
+    embedding = _hf_tensor(hf_state_dict, "model.embed_tokens.weight").to(torch.bfloat16).float()
+    eh_proj = _hf_tensor(hf_state_dict, f"model.layers.{mtp_layer_idx}.eh_proj.weight").to(torch.bfloat16)
+    h_gamma = _hf_tensor(hf_state_dict, f"model.layers.{mtp_layer_idx}.hnorm.weight").to(torch.bfloat16)
+    e_gamma = _hf_tensor(hf_state_dict, f"model.layers.{mtp_layer_idx}.enorm.weight").to(torch.bfloat16)
+    folded_eh_proj = (eh_proj * torch.cat([e_gamma, h_gamma], dim=0).unsqueeze(0)).T.contiguous()
+    folded_eh_proj = _per_shard_quantize(
+        folded_eh_proj,
+        num_shards=8,
+        shard_dim=0,
+        dtype=ttnn.bfloat8_b,
+    ).float()
+
+    rows = []
+    for row_idx in range(base_hidden_rows.shape[0]):
+        h_input = base_hidden_rows[row_idx : row_idx + 1].to(torch.bfloat16).float()
+        h_norm = h_input * torch.rsqrt(h_input.pow(2).mean(-1, keepdim=True) + 1e-6)
+        token_id = int(base_token_ids[row_idx].item())
+        e_input = embedding[token_id : token_id + 1]
+        e_norm = e_input * torch.rsqrt(e_input.pow(2).mean(-1, keepdim=True) + 1e-6)
+        concat = torch.cat([e_norm, h_norm], dim=-1).to(torch.bfloat16).float()
+        rows.append((concat @ folded_eh_proj).to(torch.bfloat16).float())
+    return torch.cat(rows, dim=0)
+
+
 def _topk_hit_counts(tokens: torch.Tensor, reference_topk: torch.Tensor) -> tuple[int, int]:
     tokens = tokens.to(torch.int64).reshape(-1)
     reference_topk = reference_topk.to(torch.int64)
@@ -334,13 +363,14 @@ def _create_mtp_module_trace_pipeline_configuration(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
-    """4-stage trace pipeline: captured hidden rows -> base LM head+MTP -> passthrough -> spec LM head."""
+    """4-stage trace pipeline matching the demo spec-decode socket topology."""
 
     def stage_0(device: ttnn.MeshDevice):
-        return EmbeddingStage(
-            weight_provider.load_trace_input_embedding(device),
-            d2h_page_size=TOKEN_META_PAGE_SIZE_BYTES,
-            forward_metadata=True,
+        return SpecLMHeadWithEmbeddingStage(
+            embedding_weights=weight_provider.load_trace_input_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_spec(device),
         )
 
     def stage_1(device: ttnn.MeshDevice):
@@ -357,11 +387,7 @@ def _create_mtp_module_trace_pipeline_configuration(
         return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     def stage_3(device: ttnn.MeshDevice):
-        return SpecLMHeadStage(
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
-        )
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     return PipelineConfiguration({0: stage_0, 1: stage_1, 2: stage_2, 3: stage_3})
 
@@ -2095,7 +2121,7 @@ def create_input_page(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1485568,
+            "worker_l1_size": 1453716,
         }
     ],
     indirect=True,
@@ -2135,10 +2161,12 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
     base_gamma, base_vocab, _ = _lm_head_golden_weights(hf_state_dict)
     spec_gamma, spec_vocab, _ = _verification_lm_head_golden_weights(hf_state_dict)
     base_ref_topk = _compute_reference_topk_from_hidden_rows(base_hidden_rows, base_gamma, base_vocab, topk=topk)
-    spec_ref_topk = _compute_reference_topk_from_hidden_rows(mtp_hidden_rows, spec_gamma, spec_vocab, topk=topk)
+    trace_spec_ref_topk = _compute_reference_topk_from_hidden_rows(mtp_hidden_rows, spec_gamma, spec_vocab, topk=topk)
+    mtp_module_hidden_rows = _compute_mtp_module_hidden_rows(hf_state_dict, base_hidden_rows, base_token_ids)
+    spec_ref_topk = _compute_reference_topk_from_hidden_rows(mtp_module_hidden_rows, spec_gamma, spec_vocab, topk=topk)
 
     trace_base_top1, trace_base_top5 = _topk_hit_counts(base_token_ids, base_ref_topk)
-    trace_spec_top1, trace_spec_top5 = _topk_hit_counts(spec_token_ids, spec_ref_topk)
+    trace_spec_top1, trace_spec_top5 = _topk_hit_counts(spec_token_ids, trace_spec_ref_topk)
     logger.info(
         "MTP trace reference-token top-k coverage: "
         f"base top1={trace_base_top1}/{iterations}, base top{topk}={trace_base_top5}/{iterations}; "
@@ -2151,6 +2179,11 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
     assert trace_spec_top5 == iterations, (
         f"Trace spec_token_id is not in the real-weight reference top-{topk} for all rows: "
         f"{trace_spec_top5}/{iterations}"
+    )
+    module_spec_top1, module_spec_top5 = _topk_hit_counts(spec_ref_topk[:, 0], spec_ref_topk)
+    logger.info(
+        "MTP module reference-token top-k coverage: "
+        f"spec top1={module_spec_top1}/{iterations}, spec top{topk}={module_spec_top5}/{iterations}"
     )
 
     provider = _MTPModuleTraceWeightProvider(trace, hf_state_dict)
