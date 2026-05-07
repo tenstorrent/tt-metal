@@ -50,8 +50,8 @@ on:
         required: false
         type: boolean
         default: false
-      run_tt_train_cpp_model_tests:
-        description: 'Run tt-train-cpp-models'
+      run_tt_train_model_tests:
+        description: 'Run tt-train-models'
         required: false
         type: boolean
         default: false
@@ -353,6 +353,28 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  # SD LLK Unit Tests — runs the full LLK gtest binary in slow dispatch as a comprehensive
+  # nightly regression. The PR gate covers two narrower slices (FD path via
+  # llk-fd-unit-tests-* and a Quasar+SD-only slice via llk-sd-unit-tests-*); this job is the
+  # superset that re-validates everything in SD on every supported runner class.
+  llk-sd-unit-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
+    uses: ./.github/workflows/llk-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      dispatch-mode: sd
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]
@@ -409,10 +431,10 @@ jobs:
       timeout: 90
       gtest_filter: "*"
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-cpp-models:
+  tt-train-models:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
+      (github.event_name == 'schedule' || inputs.run_tt_train_model_tests) &&
       needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
     secrets: inherit
     strategy:
@@ -425,7 +447,8 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      timeout: 90
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      timeout: 240
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-python-unit-tests:
     needs: [build-artifact, generate-arch-matrix]

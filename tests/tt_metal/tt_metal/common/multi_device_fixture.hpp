@@ -52,7 +52,7 @@ struct MeshDeviceFixtureConfig {
 namespace mesh_device_shared_detail {
 
 inline std::optional<std::string> mesh_fixture_skip_reason(const MeshDeviceFixtureConfig& config) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") && !getenv("TT_METAL_EMULE_MODE")) {
         return std::string("Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.");
     }
 

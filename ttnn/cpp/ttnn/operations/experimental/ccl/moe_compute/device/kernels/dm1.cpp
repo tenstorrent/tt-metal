@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,13 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
-namespace detail {
-inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
-}  // namespace detail
-
 void kernel_main() {
+    // Extract config type from compile-time argument
+    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
+    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
+
+    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
+    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -35,7 +37,7 @@ void kernel_main() {
     constexpr uint32_t tile_width_size_bytes = get_named_compile_time_arg_val("tile_width_size_bytes");
 
     constexpr uint32_t combine_shard_width_tiles = get_named_compile_time_arg_val("combine_shard_width_tiles");
-    constexpr uint32_t buffer_size_total_tokens = get_named_compile_time_arg_val("buffer_size_total_tokens");
+    constexpr uint32_t token_expert_row_offset = get_named_compile_time_arg_val("token_expert_row_offset");
     constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
     constexpr uint32_t matmul_combine_sync_semaphore_id =
@@ -78,21 +80,22 @@ void kernel_main() {
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
+    constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
+    const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
-        buffer_size_total_tokens / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
+        token_expert_row_offset * combine_shard_width_tiles * tile_width_size_bytes;
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);
-    constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
-    const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
+    constexpr uint32_t source_width_tiles = config_t::W2_TILES_PER_EXPERT_W;  // padded width in tiles
+    const uint32_t output_width_tiles_core = config_t::W2_TILES_PER_CORE[ring_core_id];
     // offset in tiles into the token width for this core
-    const uint32_t width_tile_base = moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id];
-    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
+    const uint32_t width_tile_base = config_t::COMBINE_W_OFFSET_PER_CORE[ring_core_id];
+    // number of compute cores that send data to each column of output shards (combine cores)
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
     const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
@@ -100,14 +103,14 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_B;
+    constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
 
     // The number of tiles to send in each step
-    // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_B;  // max(num_w0_w1_tiles_w)
+    // Tiles send per step, may include 1 tile of padding.
+    constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
@@ -229,7 +232,7 @@ void kernel_main() {
                     cb_reserve_back(cb_w2c_rdy, 1);
                     cb_push_back(cb_w2c_rdy, 1);
 
-                    // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+                    // Write tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
                     const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
                     const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
@@ -251,7 +254,7 @@ void kernel_main() {
                 }
             }
 
-            uint32_t width_tiles_to_send = output_width_tiles_core;  // 18 or 19
+            uint32_t width_tiles_to_send = output_width_tiles_core;  // split width of hidden dim, maybe padded
             uint32_t width_tiles_sent = 0;
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);

@@ -134,7 +134,7 @@ def _run_matmul_2d_interleaved_in0_sharded_in1(
         )
 
         if has_bias:
-            bias_shape = [1, 1, tile_h, n]
+            bias_shape = [1, 1, 1, n]
             bias_torch = torch.randn(bias_shape, dtype=torch.bfloat16)
             bias_t = ttnn.from_torch(
                 bias_torch,
@@ -318,7 +318,7 @@ def _run_matmul_2d_interleaved_in0_sharded_in1(
         output_tensor = output_tensor[:, :, :seq_len, :n]
         pt_out = torch.matmul(in0, in1)
         if has_bias:
-            num_bias_repeats = (seq_len + tile_h - 1) // tile_h
+            num_bias_repeats = seq_len
             bias_repeated = torch.repeat_interleave(bias_torch, num_bias_repeats, dim=2)
             bias_repeated = bias_repeated[:, :, :seq_len, :]  # match pt_out length (padded repeat can exceed)
             pt_out = pt_out + bias_repeated

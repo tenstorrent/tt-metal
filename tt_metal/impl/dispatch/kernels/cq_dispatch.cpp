@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -28,6 +29,7 @@ constexpr uint32_t dispatch_cb_log_page_size = DISPATCH_CB_LOG_PAGE_SIZE;
 constexpr uint32_t dispatch_cb_pages = DISPATCH_CB_PAGES;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uint32_t dispatch_cb_blocks = DISPATCH_CB_BLOCKS;
 constexpr uint32_t upstream_sync_sem = UPSTREAM_SYNC_SEM;
 constexpr uint32_t command_queue_base_addr = COMMAND_QUEUE_BASE_ADDR;
@@ -120,11 +122,23 @@ constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
 constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 
+constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
+constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled;
+
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
 // Note: due to the current method of release pages, up to 1 block of pages
 // may be unavailable to the prefetcher at any time
 constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb_blocks;
+
+// Dispatch-core-local L1 region assigned by DispatchMemMap via
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address is supplied by host through
+// the REALTIME_PROFILER_MSG_ADDR compile-time define; the same value is wired into the
+// co-located cq_dispatch_subordinate kernel and the reserved RT-profiler tensix core, so
+// all three view the same physical L1. The embedded program_id_fifo is the BRISC
+// (producer) / dispatch_s NCRISC (consumer) handoff.
+volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
@@ -1280,6 +1294,11 @@ re_run_command:
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
+            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0) {
+                while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
+                    invalidate_l1_cache();
+                }
+            }
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
@@ -1388,6 +1407,61 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
     return done;
 }
 
+struct NocCounterSnapshot {
+    uint32_t reads_num_issued;
+    uint32_t nonposted_writes_num_issued;
+    uint32_t nonposted_writes_acked;
+    uint32_t nonposted_atomics_acked;
+    uint32_t posted_writes_num_issued;
+};
+
+template <uint32_t noc_index>
+FORCE_INLINE NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
+    return {
+        .reads_num_issued = noc_reads_num_issued[noc_index],
+        .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[noc_index],
+        .nonposted_writes_acked = noc_nonposted_writes_acked[noc_index],
+        .nonposted_atomics_acked = noc_nonposted_atomics_acked[noc_index],
+        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]
+    };
+}
+
+// dispatch_d writes to the NOC1 core, but dispatch_s holds dedicated noc status on it. L1 noc counters
+// are leveraged along with a shutdown semaphore to transfer dispatch_d's write count to dispatch_s.
+FORCE_INLINE
+void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
+    if constexpr (!publish_noc_count) {
+        DEVICE_PRINT("publish_dispatch_d_noc_count is only supported when dispatch_s runs on the same core");
+        ASSERT(0);
+        return;
+    }
+
+    const uint32_t reads_delta = noc_reads_num_issued[upstream_noc_index] - snapshot.reads_num_issued;
+    const uint32_t nonposted_writes_delta =
+        noc_nonposted_writes_num_issued[upstream_noc_index] - snapshot.nonposted_writes_num_issued;
+    const uint32_t nonposted_writes_acked_delta =
+        noc_nonposted_writes_acked[upstream_noc_index] - snapshot.nonposted_writes_acked;
+    const uint32_t nonposted_atomics_acked_delta =
+        noc_nonposted_atomics_acked[upstream_noc_index] - snapshot.nonposted_atomics_acked;
+    const uint32_t posted_writes_delta =
+        noc_posted_writes_num_issued[upstream_noc_index] - snapshot.posted_writes_num_issued;
+
+    // Leverage noc counters to store deltas so that dispatch_s can read them directly.
+    set_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(upstream_noc_index, reads_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(
+        upstream_noc_index, nonposted_writes_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(
+        upstream_noc_index, nonposted_writes_acked_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
+        upstream_noc_index, nonposted_atomics_acked_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
+        upstream_noc_index, posted_writes_delta);
+
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+    *shutdown_sem_addr = 1;
+}
+
 void kernel_main() {
     set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
@@ -1409,6 +1483,11 @@ void kernel_main() {
         noc_local_state_init(upstream_noc_index);
     }
 
+    [[maybe_unused]] NocCounterSnapshot dispatch_d_noc_counter_start = {};
+    if constexpr (publish_noc_count) {
+        dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters<upstream_noc_index>();
+    }
+
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         uint32_t index = i + first_stream_used;
 
@@ -1420,6 +1499,13 @@ void kernel_main() {
     }
 
     uint32_t l1_cache[l1_cache_elements_rounded];
+
+    // Reset RT profiler mailbox fields on every dispatch core startup.
+    // L1 is not guaranteed to be zero-initialized, and stale values here can
+    // incorrectly enable RT profiler paths when host-side RT setup is skipped.
+    rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
+    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     dispatch_cb_reader.init();
     cmd_ptr = dispatch_cb_base;
@@ -1487,6 +1573,10 @@ void kernel_main() {
     dispatch_cb_reader.wait_all_pages();
 
     noc_async_full_barrier();
+
+    if constexpr (publish_noc_count) {
+        publish_dispatch_d_noc_count(dispatch_d_noc_counter_start);
+    }
 
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();

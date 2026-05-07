@@ -169,16 +169,22 @@ def parse_args():
         help="Enable memory usage tracking (prints memory stats after first iteration)",
     )
     parser.add_argument(
-        "--ddp",
-        type=int,
-        default=1,
-        help="Number of devices for distributed data parallel (default: 1, no DDP).",
+        "--mesh_shape",
+        type=lambda s: tuple(int(x) for x in s.split(",")),
+        default=(1, 1),
+        help="Mesh shape as comma-separated integers, e.g. '2,4' (default: '1,1').",
     )
     parser.add_argument(
-        "--tp",
+        "--dp_axis",
         type=int,
-        default=1,
-        help="Number of devices for tensor parallelism (default: 1, no TP).",
+        default=-1,
+        help="Index of the DP axis in --mesh_shape (default: -1, no DP).",
+    )
+    parser.add_argument(
+        "--tp_axis",
+        type=int,
+        default=-1,
+        help="Index of the TP axis in --mesh_shape (default: -1, no TP).",
     )
     parser.add_argument(
         "--batch",
@@ -239,19 +245,31 @@ def main():
     train_ids = ids[:n_train]
 
     # ── Device ────────────────────────────────────────────────────────────────
-    dp_size = args.ddp
-    tp_size = args.tp
-    use_ddp = dp_size > 1
-    use_tp = tp_size > 1
-    if use_ddp and batch_size % dp_size != 0:
-        raise ValueError(f"--batch ({batch_size}) must be divisible by --ddp ({dp_size})")
-
-    if use_tp and (args.save_every > 0 or args.resume):
-        raise ValueError("Checkpointing (--save_every, --resume) is not supported with tensor parallelism (--tp > 1)")
-
-    mesh = ttml.Mesh((dp_size, tp_size), ("dp", "tp"))
+    shape = args.mesh_shape
+    for name, value in (("dp_axis", args.dp_axis), ("tp_axis", args.tp_axis)):
+        if value != -1 and not (0 <= value < len(shape)):
+            raise ValueError(f"--{name} ({value}) is out of range for --mesh_shape of length {len(shape)}")
+    if args.dp_axis != -1 and args.dp_axis == args.tp_axis:
+        raise ValueError(f"--dp_axis and --tp_axis must differ (both set to {args.dp_axis})")
+    axis_names_list = [f"_{i}" for i in range(len(shape))]
+    if args.dp_axis != -1:
+        axis_names_list[args.dp_axis] = "dp"
+    if args.tp_axis != -1:
+        axis_names_list[args.tp_axis] = "tp"
+    mesh = ttml.Mesh(shape, tuple(axis_names_list))
     ttml.open_device_mesh(mesh)
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
+
+    dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
+    tp_size = mesh.axis_size("tp") if mesh.has_axis("tp") else 1
+    use_ddp = dp_size > 1
+    use_tp = tp_size > 1
+
+    if use_ddp and batch_size % dp_size != 0:
+        raise ValueError(f"--batch ({batch_size}) must be divisible by dp axis size ({dp_size})")
+
+    if use_tp and (args.save_every > 0 or args.resume):
+        raise ValueError("Checkpointing (--save_every, --resume) is not supported with tensor parallelism (tp > 1)")
 
     if use_ddp or use_tp:
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))

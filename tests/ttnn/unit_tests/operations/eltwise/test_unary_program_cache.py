@@ -82,7 +82,7 @@ def test_unary_cache_reuse_same_config(device):
 
 def test_unary_cache_reuse_same_volume_different_shapes(device):
     """TILE layout: same volume, different shapes -> 1 cache entry.
-    unary_ng doesn't hash volume or shape; tile counts are runtime args,
+    unary doesn't hash volume or shape; tile counts are runtime args,
     so any shape with the same op/dtype/memory_config shares one entry."""
     device.cache_entries_counter.reset()
 
@@ -97,7 +97,7 @@ def test_unary_cache_reuse_same_volume_different_shapes(device):
 
 def test_unary_cache_reuse_different_volumes(device):
     """TILE layout: different volumes -> still 1 cache entry.
-    unary_ng uses runtime tile counts (not compile-time), so different volumes
+    unary uses runtime tile counts (not compile-time), so different volumes
     share the same compiled program. override_runtime_arguments handles the
     different per-core tile distributions on cache hit."""
     device.cache_entries_counter.reset()

@@ -51,7 +51,7 @@ class Mesh:
             raise RuntimeError(msg)
         return self._axis_map[name]
 
-    def axis_mapper(self, name: str, tdim: int):
+    def axis_mapper(self, name: str, tdim: int) -> ttnn.CppTensorToMesh:
         """Return a mapper that shards a tensor along ``tdim`` across the named mesh axis.
 
         The mapper is passed to ``Tensor.from_numpy`` (or an initializer's ``mapper``
@@ -61,6 +61,13 @@ class Mesh:
         dev = ttml.autograd.AutoContext.get_instance().get_device()
         cluster_axis = self.axis_index(name)
         return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, cluster_axis)
+
+    def axis_mapper_config(self, name: str, tdim: int) -> ttnn.MeshMapperConfig:
+        """Return a MeshMapperConfig that shards along ``tdim`` across the named mesh axis."""
+        cluster_axis = self.axis_index(name)
+        placements = [ttnn.PlacementReplicate() for _ in self.shape]
+        placements[cluster_axis] = ttnn.PlacementShard(tdim)
+        return ttnn.MeshMapperConfig(placements)
 
 
 # Mirrors get_max_dimensions_for_architecture() in tt_metal/fabric/mesh_graph_descriptor.cpp
@@ -223,7 +230,8 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     for _, param in parameters.items():
         if not param.is_grad_initialized():
             continue
-        grad_t = ttml.autograd.create_tensor(param.get_grad())
+        grad = param.get_grad()
         for axis in axes:
-            grad_t = ttml.ops.distributed.all_reduce(grad_t, True, axis)
-        param.set_grad(ttnn.multiply(grad_t.get_value(), inv_scaler))
+            grad = ttnn.all_reduce(grad, cluster_axis=axis)
+        grad = ttnn.multiply(grad, inv_scaler)
+        param.set_grad(grad)

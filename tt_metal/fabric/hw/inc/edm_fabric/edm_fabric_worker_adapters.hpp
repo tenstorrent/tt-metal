@@ -332,6 +332,21 @@ struct WorkerToFabricEdmSenderBase {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
 
+    // Non-stateful current-slot helper for payload+header pairs.
+    // This avoids recomputing the destination EDM slot address for the header write.
+    FORCE_INLINE void send_current_slot_non_blocking(
+        uint32_t payload_source_l1_addr, size_t payload_size_bytes, uint32_t header_source_l1_addr) {
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_source_l1_addr))));
+
+        const uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
+        send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
+            payload_source_l1_addr, 1, payload_size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
+        send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
+            header_source_l1_addr, 1, sizeof(PACKET_HEADER_TYPE), buffer_address);
+        post_send_payload_increment_pointers();
+    }
+
     template <bool posted = false>
     FORCE_INLINE void setup_stateful_send_cmd_bufs(uint8_t noc = get_fabric_worker_noc()) const {
         // In DM_DYNAMIC_NOC, write and write_reg traffic on a worker RISC alias to the same physical cmd buf.
@@ -363,6 +378,19 @@ struct WorkerToFabricEdmSenderBase {
         this->issue_payload_to_current_slot_stateful<posted>(
             slot_l1_addr, payload_source_l1_addr, payload_size_bytes, noc);
         this->issue_header_to_current_slot_stateful<posted>(slot_l1_addr, header_source_l1_addr, noc);
+        this->post_send_payload_increment_pointers</*stateful_api=*/true>(noc);
+    }
+
+    template <bool posted = false>
+    FORCE_INLINE void send_current_slot_stateful_non_blocking_from_address(
+        uint32_t packet_source_l1_addr, uint32_t packet_size_bytes, uint8_t noc = get_fabric_worker_noc()) {
+        ASSERT(packet_size_bytes <= this->buffer_size_bytes);
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_source_l1_addr))));
+
+        const uint32_t slot_l1_addr = this->current_buffer_slot_l1_addr();
+        ncrisc_noc_write_with_state<noc_mode, /*posted=*/posted, /*update_counter=*/true, /*one_packet=*/false>(
+            noc, this->data_noc_cmd_buf, packet_source_l1_addr, slot_l1_addr, packet_size_bytes);
         this->post_send_payload_increment_pointers</*stateful_api=*/true>(noc);
     }
 

@@ -98,10 +98,8 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
     if has_bias:
-        torch_input_tensor_c = torch.randn((1, 1, TILE_HEIGHT, n_size), dtype=torch.bfloat16)
-        _torch_input_tensor_c = torch.repeat_interleave(
-            torch_input_tensor_c, torch_output_tensor.shape[2] // TILE_HEIGHT, dim=2
-        )
+        torch_input_tensor_c = torch.randn((1, 1, 1, n_size), dtype=torch.bfloat16)
+        _torch_input_tensor_c = torch.repeat_interleave(torch_input_tensor_c, torch_output_tensor.shape[2], dim=2)
         torch_output_tensor = torch_output_tensor + _torch_input_tensor_c
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)

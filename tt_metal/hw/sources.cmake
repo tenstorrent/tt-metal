@@ -133,6 +133,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/noc.h
     inc/experimental/circular_buffer.h
     inc/experimental/dataflow_buffer.h
+    inc/experimental/kernel_args.h
     inc/experimental/noc_semaphore.h
     inc/experimental/endpoints.h
     inc/experimental/core_local_mem.h
@@ -141,6 +142,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
+    inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h

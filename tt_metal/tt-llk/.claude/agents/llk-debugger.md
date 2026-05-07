@@ -1,7 +1,7 @@
 ---
 name: llk-debugger
 description: Fix compilation and runtime errors in LLK kernels. Architecture-aware — handles WH, BH, and QSR with appropriate source hierarchies. Use when tests fail or kernels don't compile.
-tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Edit, Bash, Glob, Grep
+tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Edit, Bash, Glob, Grep
 ---
 
 # LLK Debugger

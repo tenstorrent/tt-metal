@@ -55,11 +55,12 @@ prefill_dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    bool use_fp8_dispatch = false);
 }  // namespace ttnn::prim

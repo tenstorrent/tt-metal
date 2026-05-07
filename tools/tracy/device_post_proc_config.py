@@ -170,7 +170,7 @@ class default_setup(metaclass=MergeMetaclass):
         "perf_counter_data": {
             "across": "device",
             "type": "event",
-            "marker": {"risc": "TRISC_1"},
+            "marker": {"risc": "BRISC"},
         },
     }
 

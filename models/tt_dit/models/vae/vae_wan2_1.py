@@ -22,13 +22,14 @@ from ...utils.conv3d import (
     _ntuple,
     aligned_channels,
     compute_decoder_dims,
+    compute_encoder_dims,
     conv_pad_height,
     conv_pad_in_channels,
     count_convs,
     get_conv3d_config,
 )
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tensor import local_device_to_torch, typed_tensor
+from ...utils.tensor import local_device_to_torch
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -328,8 +329,6 @@ class WanCausalConv3d(Module):
         )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
-        self.mask_cache = {}
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             weight_tt = ttnn.from_torch(state["weight"], dtype=self.dtype, pad_value=0)
@@ -339,25 +338,6 @@ class WanCausalConv3d(Module):
             state["weight"] = local_device_to_torch(prepared)
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
-
-    def get_cached_mask(self, x_BTHWC, logical_h):
-        sharded_h = x_BTHWC.shape[2]
-        key = (sharded_h, logical_h)
-        if key not in self.mask_cache:
-            padded_h = sharded_h * self.parallel_config.height_parallel.factor
-            mask_shape = (1, 1, padded_h, 1, 1)
-            mask = torch.ones(mask_shape)
-            mask[:, :, logical_h:, :, :] = 0.0
-            mask = typed_tensor(
-                mask,
-                device=self.mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
-                shard_dim=2,
-                dtype=self.dtype,
-            )
-            self.mask_cache[key] = mask
-        return self.mask_cache[key]
 
     def forward(
         self,
@@ -378,35 +358,24 @@ class WanCausalConv3d(Module):
             # concat on T
             x_BTHWC = ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1)
             t_front_padding -= cache_x_BTHWC.shape[1]
-        if t_front_padding > 0:
-            # Padding only works on the lowest 3 dims. reshape input.
+        # Halo exchange (height and/or width padding)
+        # Masking (zero rows at/beyond logical_h) is fused into neighbor_pad via logical_h parameter,
+        # eliminating a separate mul-mask op. The local-copy kernel writes MEM_ZEROS_BASE for masked rows
+        # while still draining the CB, so the 2-phase pipeline (H then W) correctly propagates zeros.
+        # This is valid for linear H topology: the last device (which has padded rows) is is_last_device
+        # and never sends those rows via H fabric; phase-2 W exchange reads from the already-zeroed output.
+        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
+        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+
+        # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
+        # separate reshape+pad+reshape and an intermediate tensor allocation).
+        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on.
+        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed
+        if t_front_padding > 0 and not fuse_t_front_pad:
             B, T, H, W, C = x_BTHWC.shape
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
-
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
-        # Every operation between conv outputs is either:
-        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
-        # - SiLU — element-wise; no spatial mixing
-        # - Residual add — element-wise; no spatial mixing
-        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
-        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
-        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
-        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
-        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
-        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
-        #   padding from contaminating normalization statistics.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
-
-        # Halo exchange (height and/or width padding)
-        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
-        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
@@ -430,6 +399,11 @@ class WanCausalConv3d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
+            fused_logical_h = (
+                logical_h
+                if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                else 0
+            )
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
                 dims=dims,
@@ -439,6 +413,8 @@ class WanCausalConv3d(Module):
                 axes=axes,
                 neighbor_sems=neighbor_sems,
                 num_links=links,
+                logical_h=fused_logical_h,
+                t_front_pad=t_front_padding if fuse_t_front_pad else 0,
             )
 
         x_BTHWC = ttnn.experimental.conv3d(
@@ -780,8 +756,6 @@ class WanConv2d(Module):
             dtype=dtype,
         )
 
-        self.mask_cache = {}
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             weight_tt = ttnn.from_torch(state["weight"].unsqueeze(2), dtype=self.dtype, pad_value=0)
@@ -792,48 +766,11 @@ class WanConv2d(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def get_cached_mask(self, x_BTHWC, logical_h):
-        sharded_h = x_BTHWC.shape[2]
-        key = (sharded_h, logical_h)
-        if key not in self.mask_cache:
-            padded_h = sharded_h * self.parallel_config.height_parallel.factor
-            mask_shape = (1, 1, padded_h, 1, 1)
-            mask = torch.ones(mask_shape)
-            mask[:, :, logical_h:, :, :] = 0.0
-            mask = typed_tensor(
-                mask,
-                device=self.mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
-                shard_dim=2,
-                dtype=self.dtype,
-            )
-            self.mask_cache[key] = mask
-        return self.mask_cache[key]
-
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
-        # Every operation between conv outputs is either:
-        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
-        # - SiLU — element-wise; no spatial mixing
-        # - Residual add — element-wise; no spatial mixing
-        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
-        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
-        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
-        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
-        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
-        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
-        #   padding from contaminating normalization statistics.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
-
         # Halo exchange (height and/or width padding)
+        # Masking fused into neighbor_pad via logical_h (see WanCausalConv3d.forward for details).
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
@@ -859,6 +796,11 @@ class WanConv2d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
+            fused_logical_h = (
+                logical_h
+                if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                else 0
+            )
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
                 dims=dims,
@@ -868,6 +810,7 @@ class WanConv2d(Module):
                 axes=axes,
                 neighbor_sems=neighbor_sems,
                 num_links=links,
+                logical_h=fused_logical_h,
             )
 
         x_BTHWC = ttnn.experimental.conv3d(
@@ -1057,7 +1000,14 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                raise ValueError("feat_cache cannot be None")
+                # Full-T mode: frame 0 passes through without time_conv (matches
+                # the cached path's first-iteration behavior), remaining frames
+                # get the strided temporal conv with frame 0 prepended as context.
+                x_first = x_conv_BTHWC[:, :1, :, :, :]
+                if x_conv_BTHWC.shape[1] > 1:
+                    x_rest_input = ttnn.concat([x_first, x_conv_BTHWC[:, 1:, :, :, :]], dim=1)
+                    x_rest_output = self.time_conv(x_rest_input, logical_h)
+                    x_conv_BTHWC = ttnn.concat([x_first, x_rest_output], dim=1)
         return x_conv_BTHWC, logical_h
 
 
@@ -1156,8 +1106,8 @@ class WanDecoder3d(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         sdpa_t_fracture_w_only: bool = False,
-        target_height: int = 0,
-        target_width: int = 0,
+        height: int = 0,
+        width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
     ) -> None:
@@ -1180,8 +1130,8 @@ class WanDecoder3d(Module):
         h_factor = parallel_config.height_parallel.factor
         w_factor = parallel_config.width_parallel.factor
         stage_hw, stage_t = compute_decoder_dims(
-            target_height,
-            target_width,
+            height,
+            width,
             h_factor,
             w_factor,
             t_chunk_size,
@@ -1388,8 +1338,8 @@ class WanDecoder(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         sdpa_t_fracture_w_only: bool = False,
-        target_height: int = 0,
-        target_width: int = 0,
+        height: int = 0,
+        width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
     ) -> None:
@@ -1428,8 +1378,8 @@ class WanDecoder(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
-            target_height=target_height,
-            target_width=target_width,
+            height=height,
+            width=width,
             t_chunk_size=t_chunk_size,
             cached=cached,
         )
@@ -1470,7 +1420,7 @@ class WanDecoder(Module):
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
-        if t_chunk_size is None:
+        if t_chunk_size is None or t_chunk_size >= T:
             # No-cache full-T single-pass mode
             out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
             output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
@@ -1512,6 +1462,9 @@ class WanEncoder3D(Module):
         ccl_manager=None,
         parallel_config=None,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        height: int = 0,
+        width: int = 0,
+        encoder_t_chunk_size: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -1526,11 +1479,25 @@ class WanEncoder3D(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
+        num_stages = len(dim_mult) - 1
+        h_factor = parallel_config.height_parallel.factor
+        w_factor = parallel_config.width_parallel.factor
+        stage_hw, stage_t = compute_encoder_dims(
+            height,
+            width,
+            h_factor,
+            w_factor,
+            encoder_t_chunk_size,
+            temperal_downsample=temperal_downsample,
+            num_stages=num_stages,
+        )
+
         # dimensions
         dims = [dim * u for u in [1] + dim_mult]
         scale = 1.0
 
         # init block
+        full_h, full_w = stage_hw[0]
         self.conv_in = WanCausalConv3d(
             in_channels,
             dims[0],
@@ -1540,11 +1507,15 @@ class WanEncoder3D(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            conv_dims=ConvDims(stage_t[0].T_res, full_h, full_w),
         )
 
         # downsample blocks.
         self.down_blocks = ModuleList()
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
+            stage_h, stage_w = stage_hw[i]
+            res_dims = ConvDims(stage_t[i].T_res, stage_h, stage_w)
+
             for _ in range(num_res_blocks):
                 self.down_blocks.append(
                     WanResidualBlock(
@@ -1554,6 +1525,7 @@ class WanEncoder3D(Module):
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
                         dtype=dtype,
+                        conv_dims=res_dims,
                     )
                 )
                 if scale in attn_scales:
@@ -1571,6 +1543,7 @@ class WanEncoder3D(Module):
             # downsample block
             if i != len(dim_mult) - 1:
                 mode = "downsample3d" if temperal_downsample[i] else "downsample2d"
+                next_h, next_w = stage_hw[i + 1]
                 self.down_blocks.append(
                     WanResample(
                         dim=out_dim,
@@ -1579,11 +1552,15 @@ class WanEncoder3D(Module):
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
                         dtype=dtype,
+                        tconv_dims=ConvDims(stage_t[i].T_tconv, next_h, next_w),
+                        spatial_dims=ConvDims(stage_t[i].T_spatial, stage_h, stage_w),
                     )
                 )
                 scale /= 2.0
 
         # middle blocks
+        lat_h, lat_w = stage_hw[-1]
+        lat_dims = ConvDims(stage_t[-1].T_res, lat_h, lat_w)
         self.mid_block = WanMidBlock(
             dim=out_dim,
             num_layers=1,
@@ -1591,6 +1568,7 @@ class WanEncoder3D(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            conv_dims=lat_dims,
         )
 
         # output blocks
@@ -1612,6 +1590,7 @@ class WanEncoder3D(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            conv_dims=lat_dims,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1691,6 +1670,9 @@ class WanEncoder(Module):
         ccl_manager=None,
         parallel_config=None,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        height: int = 0,
+        width: int = 0,
+        encoder_t_chunk_size: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -1709,6 +1691,9 @@ class WanEncoder(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            height=height,
+            width=width,
+            encoder_t_chunk_size=encoder_t_chunk_size,
         )
         # Linear for quant_conv
         self.quant_conv = Linear(
@@ -1732,29 +1717,48 @@ class WanEncoder(Module):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
+    def forward(
+        self, x_BTHWC: ttnn.Tensor, logical_h: int, encoder_t_chunk_size: int | None = 4
+    ) -> tuple[ttnn.Tensor, int]:
+        """
+        encoder_t_chunk_size controls how the T dimension is processed:
+            None  - full-T single pass, no caching (fastest, most memory)
+            N     - frame 0 alone, then N frames at a time with caching
+        """
+        assert (
+            encoder_t_chunk_size is None or encoder_t_chunk_size >= 4
+        ), f"encoder_t_chunk_size must be None or >= 4, got {encoder_t_chunk_size}"
         B, T, H, W, C = x_BTHWC.shape
+        logger.info(f"WanEncoder.forward: T={T}, encoder_t_chunk_size={encoder_t_chunk_size}")
 
-        self.clear_cache()
+        if encoder_t_chunk_size is None:
+            output_BTHWC, new_logical_h = self.encoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
+        else:
+            self.clear_cache()
+            output_BTHWC = None
 
-        output_BTHWC = None
-        T_encoded = 1 + (T - 1) // 4
-        for i in range(T_encoded):
-            # Process one frame at a time
+            # Frame 0 alone (required by downsample3d cache initialization)
             self._conv_idx = [0]
-            if i == 0:
-                x_BTHWC_chunk = x_BTHWC[:, :1, :, :, :]
-            else:
-                x_BTHWC_chunk = x_BTHWC[:, 1 + 4 * (i - 1) : 1 + 4 * i, :, :, :]
-
             out_BTHWC, new_logical_h = self.encoder(
-                x_BTHWC_chunk, logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
+                x_BTHWC[:, :1, :, :, :],
+                logical_h,
+                feat_cache=self._feat_cache,
+                feat_idx=self._conv_idx,
             )
+            output_BTHWC = out_BTHWC
 
-            if output_BTHWC is None:
-                output_BTHWC = out_BTHWC
-            else:
+            for t_start in range(1, T, encoder_t_chunk_size):
+                self._conv_idx = [0]
+                t_end = min(t_start + encoder_t_chunk_size, T)
+                out_BTHWC, new_logical_h = self.encoder(
+                    x_BTHWC[:, t_start:t_end, :, :, :],
+                    logical_h,
+                    feat_cache=self._feat_cache,
+                    feat_idx=self._conv_idx,
+                )
                 output_BTHWC = ttnn.concat([output_BTHWC, out_BTHWC], dim=1)
+
+            self.clear_cache()
 
         output_tile_BTHWC = ttnn.to_layout(output_BTHWC, ttnn.TILE_LAYOUT)
         output_tile_BTHWC = self.quant_conv(output_tile_BTHWC)
@@ -1763,7 +1767,6 @@ class WanEncoder(Module):
         output_BCTHW = ttnn.permute(output_BTHWC, (0, 4, 1, 2, 3))
         # Trim padding on output channels
         output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]  # Get the mean
-        self.clear_cache()
         return (output_BCTHW, new_logical_h)
 
 

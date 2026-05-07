@@ -435,6 +435,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_scale_fp32"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+                get_named_compile_time_arg_val("sdpa_compute_block_size"),
                 get_named_compile_time_arg_val("sdpa_position_enabled"),
                 get_named_compile_time_arg_val("sdpa_per_device_chunk_size"),
                 1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
