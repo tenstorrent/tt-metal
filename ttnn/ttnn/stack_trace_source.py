@@ -85,9 +85,3 @@ def get_source_file_id(cursor: sqlite3.Cursor, path: str, contents: str) -> int:
     if row is None:
         raise RuntimeError(f"source_files row missing after insert for path {path!r}")
     return row[0]
-
-
-# ``ttnn.database`` / ``graph_report`` import ``get_source_file_id`` by this exact name.
-# Keep typo/historical aliases so mixed revisions or stale wheels do not break imports.
-ensure_source_file_id = get_source_file_id
-get_source_file_id_id = get_source_file_id
