@@ -4,7 +4,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <stdexcept>
@@ -38,6 +41,20 @@ struct ScopedCopiedPrecompiledRoot {
     }
 
     fs::path root_;
+};
+
+struct ScopedTempDir {
+    explicit ScopedTempDir(const std::string& tag) {
+        const auto timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = fs::temp_directory_path() / (tag + "_" + std::to_string(timestamp_ns));
+        fs::create_directories(path_);
+    }
+    ~ScopedTempDir() {
+        std::error_code ec;
+        fs::remove_all(path_, ec);
+    }
+
+    fs::path path_;
 };
 
 class OfflineKernelCompileMockFixture : public ::testing::Test {
@@ -157,6 +174,59 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsInvalidExplic
     };
 
     EXPECT_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params), std::invalid_argument);
+}
+
+// Returns the number of subdirectories directly under `dir` whose names parse as decimal digits
+// (i.e. compile-hash buckets). Returns 0 if `dir` does not exist.
+size_t count_compile_hash_subdirs(const fs::path& dir) {
+    if (!fs::exists(dir)) {
+        return 0;
+    }
+    size_t count = 0;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_directory()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        if (!name.empty() && std::all_of(name.begin(), name.end(), [](char c) { return std::isdigit(c); })) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// Returns true if `dir` (recursively) contains at least one .elf file with size > 0.
+bool contains_nonempty_elf(const fs::path& dir) {
+    for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".elf" && fs::file_size(entry.path()) > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtreeForReaderKernel) {
+    ScopedTempDir output_dir("tt_metal_offline_compile_smoke");
+
+    using Params = experimental::OfflineKernelCompileParams;
+    Params params{
+        .mode = Params::AllSupportedProducts{},
+        .output_dir = output_dir.path_.string(),
+        .cb_compile_configs = {},
+    };
+
+    ASSERT_NO_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params));
+
+    const fs::path kernel_subdir = output_dir.path_ / kReaderKernelName;
+    ASSERT_TRUE(fs::exists(kernel_subdir)) << "Expected kernel subdir at " << kernel_subdir;
+
+    // AllSupportedProducts enumerates every (arch, core_descriptor, soc_descriptor) tuple in the
+    // jit_build offline-compile table; each yields one or more JitDeviceConfig values, so the
+    // subtree must contain multiple distinct compile-hash buckets.
+    const size_t hash_subdir_count = count_compile_hash_subdirs(kernel_subdir);
+    EXPECT_GT(hash_subdir_count, 1u) << "Expected >1 compile-hash buckets under " << kernel_subdir;
+
+    EXPECT_TRUE(contains_nonempty_elf(kernel_subdir)) << "Expected at least one non-empty .elf under " << kernel_subdir;
 }
 
 }  // namespace
