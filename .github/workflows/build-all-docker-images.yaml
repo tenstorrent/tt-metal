@@ -83,7 +83,7 @@ jobs:
       llk-needs-build: ${{ steps.llk-check.outputs.llk-needs-build }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 1
           submodules: recursive
@@ -198,11 +198,11 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
@@ -282,11 +282,11 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
@@ -366,11 +366,11 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
@@ -396,11 +396,11 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
@@ -419,7 +419,7 @@ jobs:
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           sparse-checkout: .github/actions/push-latest-image-to-ghcr
           sparse-checkout-cone-mode: false

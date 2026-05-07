@@ -59,7 +59,7 @@ jobs:
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -102,7 +102,7 @@ jobs:
       # Step 5: Publish Test Results
       - name: Publish Test Results
         if: always()
-        uses: mikepenz/action-junit-report@v5
+        uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6
         with:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
           check_name: Quasar Compile Tests
