@@ -91,6 +91,7 @@ def _allowed_stack_trace_source_roots(
     try:
         add(str(Path.home()))
     except RuntimeError:
+        # Best-effort allowlist construction: some environments cannot resolve a home directory.
         pass
     add(sys_prefix)
     if sys_base_prefix != sys_prefix:
