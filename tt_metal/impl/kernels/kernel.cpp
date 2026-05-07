@@ -768,7 +768,7 @@ void Kernel::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>
 }
 
 void DataMovementKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
-    TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
+    TT_FATAL(this->binaries_exist_on_disk(device, binary_root), "Kernel binaries not found on disk");
     std::vector<const ll_api::memory*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indices
@@ -790,7 +790,7 @@ void DataMovementKernel::read_binaries(IDevice* device, const std::filesystem::p
 }
 
 void DramKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
-    TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
+    TT_FATAL(this->binaries_exist_on_disk(device, binary_root), "Kernel binaries not found on disk");
     std::vector<const ll_api::memory*> binaries;
     uint32_t dram_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -807,7 +807,7 @@ void DramKernel::read_binaries(IDevice* device, const std::filesystem::path& bin
 
 void EthernetKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
     // untested
-    TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
+    TT_FATAL(this->binaries_exist_on_disk(device, binary_root), "Kernel binaries not found on disk");
     std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -841,7 +841,7 @@ void EthernetKernel::read_binaries(IDevice* device, const std::filesystem::path&
 }
 
 void ComputeKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
-    TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
+    TT_FATAL(this->binaries_exist_on_disk(device, binary_root), "Kernel binaries not found on disk");
     std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -1002,7 +1002,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
 }
 
 void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
-    TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
+    TT_FATAL(this->binaries_exist_on_disk(device, binary_root), "Kernel binaries not found on disk");
     std::vector<const ll_api::memory*> binaries;
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -1101,7 +1101,7 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
 }
 
 void QuasarComputeKernel::read_binaries(IDevice* device, const std::filesystem::path& binary_root) {
-    TT_FATAL(this->binaries_exist_on_disk(device, binary_root));
+    TT_FATAL(this->binaries_exist_on_disk(device, binary_root), "Kernel binaries not found on disk");
     std::vector<const ll_api::memory*> binaries;
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
