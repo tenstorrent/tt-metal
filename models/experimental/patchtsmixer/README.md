@@ -28,7 +28,9 @@ PatchTSMixer TTNN supports the HuggingFace channel modes `common_channel` and `m
 
 ## Benchmarks & Validation
 
-Benchmarked on 100 ETTh2 test samples. Checkpoint: `checkpoints/etth2_512_96_20260428/best_model.pt` (ETTh2, context=512, pred=96, patch=8, d_model=16, 4 layers, common_channel). Hardware: Wormhole n300, Firmware 19.4.2, KMD 2.6.0. Date: 2026-04-28.
+**Reproduction:** A pre-trained checkpoint is included in this repo at `checkpoints/etth2_512_96_20260428/best_model.pt`. Results below are verified from this checkpoint on ETTh2 test set (100 samples) with config: context=512, pred=96, patch=8, d_model=16, 4 layers, common_channel. Hardware: Wormhole n300, Firmware 19.4.2, KMD 2.6.0.
+
+To verify: run `python benchmark_datasets.py --checkpoint checkpoints/etth2_512_96_20260428/best_model.pt --context-length 512 --prediction-length 96 --patch-length 8 --patch-stride 8 --d-model 16 --num-layers 4 --mode common_channel --num-samples 100`
 
 ### Accuracy (TTNN vs PyTorch on 100 ETTh2 samples)
 
@@ -88,12 +90,25 @@ python reference/train_patchtsmixer_pytorch.py \
     --output_dir checkpoints/etth2_512_96
 ```
 
-### 3. Full Benchmark (100 samples)
-Use the same model hyperparameters as the checkpoint run (especially `context_length`, `prediction_length`, `patch_length`, `patch_stride`, `d_model`, `num_layers`, and `mode`). If training used `--use_gated_attn`, also pass `--gated-attn` here.
+### 3. Run Benchmark (Optional: with your own trained checkpoint)
+
+If you trained your own checkpoint (step 2), benchmark it with:
 
 ```bash
 python benchmark_datasets.py \
     --checkpoint checkpoints/etth2_512_96/best_model.pt \
+  --context-length 512 --prediction-length 96 \
+  --patch-length 8 --patch-stride 8 \
+  --d-model 16 --num-layers 4 \
+  --mode common_channel \
+  --num-samples 100
+```
+
+Or use the included reference checkpoint to reproduce the benchmark results:
+
+```bash
+python benchmark_datasets.py \
+    --checkpoint checkpoints/etth2_512_96_20260428/best_model.pt \
   --context-length 512 --prediction-length 96 \
   --patch-length 8 --patch-stride 8 \
   --d-model 16 --num-layers 4 \
