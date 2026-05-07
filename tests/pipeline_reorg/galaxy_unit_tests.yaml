@@ -21,7 +21,7 @@
   auto_triage: true
   cmd: ./build/test/umd/galaxy/unit_tests_glx
   skus:
-    wh_galaxy:
+    wh_galaxy_perf_uf:
       timeout: 10
 
 - id: galaxy-umd-api
@@ -31,7 +31,7 @@
   auto_triage: true
   cmd: ./build/test/umd/api/api_tests
   skus:
-    wh_galaxy:
+    wh_galaxy_perf_uf:
       timeout: 20
 
 - id: galaxy-fabric-unit-suite
