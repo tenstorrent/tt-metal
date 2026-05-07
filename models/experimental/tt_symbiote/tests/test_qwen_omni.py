@@ -76,12 +76,12 @@ from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import (
     replace_code_predictor_lm_head_with_ttnn,
     replace_talker_codec_head_with_ttnn,
     replace_thinker_lm_head_with_ttnn,
+    TTNNQwen3OmniMoeCodecPredictorEmbedding,
 )
 from models.experimental.tt_symbiote.models.qwen_omni import (
     QwenOmniDeviceInit,
     apply_qwen3_omni_talker_prepare_inputs_fix,
 )
-from models.experimental.tt_symbiote.modules.embedding import TTNNQwen3OmniMoeCodecPredictorEmbedding
 from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.core.module import TTNNModule

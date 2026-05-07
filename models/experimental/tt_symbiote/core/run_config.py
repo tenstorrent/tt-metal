@@ -9,21 +9,92 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
+from models.experimental.tt_symbiote.core.utils import tree_map, flat_map_bypass
 from tracy import signpost
 
 import ttnn
 from models.experimental.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
     compare_fn_outputs,
-    flat_map_bypass,
     torch_dtype_to_ttnn_dtype,
-    tree_map,
     ttnn_dtype_to_torch_dtype,
 )
-from models.experimental.tt_symbiote.models.qwen_omni import distributed_config as _qwen_omni_distributed_config
+from models.tt_transformers.tt.ccl import TT_CCL
 
-DistributedTensorConfig = _qwen_omni_distributed_config.DistributedTensorConfig
-DistributedConfig = _qwen_omni_distributed_config.DistributedConfig
+
+@dataclass
+class CCLManagerConfig:
+    """Configuration for CCLManager."""
+
+    mesh_device: Any
+    num_links: Optional[int] = None
+    topology: Optional[Any] = None
+
+    def __post_init__(self):
+        if self.num_links is None:
+            self.num_links = 1
+        if self.topology is None:
+            self.topology = ttnn.Topology.Linear
+
+
+@dataclass
+class DistributedTensorConfig:
+    """Configuration for distributed tensor operations."""
+
+    mesh_mapper: Any
+    mesh_composer: Any
+    logical_shape_fn: Optional[Any] = None
+
+    def get_logical_shape(self, sharded_shape):
+        if self.logical_shape_fn is not None:
+            return self.logical_shape_fn(sharded_shape)
+        return sharded_shape
+
+
+def logical_shape_for_batch_channel_sharding(mesh_shape):
+    def _logical_shape(shape):
+        shape = list(shape)
+        logical_shape = [shape[0] * mesh_shape[0]] + shape[1:-1] + [shape[-1] * mesh_shape[1]]
+        return tuple(logical_shape)
+
+    return _logical_shape
+
+
+@dataclass
+class DistributedConfig:
+    """Configuration for distributed operations."""
+
+    mesh_device: Any
+    tensor_config: Optional[DistributedTensorConfig] = None
+    ccl_manager: Optional[Any] = None
+
+    def __post_init__(self):
+        if self.tensor_config is None and self.mesh_device.get_num_devices() > 1:
+            self.tensor_config = DistributedTensorConfig(
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (0, -1)),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, self.mesh_device.shape, (0, -1)),
+                logical_shape_fn=logical_shape_for_batch_channel_sharding(self.mesh_device.shape),
+            )
+        if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
+            self.ccl_manager = TT_CCL(self.mesh_device)
+
+    def get_tensor_config_for_tensor(self, module_name, tensor):
+        if tensor is not None:
+            if (
+                len(tensor.shape) < 2
+                or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
+                or tensor.shape[0] % self.mesh_device.shape[0] != 0
+            ):
+                print(
+                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
+                )
+                return DistributedTensorConfig(
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    mesh_composer=ttnn.create_mesh_composer(
+                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
+                    ),
+                )
+        return self.tensor_config
 
 
 @contextlib.contextmanager

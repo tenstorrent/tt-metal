@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 import os
+import logging
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
@@ -24,12 +26,13 @@ from models.experimental.tt_symbiote.core.module import (
     DeviceArch,
     set_distributed_tensor_config,
 )
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
+from models.experimental.tt_symbiote.core.run_config import (
+    DistributedConfig,
+    DistributedTensorConfig,
+    trace_enabled,
+)
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import torch_dtype_to_ttnn_dtype, tree_map
-from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import (
-    qwen_omni_replicated_concat_dim0_tensor_config,
-)
 from models.experimental.tt_symbiote.modules.attention import (
     TTNNBailingMoEAttention,
     TTNNPagedAttentionKVCache,
@@ -55,7 +58,257 @@ from models.experimental.tt_symbiote.modules.moe import (
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
+from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.tensor import TTNNReshape
+from models.experimental.tt_symbiote.utils.device_management import DeviceInit
+
+logger = logging.getLogger(__name__)
+
+# ``DistributedConfig`` / ``DistributedTensorConfig`` are defined in ``run_config``; imported here so
+# callers can import Omni mesh types from ``qwen_omni_modules`` or ``distributed_config``.
+
+
+def refresh_qwen_omni_distributed_config_aliases() -> None:
+    """Drop any cached copies of shim ``DistributedConfig`` / ``DistributedTensorConfig`` globals.
+
+    Gr00t's ``patch_run_config_for_gr00t`` swaps ``run_config.DistributedConfig``; if something had
+    materialized attributes on ``qwen_omni.distributed_config``, clear them so lazy module
+    accessors (PEP 562) keep tracking ``run_config``.
+    """
+    import sys
+
+    modname = "models.experimental.tt_symbiote.models.qwen_omni.distributed_config"
+    shim = sys.modules.get(modname)
+    if shim is None:
+        return
+    shim.__dict__.pop("DistributedConfig", None)
+    shim.__dict__.pop("DistributedTensorConfig", None)
+
+
+def _tensor_shardable_for_default_mesh_config(mesh_device, tensor) -> bool:
+    """True when tensor dims divide cleanly along mesh batch/channel axes (default 2-D shard layout)."""
+    if tensor is None:
+        return True
+    if len(tensor.shape) < 2:
+        return False
+    ms = mesh_device.shape
+    return tensor.shape[-1] % ms[-1] == 0 and tensor.shape[0] % ms[0] == 0
+
+
+def distributed_config_col_sharded_last_dim(mesh_device) -> DistributedTensorConfig:
+    """Build metadata for last-dim column-sharded activations on ``mesh_device``."""
+
+    def logical_shape_for_col_sharded(sharded_shape):
+        shape_list = list(sharded_shape)
+        n = int(mesh_device.get_num_devices())
+        shape_list[-1] = int(shape_list[-1]) * int(n)
+        return tuple(shape_list)
+
+    return DistributedTensorConfig(
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1),
+        logical_shape_fn=logical_shape_for_col_sharded,
+    )
+
+
+@dataclass
+class QwenOmniReplicatedMeshTensorConfig(DistributedTensorConfig):
+    """Replicated readback via ``ConcatMeshToTensor(dim=0)``; sets ``replicate_compose_slice_dim0_to_leading``."""
+
+    replicate_compose_slice_dim0_to_leading: bool = True
+
+
+def qwen_omni_replicated_concat_dim0_tensor_config(mesh_device) -> Optional[QwenOmniReplicatedMeshTensorConfig]:
+    """Replicate + concat on dim 0, then slice when Omni ``to_torch`` patch is active."""
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return None
+    return QwenOmniReplicatedMeshTensorConfig(
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+
+
+@dataclass
+class QwenOmniDistributedConfig(DistributedConfig):
+    """Qwen3-Omni: ambiguous replicated tensors use ``ConcatMeshToTensor(dim=0)`` + dim-0 slice on readback."""
+
+    def get_tensor_config_for_tensor(self, module_name, tensor):
+        if tensor is not None and not _tensor_shardable_for_default_mesh_config(self.mesh_device, tensor):
+            logger.warning(
+                "Could not determine tensor config for %s with shape %s. Assuming replication to all devices. "
+                "Override set_output_tensors_config_impl in the module to set the correct config for this tensor.",
+                module_name,
+                getattr(tensor, "shape", tensor),
+            )
+            return QwenOmniReplicatedMeshTensorConfig(
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+            )
+        return self.tensor_config
+
+
+def qwen_omni_maybe_slice_replicated_mesh_compose(cfg, ttnn_tensor, result: torch.Tensor) -> torch.Tensor:
+    """After mesh ``to_torch``, slice stacked replicas on dim 0 when ``cfg`` opts in (Qwen3-Omni)."""
+    if getattr(cfg, "replicate_compose_slice_dim0_to_leading", False) and result.dim() >= 1:
+        lead = int(ttnn_tensor.shape[0])
+        if result.shape[0] > lead:
+            return result[:lead].contiguous()
+    return result
+
+
+_QWEN_OMNI_NORMALRUN_TO_TORCH_PATCHED = False
+
+
+def ensure_qwen_omni_normalrun_to_torch_slice() -> None:
+    """Patch :meth:`NormalRun.to_torch` for Omni dim-0 slice after ``ttnn.to_torch`` when configured."""
+    global _QWEN_OMNI_NORMALRUN_TO_TORCH_PATCHED
+    refresh_qwen_omni_distributed_config_aliases()
+    if _QWEN_OMNI_NORMALRUN_TO_TORCH_PATCHED:
+        return
+    from models.experimental.tt_symbiote.core.run_config import NormalRun
+
+    def to_torch(self):
+        """Convert to PyTorch tensor."""
+        if self.elem is not None and self.elem.device.type != "meta" and self.ttnn_tensor is None:
+            return self.elem
+
+        def _to_torch(self_inner):
+            is_mesh_device = self_inner.ttnn_distributed_tensor_config is not None
+            if is_mesh_device:
+                result = ttnn.to_torch(
+                    self_inner.ttnn_tensor,
+                    mesh_composer=self_inner.ttnn_distributed_tensor_config.mesh_composer,
+                ).to(self_inner.device, self_inner.dtype)
+                result = qwen_omni_maybe_slice_replicated_mesh_compose(
+                    self_inner.ttnn_distributed_tensor_config, self_inner.ttnn_tensor, result
+                )
+            else:
+                result = ttnn.to_torch(self_inner.ttnn_tensor).to(self_inner.device, self_inner.dtype)
+            return result
+
+        result = self.elem
+        if self.ttnn_tensor is not None and self.elem is None:
+            result = _to_torch(self)
+        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        if result.device.type == "meta" and self.ttnn_tensor is not None:
+            result = _to_torch(self)
+        self.elem = result if self.elem is None else self.elem
+        return self.elem
+
+    NormalRun.to_torch = staticmethod(to_torch)
+    _QWEN_OMNI_NORMALRUN_TO_TORCH_PATCHED = True
+
+
+class QwenOmniDeviceInit(DeviceInit):
+    """Use with ``set_device(..., device_init=QwenOmniDeviceInit)`` for Qwen3-Omni on multi-device mesh."""
+
+    @classmethod
+    def init_state_impl(cls, device):
+        refresh_qwen_omni_distributed_config_aliases()
+        ensure_qwen_omni_normalrun_to_torch_slice()
+        return QwenOmniDistributedConfig(device)
+
+
+def _codec_embedding_aligned_up(x: int, alignment: int) -> int:
+    return ((int(x) + alignment - 1) // alignment) * alignment
+
+
+def _pad_last_dim_row_major_codec_embedding(tensor, pad_amount: int, *, value):
+    """Right-pad the last dimension (row-major)."""
+    rank = len(tensor.shape)
+    last = rank - 1
+    padding = tuple((0, pad_amount if i == last else 0) for i in range(rank))
+    return ttnn.pad(tensor, padding=padding, value=value)
+
+
+def _slice_dim_codec_embedding(tensor, dim: int, length: int):
+    starts = [0] * len(tensor.shape)
+    ends = list(tensor.shape)
+    ends[dim] = length
+    return ttnn.slice(tensor, starts, ends)
+
+
+def _prepare_embedding_indices(tt_indices):
+    """Return ``(indices_uint32_or_unchanged, orig_seq_len)`` for ``ttnn.embedding``.
+
+    ``ttnn.embedding`` requires indices in **UINT32** or BFLOAT16; symbiote maps ``torch.long`` → INT32.
+    ``ttnn.typecast`` to UINT32 on row-major INT32 requires the **last dim** to be a multiple of 32;
+    we pad with 0, then the caller must slice the **embedding output** on the sequence dim when
+    ``orig_seq_len`` is not ``None``.
+    """
+    if not isinstance(tt_indices, ttnn.Tensor):
+        return tt_indices, None
+    dt = tt_indices.dtype
+    if dt == ttnn.uint32 or dt == ttnn.bfloat16:
+        return tt_indices, None
+
+    rank = len(tt_indices.shape)
+    seq_dim = rank - 1
+    seq_len = int(tt_indices.shape[seq_dim])
+    padded_len = _codec_embedding_aligned_up(seq_len, 32)
+    orig_seq_len = None
+    if padded_len != seq_len:
+        tt_indices = _pad_last_dim_row_major_codec_embedding(tt_indices, padded_len - seq_len, value=0)
+        orig_seq_len = seq_len
+
+    tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
+    return tt_indices, orig_seq_len
+
+
+def _maybe_slice_embedding_output(out, orig_seq_len):
+    """Undo sequence padding: embedding output is ``[..., seq, hidden]``."""
+    if orig_seq_len is None:
+        return out
+    rank = len(out.shape)
+    seq_dim = rank - 2
+    return _slice_dim_codec_embedding(out, seq_dim, orig_seq_len)
+
+
+@trace_enabled
+class TTNNQwen3OmniMoeCodecPredictorEmbedding(TTNNEmbedding):
+    """Codec predictor ModuleList embeddings: UINT32/padding_idx prep; hidden-sharded like TTNNEmbedding; mesh outputs col-sharded to match talker norms/attn."""
+
+    @property
+    def weight(self):
+        return self.torch_layer.weight
+
+    @property
+    def padding_idx(self):
+        return self.torch_layer.padding_idx
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Col-shard last dim like decoder norms; fresh DistributedTensorConfig per leaf (reuse truncated long TTS)."""
+
+        def set_col_sharded_config(e):
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                if self.device is not None and self.device.get_num_devices() > 1:
+                    e.set_distributed_tensor_config(distributed_config_col_sharded_last_dim(self.device))
+            return e
+
+        if self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+        return tree_map(set_col_sharded_config, output_tensors)
+
+    def forward(self, tt_indices):
+        tt_indices, orig_seq_len = _prepare_embedding_indices(tt_indices)
+        pad = self.torch_layer.padding_idx
+        pad_token = int(pad) if pad is not None and int(pad) >= 0 else None
+        if pad_token is None:
+            out = ttnn.embedding(
+                tt_indices,
+                self.tt_weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            out = ttnn.embedding(
+                tt_indices,
+                self.tt_weight,
+                padding_idx=pad_token,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return _maybe_slice_embedding_output(out, orig_seq_len)
 
 
 # ---------------------------------------------------------------------------
@@ -5369,4 +5622,15 @@ __all__ = [
     "replace_code_predictor_lm_head_with_ttnn",
     "replace_talker_codec_head_with_ttnn",
     "replace_thinker_lm_head_with_ttnn",
+    "TTNNQwen3OmniMoeCodecPredictorEmbedding",
+    "DistributedConfig",
+    "DistributedTensorConfig",
+    "QwenOmniDistributedConfig",
+    "refresh_qwen_omni_distributed_config_aliases",
+    "QwenOmniReplicatedMeshTensorConfig",
+    "distributed_config_col_sharded_last_dim",
+    "ensure_qwen_omni_normalrun_to_torch_slice",
+    "QwenOmniDeviceInit",
+    "qwen_omni_maybe_slice_replicated_mesh_compose",
+    "qwen_omni_replicated_concat_dim0_tensor_config",
 ]
