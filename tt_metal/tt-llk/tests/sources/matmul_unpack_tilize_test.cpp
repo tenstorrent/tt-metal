@@ -68,11 +68,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         formats_array[run].unpack_A_src,
         formats_array[run].unpack_A_dst,
         tile_size); // have to reconfigure unpack kernel data formats_array if they change in this run
-    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
+    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
+        formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
 #ifdef ARCH_BLACKHOLE
     _llk_unpack_tilize_uninit_(formats_array[run].unpack_A_dst, 4, FACE_R_DIM);
 #else
@@ -159,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
     const bool TILIZE = true;
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false, TILIZE>(formats_array[run].pack_dst);
+    _llk_pack_init_<UNTILIZE, false, TILIZE>();
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
@@ -186,7 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tile_size); // need to reconfigure data formats_array for next pack, also calls set_packer_strides to readjust strides after pack tilizing
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false, false, false>(formats_array[run].pack_dst);
+    _llk_pack_init_<false, false, false>();
 #endif
 
     _llk_packer_wait_for_math_done_();

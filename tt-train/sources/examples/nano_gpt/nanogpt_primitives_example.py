@@ -1118,7 +1118,11 @@ def main():
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
                     print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
-                    if checkpoint_save_path and global_step % training_config.model_save_interval == 0:
+                    if (
+                        checkpoint_save_path
+                        and training_config.model_save_interval > 0
+                        and global_step % training_config.model_save_interval == 0
+                    ):
                         checkpoint_path = f"{checkpoint_save_path}_step_{global_step}.pkl"
                         save_checkpoint(
                             checkpoint_path,

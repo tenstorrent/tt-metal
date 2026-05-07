@@ -42,10 +42,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Initial quotient approximation: q = a * (1/b)
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
-    sfpi::vUInt q = sfpi::exman9(q_f);
+    sfpi::vUInt q = sfpi::exman(q_f);
 
-    // Compute q * b using 24-bit multiplication
-    sfpi::vInt qb = __builtin_rvtt_sfpmul24(q.get(), b.get(), 0);
+    sfpi::vInt qb = sfpi::fractional_mul(q, b);
     qb <<= 10;
 
     // Compute initial remainder
@@ -56,10 +55,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, sfpi::RoundMode::NearestEven);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
-    sfpi::vInt tmp_lo = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 0);
-    sfpi::vInt tmp_hi = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 1);
+    sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
+    sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt b_hi = b >> 23;
-    b_hi = __builtin_rvtt_sfpmul24(correction.get(), b_hi.get(), 0);
+    b_hi = sfpi::fractional_mul(correction, b_hi);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
     // Extract sign mask of r

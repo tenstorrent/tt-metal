@@ -15,10 +15,13 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
     auto parallelization_strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
 
     switch (parallelization_strategy) {
-        case ReduceOpParallelizationStrategy::MULTI_CORE_H: return ReduceMultiCoreHProgramFactory{};
-        case ReduceOpParallelizationStrategy::MULTI_CORE_W: return ReduceMultiCoreWProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_H:
+            return ReduceDeviceOperation::ReduceMultiCoreHProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_W:
+            return ReduceDeviceOperation::ReduceMultiCoreWProgramFactory{};
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
-        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW: return ReduceSingleCoreHwProgramFactory{};
+        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
+            return ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory{};
         default: TT_THROW("Unsupported parallelization strategy");
     }
 }

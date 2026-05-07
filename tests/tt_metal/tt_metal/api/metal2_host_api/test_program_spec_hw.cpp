@@ -121,7 +121,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // -------------------------------------------------------
     // Create Program
     // -------------------------------------------------------
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     // -------------------------------------------------------
     // Set runtime args
@@ -258,7 +258,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     // Vararg values picked so both kernels' XOR sums equal the same non-trivial S.
     // The kernels fold this into the first word of each DFB entry; S ^ S = 0, so data
@@ -378,7 +378,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     spec.dataflow_buffers = {out_dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute", "consumer"})};
 
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     // Pick non-trivial bits so a wrong-offset read is unlikely to coincidentally
     // produce the same XOR. The compute kernel's sum is:
@@ -503,7 +503,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .work_units = std::vector<WorkUnitSpec>{work_unit},
     };
 
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
     detail::LaunchProgram(device, program);
     // If we got here, both kernels resolved their sem accessors to the same ID.
 }
