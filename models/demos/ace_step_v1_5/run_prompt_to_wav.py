@@ -365,7 +365,6 @@ def main():
     # --------------------------
     # TTNN path: diffusion sampler (device-pure)
     # --------------------------
-    import os
     import sys
 
     # Ensure tt-metal + ttnn python package are importable before importing `ttnn`
