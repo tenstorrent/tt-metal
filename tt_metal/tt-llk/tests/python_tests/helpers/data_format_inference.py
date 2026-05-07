@@ -495,8 +495,7 @@ def data_formats(
                 if is_fp32_dest_acc_en == DestAccumulation.Yes
                 else DataFormat.Float16_b
             )
-
-        if input_format == DataFormat.Fp8_e4m3:
+        elif input_format == DataFormat.Fp8_e4m3:
             unpack_dst = DataFormat.Fp8_e4m3
             math_format = DataFormat.Float16
             pack_src_format = DataFormat.Float16
