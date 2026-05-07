@@ -289,6 +289,7 @@ def test_isclose(device, h, w, atol, rtol):
     [
         torch.Size([1, 1, 32, 32]),
         torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 1, 768, 456]),
     ],
 )
 def test_isclose_int32(device, input_shapes, rtol, atol):
@@ -310,16 +311,14 @@ def test_isclose_int32(device, input_shapes, rtol, atol):
 
 @pytest.mark.parametrize(
     "rtol, atol",
-    [
-        (1e-05, 1e-08),
-        (0.01, 5),
-    ],
+    [(1e-05, 1e-08), (1e-04, 0), (1e-3, 1e-6), (1e-1, 5e-1)],
 )
 @pytest.mark.parametrize(
     "input_shapes",
     [
         torch.Size([1, 1, 32, 32]),
         torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 1, 768, 456]),
     ],
 )
 @pytest.mark.parametrize(

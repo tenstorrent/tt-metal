@@ -436,17 +436,26 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // a single cached kernel binary handles all tolerance values.  Only equal_nan is a
     // compile-time template parameter because it controls distinct code paths.
     // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits.
-    // `rtol_bits` and `atol_bits` forward them through the inlined process_tile
-    // helpers via ISCLOSE_RT_ARG_PARAMS and ISCLOSE_RT_ARG_FWD.
+    // ISCLOSE_RT_ARG_PARAMS / ISCLOSE_RT_ARG_FWD inject `rtol_bits` and `atol_bits`
+    // as parameters of the inlined process_tile helpers; `#if ISCLOSE_OP` branches
+    // at the kernel call sites then forward those locals into the 5-arg macro below.
     if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
         compute_kernel_defines["ISCLOSE_OP"] = "1";
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";
         compute_kernel_defines["ISCLOSE_RTOL_RT_ARG_IDX"] = "3";
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
         compute_kernel_defines.erase("BINARY_SFPU_OP");
-        compute_kernel_defines["BINARY_SFPU_OP(a,b,c)"] =
-            "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>(a, b, c, rtol_bits, atol_bits)";
+        compute_kernel_defines["BINARY_SFPU_OP(a,b,c,rtol,atol)"] =
+            "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>(a, b, c, rtol, atol)";
     }
+
+    // Track post-activation dtypes so the c_3 / c_4 intermediate CBs can be
+    // sized and formatted to match the data the in-kernel TYPECAST produces.
+    // For ops without a TYPECAST in their activation chain these stay equal to
+    // the input dtype, preserving the legacy `is_sfpu_op ? a_data_format : ...`
+    // behaviour.
+    DataType a_post_activation_dtype = a_dtype;
+    DataType b_post_activation_dtype = b_dtype;
 
     {
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
@@ -492,6 +501,36 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
             });
         }
+
+        // Walk the (now finalized) activation chains backwards looking for the
+        // last TYPECAST.  For an in-kernel TYPECAST(src,dst) the data leaving
+        // DST and packed into the c_3 / c_4 intermediate CB is in `dst`
+        // format, not the original input format.  Capturing the post-activation
+        // dtype here lets the intermediate CB descriptors below match what
+        // PREPROCESS actually writes — without this, ISCLOSE on INT32 inputs
+        // (which uses TYPECAST(INT32->FLOAT32) activations) ends up with
+        // INT32 intermediate CBs and the packer corrupts the float bit pattern
+        // on TTSim, producing all-zero tiles after the first.
+        auto extract_typecast_output_dtype = [](ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+                                                DataType fallback) -> DataType {
+            for (auto it = activations.rbegin(); it != activations.rend(); ++it) {
+                if (it->type() != unary::UnaryOpType::TYPECAST) {
+                    continue;
+                }
+                if (const auto p = it->get_param_if<float>(1)) {
+                    return static_cast<DataType>(static_cast<int>(*p));
+                }
+                if (const auto p = it->get_param_if<std::int32_t>(1)) {
+                    return static_cast<DataType>(*p);
+                }
+                if (const auto p = it->get_param_if<std::uint32_t>(1)) {
+                    return static_cast<DataType>(*p);
+                }
+            }
+            return fallback;
+        };
+        a_post_activation_dtype = extract_typecast_output_dtype(lhs_activations, a_dtype);
+        b_post_activation_dtype = extract_typecast_output_dtype(rhs_activations, b_dtype);
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -560,9 +599,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
-        auto a_intermediate_format = is_sfpu_op   ? a_data_format
+        const auto a_post_activation_data_format = datatype_to_dataformat_converter(a_post_activation_dtype);
+        auto a_intermediate_format = is_sfpu_op   ? a_post_activation_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
-                                                  : a_data_format;
+                                                  : a_post_activation_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
@@ -591,9 +631,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
-        auto b_intermediate_format = is_sfpu_op   ? b_data_format
+        const auto b_post_activation_data_format = datatype_to_dataformat_converter(b_post_activation_dtype);
+        auto b_intermediate_format = is_sfpu_op   ? b_post_activation_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
-                                                  : b_data_format;
+                                                  : b_post_activation_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,

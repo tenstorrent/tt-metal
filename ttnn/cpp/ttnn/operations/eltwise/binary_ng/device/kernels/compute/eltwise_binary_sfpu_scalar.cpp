@@ -50,7 +50,11 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
+#if ISCLOSE_OP
+        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
     tile_regs_commit();
