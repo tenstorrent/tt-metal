@@ -7,6 +7,7 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
@@ -71,6 +72,7 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
+            partial_rotary_factor=args.partial_rotary_factor,
             use_qk_fused=args.use_qk_fused,
             prefetcher=prefetcher,
         )
@@ -82,6 +84,7 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                args.partial_rotary_factor,
                 use_qk_fused=args.use_qk_fused,
                 prefetcher=None,
             )
@@ -105,8 +108,9 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+        norm_class = LayerNorm if self.args.layernorm else RMSNorm
         self.norm = DistributedNorm(
-            RMSNorm(
+            norm_class(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -345,41 +349,58 @@ class Transformer(LightweightModule):
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
-        required_end = start_pos + S
-        pad_len = max(0, required_end - mat_len)
+        if batch_size > 1 and self.args.use_hf_rope:
+            # Batched prefill: q's seq dim is batch_size * S (users concatenated along the seq axis).
+            # Build cos/sin by tiling per-user slice so each user's concatenated chunk sees positions
+            # 0..S-1 (HF/Llama rope expect cos seq_len == q seq_len with correct per-user positions).
+            assert mat_len >= S, f"Per-user seq_len {S} exceeds rope cache {mat_len}"
+            per_user_cos = self.rope_setup.cos_matrix_prefill[:, :, 0:S, :]
+            per_user_sin = self.rope_setup.sin_matrix_prefill[:, :, 0:S, :]
+            cos_slice = ttnn.concat([per_user_cos] * batch_size, dim=2)
+            sin_slice = ttnn.concat([per_user_sin] * batch_size, dim=2)
+        else:
+            required_end = start_pos + S
+            pad_len = max(0, required_end - mat_len)
 
-        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix
-        # In case of trace, we will use the whole matrix for all seq_lens supported by trace
-        prefill_start_pos = 0 if trace_enabled else start_pos
-        slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
+            # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix
+            # In case of trace, we will use the whole matrix for all seq_lens supported by trace
+            prefill_start_pos = 0 if trace_enabled else start_pos
+            slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
 
-        cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
+            cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
+            sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
 
-        if pad_len > 0:
-            # Padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
-            padding = [(0, 0)] * 4
-            padding[2] = (0, pad_len)
-            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
-            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+            if pad_len > 0:
+                # Padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
+                padding = [(0, 0)] * 4
+                padding[2] = (0, pad_len)
+                cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+                sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
 
         tt_rot_mats_prefill_global = [cos_slice, sin_slice]
 
         if hasattr(self, "rope_local_setup"):
             local_mat_len = self.rope_local_setup.cos_matrix_prefill.shape[2]
-            local_required_end = start_pos + S
-            local_pad_len = max(0, local_required_end - local_mat_len)
-            local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
+            if batch_size > 1 and self.args.use_hf_rope:
+                assert local_mat_len >= S, f"Per-user seq_len {S} exceeds local rope cache {local_mat_len}"
+                local_per_user_cos = self.rope_local_setup.cos_matrix_prefill[:, :, 0:S, :]
+                local_per_user_sin = self.rope_local_setup.sin_matrix_prefill[:, :, 0:S, :]
+                local_cos_slice = ttnn.concat([local_per_user_cos] * batch_size, dim=2)
+                local_sin_slice = ttnn.concat([local_per_user_sin] * batch_size, dim=2)
+            else:
+                local_required_end = start_pos + S
+                local_pad_len = max(0, local_required_end - local_mat_len)
+                local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
 
-            local_cos_slice = self.rope_local_setup.cos_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
-            local_sin_slice = self.rope_local_setup.sin_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
+                local_cos_slice = self.rope_local_setup.cos_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
+                local_sin_slice = self.rope_local_setup.sin_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
 
-            if local_pad_len > 0:
-                # Pad at end of 3rd dim (dim=2) by local_pad_len
-                local_padding = [(0, 0)] * 4
-                local_padding[2] = (0, local_pad_len)
-                local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
-                local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
+                if local_pad_len > 0:
+                    # Pad at end of 3rd dim (dim=2) by local_pad_len
+                    local_padding = [(0, 0)] * 4
+                    local_padding[2] = (0, local_pad_len)
+                    local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
+                    local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
 
             tt_rot_mats_prefill_local = [local_cos_slice, local_sin_slice]
         else:
