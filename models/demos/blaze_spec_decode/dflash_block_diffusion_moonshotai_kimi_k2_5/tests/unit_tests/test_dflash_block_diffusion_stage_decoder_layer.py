@@ -13,6 +13,10 @@ from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.
     golden_decoder_layer_stage,
     load_stage_fixture,
 )
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_test_modes import (
+    USE_GOLDEN_PARAMS,
+    require_golden_or_not_implemented,
+)
 
 
 FIXTURE_DIR = (
@@ -32,9 +36,13 @@ def _layer_index_from_fixture_path(path: Path) -> int:
 
 
 @pytest.mark.parametrize("fixture_path", DECODER_LAYER_FIXTURES, ids=lambda path: path.stem)
-def test_dflash_block_diffusion_stage_decoder_layer_matches_golden_fixture(fixture_path: Path) -> None:
+@pytest.mark.parametrize("use_golden", USE_GOLDEN_PARAMS)
+def test_dflash_block_diffusion_stage_decoder_layer_matches_golden_fixture(
+    fixture_path: Path, use_golden: bool
+) -> None:
     layer_idx = _layer_index_from_fixture_path(fixture_path)
     fixture = load_stage_fixture(fixture_path, f"decoder_layer_{layer_idx}")
+    require_golden_or_not_implemented(use_golden, f"DFlash decoder layer {layer_idx} device stage")
     actual = golden_decoder_layer_stage(fixture)
 
     num_layers = int(fixture["config"]["num_hidden_layers"])

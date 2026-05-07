@@ -6,10 +6,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
     assert_close,
     golden_post_decoder_fused_stage,
     load_stage_fixture,
+)
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_test_modes import (
+    USE_GOLDEN_PARAMS,
+    require_golden_or_not_implemented,
 )
 
 
@@ -21,8 +27,10 @@ FIXTURE_PATH = (
 )
 
 
-def test_dflash_block_diffusion_stage_post_decoder_fused_matches_golden_fixture() -> None:
+@pytest.mark.parametrize("use_golden", USE_GOLDEN_PARAMS)
+def test_dflash_block_diffusion_stage_post_decoder_fused_matches_golden_fixture(use_golden: bool) -> None:
     fixture = load_stage_fixture(FIXTURE_PATH, "post_decoder_fused")
+    require_golden_or_not_implemented(use_golden, "DFlash post-decoder fused device stage")
     actual = golden_post_decoder_fused_stage(fixture)
     expected = fixture["expected"]
 

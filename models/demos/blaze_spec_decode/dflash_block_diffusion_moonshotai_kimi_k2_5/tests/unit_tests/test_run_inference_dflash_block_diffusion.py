@@ -11,8 +11,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
+import pytest
+
 from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
     golden_accepted_after_anchor,
+)
+from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_test_modes import (
+    USE_GOLDEN_PARAMS,
+    require_golden_or_not_implemented,
 )
 
 
@@ -257,8 +263,10 @@ def _make_trace_backed_pipeline(trace: dict) -> tuple[_DFlashTraceBackedPipeline
     return _DFlashTraceBackedPipeline(trace, fake_model), fake_model
 
 
-def test_run_inference_dflash_block_diffusion_replays_golden_trace() -> None:
+@pytest.mark.parametrize("use_golden", USE_GOLDEN_PARAMS)
+def test_run_inference_dflash_block_diffusion_replays_golden_trace(use_golden: bool) -> None:
     trace = _load_trace()
+    require_golden_or_not_implemented(use_golden, "ModelPipeline.run_inference with DFlash block proposals")
     pipeline, fake_model = _make_trace_backed_pipeline(trace)
     emitted_tokens: list[int] = []
 

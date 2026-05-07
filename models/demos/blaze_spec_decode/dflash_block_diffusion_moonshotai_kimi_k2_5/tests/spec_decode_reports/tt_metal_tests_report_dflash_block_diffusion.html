@@ -165,6 +165,7 @@
       <ul>
         <li>Fixtures use a deterministic tiny DFlash model, not full Kimi weights.</li>
         <li>Tests are bringup contracts; they do not run hardware kernels.</li>
+        <li>Implementation tests expose <code>use_golden</code>; the pipeline branch is strict xfail until real hooks exist.</li>
         <li>Main lacks the DFlash production module and dynamic multi-spec host hook.</li>
       </ul>
 
