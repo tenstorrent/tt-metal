@@ -262,10 +262,11 @@ class DecoderLayer(LightweightModule):
                 memory_config=self._decode_ln_in_memcfg,
             )
             x = self.mlp(x, mode=mode)
-            # Second residual add: caller wants DRAM output. Both inputs are sharded;
-            # ask the add to write to DRAM_INTERLEAVED so the S→I happens for free as
-            # part of the binary op output staging.
-            x_out = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Second residual add: stage to L1_INTERLEAVED instead of DRAM. Next
+            # layer's input_layernorm does to_memory_config(x, _decode_ln_in_memcfg)
+            # which is a cheap L1→L1 reshard rather than a DRAM round-trip on the
+            # 4 KB (Talker) / 2 KB (CP) per-layer activation.
+            x_out = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(residual)
             return x_out, updated_kv_cache
 
@@ -303,8 +304,10 @@ class DecoderLayer(LightweightModule):
             x = self.post_attention_layernorm(x)
         x = self.mlp(x, mode=mode)
         # Second residual add: this is the layer's *output*, returned to the caller.
-        # Caller (Talker.forward) expects the per-layer output in DRAM_INTERLEAVED so
-        # the next layer's residual chain has stable addresses across trace iterations.
-        x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Decode-trace replay needs DRAM for stable addresses across iterations.
+        # Prefill is non-traced — keep the layer output in L1 so the next layer's
+        # input_layernorm doesn't pay a DRAM round-trip on the residual stream.
+        out_memcfg = ttnn.L1_MEMORY_CONFIG if mode == "prefill" else ttnn.DRAM_MEMORY_CONFIG
+        x = ttnn.add(residual, x, memory_config=out_memcfg)
 
         return x, updated_kv_cache
