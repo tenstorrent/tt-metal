@@ -1110,10 +1110,10 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{64, 64},
         tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(tensor_spec, mesh_device_.get());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology());
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
-    const auto args_from_mesh_buffer = TensorAccessorArgs(*mesh_tensor.mesh_buffer());
+    const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());
 
     EXPECT_EQ(args_from_mesh_tensor.get_compile_time_args(), args_from_mesh_buffer.get_compile_time_args());
     EXPECT_EQ(args_from_mesh_tensor.get_common_runtime_args(), args_from_mesh_buffer.get_common_runtime_args());
@@ -1126,10 +1126,10 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{64, 128},
         tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(tensor_spec, mesh_device_.get());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology());
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
-    const auto args_from_mesh_buffer = TensorAccessorArgs(*mesh_tensor.mesh_buffer());
+    const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());
 
     EXPECT_EQ(args_from_mesh_tensor.get_compile_time_args(), args_from_mesh_buffer.get_compile_time_args());
     EXPECT_EQ(args_from_mesh_tensor.get_common_runtime_args(), args_from_mesh_buffer.get_common_runtime_args());
@@ -1148,10 +1148,10 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{4, 6, 64, 64},
         tt::tt_metal::TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(tensor_spec, mesh_device_.get());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology());
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
-    const auto args_from_mesh_buffer = TensorAccessorArgs(*mesh_tensor.mesh_buffer());
+    const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());
 
     EXPECT_EQ(args_from_mesh_tensor.get_compile_time_args(), args_from_mesh_buffer.get_compile_time_args());
     EXPECT_EQ(args_from_mesh_tensor.get_common_runtime_args(), args_from_mesh_buffer.get_common_runtime_args());
