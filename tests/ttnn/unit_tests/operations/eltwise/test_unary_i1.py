@@ -68,9 +68,54 @@ def test_i1_zero(device, shapes):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.9999
 
 
+# Tolerances calibrated from kernel ULP measurement:
+#   FP32 in-domain MaxULP ≈ 10  (rtol 1e-4 leaves ~1000× margin)
+#   FP32 OOD       MaxULP < 1
+#   BF16           MaxULP ~0.5 BF16 ULP (≈ 0.2% relative; rtol 5e-3 = 4× margin)
+#   max_ulp limits use units native to the device dtype (FP32 ULP for fp32,
+#   BF16 ULP for bfloat16 — BF16 has 7-bit mantissa so 1 BF16 ULP ≈ 0.78%).
+# atol guards near-zero outputs (i1(x) ≈ x/2 for small x).
+_TOLS = {
+    ttnn.float32: dict(rtol=1e-4, atol=1e-6, max_ulp=100, ulp_mantissa_bits=23),
+    ttnn.bfloat16: dict(rtol=5e-3, atol=1e-3, max_ulp=5, ulp_mantissa_bits=7),
+}
+
+
+def _ulp_error(got_f32, ref_f32, mantissa_bits):
+    """Per-element ULP distance, expressed in `2^-mantissa_bits` units of |ref|."""
+    ulp_size = ref_f32.abs() * (2.0**-mantissa_bits) + 1e-38
+    return (got_f32 - ref_f32).abs() / ulp_size
+
+
+def _assert_close(name, got, ref, dtype):
+    tols = _TOLS[dtype]
+    got_f32 = got.float()
+    ref_f32 = ref.float()
+    rtol, atol = tols["rtol"], tols["atol"]
+
+    # 1) allclose check
+    if not torch.allclose(got_f32, ref_f32, rtol=rtol, atol=atol):
+        diff = (got_f32 - ref_f32).abs()
+        rel = diff / (ref_f32.abs() + atol)
+        idx = rel.argmax()
+        raise AssertionError(
+            f"{name}: not allclose (rtol={rtol}, atol={atol}); "
+            f"worst rel_err={rel.flatten()[idx].item():.2e} "
+            f"ref={ref_f32.flatten()[idx].item():.4e} got={got_f32.flatten()[idx].item():.4e}"
+        )
+
+    # 2) ULP check (in dtype-native ULP units)
+    valid = ~(ref_f32.isnan() | ref_f32.isinf() | got_f32.isnan() | got_f32.isinf())
+    ulps = _ulp_error(got_f32, ref_f32, tols["ulp_mantissa_bits"])[valid]
+    max_ulp = ulps.max().item() if ulps.numel() else 0.0
+    assert max_ulp <= tols["max_ulp"], (
+        f"{name}: MaxULP={max_ulp:.2f} exceeds limit {tols['max_ulp']} "
+        f"(units: 2^-{tols['ulp_mantissa_bits']} of |ref|)"
+    )
+
+
 # Covers the asymptotic |x| > 10 branch and the ±88.5 input clamp.
 # Range [-50, 50] keeps reference values within FP32 (i1(50) ≈ 2.93e20).
-# BF16's ~0.4% relative precision over a 20-decade output range loosens PCC.
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -78,20 +123,18 @@ def test_i1_zero(device, shapes):
         [4, 2, 96, 192],
     ],
 )
-@pytest.mark.parametrize(
-    "dtype, pcc_threshold",
-    [
-        (ttnn.float32, 0.9999),
-        (ttnn.bfloat16, 0.99),
-    ],
-)
-def test_i1_ood(device, shapes, dtype, pcc_threshold):
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_i1_ood(device, shapes, dtype):
     torch.manual_seed(0)
 
     high = 50.0
     low = -50.0
     torch_input_tensor_a = torch.rand(shapes, dtype=torch.float32) * (high - low) + low
-    torch_output_tensor = torch.special.i1(torch_input_tensor_a)
+    # Quantise the reference input to the device dtype so we measure kernel
+    # error, not input-quantisation noise.
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    ref_input = torch_input_tensor_a.to(torch_dtype).to(torch.float32)
+    torch_output_tensor = torch.special.i1(ref_input)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -103,8 +146,7 @@ def test_i1_ood(device, shapes, dtype, pcc_threshold):
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert pcc >= pcc_threshold
+    _assert_close("test_i1_ood", output_tensor, torch_output_tensor, dtype)
 
 
 # Boundary inputs straddling the |x| > 10 branch and the ±88.5 clamp.
@@ -116,6 +158,8 @@ def test_i1_clamp_boundary(device, dtype):
     )
     # i1 is unbounded; out-of-clamp inputs (|x| > 88.5) return i1(±88.5).
     expected_input = torch.clamp(boundaries, min=-88.5, max=88.5)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    expected_input = expected_input.to(torch_dtype).to(torch.float32)
     torch_output_tensor = torch.special.i1(expected_input)
 
     # Pad to a tile-aligned shape so we can run on device.
@@ -132,5 +176,4 @@ def test_i1_clamp_boundary(device, dtype):
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)[0, 0, 0, : boundaries.numel()]
 
-    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert pcc >= 0.9999
+    _assert_close("test_i1_clamp_boundary", output_tensor, torch_output_tensor, dtype)
