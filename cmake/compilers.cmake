@@ -44,19 +44,39 @@ function(CHECK_COMPILERS)
         file(GLOB _tt_c_compiler_info "${CMAKE_BINARY_DIR}/CMakeFiles/*/CMakeCCompiler.cmake")
         foreach(_f IN LISTS _tt_c_compiler_info)
             file(READ "${_f}" _txt)
-            string(REPLACE [[set(CMAKE_C_COMPILER_AR "CMAKE_C_COMPILER_AR-NOTFOUND")]]
-                           "set(CMAKE_C_COMPILER_AR \"${CMAKE_AR}\")" _txt "${_txt}")
-            string(REPLACE [[set(CMAKE_C_COMPILER_RANLIB "CMAKE_C_COMPILER_RANLIB-NOTFOUND")]]
-                           "set(CMAKE_C_COMPILER_RANLIB \"${CMAKE_RANLIB}\")" _txt "${_txt}")
+            string(
+                REPLACE
+                [[set(CMAKE_C_COMPILER_AR "CMAKE_C_COMPILER_AR-NOTFOUND")]]
+                "set(CMAKE_C_COMPILER_AR \"${CMAKE_AR}\")"
+                _txt
+                "${_txt}"
+            )
+            string(
+                REPLACE
+                [[set(CMAKE_C_COMPILER_RANLIB "CMAKE_C_COMPILER_RANLIB-NOTFOUND")]]
+                "set(CMAKE_C_COMPILER_RANLIB \"${CMAKE_RANLIB}\")"
+                _txt
+                "${_txt}"
+            )
             file(WRITE "${_f}" "${_txt}")
         endforeach()
         file(GLOB _tt_cxx_compiler_info "${CMAKE_BINARY_DIR}/CMakeFiles/*/CMakeCXXCompiler.cmake")
         foreach(_f IN LISTS _tt_cxx_compiler_info)
             file(READ "${_f}" _txt)
-            string(REPLACE [[set(CMAKE_CXX_COMPILER_AR "CMAKE_CXX_COMPILER_AR-NOTFOUND")]]
-                           "set(CMAKE_CXX_COMPILER_AR \"${CMAKE_AR}\")" _txt "${_txt}")
-            string(REPLACE [[set(CMAKE_CXX_COMPILER_RANLIB "CMAKE_CXX_COMPILER_RANLIB-NOTFOUND")]]
-                           "set(CMAKE_CXX_COMPILER_RANLIB \"${CMAKE_RANLIB}\")" _txt "${_txt}")
+            string(
+                REPLACE
+                [[set(CMAKE_CXX_COMPILER_AR "CMAKE_CXX_COMPILER_AR-NOTFOUND")]]
+                "set(CMAKE_CXX_COMPILER_AR \"${CMAKE_AR}\")"
+                _txt
+                "${_txt}"
+            )
+            string(
+                REPLACE
+                [[set(CMAKE_CXX_COMPILER_RANLIB "CMAKE_CXX_COMPILER_RANLIB-NOTFOUND")]]
+                "set(CMAKE_CXX_COMPILER_RANLIB \"${CMAKE_RANLIB}\")"
+                _txt
+                "${_txt}"
+            )
             file(WRITE "${_f}" "${_txt}")
         endforeach()
     endif()
