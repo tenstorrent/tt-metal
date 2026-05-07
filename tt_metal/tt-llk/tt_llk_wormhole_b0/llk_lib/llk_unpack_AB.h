@@ -155,7 +155,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape &tensor_shape, const ckernel::Transpose transpose, const bool partial_face = true)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -163,7 +163,6 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 
-    const bool partial_face = (tensor_shape.face_r_dim < FACE_R_DIM);
     if (partial_face)
     {
         config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
@@ -177,7 +176,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape &tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
 }
