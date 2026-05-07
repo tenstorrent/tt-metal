@@ -38,7 +38,7 @@
   team: models
   owner_id: U053W15B6JF # Djordje Ivanovic
   cmd: |
-    LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k 'stress-test and not mini-stress-test'
+    LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
   skus:
     wh_galaxy_perf:
       timeout: 140
