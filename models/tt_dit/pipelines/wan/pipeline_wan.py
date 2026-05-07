@@ -36,6 +36,7 @@ from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import (
     fast_device_to_host,
+    fast_device_to_host_yuv,
     float32_tensor,
     float_to_uint8,
     float_to_unit_range,
@@ -356,6 +357,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             width=width,
             num_frames=81,
             num_inference_steps=2,
+            output_type="yuv",
         )
 
     @staticmethod
@@ -812,8 +814,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             prompt_embeds (`torch.Tensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs (prompt weighting). If not
                 provided, text embeddings are generated from the `prompt` input argument.
-            output_type (`str`, *optional*, defaults to `"np"`):
-                The output format of the generated image. Choose between `PIL.Image` or `np.array`.
+            output_type (`str`, *optional*, defaults to `"uint8"`):
+                Output format. One of:
+                  * ``"uint8"`` — ``(B, T, H, W, 3)`` numpy uint8 RGB (interleaved).
+                  * ``"yuv"`` — ``(B, T, H*W + 2*(H/2 * W/2))`` numpy uint8 YUV
+                    4:2:0 planar (ffmpeg ``AV_PIX_FMT_YUV420P``); on-device
+                    color conversion + batched D2H + planar concat via
+                    ``fast_device_to_host_yuv``.
+                  * ``"np"`` — ``(B, T, H, W, 3)`` numpy float32 RGB in [0, 1].
+                  * ``"pil"``/``"pt"`` — passed to ``VideoProcessor.postprocess_video``.
+                  * ``"latent"`` — raw VAE latents (no decoding).
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether or not to return a [`WanPipelineOutput`] instead of a plain tuple.
             max_sequence_length (`int`, defaults to `512`):
@@ -1043,40 +1053,56 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self._prepare_vae()
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
 
-            concat_dims = [None, None]
-            concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
-            concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-            d2h_permute = (0, 2, 3, 4, 1) if output_type in ("np", "uint8") else None
-
-            if output_type == "uint8":
-                pre_fn = float_to_uint8
-            elif output_type == "np":
-                pre_fn = float_to_unit_range
+            if output_type == "yuv":
+                # On-device YUV 4:2:0 conversion + batched D2H + planar concat.
+                # Output: numpy uint8 of shape (1, T, logical_h*W + 2*(logical_h/2 * W/2)) —
+                # ffmpeg AV_PIX_FMT_YUV420P layout, with a leading B=1 for symmetry
+                # with the other output_type values (test code does frames[0]).
+                #
+                # ``new_logical_h`` is the logical (un-padded) height returned
+                # by the VAE.  When it's smaller than the on-device padded H,
+                # ``fast_device_to_host_yuv`` trims the planar buffer on host.
+                video_planar = fast_device_to_host_yuv(
+                    tt_video_BCTHW,
+                    self.mesh_device,
+                    logical_h=new_logical_h,
+                )
+                video = video_planar[None]  # (1, T, planar_bytes)
             else:
-                pre_fn = None
+                concat_dims = [None, None]
+                concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+                concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+                d2h_permute = (0, 2, 3, 4, 1) if output_type in ("np", "uint8") else None
 
-            video_torch = fast_device_to_host(
-                tt_video_BCTHW,
-                self.mesh_device,
-                concat_dims,
-                ccl_manager=self.vae_ccl_manager,
-                pre_transfer_fn=pre_fn,
-                permute=d2h_permute,
-            )
+                if output_type == "uint8":
+                    pre_fn = float_to_uint8
+                elif output_type == "np":
+                    pre_fn = float_to_unit_range
+                else:
+                    pre_fn = None
 
-            if d2h_permute is not None:
-                # Output is (B, T, H, W, C) — trim height in dim 2.
-                video_torch = video_torch[:, :, :new_logical_h, :, :]
-            else:
-                # Output is (B, C, T, H, W) — trim height in dim 3.
-                video_torch = video_torch[:, :, :, :new_logical_h, :]
+                video_torch = fast_device_to_host(
+                    tt_video_BCTHW,
+                    self.mesh_device,
+                    concat_dims,
+                    ccl_manager=self.vae_ccl_manager,
+                    pre_transfer_fn=pre_fn,
+                    permute=d2h_permute,
+                )
 
-            if output_type == "uint8":
-                video = video_torch.numpy()
-            elif output_type == "np":
-                video = video_torch.float().numpy()
-            else:
-                video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
+                if d2h_permute is not None:
+                    # Output is (B, T, H, W, C) — trim height in dim 2.
+                    video_torch = video_torch[:, :, :new_logical_h, :, :]
+                else:
+                    # Output is (B, C, T, H, W) — trim height in dim 3.
+                    video_torch = video_torch[:, :, :, :new_logical_h, :]
+
+                if output_type == "uint8":
+                    video = video_torch.numpy()
+                elif output_type == "np":
+                    video = video_torch.float().numpy()
+                else:
+                    video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
             video = latents
 

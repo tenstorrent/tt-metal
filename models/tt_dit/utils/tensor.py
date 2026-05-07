@@ -751,6 +751,75 @@ def _yuv_planar_d2h(
     return out
 
 
+def _trim_yuv420p_planar_height(planar: np.ndarray, full_H: int, full_W: int, new_H: int) -> np.ndarray:
+    """Trim the H dimension of a flattened YUV 4:2:0 planar uint8 buffer.
+
+    Input ``planar`` has shape ``(T, full_H*full_W + 2*(full_H/2)*(full_W/2))``
+    uint8 and is laid out as ``[Y plane | Cb plane | Cr plane]`` per frame.
+    Returns a new buffer of shape
+    ``(T, new_H*full_W + 2*(new_H/2)*(full_W/2))`` keeping the top ``new_H``
+    rows of Y and the top ``new_H/2`` rows of Cb / Cr.
+
+    Used after ``fast_device_to_host_yuv`` when the VAE pads its output height
+    (``new_logical_h < full_H``); the bottom rows of every plane contain
+    garbage that ffmpeg would otherwise encode.
+
+    No-op when ``new_H == full_H``.
+    """
+    if new_H == full_H:
+        return planar
+    if new_H > full_H:
+        raise ValueError(f"new_H ({new_H}) must not exceed full_H ({full_H})")
+    if new_H % 2 != 0 or full_W % 2 != 0:
+        raise ValueError(f"YUV 4:2:0 trim requires even new_H and full_W (got new_H={new_H}, full_W={full_W})")
+
+    full_Hu, full_Wu = full_H // 2, full_W // 2
+    new_Hu = new_H // 2
+
+    full_hw = full_H * full_W
+    full_uv = full_Hu * full_Wu
+    full_row_stride = full_hw + 2 * full_uv
+
+    new_hw = new_H * full_W
+    new_uv = new_Hu * full_Wu
+    new_row_stride = new_hw + 2 * new_uv
+
+    T = planar.shape[0]
+    out = np.empty((T, new_row_stride), dtype=planar.dtype)
+
+    # Strided 3D views into source / dest planes — no copy until the assignment.
+    src_y = np.lib.stride_tricks.as_strided(planar, shape=(T, full_H, full_W), strides=(full_row_stride, full_W, 1))
+    src_u = np.lib.stride_tricks.as_strided(
+        planar[:, full_hw:], shape=(T, full_Hu, full_Wu), strides=(full_row_stride, full_Wu, 1)
+    )
+    src_v = np.lib.stride_tricks.as_strided(
+        planar[:, full_hw + full_uv :],
+        shape=(T, full_Hu, full_Wu),
+        strides=(full_row_stride, full_Wu, 1),
+    )
+
+    dst_y = np.lib.stride_tricks.as_strided(
+        out, shape=(T, new_H, full_W), strides=(new_row_stride, full_W, 1), writeable=True
+    )
+    dst_u = np.lib.stride_tricks.as_strided(
+        out[:, new_hw:], shape=(T, new_Hu, full_Wu), strides=(new_row_stride, full_Wu, 1), writeable=True
+    )
+    dst_v = np.lib.stride_tricks.as_strided(
+        out[:, new_hw + new_uv :],
+        shape=(T, new_Hu, full_Wu),
+        strides=(new_row_stride, full_Wu, 1),
+        writeable=True,
+    )
+
+    # Inner W stride matches (1) on both sides, so numpy's strided iterator
+    # collapses to a per-row memcpy of `full_W` (or `full_Wu`) bytes.
+    dst_y[:] = src_y[:, :new_H, :]
+    dst_u[:] = src_u[:, :new_Hu, :]
+    dst_v[:] = src_v[:, :new_Hu, :]
+
+    return out
+
+
 def fast_device_to_host_yuv(
     tt_video_BCTHW: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -758,6 +827,7 @@ def fast_device_to_host_yuv(
     coefficients=None,
     pool: ThreadPoolExecutor | None = None,
     debug: bool = False,
+    logical_h: int | None = None,
 ) -> np.ndarray:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -788,12 +858,20 @@ def fast_device_to_host_yuv(
             per-channel weights and offsets.  Defaults to BT.601.
         pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
             If ``None``, the module-level lazy default pool is used.
+        logical_h: Optional logical (un-padded) height of the output.  When
+            the VAE pads ``H`` to a coarser size, pass the true logical height
+            here and the function will trim the bottom rows of each plane in
+            the planar buffer on host (Y → top ``logical_h`` rows; Cb/Cr →
+            top ``logical_h/2`` rows).  Must be even and ``≤ H``.  Defaults to
+            ``None`` (no trim).
 
     Returns:
-        ``np.ndarray`` of shape ``(T, H*W + 2*(H/2 * W/2))``, dtype uint8.
+        ``np.ndarray`` of shape ``(T, H'*W + 2*(H'/2 * W/2))``, dtype uint8,
+        where ``H' = logical_h if logical_h is not None else H``.
 
     Raises:
         AssertionError: if ``B != 1``, ``C != 3``, or H/W are not even.
+        ValueError: if ``logical_h`` is set and is greater than ``H`` or odd.
     """
     if coefficients is None:
         coefficients = _bt601_yuv_coefficients()
@@ -837,7 +915,16 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
 
     # 3+4. Batched D2H + planar concat — uses GLOBAL H, W to size the buffer.
-    return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, pool=pool)
+    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, pool=pool)
+
+    # 5. Optional host-side trim of the height in the planar buffer for the
+    # case where the VAE pads H beyond its logical extent.
+    if logical_h is not None and logical_h != H:
+        if debug:
+            print(f"  [yuv-d2h] trimming H {H} -> logical_h {logical_h}")
+        out = _trim_yuv420p_planar_height(out, H, W, logical_h)
+
+    return out
 
 
 def upsample(

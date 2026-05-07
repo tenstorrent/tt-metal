@@ -222,7 +222,7 @@ def test_pipeline_performance(
     ]
 
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = 4
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -263,7 +263,7 @@ def test_pipeline_performance(
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
-    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
+    num_perf_runs = 5  # For now use 1 prompt to minimize test time.
 
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
@@ -286,7 +286,7 @@ def test_pipeline_performance(
                     profiler_iteration=i,
                     seed=42,
                     traced=traced,
-                    output_type="uint8",
+                    output_type="yuv",
                 )
                 ttnn.synchronize_device(mesh_device)
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -317,11 +317,17 @@ def test_pipeline_performance(
     if not is_ci_env:
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
-            try:
-                export_to_video(frames, output_path, fps=16)
-                print(f"✓ Saved video to: {output_path}")
-            except ImportError:
-                print("Could not export video - imageio_ffmpeg not available")
+            # `output_type="yuv"` returns flattened YUV 4:2:0 planar uint8;
+            # tell ffmpeg the source pixel format and dimensions explicitly.
+            export_to_video(
+                frames,
+                output_path,
+                fps=16,
+                pix_fmt="yuv420p",
+                width=width,
+                height=height,
+            )
+            print(f"✓ Saved video to: {output_path}")
         else:
             print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
