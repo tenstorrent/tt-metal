@@ -284,8 +284,8 @@ def _packet_to_decode_result(packet: dict, *, force_prefill: bool = False) -> De
             user_id=int(packet["user_id"]),
             lane_idx=int(packet["lane_idx"]),
             position_id=int(packet["window_start_pos"]) + int(packet["lane_idx"]) - 1,
-            p_top32_indices=[int(token) for token in packet["target_topn_tokens"]],
-            p_top32_scores=[float(prob) for prob in packet["target_topn_probs"]],
+            p_top15_indices=[int(token) for token in packet["target_topn_tokens"]],
+            p_top15_scores=[float(prob) for prob in packet["target_topn_probs"]],
         )
 
     token_0 = packet["token_0"]
@@ -341,8 +341,8 @@ def test_relaxed_acceptance_uses_configured_topn_and_delta():
     result = DecodeResult(
         token_type=TokenType.BASE,
         tokens=[CandidateToken(101, 4)],
-        p_top32_indices=[101, 202, 303],
-        p_top32_scores=[0.9, 0.5, 0.35],
+        p_top15_indices=[101, 202, 303],
+        p_top15_scores=[0.9, 0.5, 0.35],
     )
 
     pipeline._set_relaxed_acceptance_params(relaxed_accept_topn=2, relaxed_accept_delta=0.6)

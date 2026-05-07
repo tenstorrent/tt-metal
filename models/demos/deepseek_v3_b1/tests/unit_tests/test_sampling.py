@@ -14,23 +14,23 @@ from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 # ---------------------------------------------------------------------------
 # DeepseekMetadata binary layout (see models/demos/deepseek_v3_b1/metadata/metadata.hpp):
-#   words 17..48  : p_top32_indices[32]
-#   words 49..64  : p_top32_scores[32] packed as two bf16/uint16 values per uint32
-#   words 65..96  : q_top32_indices[32]
-#   words 97..112 : q_top32_scores[32] packed as two bf16/uint16 values per uint32
+#   words 17..31  : p_top15_indices[15]
+#   words 32..39  : p_top15_scores[15] packed as two bf16/uint16 values per uint32
+#   words 40..54  : q_top15_indices[15]
+#   words 55..62  : q_top15_scores[15] packed as two bf16/uint16 values per uint32
 # ---------------------------------------------------------------------------
-_METADATA_BYTES = 512
-_METADATA_U32_WORDS = _METADATA_BYTES // 4  # 128
-_METADATA_P_TOP32_INDICES_WORD = 17
-_METADATA_P_TOP32_SCORES_WORD = 49
-_METADATA_TOP32_CAPACITY = 32
+_METADATA_BYTES = 256
+_METADATA_U32_WORDS = _METADATA_BYTES // 4  # 64
+_METADATA_P_TOP15_INDICES_WORD = 17
+_METADATA_P_TOP15_SCORES_WORD = 32
+_METADATA_TOP15_CAPACITY = 15
 _METADATA_TEMPERATURE_WORD = 5
 _METADATA_TOP_K_WORD = 6
 _METADATA_TOP_P_WORD = 7
 
 
-def _decode_p_top32_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
-    """Extract p_top32 metadata from the device-side metadata tensor."""
+def _decode_p_top15_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
+    """Extract p_top15 metadata from the device-side metadata tensor."""
     if device_idx is None:
         meta_torch = ttnn.to_torch(ttnn_metadata)
     else:
@@ -43,10 +43,10 @@ def _decode_p_top32_metadata(ttnn_metadata, k: int, device_idx: int | None = Non
     ), f"metadata tensor must be exactly {_METADATA_BYTES}B; got {len(meta_bytes)}"
 
     meta_words = np.frombuffer(meta_bytes, dtype=np.uint32).copy()
-    topn = min(k, _METADATA_TOP32_CAPACITY)
-    token_words = meta_words[_METADATA_P_TOP32_INDICES_WORD : _METADATA_P_TOP32_INDICES_WORD + topn]
+    topn = min(k, _METADATA_TOP15_CAPACITY)
+    token_words = meta_words[_METADATA_P_TOP15_INDICES_WORD : _METADATA_P_TOP15_INDICES_WORD + topn]
     packed_score_words = meta_words[
-        _METADATA_P_TOP32_SCORES_WORD : _METADATA_P_TOP32_SCORES_WORD + _METADATA_TOP32_CAPACITY // 2
+        _METADATA_P_TOP15_SCORES_WORD : _METADATA_P_TOP15_SCORES_WORD + (_METADATA_TOP15_CAPACITY + 1) // 2
     ]
     score_u16 = np.frombuffer(packed_score_words.astype(np.uint32).tobytes(), dtype=np.uint16).copy()[:topn]
     probs_f32 = (score_u16.astype(np.uint32) << 16).astype(np.uint32).view(np.float32).copy()
@@ -68,7 +68,7 @@ def _assert_p_metadata_matches_golden(
     rand_value: float,
     device_idx: int | None = None,
 ):
-    """Compare kernel-written p_top32 metadata against the PyTorch golden."""
+    """Compare kernel-written p_top15 metadata against the PyTorch golden."""
     _, _, p_scores_golden, p_indices_golden = SamplingOp.golden(
         torch_scores,
         torch_indices,
@@ -79,23 +79,23 @@ def _assert_p_metadata_matches_golden(
         return_p_metadata=True,
     )
 
-    topn = min(k, _METADATA_TOP32_CAPACITY)
-    p_indices_kernel, p_scores_kernel = _decode_p_top32_metadata(ttnn_metadata, k=k, device_idx=device_idx)
+    topn = min(k, _METADATA_TOP15_CAPACITY)
+    p_indices_kernel, p_scores_kernel = _decode_p_top15_metadata(ttnn_metadata, k=k, device_idx=device_idx)
     p_indices_golden = p_indices_golden[:topn]
     p_scores_golden = p_scores_golden[:topn].float()
 
-    logger.info(f"Kernel p_top32_indices[:{topn}]: {p_indices_kernel.tolist()}")
-    logger.info(f"Golden p_top32_indices[:{topn}]: {p_indices_golden.tolist()}")
-    logger.info(f"Kernel p_top32_scores[:{topn}]: {p_scores_kernel.float().tolist()}")
-    logger.info(f"Golden p_top32_scores[:{topn}]: {p_scores_golden.float().tolist()}")
+    logger.info(f"Kernel p_top15_indices[:{topn}]: {p_indices_kernel.tolist()}")
+    logger.info(f"Golden p_top15_indices[:{topn}]: {p_indices_golden.tolist()}")
+    logger.info(f"Kernel p_top15_scores[:{topn}]: {p_scores_kernel.float().tolist()}")
+    logger.info(f"Golden p_top15_scores[:{topn}]: {p_scores_golden.float().tolist()}")
 
     assert p_indices_kernel.tolist() == p_indices_golden.tolist(), (
-        f"p_top32_indices mismatch:\n  kernel: {p_indices_kernel.tolist()}\n" f"  golden: {p_indices_golden.tolist()}"
+        f"p_top15_indices mismatch:\n  kernel: {p_indices_kernel.tolist()}\n" f"  golden: {p_indices_golden.tolist()}"
     )
     rtol = 2e-2
     atol = 2e-3
     assert torch.allclose(p_scores_kernel.float(), p_scores_golden.float(), rtol=rtol, atol=atol), (
-        f"p_top32_scores not allclose at rtol={rtol}, atol={atol}:\n"
+        f"p_top15_scores not allclose at rtol={rtol}, atol={atol}:\n"
         f"  kernel: {p_scores_kernel.float().tolist()}\n"
         f"  golden: {p_scores_golden.float().tolist()}, max_abs_error: {torch.max(torch.abs(p_scores_kernel.float() - p_scores_golden.float()))}, max_rel_error: {torch.max(torch.abs(p_scores_kernel.float() - p_scores_golden.float()) / p_scores_golden.float())}"
     )

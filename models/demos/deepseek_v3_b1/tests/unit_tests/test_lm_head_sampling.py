@@ -2028,14 +2028,14 @@ def test_d2d_to_d2h_pipeline(
 
 
 def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
-    """Parse a 512-byte DeepseekMetadata output page into a dict.
+    """Parse a 256-byte DeepseekMetadata output page into a dict.
 
-    Layout (128 uint32 words = 512 bytes), kept in lock-step with metadata.hpp:
+    Layout (64 uint32 words = 256 bytes), kept in lock-step with metadata.hpp:
       [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
       [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
       [8:13] candidate_token_ids, [13:17] prefill_token_id,
-      [17:49] p_top32_indices, [49:65] p_top32_scores,
-      [65:97] q_top32_indices, [97:113] q_top32_scores.
+      [17:32] p_top15_indices, [32:40] p_top15_scores,
+      [40:55] q_top15_indices, [55:63] q_top15_scores.
     """
     raw = ttnn.to_torch(output_tensor).to(torch.int32).flatten()
     assert (
@@ -2052,9 +2052,11 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
 
     def _bf16_score_words_to_f32(start_word: int) -> list[float]:
         scores = []
-        for word_idx in range(16):
+        for word_idx in range(8):
             word = int(raw[start_word + word_idx].item()) & 0xFFFFFFFF
             for shift in (0, 16):
+                if len(scores) == 15:
+                    break
                 scores.append(_u32_to_f32(((word >> shift) & 0xFFFF) << 16))
         return scores
 
@@ -2070,10 +2072,10 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
         "temperature": _u32_to_f32(raw[5].item()),
         "k": int(raw[6].item()),
         "top_p": _u32_to_f32(raw[7].item()),
-        "p_top32_indices": [int(raw[17 + idx].item()) for idx in range(32)],
-        "p_top32_scores": _bf16_score_words_to_f32(49),
-        "q_top32_indices": [int(raw[65 + idx].item()) for idx in range(32)],
-        "q_top32_scores": _bf16_score_words_to_f32(97),
+        "p_top15_indices": [int(raw[17 + idx].item()) for idx in range(15)],
+        "p_top15_scores": _bf16_score_words_to_f32(32),
+        "q_top15_indices": [int(raw[40 + idx].item()) for idx in range(15)],
+        "q_top15_scores": _bf16_score_words_to_f32(55),
     }
 
 

@@ -766,7 +766,7 @@ void kernel_main() {
         }
         if (metadata_src_addr != 0) {
             volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_src_addr);
-            for (uint32_t i = 5; i <= 112; ++i) {
+            for (uint32_t i = 5; i <= 62; ++i) {
                 page[i] = src[i];
             }
         }

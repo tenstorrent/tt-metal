@@ -1459,12 +1459,12 @@ struct TopKSampling {
                                << " p2=" << BF16(prob_u16[2]) << " rand=" << BF16(rand) << ENDL();
                         DPRINT << "rand = " << BF16(rand) << ENDL();
 
-                        uint16_t q_top32_scores[deepseek_b1_ops::TOPK_METADATA_COUNT] = {0};
+                        uint16_t q_top15_scores[deepseek_b1_ops::TOPK_METADATA_COUNT] = {0};
                         if constexpr (CTArgs::copy_probabilities) {
                             for (uint32_t i = 0; i < deepseek_b1_ops::TOPK_METADATA_COUNT; ++i) {
                                 if (i < K) {
                                     uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
-                                    q_top32_scores[i] = prob_u16[tile_idx];
+                                    q_top15_scores[i] = prob_u16[tile_idx];
                                 }
                             }
                         }
@@ -1566,7 +1566,7 @@ struct TopKSampling {
                         }
 
                         if constexpr (CTArgs::copy_probabilities) {
-                            // Copy pre- and post-top-p top-32 candidates into the fixed metadata page.
+                            // Copy pre- and post-top-p top-15 candidates into the fixed metadata page.
                             // Scores are stored as raw bf16/uint16 values to keep the metadata compact.
                             auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(
                                 CTArgs::metadata_output_l1_addr);
@@ -1575,15 +1575,15 @@ struct TopKSampling {
                             for (uint32_t i = 0; i < deepseek_b1_ops::TOPK_METADATA_COUNT; ++i) {
                                 if (i < topn) {
                                     uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
-                                    metadata_ptr->p_top32_indices[i] = global_indices[i];
-                                    metadata_ptr->p_top32_scores[i] = (i < kept_tokens) ? prob_u16[tile_idx] : 0;
-                                    metadata_ptr->q_top32_indices[i] = global_indices[i];
-                                    metadata_ptr->q_top32_scores[i] = q_top32_scores[i];
+                                    metadata_ptr->p_top15_indices[i] = global_indices[i];
+                                    metadata_ptr->p_top15_scores[i] = (i < kept_tokens) ? prob_u16[tile_idx] : 0;
+                                    metadata_ptr->q_top15_indices[i] = global_indices[i];
+                                    metadata_ptr->q_top15_scores[i] = q_top15_scores[i];
                                 } else {
-                                    metadata_ptr->p_top32_indices[i] = 0;
-                                    metadata_ptr->p_top32_scores[i] = 0;
-                                    metadata_ptr->q_top32_indices[i] = 0;
-                                    metadata_ptr->q_top32_scores[i] = 0;
+                                    metadata_ptr->p_top15_indices[i] = 0;
+                                    metadata_ptr->p_top15_scores[i] = 0;
+                                    metadata_ptr->q_top15_indices[i] = 0;
+                                    metadata_ptr->q_top15_scores[i] = 0;
                                 }
                             }
                         }

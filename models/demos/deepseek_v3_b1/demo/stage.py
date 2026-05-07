@@ -87,7 +87,7 @@ EMBEDDING_D2H_CORE_COORD = ttnn.CoreCoord(12, 1)
 num_dram_banks = 8
 # Number of bf16 elements appended to each activation shard to carry the full
 # DeepseekMetadata struct. The source unicasts the whole struct from the LM-head
-# input core to the sampling final core; sampling.hpp fills the p/q top-32
+# input core to the sampling final core; sampling.hpp fills the p/q top-15
 # fields on the destination after sampling.
 METADATA_NUM_ELEMS = METADATA_TENSOR_NUM_BF16
 mtp_n_per_core = ACTIVATION_DIM // num_dram_banks
@@ -95,7 +95,7 @@ mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
 # Token metadata payload: full DeepseekMetadata struct. This is the
 # per-iteration metadata that flows through the model: every decoder stage
-# carries it, the BaseLMHeadStage fills p/q top-32 fields inside it, and the
+# carries it, the BaseLMHeadStage fills p/q top-15 fields inside it, and the
 # SpecLMHeadStage forwards it. Spec-LM output and the embedding input are the
 # only paths that don't carry the full struct.
 # FIFO depth is kept at TOKEN_FIFO_NUM_PAGES so buffering capacity (in pages) is
@@ -523,7 +523,7 @@ class SpecLMHeadStage(StageKind):
         )
 
         # Metadata buffer on argmax_final_core, sized for the full DeepseekMetadata
-        # struct including p/q top-32 fields written by sampling.hpp.
+        # struct including p/q top-15 fields written by sampling.hpp.
         METADATA_ELEMS = METADATA_TENSOR_NUM_UINT32
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
