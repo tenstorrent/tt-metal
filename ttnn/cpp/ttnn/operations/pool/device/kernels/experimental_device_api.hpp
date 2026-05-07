@@ -29,9 +29,11 @@ using CB = CircularBuffer;
 // Prefer passing experimental::CB with offset_bytes args over constructing CoreLocalMem directly.
 
 // Convenience wrappers for set_async_read_state / async_read_with_state.
-// Supports both single-packet (transfer_size <= NOC_MAX_BURST_SIZE) and multi-packet
+// The raw-address overloads templated on transfer_size support both single-packet
+// (transfer_size <= NOC_MAX_BURST_SIZE) and multi-packet
 // (transfer_size > NOC_MAX_BURST_SIZE) transfers. The underlying NOC API routes to the
 // correct path based on the transfer_size template parameter.
+// The CB/typed-destination overloads below remain single-packet convenience helpers.
 // These wrappers put max_page_size first so callers don't need to spell out
 // VcSelection::DEFAULT every time.
 
