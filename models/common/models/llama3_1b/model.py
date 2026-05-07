@@ -180,16 +180,16 @@ class LlamaDecoderLayer1D(LightweightModule):
 
     def prefill_forward(
         self,
-        hidden_states: ttnn.Tensor,
+        x: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         user_id: int,
         page_table: ttnn.Tensor | None,
         chunk_page_table: ttnn.Tensor | None,
         chunk_start_idx: int | None,
     ) -> ttnn.Tensor:
-        residual = hidden_states
+        residual = x
 
-        hidden_states = self.input_layernorm.prefill_forward(hidden_states)
+        hidden_states = self.input_layernorm.prefill_forward(x)
         hidden_states = _all_gather_rmsnorm_tensor(self.input_layernorm, hidden_states)
         hidden_states = self.self_attn.prefill_forward(
             hidden_states,
@@ -203,7 +203,7 @@ class LlamaDecoderLayer1D(LightweightModule):
 
         hidden_states = ttnn.add(residual, hidden_states, memory_config=self.prefill_residual_memcfg)
         residual = hidden_states
-        hidden_states.deallocate(True)
+        x.deallocate(True)
 
         hidden_states = self.post_attention_layernorm.prefill_forward(residual)
         hidden_states = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, hidden_states)
@@ -447,9 +447,9 @@ class LlamaForCausalLM1D(LightweightModule):
 
         Must be called before the first forward (before load_device_weights runs).
         """
-        assert len(kv_cache) == len(self.model.layers), (
-            f"kv_cache has {len(kv_cache)} entries but model has {len(self.model.layers)} layers"
-        )
+        assert len(kv_cache) == len(
+            self.model.layers
+        ), f"kv_cache has {len(kv_cache)} entries but model has {len(self.model.layers)} layers"
         for i, layer in enumerate(self.model.layers):
             layer.self_attn.config.kv_cache = tuple(kv_cache[i])
 
