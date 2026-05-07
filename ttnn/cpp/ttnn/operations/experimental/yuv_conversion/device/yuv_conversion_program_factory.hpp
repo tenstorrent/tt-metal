@@ -13,6 +13,8 @@ struct YUVConversionProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
+        tt::tt_metal::KernelHandle compute_kernel_id_g1;
+        tt::tt_metal::KernelHandle compute_kernel_id_g2;
         uint32_t num_cores;
         tt::tt_metal::CoreRangeSet core_group_1;
         tt::tt_metal::CoreRangeSet core_group_2;
