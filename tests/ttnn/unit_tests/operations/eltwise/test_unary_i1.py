@@ -68,16 +68,16 @@ def test_i1_zero(device, shapes):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.9999
 
 
-# Tolerances calibrated from kernel ULP measurement:
-#   FP32 in-domain MaxULP ≈ 10  (rtol 1e-4 leaves ~1000× margin)
-#   FP32 OOD       MaxULP < 1
-#   BF16           MaxULP ~0.5 BF16 ULP (≈ 0.2% relative; rtol 5e-3 = 4× margin)
-#   max_ulp limits use units native to the device dtype (FP32 ULP for fp32,
-#   BF16 ULP for bfloat16 — BF16 has 7-bit mantissa so 1 BF16 ULP ≈ 0.78%).
-# atol guards near-zero outputs (i1(x) ≈ x/2 for small x).
+# Tolerances enforce the kernel's documented accuracy claims:
+#   FP32 in-domain MaxULP ≈ 10, FP32 OOD MaxULP < 1  → cap at 20 (2× headroom)
+#   BF16 MaxULP ≤ 1 BF16 ULP (PR claim "BF16 sub-1 ULP"; measured ~0.5)
+# Units are native to the device dtype (FP32 ULP for fp32, BF16 ULP for bf16);
+# BF16's 7-bit mantissa gives 1 BF16 ULP ≈ 0.78% relative.
+# rtol/atol bound elementwise relative error; atol covers near-zero outputs
+# (i1(x) ≈ x/2 for small x).
 _TOLS = {
-    ttnn.float32: dict(rtol=1e-4, atol=1e-6, max_ulp=100, ulp_mantissa_bits=23),
-    ttnn.bfloat16: dict(rtol=5e-3, atol=1e-3, max_ulp=5, ulp_mantissa_bits=7),
+    ttnn.float32: dict(rtol=1e-4, atol=1e-6, max_ulp=20, ulp_mantissa_bits=23),
+    ttnn.bfloat16: dict(rtol=1e-2, atol=1e-3, max_ulp=1, ulp_mantissa_bits=7),
 }
 
 
