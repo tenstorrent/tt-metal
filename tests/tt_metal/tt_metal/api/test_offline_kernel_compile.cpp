@@ -7,11 +7,15 @@
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <stdexcept>
+#include <vector>
 
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
+#include <tt-metalium/experimental/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "device_fixture.hpp"
 #include "jit_build/build.hpp"
@@ -34,6 +38,13 @@ struct ScopedCopiedPrecompiledRoot {
     }
 
     fs::path root_;
+};
+
+class OfflineKernelCompileMockFixture : public ::testing::Test {
+protected:
+    void SetUp() override { experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1); }
+
+    void TearDown() override { experimental::disable_mock_mode(); }
 };
 
 constexpr const char* kReaderKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
@@ -96,6 +107,56 @@ ScopedCopiedPrecompiledRoot precompiled_root_from_live_compile(IDevice* device) 
         copied_precompiled_root / kReaderKernelName,
         fs::copy_options::recursive | fs::copy_options::overwrite_existing);
     return ScopedCopiedPrecompiledRoot(copied_precompiled_root);
+}
+
+TEST_F(OfflineKernelCompileMockFixture, MetadataFromProgramDerivesConfiguredCbMetadata) {
+    Program program = CreateProgram();
+    const Tile tile({16, 32});
+    const auto page_size = tile.get_tile_size(DataFormat::Float16_b);
+    CircularBufferConfig cb_config(page_size, {{0, DataFormat::Float16_b}});
+    cb_config.set_page_size(0, page_size).set_tile_dims(0, tile);
+    CreateCircularBuffer(program, CoreCoord{0, 0}, cb_config);
+    const KernelHandle kernel = CreateKernel(program, kReaderKernelPath, CoreCoord{0, 0}, kReaderDmConfig);
+
+    const auto cb_compile_configs = experimental::CBCompileConfigsFromProgram(program, kernel);
+    ASSERT_EQ(cb_compile_configs.size(), 1);
+    EXPECT_EQ(cb_compile_configs[0].cb_index, 0);
+    EXPECT_EQ(cb_compile_configs[0].data_format, DataFormat::Float16_b);
+    ASSERT_TRUE(cb_compile_configs[0].tile.has_value());
+    EXPECT_EQ(*cb_compile_configs[0].tile, tile);
+}
+
+TEST_F(OfflineKernelCompileMockFixture, CBCompileConfigsFromProgramDeduplicatesOverlappingCbIndex) {
+    Program program = CreateProgram();
+    const CoreRange left_core(CoreCoord{0, 0}, CoreCoord{0, 0});
+    const CoreRange right_core(CoreCoord{1, 0}, CoreCoord{1, 0});
+    const CoreRangeSet kernel_cores(std::vector<CoreRange>{left_core, right_core});
+    const KernelHandle kernel = CreateKernel(program, kReaderKernelPath, kernel_cores, kReaderDmConfig);
+
+    constexpr uint32_t kPageSize = 2048;
+    CreateCircularBuffer(
+        program, left_core, CircularBufferConfig(kPageSize, {{0, DataFormat::Float16_b}}).set_page_size(0, kPageSize));
+    CreateCircularBuffer(
+        program, right_core, CircularBufferConfig(kPageSize, {{0, DataFormat::Bfp8_b}}).set_page_size(0, kPageSize));
+
+    const auto cb_compile_configs = experimental::CBCompileConfigsFromProgram(program, kernel);
+    ASSERT_EQ(cb_compile_configs.size(), 1);
+    EXPECT_EQ(cb_compile_configs[0].cb_index, 0);
+}
+
+TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsInvalidExplicitCbMetadata) {
+    using Params = experimental::OfflineKernelCompileParams;
+    Params params{
+        .mode = Params::AllSupportedProducts{},
+        .output_dir = "/tmp/unused",
+        .cb_compile_configs =
+            {
+                Params::CBCompileConfig{.cb_index = 0, .data_format = DataFormat::Float16_b},
+                Params::CBCompileConfig{.cb_index = 0, .data_format = DataFormat::Float16_b},
+            },
+    };
+
+    EXPECT_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params), std::invalid_argument);
 }
 
 }  // namespace

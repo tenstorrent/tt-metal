@@ -157,6 +157,7 @@ set(TT_METAL_PUBLIC_API
 
 set(TT_METAL_SOURCES
     impl/host_api/tt_metal.cpp
+    impl/experimental/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
 )
