@@ -281,6 +281,13 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Upload watcher log
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: ${{ !cancelled() }}
+        with:
+          name: "watcher_log_${{ github.run_id }}_${{ matrix.test-group.name }}"
+          path: /work/generated/watcher/
+          if-no-files-found: ignore
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
