@@ -310,7 +310,16 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
 
     @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass through linear layer."""
+        """Forward pass through linear layer.
+
+        Bias is fused into the matmul via ``ttnn.linear(bias=...)``. This is safe
+        for IReplicatedWColSharded because there is no CCL on the matmul output
+        (each device produces its own column slice independently), so adding the
+        bias inside the matmul kernel is mathematically identical to a separate
+        post-matmul add but saves one device op per call. (For the column-
+        sharded all-reduced variants the bias *must* stay post-CCL — fusing
+        would cause the bias to be summed num_devices times by the all-reduce.)
+        """
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -321,11 +330,10 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
+            bias=self.tt_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        if self.tt_bias is not None:
-            tt_output += self.tt_bias
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 

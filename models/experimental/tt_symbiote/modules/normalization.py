@@ -195,11 +195,16 @@ class TTNNDistributedRMSNorm(TTNNModule):
             mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
         )
         self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
+        # Compute kernel matches the proven tt_transformers/multimodal/llama_layernorm.py
+        # pattern: HiFi4 (RMSNorm is sensitive — keep) but fp32_dest_acc_en=False to
+        # double the dst register from 4 -> 8 tiles (~halves the kernel passes), and
+        # packer_l1_acc=False to drop the L1 accumulator buffer. The variance reduction
+        # itself runs in the kernel's internal FP32 path, so output accuracy is preserved.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
 
     @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
