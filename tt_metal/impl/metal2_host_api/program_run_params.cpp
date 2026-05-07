@@ -152,8 +152,8 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate named CRTAs: every declared name supplied, no extras.
         // The TensorBinding address section lives in its own structurally-separate part of the
-        // kernel's CRTA buffer and is filled from TensorArg at enqueue; it is not part of
-        // schema->named_common_runtime_args, so no special-casing is needed here.
+        // kernel's CRTA buffer and is filled from TensorArg at enqueue.
+        // (This is separate from the schema->named_common_runtime_args.)
         const auto& named_crta_names = schema->named_common_runtime_args;
         for (const auto& name : named_crta_names) {
             TT_FATAL(
@@ -199,9 +199,9 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
     //   - No duplicate tensor_parameter_name entries
     //   - Every entry references a TensorParameter declared in the ProgramSpec
     //   - The supplied MeshTensor's TensorSpec equals the binding's expected TensorSpec
-    //     (full equality — see also the design note in tensor_parameter.hpp; loosens to
-    //     layout-compatible-modulo-shape in the follow-up PR that adds RuntimeTensorShape).
-    //   - Every declared TensorParameter is set
+    //     (full equality is required, for now. This will be loosened to layout-compatible-modulo-shape
+    //     in a follow-up PR that adds RuntimeTensorShape as a mutable parameter).
+    //   - Every declared TensorParameter must be set
     std::unordered_set<std::string> tensor_parameters_with_params;
     for (const auto& tensor_params : params.tensor_args) {
         auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name);
@@ -245,8 +245,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
     // Build a tensor_parameter_name -> base address lookup from the user's TensorArg entries.
     // Used below to fill the kernel's TensorBinding address section from MeshTensor::address().
-    // Lockstep mesh allocation makes this a single uint32_t per binding (same address on every
-    // device).
+    // NOTE: We assume lockstep mesh allocation, so a device-independent, single uint32_t per binding.
     std::unordered_map<std::string, uint32_t> ta_binding_addresses;
     ta_binding_addresses.reserve(params.tensor_args.size());
     for (const auto& tensor_params : params.tensor_args) {
@@ -261,15 +260,17 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
     // Process kernel runtime arguments.
     // Named RTAs/CRTAs and vararg RTAs/CRTAs share a single dispatch buffer each (RTA + CRTA).
+    //
     // Layout:
     //   RTA per-node:  [named_rta_0 ... named_rta_N-1, vararg_0 ... vararg_M-1]
     //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, vararg_0 ... vararg_L-1]
-    // Named args are placed first in schema declaration order; the TensorBinding address section
-    // (one slot per binding handle, in handle order) follows immediately and is consumed by the
-    // kernel through the `ta::` namespace tokens. Both sections together match the byte-offset
-    // layout emitted into kernel_args_generated.h. The device-side get_vararg / get_common_vararg
-    // helpers add the combined named-arg + binding offset transparently, so kernel code indexes
-    // varargs from 0.
+    //
+    // RTA layout has two sections: named RTAs and RTA varargs.
+    // CRTA layout has three sections: named CRTAs, TensorBinding addresses, and CRTA varargs.
+    //
+    // TensorBinding address section is used by headergen to emit the `ta::` namespace tokens.
+    // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
+    // offset, so kernel code indexes varargs from 0.
     for (const auto& kernel_params : params.kernel_run_params) {
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
         const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_params.kernel_spec_name);

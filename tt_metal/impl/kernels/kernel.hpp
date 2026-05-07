@@ -231,8 +231,8 @@ protected:
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
         const std::unordered_map<std::string, uint32_t>& named_compile_args,
-        // Metal 2.0-only parameters below. is_metal2_kernel leads the group so the
-        // boundary is obvious at a glance; the others are ignored when it is false.
+        // Metal 2.0-only parameters below.
+        // If is_metal2_kernel is false, the remaining parameters are ignored and should be left default.
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},

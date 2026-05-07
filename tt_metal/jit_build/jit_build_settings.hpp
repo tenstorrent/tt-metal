@@ -41,14 +41,14 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
     virtual void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
+
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `ta::` namespace
     //  - cta_offset: starting word index of this binding's CTA payload in the kernel's
     //    positional compile-time-args buffer
     //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
     //    common-runtime-args section
-    // The tensor_parameter_name (program-level reference) lives on the Kernel object itself; it
-    // is a dispatch concern, not a codegen one, and is intentionally not surfaced here.
+    // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
     virtual void process_tensor_binding_handles(
         std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>) const {}
 

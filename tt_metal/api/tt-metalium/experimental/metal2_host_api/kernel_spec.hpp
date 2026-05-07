@@ -139,6 +139,8 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////
 
     // DFB bindings
+    // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
     enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
@@ -149,6 +151,8 @@ struct KernelSpec {
     std::vector<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
+    // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via SemaphoreAccessor(sem::<local_accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
@@ -156,7 +160,8 @@ struct KernelSpec {
     std::vector<SemaphoreBinding> semaphore_bindings;
 
     // Tensor bindings
-    // (Declares that this kernel accesses a tensor declared at the ProgramSpec level.)
+    // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
     struct TensorBinding {
         TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)

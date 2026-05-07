@@ -33,8 +33,12 @@ struct ProgramRunParams {
         KernelSpecName kernel_spec_name;
 
         // Named Runtime Argument settings
-        // Every arg in this kernel's RuntimeArgSchema::named_runtime_args must be set,
+        // Every argument in this kernel's RuntimeArgSchema::named_runtime_args must be set,
         // for every node the kernel runs on.
+        // Missing arguments or superfluous arguments will trigger validation errors.
+        //
+        // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
+        // a common runtime argument would provide better dispatch efficiency.
         struct NodeNamedRTAs {
             NodeCoord node;
             std::unordered_map<std::string, uint32_t> args;
@@ -69,9 +73,11 @@ struct ProgramRunParams {
         TensorParameterName tensor_parameter_name;
 
         // The actual MeshTensor argument
+        // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)
         std::reference_wrapper<const MeshTensor> tensor;
     };
-    // TensorArg must be specified for every TensorParameter declared in the ProgramSpec.
+    // A TensorArg must be specified for EVERY TensorParameter declared in the ProgramSpec.
+    // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
     std::vector<TensorArg> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////

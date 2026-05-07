@@ -108,8 +108,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
     // Get the tensor binding handles from the settings callback
-    // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed
-    // (Kernel::compute_hash also hashes them in the same order; the two must stay the same.)
+    // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
+    // (Kernel::compute_hash also hashes them in the same order... these two must be the same.)
     struct TaEntry {
         string name;
         uint32_t cta_offset;
@@ -134,10 +134,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
     //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
-    //       Each binding's tensor base address is specified per-enqueue.
-    //       It rides on a reserved-prefix named CRTA filled by SetProgramRunParameters
-    //       from the corresponding TensorArg. The static layout metadata (rank, shape, bank coords,
-    //       etc.) still flows through CTAs, packed by the host into the kernel's positional CTA buffer.
+    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArg.
+    //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
+    //       added automatically by the Metal 2.0 host API machinery.
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
@@ -206,9 +205,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const vector<string>& crta_names = settings.get_named_common_runtime_args();
 
     // TensorBinding addresses occupy a structurally-separate, position-indexed section appended
-    // immediately after the user-named CRTAs in the kernel's CRTA buffer. We don't emit them
-    // into the `args::` namespace (they live in `ta::` via kernel_bindings_generated.h), but
-    // we need to know how many there are so the vararg helpers below skip past the binding
+    // immediately after the user-named CRTAs in the kernel's CRTA buffer.
+    // We need to know how many there are so the vararg helpers below skip past the binding
     // section to land at the first user vararg.
     uint32_t tensor_binding_count = 0;
     settings.process_tensor_binding_handles(
@@ -248,9 +246,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             rta_offset += sizeof(uint32_t);
         }
         // Named CRTAs
-        // The TensorBinding address section follows immediately after these slots in the CRTA
-        // buffer (see vararg-offset computation below); those slots are surfaced through
-        // `ta::` via kernel_bindings_generated.h, not here.
+        // The TensorBinding address section follows immediately after the named CRTA slots in the CRTA
+        // buffer (see vararg-offset computation below).
         uint32_t crta_offset = 0;
         for (const auto& name : crta_names) {
             content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
