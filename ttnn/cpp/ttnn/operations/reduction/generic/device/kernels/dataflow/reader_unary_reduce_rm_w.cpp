@@ -13,7 +13,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
-// Row-major input pages (one page = one full tensor row along W). RM circular buffer index must match host factory.
+// Row-major W chunks: one cb_rm page per (logical row, W-chunk). Matches compute tilize_block(..., wt_in_chunk, ...).
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_pages = get_arg_val<uint32_t>(1);
@@ -22,14 +22,12 @@ void kernel_main() {
     constexpr uint32_t W_logical = get_compile_time_arg_val(1);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t padding_identity_bits = get_compile_time_arg_val(3);
-    constexpr auto tensor_args = TensorAccessorArgs<4>();
+    constexpr uint32_t Wt = get_compile_time_arg_val(4);
+    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(5);
+    constexpr auto tensor_args = TensorAccessorArgs<6>();
 
     constexpr uint32_t cb_id_scaler = tt::CBIndex::c_2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    // SUM/AVG (device path uses PoolType::SUM for mean) + REDUCE_ROW uses the matmul reduce path; the scaler's
-    // partial-fill helper interprets this count as rows along column 0 (see reduce_helpers_dataflow.inl). Use full
-    // TILE_WIDTH so column-0 is populated for all tile rows after padding uses clear_value pattern below. MAX uses
-    // the row-0 partial path and needs valid width within the tile (clamp W_logical to one tile).
     const uint32_t scaler_valid_for_reduce = []() -> uint32_t {
         if constexpr (REDUCE_OP == ckernel::PoolType::SUM) {
             return tt::constants::TILE_WIDTH;
@@ -60,23 +58,36 @@ void kernel_main() {
 
     uint32_t end_page = start_page + num_pages;
     for (uint32_t page_id = start_page; page_id < end_page; page_id++) {
-        cb_rm.reserve_back(onepage);
-        // Read only logical row bytes from source; pad tail with reduction identity (pool-style template semantics).
-        noc.async_read(tensor_accessor, cb_rm, valid_row_bytes, {.page_id = page_id}, {.offset_bytes = 0});
-        if (valid_row_bytes < page_bytes) {
-            uint32_t tail_bytes_remaining = page_bytes - valid_row_bytes;
-            uint32_t dst_offset_bytes = valid_row_bytes;
-            // Pool-style clear path: copy identity bytes from clear template CB into the row tail.
-            // Repeat template copies if tail is larger than one tile.
-            while (tail_bytes_remaining > 0) {
-                const uint32_t chunk_bytes =
-                    tail_bytes_remaining < clear_template_bytes ? tail_bytes_remaining : clear_template_bytes;
-                noc.async_read(self_ep, cb_rm, chunk_bytes, clear_template_src, {.offset_bytes = dst_offset_bytes});
-                dst_offset_bytes += chunk_bytes;
-                tail_bytes_remaining -= chunk_bytes;
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += wt_tiles_per_chunk) {
+            const uint32_t wt_in_chunk = (wt_base + wt_tiles_per_chunk < Wt) ? wt_tiles_per_chunk : (Wt - wt_base);
+            const uint32_t chunk_bytes = wt_in_chunk * tt::constants::TILE_WIDTH * elem_bytes;
+            const uint32_t row_chunk_start_bytes = wt_base * tt::constants::TILE_WIDTH * elem_bytes;
+            const uint32_t valid_bytes_this_chunk = (row_chunk_start_bytes >= valid_row_bytes)
+                                                        ? 0
+                                                        : ((valid_row_bytes - row_chunk_start_bytes) < chunk_bytes
+                                                               ? (valid_row_bytes - row_chunk_start_bytes)
+                                                               : chunk_bytes);
+
+            cb_rm.reserve_back(onepage);
+            if (valid_bytes_this_chunk > 0) {
+                noc.async_read(
+                    tensor_accessor,
+                    cb_rm,
+                    valid_bytes_this_chunk,
+                    {.page_id = page_id, .offset_bytes = row_chunk_start_bytes},
+                    {.offset_bytes = 0});
             }
+            uint32_t tail_bytes_remaining = page_bytes - valid_bytes_this_chunk;
+            uint32_t dst_offset_bytes = valid_bytes_this_chunk;
+            while (tail_bytes_remaining > 0) {
+                const uint32_t copy_bytes =
+                    tail_bytes_remaining < clear_template_bytes ? tail_bytes_remaining : clear_template_bytes;
+                noc.async_read(self_ep, cb_rm, copy_bytes, clear_template_src, {.offset_bytes = dst_offset_bytes});
+                dst_offset_bytes += copy_bytes;
+                tail_bytes_remaining -= copy_bytes;
+            }
+            noc.async_read_barrier();
+            cb_rm.push_back(onepage);
         }
-        noc.async_read_barrier();
-        cb_rm.push_back(onepage);
     }
 }
