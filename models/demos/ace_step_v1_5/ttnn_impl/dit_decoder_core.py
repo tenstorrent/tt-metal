@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -25,6 +26,12 @@ class AceStepDecoderConfigTTNN:
     head_dim: int
     rms_norm_eps: float
     sliding_window: Optional[int]
+    # Hugging Face config fields needed for parity features.
+    max_position_embeddings: int = 4096
+    rope_theta: float = 10000.0
+    # Optional per-layer attention type selector used by HF ("full_attention" vs "sliding_attention").
+    # When absent, all layers default to full attention.
+    layer_types: Optional[Sequence[str]] = None
 
 
 def _maybe_get(state_dict: dict, key: str) -> np.ndarray:
@@ -134,6 +141,92 @@ class TtTimestepEmbedding:
         temb = ttnn.reshape(temb, (1, d))
         return temb, tp
 
+    def from_timestep_value(self, timestep: float):
+        """
+        HF-parity path: compute sinusoidal embedding for an arbitrary timestep value.
+
+        This matches HF's `TimestepEmbedding` contract of generating sin/cos at runtime, but
+        it uploads a tiny `[1,1,1,256]` tensor each call (host -> device).
+        """
+        ttnn = self.ttnn
+        try:
+            import torch
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError("from_timestep_value() requires torch to be installed") from e
+
+        # Build the exact same t_freq as in __init__ precompute, but for a single timestep.
+        t = torch.tensor([float(timestep) * self.scale], dtype=torch.float32)  # [1]
+        half = self.in_channels // 2
+        freqs = torch.exp((-math.log(10000.0)) * (torch.arange(0, half, dtype=torch.float32) / float(half)))  # [half]
+        args = t[:, None] * freqs[None, :]  # [1, half]
+        emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)  # [1, in_channels]
+        emb = emb.reshape(1, 1, 1, self.in_channels)
+
+        # Upload and run the same MLP projection as the lookup-table path.
+        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        t_freq = ttnn.from_torch(emb, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
+        temb = ttnn.linear(t_freq, self.w1, bias=self.b1, transpose_b=True)
+        temb = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
+        temb = ttnn.linear(temb, self.w2, bias=self.b2, transpose_b=True)
+        h = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
+        tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True)
+        d = self.time_embed_dim
+        tp = ttnn.reshape(tp, (1, 6, 1, d))
+        tp = ttnn.reshape(tp, (1, 6, d))
+        temb = ttnn.reshape(temb, (1, d))
+        # Keep t_freq allocated only for the duration of this call.
+        if hasattr(ttnn, "deallocate"):
+            try:
+                ttnn.deallocate(t_freq)
+            except Exception:
+                pass
+        return temb, tp
+
+
+class TtHfRotaryEmbedding:
+    """
+    Minimal HF-style RoPE cache for applying `ttnn.experimental.rotary_embedding` to [B,H,S,Dh] tensors.
+    """
+
+    def __init__(self, *, mesh_device, head_dim: int, max_seq_len: int, rope_theta: float, dtype=None):
+        ttnn = _require_ttnn()
+        self.ttnn = ttnn
+        self.mesh_device = mesh_device
+        self.head_dim = int(head_dim)
+        self.max_seq_len = int(max_seq_len)
+        self.rope_theta = float(rope_theta)
+        self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
+        if self.dtype is None:
+            raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
+
+        if not hasattr(ttnn, "experimental") or not hasattr(ttnn.experimental, "rotary_embedding"):
+            raise RuntimeError("TTNN build missing ttnn.experimental.rotary_embedding (HF-style RoPE).")
+
+        # Build cos/sin caches on device in HF format: [1,1,max_seq_len,head_dim].
+        from models.tt_transformers.tt.rope import get_rot_mats_hf
+
+        cos, sin = get_rot_mats_hf(
+            head_dim=self.head_dim,
+            device=self.mesh_device,
+            seq_len=self.max_seq_len,
+            theta=self.rope_theta,
+            rope_scaling=None,
+            datatype=self.dtype,
+        )
+        self.cos_cached = cos
+        self.sin_cached = sin
+
+    def __call__(self, x, *, token_idx: Optional[int] = None):
+        ttnn = self.ttnn
+        # `rotary_embedding` uses `x.shape[2]` as seq_len and slices cos/sin caches internally.
+        return ttnn.experimental.rotary_embedding(
+            x,
+            self.cos_cached,
+            self.sin_cached,
+            token_idx,
+            memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+        )
+
 
 class TtAceStepAttentionSDPA:
     """
@@ -144,7 +237,16 @@ class TtAceStepAttentionSDPA:
       - encoder_hidden_states (cross): [B, 1, S_enc, D]
     """
 
-    def __init__(self, *, cfg: AceStepDecoderConfigTTNN, state_dict: dict, base_address: str, mesh_device, dtype=None):
+    def __init__(
+        self,
+        *,
+        cfg: AceStepDecoderConfigTTNN,
+        state_dict: dict,
+        base_address: str,
+        mesh_device,
+        dtype=None,
+        rotary_embedding: Optional[TtHfRotaryEmbedding] = None,
+    ):
         ttnn = _require_ttnn()
         transformer = getattr(ttnn, "transformer", None)
         sdpa = getattr(transformer, "scaled_dot_product_attention", None) if transformer is not None else None
@@ -163,6 +265,7 @@ class TtAceStepAttentionSDPA:
         self.n_kv = int(cfg.num_key_value_heads)
         self.d_head = int(cfg.head_dim)
         self.scale = 1.0 / math.sqrt(float(self.d_head))
+        self._rotary = rotary_embedding
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
@@ -193,8 +296,35 @@ class TtAceStepAttentionSDPA:
             )
 
         self.wq, self.bq = as_w("q_proj"), as_b("q_proj")
-        self.wk, self.bk = as_w("k_proj"), as_b("k_proj")
-        self.wv, self.bv = as_w("v_proj"), as_b("v_proj")
+        # Build a fused KV projection to guarantee K and V have identical (logical and padded) sequence length.
+        # Some TTNN builds can produce mismatched seq lengths when running separate K and V linears.
+        wk_host = _maybe_get(state_dict, f"{base_address}.k_proj.weight")
+        wv_host = _maybe_get(state_dict, f"{base_address}.v_proj.weight")
+        wkv_host = np.concatenate([wk_host, wv_host], axis=0)
+        self.wkv = ttnn.as_tensor(
+            wkv_host,
+            device=mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
+
+        bk_host = state_dict.get(f"{base_address}.k_proj.bias", None)
+        bv_host = state_dict.get(f"{base_address}.v_proj.bias", None)
+        if bk_host is not None and bv_host is not None:
+            bkv_host = np.concatenate([bk_host, bv_host], axis=0).reshape(1, 1, 1, -1)
+            self.bkv = ttnn.as_tensor(
+                bkv_host,
+                device=mesh_device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=mapper,
+            )
+        else:
+            self.bkv = None
+
         self.wo, self.bo = as_w("o_proj"), as_b("o_proj")
 
         # Per-head RMSNorm weights (shape [Dh]).
@@ -218,22 +348,81 @@ class TtAceStepAttentionSDPA:
         )
         self.eps = float(cfg.rms_norm_eps)
 
-    def __call__(self, hidden_states, *, encoder_hidden_states=None, is_causal: bool = False):
+    def __call__(
+        self,
+        hidden_states,
+        *,
+        encoder_hidden_states=None,
+        is_causal: bool = False,
+        sliding_window_size: Optional[int] = None,
+        attn_mask=None,
+    ):
         ttnn = self.ttnn
         x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # [B,1,S,D]
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
         if encoder_hidden_states is None:
-            k = ttnn.linear(x, self.wk, bias=self.bk, transpose_b=True)
-            v = ttnn.linear(x, self.wv, bias=self.bv, transpose_b=True)
+            kv = ttnn.linear(x, self.wkv, bias=self.bkv, transpose_b=True)
         else:
             enc = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
-            k = ttnn.linear(enc, self.wk, bias=self.bk, transpose_b=True)
-            v = ttnn.linear(enc, self.wv, bias=self.bv, transpose_b=True)
+            kv = ttnn.linear(enc, self.wkv, bias=self.bkv, transpose_b=True)
 
         B = int(q.shape[0])
         S = int(q.shape[2])
         H = self.n_heads
         Dh = self.d_head
+
+        # Split fused KV: kv is [B,1,S,2*(n_kv*Dh)]
+        kv_dim = int(self.n_kv * Dh)
+        k = ttnn.slice(kv, (0, 0, 0, 0), (B, 1, int(kv.shape[2]), kv_dim))
+        v = ttnn.slice(kv, (0, 0, 0, kv_dim), (B, 1, int(kv.shape[2]), 2 * kv_dim))
+        if hasattr(ttnn, "deallocate"):
+            try:
+                ttnn.deallocate(kv)
+            except Exception:
+                pass
+
+        def _seq_len_padded(x) -> int:
+            # SDPA validation uses padded shapes. Prefer padded_shape() when available.
+            ps = getattr(x, "padded_shape", None)
+            try:
+                if callable(ps):
+                    return int(ps()[2])
+                if ps is not None:
+                    return int(ps[2])
+            except Exception:
+                pass
+            return int(x.shape[2])
+
+        def _seq_len_logical(x) -> int:
+            return int(x.shape[2])
+
+        def _ceil_tile(x: int) -> int:
+            return ((int(x) + 31) // 32) * 32
+
+        def _pad_seq_to_rank4(x, target_s: int):
+            logical_s = _seq_len_logical(x)
+            padded_s = _seq_len_padded(x)
+            if logical_s == target_s and padded_s == target_s:
+                return x
+            if logical_s > target_s:
+                return ttnn.slice(x, (0, 0, 0, 0), (int(x.shape[0]), int(x.shape[1]), target_s, int(x.shape[3])))
+
+            pad = target_s - logical_s
+            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_rm = ttnn.pad(x_rm, padding=((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
+            # `pad` may only update storage padding. Reshape makes the new sequence length logical too.
+            x_rm = ttnn.reshape(x_rm, (int(x.shape[0]), int(x.shape[1]), target_s, int(x.shape[3])))
+            return ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
+
+        # Safety: TTNN SDPA requires K/V to have the same logical and padded sequence length.
+        # Some builds can produce mismatched seq lengths between K and V.
+        S_k_raw = max(_seq_len_logical(k), _seq_len_padded(k))
+        S_v_raw = max(_seq_len_logical(v), _seq_len_padded(v))
+        if S_k_raw != S_v_raw:
+            target = _ceil_tile(max(S_k_raw, S_v_raw))
+
+            k = _pad_seq_to_rank4(k, target)
+            v = _pad_seq_to_rank4(v, target)
 
         # Q: [B,1,S,H*Dh] -> [B,H,S,Dh]
         q = ttnn.reshape(q, (B, 1, S, H, Dh))
@@ -258,6 +447,27 @@ class TtAceStepAttentionSDPA:
             k = ttnn.repeat(k, (1, rep, 1, 1)) if hasattr(ttnn, "repeat") else ttnn.repeat_interleave(k, rep, dim=1)
             v = ttnn.repeat(v, (1, rep, 1, 1)) if hasattr(ttnn, "repeat") else ttnn.repeat_interleave(v, rep, dim=1)
 
+        # Safety (again): force both logical and padded K/V seq lengths to the same tile multiple.
+        S_k2 = max(_seq_len_logical(k), _seq_len_padded(k))
+        S_v2 = max(_seq_len_logical(v), _seq_len_padded(v))
+        target = _ceil_tile(max(S_k2, S_v2))
+        if _seq_len_logical(k) != target or _seq_len_padded(k) != target:
+            k = _pad_seq_to_rank4(k, target)
+        if _seq_len_logical(v) != target or _seq_len_padded(v) != target:
+            v = _pad_seq_to_rank4(v, target)
+
+        # Optional debug: export ACE_STEP_DEBUG_SDPA=1 to print padded seq lens
+        if os.environ.get("ACE_STEP_DEBUG_SDPA"):
+            try:
+                print(
+                    "[ace_step_v1_5][sdpa] "
+                    f"k_shape={tuple(k.shape)} v_shape={tuple(v.shape)} "
+                    f"k_padded={_seq_len_padded(k)} v_padded={_seq_len_padded(v)} target={target}",
+                    flush=True,
+                )
+            except Exception:
+                pass
+
         # Head-dim RMSNorm on q and k.
         q = ttnn.rms_norm(
             q, weight=self.q_norm_w, epsilon=self.eps, memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
@@ -266,10 +476,22 @@ class TtAceStepAttentionSDPA:
             k, weight=self.k_norm_w, epsilon=self.eps, memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         )
 
-        ctx = self._sdpa(q, k, v, attn_mask=None, is_causal=is_causal, scale=self.scale)
-        # [B,H,S,Dh] -> [B,1,S,H*Dh]
+        # HF parity: apply RoPE in self-attention only.
+        if encoder_hidden_states is None and self._rotary is not None:
+            q = self._rotary(q)
+            k = self._rotary(k)
+
+        sdpa_kwargs = dict(attn_mask=attn_mask, is_causal=is_causal, scale=self.scale)
+        if sliding_window_size is not None:
+            sdpa_kwargs["sliding_window_size"] = int(sliding_window_size)
+        ctx = self._sdpa(q, k, v, **sdpa_kwargs)
+        # [B,H,S_ctx,Dh] -> [B,1,S_ctx,H*Dh]. SDPA can return tile-aligned logical
+        # sequence lengths, so reshape using the returned length and slice back to query S.
+        S_ctx = int(ctx.shape[2])
         ctx = ttnn.permute(ctx, (0, 2, 1, 3))
-        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh))
+        ctx = ttnn.reshape(ctx, (B, 1, S_ctx, H * Dh))
+        if S_ctx != S:
+            ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         return out
 
@@ -333,6 +555,7 @@ class TtAceStepDiTLayer:
         layer_idx: int,
         mesh_device,
         dtype=None,
+        rotary_embedding: Optional[TtHfRotaryEmbedding] = None,
     ) -> None:
         ttnn = _require_ttnn()
         self.ttnn = ttnn
@@ -371,6 +594,13 @@ class TtAceStepDiTLayer:
             mesh_mapper=mapper,
         )
         self.eps = float(cfg.rms_norm_eps)
+        self.attention_type = "full_attention"
+        self.sliding_window = int(cfg.sliding_window) if cfg.sliding_window is not None else None
+        if cfg.layer_types is not None:
+            try:
+                self.attention_type = str(list(cfg.layer_types)[int(layer_idx)])
+            except Exception:
+                self.attention_type = "full_attention"
 
         # Attention modules
         self.self_attn = TtAceStepAttentionSDPA(
@@ -379,6 +609,7 @@ class TtAceStepDiTLayer:
             base_address=f"layers.{layer_idx}.self_attn",
             mesh_device=mesh_device,
             dtype=self.dtype,
+            rotary_embedding=rotary_embedding,
         )
         self.cross_attn = TtAceStepAttentionSDPA(
             cfg=cfg,
@@ -386,6 +617,7 @@ class TtAceStepDiTLayer:
             base_address=f"layers.{layer_idx}.cross_attn",
             mesh_device=mesh_device,
             dtype=self.dtype,
+            rotary_embedding=None,
         )
 
         # MLP sizes (from config.json; store in state dict as well, but we pass explicit)
@@ -455,7 +687,13 @@ class TtAceStepDiTLayer:
         one_plus = ttnn.add(scale_msa, ones)
         h = ttnn.add(ttnn.multiply(x_norm, one_plus), shift_msa)
 
-        attn_out = self.self_attn(h, encoder_hidden_states=None, is_causal=False)
+        attn_out = self.self_attn(
+            h,
+            encoder_hidden_states=None,
+            is_causal=False,
+            sliding_window_size=self.sliding_window if self.attention_type == "sliding_attention" else None,
+            attn_mask=None,
+        )
         gated = ttnn.multiply(attn_out, gate_msa)
         hidden_states = ttnn.add(hidden_states, gated)
 
@@ -528,8 +766,23 @@ class TtAceStepDiTCore:
             mesh_mapper=mapper,
         )
 
+        self._rotary = TtHfRotaryEmbedding(
+            mesh_device=mesh_device,
+            head_dim=int(cfg.head_dim),
+            max_seq_len=int(cfg.max_position_embeddings),
+            rope_theta=float(cfg.rope_theta),
+            dtype=self.dtype,
+        )
+
         self.layers: List[TtAceStepDiTLayer] = [
-            TtAceStepDiTLayer(cfg=cfg, state_dict=state_dict, layer_idx=i, mesh_device=mesh_device, dtype=self.dtype)
+            TtAceStepDiTLayer(
+                cfg=cfg,
+                state_dict=state_dict,
+                layer_idx=i,
+                mesh_device=mesh_device,
+                dtype=self.dtype,
+                rotary_embedding=self._rotary,
+            )
             for i in range(int(cfg.num_hidden_layers))
         ]
 

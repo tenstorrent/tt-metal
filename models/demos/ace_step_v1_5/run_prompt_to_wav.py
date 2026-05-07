@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -29,8 +30,30 @@ def _build_t_schedule(shift: float = 1.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompt", type=str, required=True)
-    ap.add_argument("--ckpt_dir", type=str, default="/home/ubuntu/ign-sakthi/ACE-Step-1.5/checkpoints")
-    ap.add_argument("--variant", type=str, default="acestep-v15-turbo")
+    ap.add_argument(
+        "--ckpt_dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional local checkpoints root containing subfolders like `acestep-v15-base/`, `vae/`, "
+            "and `Qwen3-Embedding-0.6B/`. If omitted, weights are downloaded from Hugging Face."
+        ),
+    )
+    ap.add_argument(
+        "--variant",
+        type=str,
+        default="acestep-v15-base",
+        help=(
+            "Decoder variant. For HF download: `acestep-v15-base`, `acestep-v15-sft` (standalone repos), "
+            "or `acestep-v15-turbo` (subfolder inside `ACE-Step/Ace-Step1.5`)."
+        ),
+    )
+    ap.add_argument(
+        "--assets-repo-id",
+        type=str,
+        default="ACE-Step/Ace-Step1.5",
+        help="HF repo that provides shared assets (VAE + text encoder).",
+    )
     ap.add_argument("--device_id", type=int, default=0)
     ap.add_argument("--duration_sec", type=float, default=10.0)
     ap.add_argument("--shift", type=float, default=1.0)
@@ -38,24 +61,54 @@ def main():
     ap.add_argument("--out", type=str, default="ttnn_out.wav")
     args = ap.parse_args()
 
-    # Make ACE-Step package importable (read-only reference; we do not modify it).
-    import sys
+    def resolve_paths():
+        # Prefer a user-provided local checkpoint layout.
+        if args.ckpt_dir:
+            ckpt_dir = Path(args.ckpt_dir)
+            model_dir = ckpt_dir / args.variant
+            safetensors_path = model_dir / "model.safetensors"
+            silence_latent_path = model_dir / "silence_latent.pt"
+            vae_dir = ckpt_dir / "vae"
+            text_model_dir = ckpt_dir / "Qwen3-Embedding-0.6B"
+            return model_dir, safetensors_path, silence_latent_path, vae_dir, text_model_dir
 
-    ace_step_root = Path("/home/ubuntu/ign-sakthi/ACE-Step-1.5")
-    if str(ace_step_root) not in sys.path:
-        sys.path.insert(0, str(ace_step_root))
+        # Otherwise, fetch from Hugging Face.
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError("huggingface_hub is required when --ckpt_dir is not provided") from e
 
-    ckpt_dir = Path(args.ckpt_dir)
-    model_dir = ckpt_dir / args.variant
-    safetensors_path = model_dir / "model.safetensors"
-    silence_latent_path = model_dir / "silence_latent.pt"
-    vae_dir = ckpt_dir / "vae"
-    text_model_dir = ckpt_dir / "Qwen3-Embedding-0.6B"
+        # Shared assets repo: contains `vae/` and `Qwen3-Embedding-0.6B/` subfolders.
+        assets_snap = Path(
+            snapshot_download(args.assets_repo_id, local_files_only=bool(os.environ.get("HF_HUB_OFFLINE")))
+        )
+        vae_dir = assets_snap / "vae"
+        text_model_dir = assets_snap / "Qwen3-Embedding-0.6B"
+
+        # Decoder weights.
+        if args.variant == "acestep-v15-turbo":
+            # Turbo decoder is nested in the umbrella assets repo.
+            model_dir = assets_snap / "acestep-v15-turbo"
+        else:
+            # Base/SFT are standalone repos: ACE-Step/<variant>
+            model_dir = Path(
+                snapshot_download(f"ACE-Step/{args.variant}", local_files_only=bool(os.environ.get("HF_HUB_OFFLINE")))
+            )
+
+        safetensors_path = model_dir / "model.safetensors"
+        silence_latent_path = model_dir / "silence_latent.pt"
+        return model_dir, safetensors_path, silence_latent_path, vae_dir, text_model_dir
+
+    model_dir, safetensors_path, silence_latent_path, vae_dir, text_model_dir = resolve_paths()
 
     if not safetensors_path.is_file():
         raise FileNotFoundError(f"Missing checkpoint: {safetensors_path}")
     if not silence_latent_path.is_file():
         raise FileNotFoundError(f"Missing silence_latent: {silence_latent_path}")
+    if not vae_dir.is_dir():
+        raise FileNotFoundError(f"Missing VAE directory: {vae_dir}")
+    if not text_model_dir.is_dir():
+        raise FileNotFoundError(f"Missing text encoder directory: {text_model_dir}")
 
     # --------------------------
     # Host path: prompt -> encoder_hidden_states (Torch/Transformers)

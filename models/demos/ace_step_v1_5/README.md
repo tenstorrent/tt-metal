@@ -54,3 +54,51 @@ export MESH_DEVICE=N150   # or N300 / T3K
 
 - PCC threshold in tests is set to `>= -0.9` per request (very lenient). You can tighten it later.
 - The `mesh_device` pytest fixture is **session-scoped** (one `open_mesh_device` per process). Opening and closing a mesh around every test exhausts Metal context IDs and can trigger invalid `context_id` / teardown crashes on distributed meshes.
+
+## TTNN demo (`full_pipeline.py`) — weights default to **Base**
+
+The TTNN entrypoint defaults to Hugging Face **`ACE-Step/acestep-v15-base`** when you omit a local checkpoint:
+
+```bash
+cd /home/ubuntu/proj_sdk/tt-metal
+python3 models/demos/ace_step_v1_5/full_pipeline.py \
+  --out-npy /tmp/ace_features.npy
+```
+
+Override weights explicitly:
+
+```bash
+python3 models/demos/ace_step_v1_5/full_pipeline.py \
+  --checkpoint-safetensors /path/to/model.safetensors \
+  --out-npy /tmp/ace_features.npy
+```
+
+Turbo lives under the umbrella repo ``ACE-Step/Ace-Step1.5``; pick it with ``--hf-subfolder``:
+
+```bash
+python3 models/demos/ace_step_v1_5/full_pipeline.py \
+  --hf-repo-id ACE-Step/Ace-Step1.5 \
+  --hf-subfolder acestep-v15-turbo \
+  --out-npy /tmp/out_turbo.npy
+```
+
+### HF parity note (`full_pipeline.py` / `dit_decoder_core.py`)
+
+This TTNN path implements the **DiT decoder stack** (patch embed → conditioned transformer layers → output head) but is **not** a guaranteed byte-for-byte match to HF ``modeling_acestep_v15_*.py``. Documented gaps include **RoPE**, **per-layer sliding-window attention masks**, and **runtime vs lookup timestep embeddings**. See the docstring on ``AceStepV15TTNNPipeline``.
+
+## Torch demo (HF weights + deterministic output signature)
+
+This demo downloads an ACE-Step 1.5 checkpoint from Hugging Face, extracts the **DiT output head**
+weights (`norm_out`, `scale_shift_table`, `proj_out`), runs a small forward pass, and prints:
+
+- the **full snapshot path** on disk
+- the inferred **state_dict prefix** for the output head inside the checkpoint
+- output **shape** and a small numeric signature (`mean/std/first8`)
+
+```bash
+cd /home/ubuntu/proj_sdk/tt-metal
+python3 -m models.demos.ace_step_v1_5.torch_ref.hf_output_head_demo \
+  --repo-id "ACE-Step/Ace-Step1.5" \
+  --subfolder "acestep-v15-turbo" \
+  --seed 0 --batch 1 --original-seq-len 257 --noise-std 1.0
+```
