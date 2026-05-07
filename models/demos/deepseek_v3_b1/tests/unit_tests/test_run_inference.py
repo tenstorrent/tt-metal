@@ -37,9 +37,16 @@ EXCEPTION_BY_NAME = {
 
 
 class _TraceBackedModel:
-    def __init__(self, read_results: list[DecodeResult], *, capture_dynamic_fields: bool = False) -> None:
+    def __init__(
+        self,
+        read_results: list[DecodeResult],
+        *,
+        capture_dynamic_fields: bool = False,
+        expected_window_tokens: int = 0,
+    ) -> None:
         self._read_results = list(read_results)
         self._capture_dynamic_fields = capture_dynamic_fields
+        self._expected_window_tokens = int(expected_window_tokens)
         self.read_count = 0
         self.writes = []
 
@@ -62,6 +69,7 @@ class _TraceBackedModel:
         temperature: float = 1.0,
         top_k: int = 32,
         probability_mass_threshold: float = 1.0,
+        top_p: float = 1.0,
     ) -> None:
         write = {
             "token_id": int(token_id),
@@ -74,8 +82,8 @@ class _TraceBackedModel:
             write.update(
                 {
                     "lane_idx": int(lane_idx),
-                    "window_start_pos": int(position_id if window_start_pos is None else window_start_pos),
-                    "num_window_tokens": int(num_window_tokens),
+                    "window_start_pos": int(position_id - lane_idx if window_start_pos is None else window_start_pos),
+                    "num_window_tokens": int(num_window_tokens or self._expected_window_tokens),
                 }
             )
         self.writes.append(write)
@@ -275,10 +283,9 @@ def _packet_to_decode_result(packet: dict, *, force_prefill: bool = False) -> De
             tokens=candidate_tokens,
             user_id=int(packet["user_id"]),
             lane_idx=int(packet["lane_idx"]),
-            window_start_pos=int(packet["window_start_pos"]),
-            num_window_tokens=int(packet["num_window_tokens"]),
-            target_topn_tokens=[int(token) for token in packet["target_topn_tokens"]],
-            target_topn_probs=[float(prob) for prob in packet["target_topn_probs"]],
+            position_id=int(packet["window_start_pos"]) + int(packet["lane_idx"]) - 1,
+            p_top32_indices=[int(token) for token in packet["target_topn_tokens"]],
+            p_top32_scores=[float(prob) for prob in packet["target_topn_probs"]],
         )
 
     token_0 = packet["token_0"]
@@ -293,8 +300,7 @@ def _packet_to_decode_result(packet: dict, *, force_prefill: bool = False) -> De
         ],
         user_id=int(packet["user_id"]),
         lane_idx=lane_idx,
-        window_start_pos=token_0_pos - lane_idx,
-        num_window_tokens=2,
+        position_id=token_0_pos - 1,
     )
 
 
@@ -304,11 +310,16 @@ def _make_trace_backed_pipeline(trace: dict) -> tuple[ModelPipeline, _TraceBacke
     ]
     read_results = [_packet_to_decode_result(packet) for packet in trace["device_to_host"]["read_results"]]
 
-    fake_model = _TraceBackedModel(read_results, capture_dynamic_fields=trace["schema_version"] == 2)
+    num_speculative_tokens = int(trace["params"].get("num_speculative_tokens", 1))
+    fake_model = _TraceBackedModel(
+        read_results,
+        capture_dynamic_fields=trace["schema_version"] == 2,
+        expected_window_tokens=num_speculative_tokens + 1,
+    )
     pipeline = ModelPipeline.__new__(ModelPipeline)
     pipeline.pipeline = SimpleNamespace(my_stage_idx=0)
     pipeline.model = fake_model
-    pipeline.num_speculative_tokens = int(trace["params"].get("num_speculative_tokens", 1))
+    pipeline.num_speculative_tokens = num_speculative_tokens
     pipeline.temperature = float(trace["params"].get("temperature", 0.6))
     pipeline.top_k = int(trace["params"].get("top_k", 32))
     pipeline.top_p = float(trace["params"].get("top_p", 1.0))
@@ -330,8 +341,8 @@ def test_relaxed_acceptance_uses_configured_topn_and_delta():
     result = DecodeResult(
         token_type=TokenType.BASE,
         tokens=[CandidateToken(101, 4)],
-        target_topn_tokens=[101, 202, 303],
-        target_topn_probs=[0.9, 0.5, 0.35],
+        p_top32_indices=[101, 202, 303],
+        p_top32_scores=[0.9, 0.5, 0.35],
     )
 
     pipeline._set_relaxed_acceptance_params(relaxed_accept_topn=2, relaxed_accept_delta=0.6)

@@ -43,6 +43,7 @@ TOKEN_ID_BYTES: int = 4
 MAX_SPECULATIVE_TOKENS: int = DeepseekMetadata.MAX_SPECULATIVE_TOKENS
 MAX_WINDOW_TOKENS: int = DeepseekMetadata.MAX_WINDOW_TOKENS
 RELAXED_ACCEPT_TOPN: int = DeepseekMetadata.RELAXED_ACCEPT_TOPN
+TOPK_METADATA_COUNT: int = DeepseekMetadata.TOPK_METADATA_COUNT
 SPEC_DECODE_PAGE_SIZE_BYTES: int = DeepseekMetadata.aligned_size_bytes()
 
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
@@ -60,15 +61,16 @@ class OutputField:
     USER_ID = 1
     TOKEN_ID = 2
     POSITION_ID = 3
-    PREFILL_TOKEN_ID = 4
-    LANE_IDX = 5
-    WINDOW_START_POS = 6
-    NUM_WINDOW_TOKENS = 7
+    LANE_IDX = 4
+    TEMPERATURE = 5
+    TOP_K = 6
+    TOP_P = 7
     CANDIDATE_TOKEN_IDS = 8
-    CANDIDATE_POSITIONS = CANDIDATE_TOKEN_IDS + MAX_WINDOW_TOKENS
-    TARGET_TOPN_COUNT = 18
-    TARGET_TOPN_TOKENS = 19
-    TARGET_TOPN_PROBS = TARGET_TOPN_TOKENS + RELAXED_ACCEPT_TOPN
+    PREFILL_TOKEN_IDS = 13
+    P_TOP32_INDICES = 17
+    P_TOP32_SCORES = 49
+    Q_TOP32_INDICES = 65
+    Q_TOP32_SCORES = 97
 
 
 class InputField:
@@ -78,13 +80,12 @@ class InputField:
     USER_ID = 1
     TOKEN_ID = 2
     POSITION_ID = 3
-    PREFILL_TOKEN_ID = 4
-    LANE_IDX = 5
-    WINDOW_START_POS = 6
-    NUM_WINDOW_TOKENS = 7
-    TEMPERATURE = 39
-    TOP_K = 40
-    PROBABILITY_MASS_THRESHOLD = 41
+    LANE_IDX = 4
+    TEMPERATURE = 5
+    TOP_K = 6
+    TOP_P = 7
+    CANDIDATE_TOKEN_IDS = 8
+    PREFILL_TOKEN_IDS = 13
 
 
 class TokenType:
@@ -111,31 +112,27 @@ class DecodeResult:
     tokens: list[CandidateToken]
     user_id: int = 0
     lane_idx: int = 0
-    window_start_pos: int | None = None
-    num_window_tokens: int = 0
-    target_topn_tokens: list[int] = field(default_factory=list)
-    target_topn_probs: list[float] = field(default_factory=list)
+    position_id: int = 0
+    p_top32_indices: list[int] = field(default_factory=list)
+    p_top32_scores: list[float] = field(default_factory=list)
+    q_top32_indices: list[int] = field(default_factory=list)
+    q_top32_scores: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.token_type = int(self.token_type)
         self.user_id = int(self.user_id)
         self.lane_idx = int(self.lane_idx)
+        self.position_id = int(self.position_id)
         self.tokens = [
             token if isinstance(token, CandidateToken) else CandidateToken(**token)  # type: ignore[arg-type]
             for token in self.tokens
         ]
         if not self.tokens:
             raise ValueError("DecodeResult requires at least one candidate token")
-        if self.num_window_tokens == 0:
-            self.num_window_tokens = len(self.tokens)
-        else:
-            self.num_window_tokens = int(self.num_window_tokens)
-        if self.window_start_pos is None:
-            self.window_start_pos = self.tokens[0].pos
-        else:
-            self.window_start_pos = int(self.window_start_pos)
-        self.target_topn_tokens = [int(token) for token in self.target_topn_tokens]
-        self.target_topn_probs = [float(prob) for prob in self.target_topn_probs]
+        self.p_top32_indices = [int(token) for token in self.p_top32_indices]
+        self.p_top32_scores = [float(prob) for prob in self.p_top32_scores]
+        self.q_top32_indices = [int(token) for token in self.q_top32_indices]
+        self.q_top32_scores = [float(prob) for prob in self.q_top32_scores]
 
     @property
     def token_ids(self) -> list[int]:
@@ -145,6 +142,22 @@ class DecodeResult:
     def positions(self) -> list[int]:
         return [token.pos for token in self.tokens]
 
+    @property
+    def window_start_pos(self) -> int:
+        return self.position_id - self.lane_idx + 1
+
+    @property
+    def num_window_tokens(self) -> int:
+        return len(self.tokens)
+
+    @property
+    def target_topn_tokens(self) -> list[int]:
+        return self.p_top32_indices
+
+    @property
+    def target_topn_probs(self) -> list[float]:
+        return self.p_top32_scores
+
 
 def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
     """Parse a fixed metadata output page into a structured DecodeResult."""
@@ -153,67 +166,69 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
     def raw_int(idx: int, default: int = 0) -> int:
         return int(raw[idx].item()) if idx < raw.numel() else default
 
-    num_window_tokens = raw_int(OutputField.NUM_WINDOW_TOKENS)
-    num_window_tokens = max(1, min(num_window_tokens, MAX_WINDOW_TOKENS))
+    def raw_bf16_pair_word(idx: int, default: int = 0) -> int:
+        return raw_int(idx, default) & 0xFFFFFFFF
+
+    def unpack_bf16_scores(start_word: int) -> list[float]:
+        scores = []
+        for word_idx in range(TOPK_METADATA_COUNT // 2):
+            word = raw_bf16_pair_word(start_word + word_idx)
+            for shift in (0, 16):
+                bf16_bits = (word >> shift) & 0xFFFF
+                scores.append(torch.tensor(bf16_bits << 16, dtype=torch.uint32).view(torch.float32).item())
+        return scores
+
+    position_id = raw_int(OutputField.POSITION_ID)
+    lane_idx = raw_int(OutputField.LANE_IDX)
+    first_candidate_pos = position_id + 1
     tokens = [
         CandidateToken(
             raw_int(OutputField.CANDIDATE_TOKEN_IDS + slot_idx),
-            raw_int(OutputField.CANDIDATE_POSITIONS + slot_idx),
+            first_candidate_pos + slot_idx,
         )
-        for slot_idx in range(num_window_tokens)
+        for slot_idx in range(MAX_WINDOW_TOKENS)
     ]
-
-    target_topn_count = min(raw_int(OutputField.TARGET_TOPN_COUNT), RELAXED_ACCEPT_TOPN)
-    target_topn_tokens = []
-    target_topn_probs = []
-    if target_topn_count:
-        target_topn_tokens = [raw_int(OutputField.TARGET_TOPN_TOKENS + idx) for idx in range(target_topn_count)]
-        target_topn_probs = [
-            torch.tensor(raw_int(OutputField.TARGET_TOPN_PROBS + idx) & 0xFFFFFFFF, dtype=torch.uint32)
-            .view(torch.float32)
-            .item()
-            for idx in range(target_topn_count)
-        ]
 
     return DecodeResult(
         token_type=int(raw[OutputField.TOKEN_TYPE].item()),
         user_id=raw_int(OutputField.USER_ID),
-        lane_idx=raw_int(OutputField.LANE_IDX),
-        window_start_pos=raw_int(OutputField.WINDOW_START_POS, tokens[0].pos),
-        num_window_tokens=num_window_tokens,
+        lane_idx=lane_idx,
+        position_id=position_id,
         tokens=tokens,
-        target_topn_tokens=target_topn_tokens,
-        target_topn_probs=target_topn_probs,
+        p_top32_indices=[raw_int(OutputField.P_TOP32_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
+        p_top32_scores=unpack_bf16_scores(OutputField.P_TOP32_SCORES),
+        q_top32_indices=[raw_int(OutputField.Q_TOP32_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
+        q_top32_scores=unpack_bf16_scores(OutputField.Q_TOP32_SCORES),
     )
 
 
 def to_spec_input(
     token_id: int,
-    prefill_token_id: int,
+    prefill_token_id: int | list[int],
     user_id: int,
     position_id: int,
     page_size_datums: int,
     token_type: TokenType,
     lane_idx: int = 0,
-    window_start_pos: int | None = None,
-    num_window_tokens: int = 0,
     temperature: float = 1.0,
     top_k: int = 32,
-    probability_mass_threshold: float = 1.0,
+    top_p: float = 1.0,
 ) -> ttnn.Tensor:
     """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
     torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
     torch_padded[0, InputField.TOKEN_ID] = token_id
-    torch_padded[0, InputField.PREFILL_TOKEN_ID] = prefill_token_id
     torch_padded[0, InputField.TOKEN_TYPE] = token_type
     torch_padded[0, InputField.USER_ID] = user_id
     torch_padded[0, InputField.POSITION_ID] = position_id
     torch_padded[0, InputField.LANE_IDX] = lane_idx
-    torch_padded[0, InputField.WINDOW_START_POS] = position_id if window_start_pos is None else window_start_pos
-    torch_padded[0, InputField.NUM_WINDOW_TOKENS] = num_window_tokens
     torch_padded[0, InputField.TEMPERATURE] = float_to_uint32(temperature)
     torch_padded[0, InputField.TOP_K] = top_k
-    torch_padded[0, InputField.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
+    torch_padded[0, InputField.TOP_P] = float_to_uint32(top_p)
+    prefill_token_ids = (
+        [int(prefill_token_id)] if isinstance(prefill_token_id, int) else [int(value) for value in prefill_token_id]
+    )
+    for idx, value in enumerate(prefill_token_ids[:MAX_SPECULATIVE_TOKENS]):
+        torch_padded[0, InputField.PREFILL_TOKEN_IDS + idx] = value
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -369,11 +384,9 @@ class DeepSeekV3:
         position_id: int,
         token_type: TokenType,
         lane_idx: int = 0,
-        window_start_pos: int | None = None,
-        num_window_tokens: int = 0,
         temperature: float = 1.0,
         top_k: int = 32,
-        probability_mass_threshold: float = 1.0,
+        top_p: float = 1.0,
     ) -> None:
         """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
         input_tensor = to_spec_input(
@@ -384,11 +397,9 @@ class DeepSeekV3:
             self._page_size_datums,
             token_type,
             lane_idx=lane_idx,
-            window_start_pos=window_start_pos,
-            num_window_tokens=num_window_tokens,
             temperature=temperature,
             top_k=top_k,
-            probability_mass_threshold=probability_mass_threshold,
+            top_p=top_p,
         )
         self._write_fn(input_tensor)
 
