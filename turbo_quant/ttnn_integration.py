@@ -535,6 +535,22 @@ class TTNNTurboQuantCache:
         #
         # Memory cost is constant in seqlen (W is small, e.g. 64 → ~4 MB total
         # at 32 layers / 8 KV heads / 128 dim).
+        #
+        # Two execution paths exist for hybrid_sdpa_decode:
+        #   - Legacy (always available): two SDPA calls + on-device LSE combine.
+        #   - Fused (TQ_FUSED_HYBRID=1, ~2x faster): single fused kernel call
+        #     with disjoint TQ/ring coverage. Requires W rounded up to a
+        #     multiple of 128 (the SDPA chunk size). Set W ∈ {128, 256, 384, ...}
+        #     to use the fused path; smaller values silently fall back to legacy.
+        if recent_window > 0 and recent_window % 128 != 0:
+            import warnings as _warnings
+
+            _warnings.warn(
+                f"recent_window={recent_window} is not a multiple of 128; the fused-hybrid "
+                f"SDPA fast path (TQ_FUSED_HYBRID=1) will fall back to the legacy dual-call. "
+                f"Round up to 128 / 256 / 384 / ... to enable the ~2x faster fused kernel.",
+                stacklevel=2,
+            )
         self.recent_window = recent_window
         self.ring_page_table_torch = None
         self.k_ring_dev = None
