@@ -78,6 +78,26 @@ struct TraceDescriptor;
 
 namespace {
 
+// Host-side use-after-free / use-before-allocation sanitizer for Buffer access.
+// Catches the case where a caller holds a live Buffer object (or shared_ptr to one)
+// whose backing device memory has been reclaimed by the allocator (DeallocateBuffer,
+// allocator reset, etc.) and then issues a host-side read/write through it. Without
+// this check, address() still returns the cached stale address and the write silently
+// stomps memory that the allocator may have already re-issued to another buffer.
+void check_buffer_allocated(const Buffer& buffer, const char* op) {
+    if (!buffer.is_allocated()) {
+        fprintf(
+            stderr,
+            "[ASAN ERROR] Use-After-Free: %s called on Buffer (unique_id=%zu, size=%lu, type=%d) "
+            "that is not currently allocated (either deallocated or never allocated). "
+            "This would access reclaimed device memory and corrupt unrelated allocations on silicon.\n",
+            op,
+            buffer.unique_id(),
+            static_cast<unsigned long>(buffer.size()),
+            static_cast<int>(buffer.buffer_type()));
+        std::abort();
+    }
+}
 struct DataMovementConfigStatus {
     bool riscv0_in_use;
     bool riscv1_in_use;
@@ -657,6 +677,7 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
 }
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    check_buffer_allocated(buffer, "WriteToBuffer");
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -776,6 +797,7 @@ void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t>
 }
 
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
+    check_buffer_allocated(buffer, "ReadFromBuffer");
     IDevice* device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -797,6 +819,7 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
+    check_buffer_allocated(buffer, "ReadShard");
     IDevice* device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
 
@@ -948,16 +971,59 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     auto mesh_device = device->get_mesh_device();
     const IDevice* validation_device = mesh_device ? mesh_device.get() : device;
 
-    program.impl().allocate_circular_buffers(validation_device);
-    program.impl().validate_circular_buffer_core_ranges(validation_device);
-    program.impl().validate_circular_buffer_region(validation_device);
-    program.impl().allocate_dataflow_buffers(validation_device);
-    program.impl().validate_dataflow_buffer_region(validation_device);
-
     bool is_emulated = false;
 #ifdef TT_METAL_USE_EMULE
     is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
+
+    try {
+        program.impl().allocate_circular_buffers(validation_device);
+        program.impl().validate_circular_buffer_core_ranges(validation_device);
+        program.impl().validate_circular_buffer_region(validation_device);
+        program.impl().allocate_dataflow_buffers(validation_device);
+        program.impl().validate_dataflow_buffer_region(validation_device);
+
+        // Per-core-type KERNEL_CONFIG window overflow check. The validators
+        // above only fire when an L1 tensor pins lowest_occupied_compute_l1_address;
+        // on a freshly-initialized device a program can still statically exceed
+        // the reserved KERNEL_CONFIG window. Catch that here.
+        const auto& hal_for_check = MetalContext::instance().hal();
+        const auto& metadata_sizes = program.impl().get_program_config_sizes();
+        for (uint32_t pct_index = 0; pct_index < hal_for_check.get_programmable_core_type_count(); pct_index++) {
+            HalProgrammableCoreType pct = hal_for_check.get_programmable_core_type(pct_index);
+            uint32_t metadata_size = metadata_sizes[pct_index];
+            // TENSIX disallows hal.get_dev_size(KERNEL_CONFIG); its window is
+            // dynamic = DEFAULT_UNRESERVED_base - KERNEL_CONFIG_base. Other core
+            // types report a static KERNEL_CONFIG size directly. Mirrors the
+            // formula in program_dispatch::initialize_worker_config_buf_mgr.
+            uint32_t window_size;
+            if (pct == HalProgrammableCoreType::TENSIX) {
+                uint32_t kc_base = static_cast<uint32_t>(
+                    hal_for_check.get_dev_addr(pct, HalL1MemAddrType::KERNEL_CONFIG));
+                uint32_t unreserved_base = static_cast<uint32_t>(
+                    hal_for_check.get_dev_addr(pct, HalL1MemAddrType::DEFAULT_UNRESERVED));
+                window_size = unreserved_base - kc_base;
+            } else {
+                window_size = hal_for_check.get_dev_size(pct, HalL1MemAddrType::KERNEL_CONFIG);
+            }
+            if (metadata_size > window_size) {
+                TT_THROW(
+                    "Program metadata size {} exceeds reserved KERNEL_CONFIG window {} for programmable core type {}",
+                    metadata_size,
+                    window_size,
+                    pct_index);
+            }
+        }
+    } catch (const std::exception& e) {
+        if (is_emulated) {
+            fprintf(
+                stderr,
+                "[ASAN ERROR] Metadata Overflow: Program metadata exceeds reserved L1 region — %s\n",
+                e.what());
+            abort();
+        }
+        throw;
+    }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
@@ -1126,6 +1192,7 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 namespace experimental::core_subset_write {
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    check_buffer_allocated(buffer, "WriteToBuffer (core_subset_write)");
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough

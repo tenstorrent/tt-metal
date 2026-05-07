@@ -132,6 +132,14 @@ thread_local uint8_t __emule_trisc_id = 0;
 thread_local uint32_t __emule_num_threads = 1;
 thread_local uint32_t __emule_my_thread_id = 0;
 
+thread_local uint32_t __emule_sem_l1_range_start = 0;
+thread_local uint32_t __emule_sem_l1_range_end = 0;
+
+// Outstanding-NOC-read counter for missing-barrier detection. Incremented by
+// noc_async_read / noc_async_read_page (JIT inlines), zeroed by
+// noc_async_read_barrier, checked at cb_push_back.
+thread_local uint32_t __emule_pending_noc_reads = 0;
+
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
@@ -174,7 +182,33 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
 }
 
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
+    // Ensure pointer size is correct
+    if (offset % 4 != 0) {
+        fprintf(stderr, "[ASAN ERROR] Local L1 Alignment: Offset 0x%x must be 4-byte aligned for scalar access\n", offset);
+        abort();
+    }
+    if (__emule_sem_l1_range_end > 0 &&
+        offset >= __emule_sem_l1_range_start && offset < __emule_sem_l1_range_end) {
+        fprintf(stderr,
+                "[ASAN ERROR] Illegal Semaphore Access: Offset 0x%x is inside the reserved Semaphore region [0x%x, 0x%x)\n",
+                offset, __emule_sem_l1_range_start, __emule_sem_l1_range_end);
+        abort();
+    }
     return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
+}
+
+// Returns true when TT_EMULE_STRICT_NOC is set in the environment. The fabric
+// access guards in __emule_noc_resolve / __emule_resolve_noc_addr abort under
+// strict mode and fall back to the legacy "return nullptr + EMULE WARN at the
+// call site" behavior otherwise. Cached on first call. Off by default to keep
+// existing tests / kernels that NOC into unregistered cores (eth, dispatch, …)
+// running until those access sites are audited.
+static bool emule_strict_noc_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_NOC");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
 }
 
 extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
@@ -183,6 +217,12 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
+        }
+        if (emule_strict_noc_enabled()) {
+            fprintf(stderr,
+                    "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
+                    x, y);
+            abort();
         }
     }
     return nullptr;
@@ -217,6 +257,12 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
                                   ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
                                   : static_cast<uint32_t>(local_addr);
             return it->second->l1_ptr(offset);
+        }
+        if (emule_strict_noc_enabled()) {
+            fprintf(stderr,
+                    "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
+                    noc_x, noc_y);
+            abort();
         }
     }
     return nullptr;
@@ -413,6 +459,8 @@ struct CoreSetup {
     uint8_t phys_y;
     std::vector<DFBAllocInfo> dfb_allocs;
     bool has_dfbs = false;
+    uint32_t sem_base;
+    uint32_t sem_size;
 };
 
 // Per-slot initialization data for a DFB tile-counter slot. wr_ptr and rd_ptr
@@ -1687,7 +1735,17 @@ static void setup_core_state(
         bool has_dfbs = !dfb_impls.empty();
         std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, dfb_impls);
 
-        core_setups.push_back({logical_core, core, &ki_list, phys_x, phys_y, std::move(dfb_allocs), has_dfbs});
+        uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
+        core_setups.push_back(
+            {logical_core,
+             core,
+             &ki_list,
+             phys_x,
+             phys_y,
+             std::move(dfb_allocs),
+             has_dfbs,
+             emule_sem_base,
+             sem_region_size});
     }
 }
 
@@ -1846,6 +1904,15 @@ static void launch_cores(
                     std::vector<std::exception_ptr> kernel_exceptions(cs.ki_list->size());
                     uint32_t lx = cs.logical_core.x;
                     uint32_t ly = cs.logical_core.y;
+                    uint32_t sem_base = cs.sem_base;
+                    uint32_t sem_size = cs.sem_size;
+                    // Per-kernel dirty-CB attribution: only fires when there
+                    // is exactly one kernel on the core. Multi-kernel programs
+                    // (producer + consumer) intentionally leave producer-side
+                    // occupied>0 at producer exit, which would be a false
+                    // positive — those are caught instead by the program-level
+                    // sweep at the end of execute_program_emulated.
+                    bool single_kernel_on_core = cs.ki_list->size() == 1;
                     for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
                         KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
                         tt_emule::EmuleDFBInterface* dfb_array =
@@ -1862,7 +1929,10 @@ static void launch_cores(
                                               py,
                                               lx,
                                               ly,
+                                              sem_base,
+                                              sem_size,
                                               kidx,
+                                              single_kernel_on_core,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
@@ -1889,6 +1959,9 @@ static void launch_cores(
                             my_y[1] = py;
                             __emule_logical_x = lx;
                             __emule_logical_y = ly;
+                            __emule_sem_l1_range_start = sem_base;
+                            __emule_sem_l1_range_end = sem_base + sem_size;
+                            __emule_pending_noc_reads = 0;
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
@@ -1907,6 +1980,34 @@ static void launch_cores(
                                     }
                                     ki.variants[t]();
                                 }
+                                // Kernel-side dirty-CB sanitizer (per-kernel attribution).
+                                // On silicon, leftover pages survive between launches and
+                                // back-pressure the next program. Only run on cores with a
+                                // single kernel — multi-kernel programs may legitimately
+                                // leave producer-side occupied>0 at producer exit.
+                                if (single_kernel_on_core) {
+                                    for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
+                                        auto& cb = cb_array[cb_id];
+                                        if (cb.num_pages == 0) {
+                                            continue;
+                                        }
+                                        uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
+                                        if (occupied > 0) {
+                                            fprintf(
+                                                stderr,
+                                                "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
+                                                "Kernel (processor %u) ended with %u/%u pages still on the CB "
+                                                "(push > pop) — would back-pressure the next program launch on silicon.\n",
+                                                lx,
+                                                ly,
+                                                cb_id,
+                                                ki.processor_id,
+                                                occupied,
+                                                cb.num_pages);
+                                            std::abort();
+                                        }
+                                    }
+                                }
                             } catch (...) {
                                 kep = std::current_exception();
                             }
@@ -1920,6 +2021,9 @@ static void launch_cores(
                             __emule_dfbs = nullptr;
                             __emule_tc_array = nullptr;
                             __emule_core_map = nullptr;
+                            __emule_sem_l1_range_start = 0;
+                            __emule_sem_l1_range_end = 0;
+                            __emule_pending_noc_reads = 0;
                         });
                     }
 
@@ -2045,6 +2149,37 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // Phase 3: Launch all cores concurrently
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
     launch_cores(core_setups, dram_data, core_map_ptr);
+
+    // Phase 4: Host-side dirty-CB sanitizer — final whole-program sweep. The
+    // per-kernel kernel-side check inside launch_cores only fires for cores
+    // with a single kernel; this sweep catches multi-kernel cases where the
+    // producer and consumer don't fully balance.
+    for (const auto& cs : core_setups) {
+        tt_emule::CBSyncState* cb_array = cs.core->cb_sync_array();
+        if (cb_array == nullptr) {
+            continue;
+        }
+        for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
+            auto& cb = cb_array[cb_id];
+            if (cb.num_pages == 0) {
+                continue;
+            }
+            uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
+            if (occupied > 0) {
+                fprintf(
+                    stderr,
+                    "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
+                    "%u/%u pages remain after program exit (push > pop) — would back-pressure "
+                    "the next program launch on silicon.\n",
+                    static_cast<uint32_t>(cs.logical_core.x),
+                    static_cast<uint32_t>(cs.logical_core.y),
+                    cb_id,
+                    occupied,
+                    cb.num_pages);
+                std::abort();
+            }
+        }
+    }
 
     log_debug(tt::LogMetal, "execute_program_emulated: device {} done", device_id);
 }
