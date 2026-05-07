@@ -54,6 +54,7 @@ def train(
     val_ids: np.ndarray,
     use_ddp: bool = False,
     use_tp: bool = False,
+    use_vocab_parallel_loss: bool = False,
 ):
     """Execute pipeline parallel training loop.
 
@@ -70,13 +71,16 @@ def train(
         val_ids: Validation data token IDs (unused, for API compatibility)
         use_ddp: Whether to use distributed data parallel
         use_tp: Whether to use tensor parallel
+        use_vocab_parallel_loss: If True, compute the loss with
+            ``ttml.ops.distributed.vocab_parallel_cross_entropy_loss`` (cluster_axis=tp);
+            otherwise call ``ttml.ops.loss.cross_entropy_loss``.
 
     Returns:
         Tuple of (train_losses, val_losses) lists
     """
     # Setup loss function and causal mask
-    loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
+    tp_cluster_axis = ttml.mesh().axis_index("tp") if use_vocab_parallel_loss else None
 
     causal_mask = build_causal_mask(cfg.seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
@@ -131,7 +135,12 @@ def train(
 
             if is_final_stage:
                 # Only final stage computes loss
-                loss = loss_fn(logits, tt_y, reduce)
+                if use_vocab_parallel_loss:
+                    loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                        logits, tt_y, cluster_axis=tp_cluster_axis
+                    )
+                else:
+                    loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, reduce)
 
                 # Scale loss by accumulation steps for proper gradient averaging
                 if cfg.gradient_accumulation_steps > 1:

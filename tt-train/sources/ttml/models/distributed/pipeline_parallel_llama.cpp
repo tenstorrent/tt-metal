@@ -139,6 +139,8 @@ PipelineParallelLlama::PipelineParallelLlama(
     if (is_last_rank()) {
         ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
         if (is_tensor_parallel) {
+            // TODO: match llama.cpp (gather_output=false + vocab_parallel_cross_entropy_loss
+            // w/ cluster_axis=tp) to skip the [B,1,S,padded_V] all-gather.
             fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
                 embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true);
         } else {
