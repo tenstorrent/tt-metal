@@ -37,7 +37,7 @@ inline void _llk_pack_srcs_config_()
 }
 
 /**
- * @brief Unpacks tiles to SrcS, Each SrcS slice is only 8*16*16bit
+ * @brief Unpacks a single operand to SrcS. Each SrcS slice is only 8*16*16bit.
  * @tparam INSTRN_COUNT: The number of instructions to place in the auto-loop, auto-loop will then
  * be looped by INSTRN_LOOP_COUNT set in the hw_config
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
@@ -83,5 +83,35 @@ inline void _llk_pack_srcs_(
     for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
         TT_PACR1_TILE_INC(0b1 /*DstS l1 increment*/, 0b0 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
+    }
+}
+
+// Small wrappers over the SrcS auto-loop config helpers above, used by tests
+// that stream a full 32x32 tile through SrcS. They dispatch on a runtime
+// srcs_32bit_mode flag and pick INSTRN_LOOP_COUNT = srcs_dims::slice_count(mode)
+// so a single _llk_{unpack,pack}_srcs_ call covers one tile.
+template <std::uint8_t INSTRN_COUNT>
+inline void _llk_unpack_srcs_config_for_tile_(const bool srcs_32bit_mode)
+{
+    if (srcs_32bit_mode)
+    {
+        _llk_unpack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(true)>();
+    }
+    else
+    {
+        _llk_unpack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(false)>();
+    }
+}
+
+template <std::uint8_t INSTRN_COUNT>
+inline void _llk_pack_srcs_config_for_tile_(const bool srcs_32bit_mode)
+{
+    if (srcs_32bit_mode)
+    {
+        _llk_pack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(true)>();
+    }
+    else
+    {
+        _llk_pack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(false)>();
     }
 }

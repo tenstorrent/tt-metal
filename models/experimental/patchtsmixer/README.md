@@ -28,7 +28,7 @@ PatchTSMixer TTNN supports the HuggingFace channel modes `common_channel` and `m
 
 ## Benchmarks & Validation
 
-**Reproduction:** A pre-trained checkpoint is included in this repo at `checkpoints/etth2_512_96_20260428/best_model.pt`. Results below are verified from this checkpoint on ETTh2 test set (100 samples) with config: context=512, pred=96, patch=8, d_model=16, 4 layers, common_channel. Hardware: Wormhole n300, Firmware 19.4.2, KMD 2.6.0.
+**Reproduction:** A pre-trained checkpoint is included in this repo at `checkpoints/etth2_512_96_20260428/best_model.pt`. Results below are verified from this checkpoint on ETTh2 test set (100 samples) with config: context=512, pred=96, patch=8, d_model=16, 4 layers, common_channel. Hardware: Wormhole n300, Firmware 19.4.2, KMD 2.6.0. Date: 2026-04-28.
 
 To verify: run `python benchmark_datasets.py --checkpoint checkpoints/etth2_512_96_20260428/best_model.pt --context-length 512 --prediction-length 96 --patch-length 8 --patch-stride 8 --d-model 16 --num-layers 4 --mode common_channel --num-samples 100`
 

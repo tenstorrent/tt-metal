@@ -10,7 +10,7 @@ namespace dfb {
 
 enum AccessPattern : uint8_t {
     STRIDED,
-    BLOCKED,
+    ALL,
     UNKNOWN,
 };
 
@@ -99,7 +99,7 @@ struct dfb_initializer_per_risc_t {  // 44 bytes
     struct {
         uint8_t num_tcs_to_rr : 4;   // 0..8, number of TCs to round-robin (max 4 but keeping space)
         uint8_t tc_init_done : 1;
-        uint8_t broadcast_tc : 1;    // DM-DM BLOCKED: producer posts to all TCs instead of round-robin
+        uint8_t broadcast_tc : 1;    // DM-DM ALL: producer posts to all TCs instead of round-robin
         uint8_t reserved : 2;
     } __attribute__((packed)) num_tcs_and_init;
     struct {

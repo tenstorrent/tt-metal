@@ -1974,9 +1974,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                generate_kernel_source_files(device, build_options, kernel);
-                auto desc = build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                coordinator.submit(std::move(desc));
+                coordinator.submit(kernel_hash, [&]() {
+                    generate_kernel_source_files(device, build_options, kernel);
+                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                });
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
             }
         }

@@ -74,7 +74,7 @@ BmmDFBHandles create_bmm_quasar_dfbs(Program& program, const CoreSpec& cores, co
         .num_producers = p.num_threads,
         .pap = AccessPattern::STRIDED,
         .num_consumers = p.num_threads,
-        .cap = AccessPattern::BLOCKED,
+        .cap = AccessPattern::ALL,
         .enable_implicit_sync = false,
         .data_format = tt::DataFormat::Float16_b};
     DataflowBufferConfig dst_cfg = {

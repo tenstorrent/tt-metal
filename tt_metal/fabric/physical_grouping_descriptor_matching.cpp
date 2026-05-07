@@ -14,6 +14,7 @@
 #include <queue>
 #include <memory>
 #include <cctype>
+#include <cstdlib>
 #include <functional>
 #include <optional>
 #include <tt_stl/fmt.hpp>
@@ -971,8 +972,20 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         global_location_traits[asic_id] = asic_location;
     }
 
+    // When set to 1, do not require PGD (tray_id, asic_location) on logical nodes to match UMD-reported ASIC
+    // positions. Use only when slot counts already match but the labeled graph has no embedding (e.g. host / tray
+    // order differs from PGD row-major). Host-alignment constraints below still apply. Bring-up only.
+    const char* relax_env = std::getenv("TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS");
+    const bool relax_pgd_slot_traits = (relax_env != nullptr && relax_env[0] == '1');
+    if (relax_pgd_slot_traits) {
+        log_warning(
+            tt::LogFabric,
+            "TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS=1: skipping PGD tray / ASIC-location trait constraints for "
+            "PGD→PSD embedding");
+    }
+
     // Add trait constraints for tray_id and asic_location
-    if (!target_tray_traits.empty() && !global_tray_traits.empty()) {
+    if (!relax_pgd_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
         if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
             MappingResult<uint32_t, AsicID> failure;
             failure.success = false;
@@ -980,7 +993,7 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
             return failure;
         }
     }
-    if (!target_location_traits.empty() && !global_location_traits.empty()) {
+    if (!relax_pgd_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
         if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
             MappingResult<uint32_t, AsicID> failure;
             failure.success = false;

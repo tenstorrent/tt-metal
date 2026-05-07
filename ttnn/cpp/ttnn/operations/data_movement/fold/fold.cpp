@@ -13,7 +13,9 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/device.hpp"
@@ -325,7 +327,15 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, false);
+    const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        std::nullopt,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/reshaped_tensor.dtype() == DataType::FLOAT32,
+        /*default_l1_acc=*/false);
+    auto halo_output =
+        ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
 
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(

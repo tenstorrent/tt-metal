@@ -95,3 +95,12 @@ class MatmulFpu(Fpu):
             f"    _llk_math_matmul_<{math_fidelity}>({block.tile_id_block}, {ct_dim}, {rt_dim});\n"
             f"}}\n"
         )
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        return "_llk_math_matmul_uninit_();\n"

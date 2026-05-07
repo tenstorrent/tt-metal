@@ -21,12 +21,8 @@ MODEL_PATH = Path(
         "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
     )
 )
-CACHE_DIR = Path(
-    os.getenv(
-        "DEEPSEEK_V3_CACHE",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/dev/",
-    )
-)
+_ds_cache = os.getenv("DEEPSEEK_V3_CACHE")
+CACHE_DIR = Path(_ds_cache) if _ds_cache else None
 
 # Must match the path used in generate_teacher_forced_file.py
 # REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")

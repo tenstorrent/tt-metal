@@ -684,6 +684,7 @@ struct FlashMLADecode {
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true));
+            sdpa_custom_mm_block_init_pack_short();
 
             uint32_t cur_pos = args.local_cur_pos;
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
@@ -716,6 +717,10 @@ struct FlashMLADecode {
 
             constexpr bool exp_approx_mode = false;
 
+            constexpr uint32_t output_granularity = out_chunk_tiles;
+            static_assert(
+                out_chunk_tiles % output_granularity == 0, "out_chunk_tiles must be divisible by output_granularity");
+
             bool sdpa_output_is_final = do_output && (!do_reduce || num_cores_to_wait == 0);
             uint32_t sdpa_output_cb = 0;
             uint32_t sdpa_ms_cb = 0;
@@ -730,6 +735,7 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }
+            pack_block_contiguous_init(sdpa_output_cb);
             uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
             bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
             if (mask_last_chunk) {
@@ -750,7 +756,9 @@ struct FlashMLADecode {
                     transpose_k,
                     transpose_v,
                     packed_tile_size,
-                    exp_approx_mode>(
+                    exp_approx_mode,
+                    output_granularity,
+                    false>(
                     cb_q_in,
                     cb_k_in,
                     cb_mask,
@@ -766,16 +774,15 @@ struct FlashMLADecode {
             }
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                pack_tile(max_dst_tile_offset, sdpa_ms_cb);
+                pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
                 cb_push_back(sdpa_ms_cb, Sq_chunk_t);
             } else {
                 compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(
                     cb_q_in, sum_dst_offset, corr_exp_dst_offset, mm2_dst_offset);
             }
-            for (uint32_t i = 0; i < out_chunk_tiles; i += 2) {
+            for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
                 PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
-                pack_tile(mm2_dst_tile_offset + i, sdpa_output_cb);
-                pack_tile(mm2_dst_tile_offset + i + 1, sdpa_output_cb);
+                pack_block_contiguous(mm2_dst_tile_offset + i, sdpa_output_cb, output_granularity);
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);

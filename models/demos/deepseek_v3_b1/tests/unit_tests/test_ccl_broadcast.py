@@ -12,7 +12,6 @@ This test validates neighbor-exchange broadcast correctness on a 2D mesh.
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -20,8 +19,20 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinim
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
+    get_env_int,
+    get_num_links_env_params,
+    run_trace_benchmark,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
+
+ENV_NUM_LINKS = "CCL_BROADCAST_NUM_LINKS"
+ENV_MAX_PAYLOAD_SIZE = "CCL_BROADCAST_MAX_PAYLOAD_SIZE_BYTES"
+MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
+
+BCAST_CORE = ttnn.CoreCoord(11, 8)
+
+
+def _validate_broadcast_num_links(num_links: int) -> None:
+    DeepseekMinimalBroadcast.get_num_semaphores(num_links)
 
 
 def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration_idx):
@@ -63,13 +74,15 @@ def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "num_links", get_num_links_env_params(ENV_NUM_LINKS, [1], validate=_validate_broadcast_num_links)
+)
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": create_fabric_router_config(MAX_PAYLOAD_SIZE),
             "trace_region_size": 573440,
         }
     ],
@@ -102,7 +115,6 @@ def test_ccl_broadcast(
     # Create submesh
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
-    bcast_core = ttnn.CoreCoord(0, 0)
     test_inputs = build_broadcast_test_inputs(
         mesh_device=submesh,
         mesh_rows=mesh_rows,
@@ -113,7 +125,7 @@ def test_ccl_broadcast(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -124,70 +136,34 @@ def test_ccl_broadcast(
     # Compute expected output using golden function
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
 
-    # Run broadcast operation
-    logger.info(f"Running CCL broadcast: sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}")
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
-    profiler = BenchmarkProfiler()
-
-    # Compile Run
-    logger.info("Compiling model")
-    ttnn_result = DeepseekMinimalBroadcast.op(
-        input_tensor_mesh,
-        output_tensor,
-        sender_coord,
-        semaphores=semaphores,
-        num_links=num_links,
+    logger.info(
+        "Running CCL broadcast: sender=({},{}) mesh={}x{} num_links={} max_payload_size_bytes={}",
+        sender_row,
+        sender_col,
+        mesh_rows,
+        mesh_cols,
+        num_links,
+        MAX_PAYLOAD_SIZE,
     )
-    ttnn.synchronize_device(submesh)
 
-    # Capture warmup trace
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_warmup_iter):
-        ttnn_result = DeepseekMinimalBroadcast.op(
+    def run_broadcast():
+        return DeepseekMinimalBroadcast.op(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
             semaphores=semaphores,
             num_links=num_links,
         )
-    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh)
 
-    # Capture main trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_iters):
-        ttnn_result = DeepseekMinimalBroadcast.op(
-            input_tensor_mesh,
-            output_tensor,
-            sender_coord,
-            semaphores=semaphores,
-            num_links=num_links,
-        )
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    # Execute warmup trace
-    logger.info("Executing warmup trace...")
-    profiler.start("deepseek-broadcast-warmup")
-    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh, trace_id_warmup)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-broadcast-warmup")
-
-    # Execute main trace with signposts for profiling
-    logger.info("Starting Trace perf test...")
-    signpost("start")
-    profiler.start("deepseek-broadcast-trace")
-
-    ttnn.execute_trace(submesh, trace_id, blocking=False)
-    ttnn.release_trace(submesh, trace_id)
-    ttnn.synchronize_device(submesh)
-
-    profiler.end("deepseek-broadcast-trace")
-    signpost("stop")
+    ttnn_result = run_trace_benchmark(
+        submesh,
+        run_broadcast,
+        num_warmup_iter=num_warmup_iter,
+        num_iter=num_iters,
+        profiler_name="deepseek-broadcast",
+    )
 
     # Verify output - all devices should have the sender's data
     logger.info("Verifying broadcast results...")
@@ -253,7 +229,6 @@ def test_ccl_broadcast_loop(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    bcast_core = ttnn.CoreCoord(0, 0)
     test_inputs = build_broadcast_test_inputs(
         mesh_device=submesh,
         mesh_rows=mesh_rows,
@@ -264,7 +239,7 @@ def test_ccl_broadcast_loop(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -343,7 +318,6 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     slice_size = output_shape[0]
-    bcast_core = ttnn.CoreCoord(0, 0)
 
     for host_iter in range(num_host_iters):
         sender_tensor = _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, host_iter)
@@ -357,7 +331,7 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
             tensor_mem_layout=tensor_mem_layout,
             layout=layout,
             input_dtype=input_dtype,
-            bcast_core=bcast_core,
+            bcast_core=BCAST_CORE,
             num_links=num_links,
             input_tensor_torch=sender_tensor,
         )
@@ -424,7 +398,6 @@ def test_ccl_broadcast_remainder_chunk(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    bcast_core = ttnn.CoreCoord(0, 0)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
     test_inputs = build_broadcast_test_inputs(
@@ -437,7 +410,7 @@ def test_ccl_broadcast_remainder_chunk(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -502,7 +475,6 @@ def test_ccl_broadcast_auto_chunk(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    bcast_core = ttnn.CoreCoord(0, 0)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
     test_inputs = build_broadcast_test_inputs(
@@ -515,7 +487,7 @@ def test_ccl_broadcast_auto_chunk(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -557,7 +529,6 @@ def _run_ccl_broadcast_torus_8x4_functional_case(
     tensor_mem_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
     layout = ttnn.TILE_LAYOUT
     input_dtype = ttnn.bfloat16
-    bcast_core = ttnn.CoreCoord(0, 0)
 
     num_devices = mesh_rows * mesh_cols
     submesh = mesh_device
@@ -573,7 +544,7 @@ def _run_ccl_broadcast_torus_8x4_functional_case(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
