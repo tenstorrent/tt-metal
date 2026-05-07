@@ -378,7 +378,7 @@ def validate_matmul(
                 else 0.0
             )
 
-            if pcc_val < PCC_THRESHOLD:
+            if pcc_val < MATMUL_PCC_THRESHOLD:
                 matmul_all_passed = False
                 logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
             else:
