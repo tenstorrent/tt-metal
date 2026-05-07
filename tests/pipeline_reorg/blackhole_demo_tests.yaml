@@ -113,7 +113,7 @@
 - name: qwen2.5-vl-72b e2e tests
   cmd: |
     set -e
-    uv pip install --system -r models/demos/qwen25_vl/requirements.txt
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
     python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct
@@ -133,6 +133,8 @@
 - name: qwen3-vl-32b e2e tests
   cmd: |
     set -e
+    uv pip install -r models/demos/qwen3_vl/requirements.txt
+    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-VL-32B-Instruct
@@ -170,6 +172,7 @@
 - name: gpt-oss-20b e2e tests
   cmd: |
     set -e
+    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=openai/gpt-oss-20b
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-20b
@@ -186,6 +189,7 @@
 - name: gpt-oss-120b e2e tests
   cmd: |
     set -e
+    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=openai/gpt-oss-120b
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-120b
