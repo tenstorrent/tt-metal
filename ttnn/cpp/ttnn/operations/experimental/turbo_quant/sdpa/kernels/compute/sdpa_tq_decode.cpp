@@ -438,6 +438,14 @@ void kernel_main() {
     // online softmax. See turbo_quant/LSE_COMBINE_DESIGN.md. Incompatible with
     // cores_per_head_arg > 1 (no combine of LSE across the Tier 2A reducer).
     constexpr bool return_lse = get_compile_time_arg_val(TQ_BASE + 3 + num_levels) == 1;
+    // Hybrid SDPA. recent_window > 0 ⇒ the chunk loop reads the last
+    // ring_W_padded/k_chunk_size_tokens chunks from the BFP8 ring (c_18/c_19)
+    // and skips the dequant cascade for those chunks; earlier chunks read
+    // from the TQ cache as today. The reader feeds the right CB per chunk
+    // (validated as host-side: ring_W_padded is chunk-aligned).
+    constexpr uint32_t recent_window_arg = get_compile_time_arg_val(TQ_BASE + 4 + num_levels);
+    constexpr uint32_t ring_W_padded_arg = get_compile_time_arg_val(TQ_BASE + 5 + num_levels);
+    constexpr bool hybrid_mode = (recent_window_arg > 0);
 
     // Runtime args
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -498,6 +506,13 @@ void kernel_main() {
     constexpr uint32_t cb_k_norms_in = tt::CBIndex::c_11;  // BFP8 (or BF16) from reader
     constexpr uint32_t cb_v_idx = tt::CBIndex::c_12;
     constexpr uint32_t cb_v_norms_in = tt::CBIndex::c_13;  // BFP8 (or BF16) from reader
+    // Hybrid SDPA: ring K / V land here when recent_window > 0. The reader
+    // pushes BFP8 (or whatever the ring's native format is) directly,
+    // bypassing the dequant cascade. The chunk-loop matmul reads from these
+    // CBs for chunks at index >= split_chunk_idx; cb_k_in / cb_v_in (the
+    // dequant pipeline output) stays the source for earlier (TQ) chunks.
+    constexpr uint32_t cb_k_ring = tt::CBIndex::c_18;
+    constexpr uint32_t cb_v_ring = tt::CBIndex::c_19;
     constexpr uint32_t cb_dq_temp = tt::CBIndex::c_14;
     constexpr uint32_t cb_k_norms_bf16 = tt::CBIndex::c_15;  // BFP8→BF16 typecast scratch (K)
     constexpr uint32_t cb_v_norms_bf16 = tt::CBIndex::c_17;  // BFP8→BF16 typecast scratch (V)
@@ -666,33 +681,60 @@ void kernel_main() {
                                                           ? k_chunk_start_for_core + chunks_per_worker
                                                           : valid_k_chunks;
 
+                // Hybrid SDPA: split index between TQ and ring sources, mirroring
+                // the same calculation in the reader. Ring covers the last
+                // actual_W_chunks chunks of valid_k_chunks (most recent positions
+                // in BFP8); TQ covers earlier chunks. Aligned to chunk boundary
+                // so chunks never straddle (host-side validation).
+                constexpr uint32_t actual_W_chunks = hybrid_mode ? (ring_W_padded_arg / k_chunk_size_tokens) : 0;
+                const uint32_t split_chunk_idx =
+                    (hybrid_mode && valid_k_chunks > actual_W_chunks) ? (valid_k_chunks - actual_W_chunks) : 0;
+
                 {
                     DeviceZoneScopedN("TQ_CHUNK_LOOP");
                     for (uint32_t k_chunk = k_chunk_start_for_core; k_chunk < k_chunk_end_for_core; ++k_chunk) {
                         DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
+                        // Ring chunks bypass the dequant cascade — reader pushes
+                        // already-rescaled BFP8 K/V to cb_k_ring / cb_v_ring.
+                        const bool is_ring_chunk = hybrid_mode && (k_chunk >= split_chunk_idx);
+                        const uint32_t cb_k_src = is_ring_chunk ? cb_k_ring : cb_k_in;
+                        const uint32_t cb_v_src = is_ring_chunk ? cb_v_ring : cb_v_in;
+
                         // ── Step 0: Typecast BFP8 norms → BF16 (when stored as BFP8) ──
                         // Skipped in pre_rescaled mode (no norms — values already include them).
+                        // Skipped on ring chunks (no norms — pre-rescaled BFP8).
                         if constexpr (!pre_rescaled && norms_are_bfp8) {
-                            typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_k_norms_in, cb_k_norms_bf16);
+                            if (!is_ring_chunk) {
+                                typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_k_norms_in, cb_k_norms_bf16);
+                            }
                         }
 
                         // ── Step 1: Dequantize K chunk → cb_k_in (transposed layout) ──
                         // Skipped in pre_rescaled mode (reader fills cb_k_in directly with
                         // pre-rescaled BFP4 values in the transposed layout matmul expects).
+                        // Skipped on ring chunks (reader fills cb_k_ring directly).
                         if constexpr (!pre_rescaled) {
-                            // DeviceZoneScopedN("TQ_DEQUANT_K");
-                            dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
-                                cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr, delta_bits_arr);
+                            if (!is_ring_chunk) {
+                                // DeviceZoneScopedN("TQ_DEQUANT_K");
+                                dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
+                                    cb_k_idx,
+                                    cb_k_norms,
+                                    cb_dq_temp,
+                                    cb_k_in,
+                                    centroids,
+                                    level_bits_arr,
+                                    delta_bits_arr);
+                            }
                         }
 
                         // ── Step 2: QK = Q × K^T ──
                         {
                             // DeviceZoneScopedN("TQ_QK_MATMUL");
-                            reconfig_data_format(cb_k_in, cb_q_in);
+                            reconfig_data_format(cb_k_src, cb_q_in);
                             pack_reconfig_data_format(cb_qk_im);
                             matmul_blocks(
                                 cb_q_in,
-                                cb_k_in,
+                                cb_k_src,
                                 cb_qk_im,
                                 Sq_chunk_t,
                                 Sk_chunk_t,
@@ -726,23 +768,34 @@ void kernel_main() {
 
                         // ── Step 4: Dequantize V chunk → cb_v_in (natural layout) ──
                         // Skipped in pre_rescaled mode (reader fills cb_v_in directly).
+                        // Skipped on ring chunks (reader fills cb_v_ring directly).
                         if constexpr (!pre_rescaled && norms_are_bfp8) {
-                            typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_v_norms_in, cb_v_norms_bf16);
+                            if (!is_ring_chunk) {
+                                typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_v_norms_in, cb_v_norms_bf16);
+                            }
                         }
                         if constexpr (!pre_rescaled) {
-                            // DeviceZoneScopedN("TQ_DEQUANT_V");
-                            dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
-                                cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr, delta_bits_arr);
+                            if (!is_ring_chunk) {
+                                // DeviceZoneScopedN("TQ_DEQUANT_V");
+                                dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
+                                    cb_v_idx,
+                                    cb_v_norms,
+                                    cb_dq_temp,
+                                    cb_v_in,
+                                    centroids,
+                                    level_bits_arr,
+                                    delta_bits_arr);
+                            }
                         }
 
                         // ── Step 5: OUT_IM = softmax × V ──
                         {
                             // DeviceZoneScopedN("TQ_OUT_MATMUL");
-                            reconfig_data_format(cb_v_in, cb_qk_im);
+                            reconfig_data_format(cb_v_src, cb_qk_im);
                             pack_reconfig_data_format(alias_mm2_cur_out);
                             matmul_blocks(
                                 cb_qk_im,
-                                cb_v_in,
+                                cb_v_src,
                                 alias_mm2_cur_out,
                                 Sq_chunk_t,
                                 vDHt,

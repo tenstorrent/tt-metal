@@ -413,6 +413,12 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // before the final divide. Used by the sliding-window hybrid host-level
     // combine (see turbo_quant/LSE_COMBINE_DESIGN.md).
     compute_ct_args.push_back(attrs.return_lse ? 1 : 0);
+    // Hybrid SDPA: recent_window (=0 disables hybrid) and ring_W_padded
+    // (block-aligned ring tensor capacity in tokens). The compute kernel
+    // computes the same split_chunk_idx the reader uses and branches the
+    // chunk-loop body on TQ vs ring source.
+    compute_ct_args.push_back(attrs.recent_window);
+    compute_ct_args.push_back(hybrid_mode ? args.k_ring->padded_shape()[0] * args.k_ring->padded_shape()[2] : 0);
 
     // K-split FP32 merge-boundary DPRINTs: enable by setting TT_TQ_DPRINT_KSPLIT=1
     // in the host environment. Off by default (no overhead in production builds).

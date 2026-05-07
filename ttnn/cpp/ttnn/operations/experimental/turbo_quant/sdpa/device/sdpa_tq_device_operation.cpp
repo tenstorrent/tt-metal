@@ -77,6 +77,21 @@ void SDPATQDeviceOperation::validate_on_program_cache_miss(
         // reader's ring K / V data CBs. Forcing num_cores_per_head == 1 above
         // guarantees the Tier-2A reducer / worker pack-and-skip paths are
         // dormant and these CBs are free.
+
+        // Ring storage must be chunk-aligned so chunks never straddle the
+        // TQ↔ring split. ring_W_padded = ring_blocks * block_size; the kernel
+        // chunk size is Sk_chunk_t * 32 = 128 tokens. Equivalently:
+        // recent_window must round up to a multiple of 128. Users who want
+        // W=64 should pass W=128 in hybrid mode (slightly more BFP8 memory
+        // but a cleaner kernel).
+        const uint32_t ring_W_padded = args.k_ring->padded_shape()[0] * args.k_ring->padded_shape()[2];
+        constexpr uint32_t k_chunk_size_tokens = 128;  // Sk_chunk_t (=4) * TILE_HEIGHT (=32)
+        TT_FATAL(
+            ring_W_padded % k_chunk_size_tokens == 0,
+            "recent_window > 0: ring tensor (size {}) must be chunk-aligned (multiple of {} tokens). "
+            "Round recent_window up to a multiple of 128.",
+            ring_W_padded,
+            k_chunk_size_tokens);
     }
 }
 

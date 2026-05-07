@@ -82,6 +82,13 @@ void kernel_main() {
     constexpr uint32_t cb_v_norms = tt::CBIndex::c_13;
     constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
     constexpr uint32_t cb_page_table = tt::CBIndex::c_9;
+    // Hybrid mode (recent_window > 0): ring K / V land here. Allocated as
+    // ring-tile-format CBs by the program factory, sized for one chunk.
+    // Forced num_cores_per_head == 1 in hybrid mode means c_18/c_19 are
+    // free of their Tier-2A use.
+    constexpr uint32_t cb_k_ring = tt::CBIndex::c_18;
+    constexpr uint32_t cb_v_ring = tt::CBIndex::c_19;
+    constexpr bool hybrid_mode = (recent_window > 0);
 
     // ── Load cur_pos tensor into cb_cur_pos (one-shot at kernel start) ──
     // Both reader (this kernel) and compute use cur_pos to derive a per-batch
@@ -104,6 +111,8 @@ void kernel_main() {
     constexpr uint32_t k_norms_tile_bytes = get_tile_size(cb_k_norms);
     constexpr uint32_t v_idx_tile_bytes = get_tile_size(cb_v_idx);
     constexpr uint32_t v_norms_tile_bytes = get_tile_size(cb_v_norms);
+    [[maybe_unused]] const uint32_t k_ring_tile_bytes = hybrid_mode ? get_tile_size(cb_k_ring) : 0;
+    [[maybe_unused]] const uint32_t v_ring_tile_bytes = hybrid_mode ? get_tile_size(cb_v_ring) : 0;
 
     constexpr uint32_t q_heads_per_kv = NQH / NKH;
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
@@ -113,12 +122,29 @@ void kernel_main() {
     const auto k_norms_reader = TensorAccessor(k_norms_args, k_norms_addr, k_norms_tile_bytes);
     const auto v_idx_reader = TensorAccessor(v_idx_args, v_idx_addr, v_idx_tile_bytes);
     const auto v_norms_reader = TensorAccessor(v_norms_args, v_norms_addr, v_norms_tile_bytes);
+    [[maybe_unused]] const auto k_ring_reader = TensorAccessor(k_ring_args, k_ring_addr, k_ring_tile_bytes);
+    [[maybe_unused]] const auto v_ring_reader = TensorAccessor(v_ring_args, v_ring_addr, v_ring_tile_bytes);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, Sqt, DHt);
     const auto k_idx_tile_shape = TensorTileShape(B, NKH, Skt, DHt);
     const auto v_idx_tile_shape = TensorTileShape(B, NKH, Skt, vDHt);
     const auto k_norms_tile_shape = TensorTileShape(B, NKH, Skt, 1);
     const auto v_norms_tile_shape = TensorTileShape(B, NKH, Skt, 1);
+
+    // ── Identity ring page table on stack (RISC-V scratchpad lives in L1, so
+    // a stack array can serve as an L1 page-table buffer for
+    // read_paged_chunk_with_padding). Avoids allocating a CB just to hold
+    // [0, 1, 2, ...]. Sized for a small fixed maximum; hybrid mode validates
+    // ring_W_padded against this implicitly via Sk_chunk_t * (#ring chunks).
+    constexpr uint32_t MAX_RING_BLOCKS_T = 16;  // 16 * block_size = up to ~4096 ring tokens
+    uint32_t identity_ring_pt[MAX_RING_BLOCKS_T];
+    if constexpr (hybrid_mode) {
+        for (uint32_t i = 0; i < MAX_RING_BLOCKS_T; ++i) {
+            identity_ring_pt[i] = i;
+        }
+    }
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* ring_page_table_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(identity_ring_pt);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         // Load page table for this batch (paged mode only).
@@ -154,11 +180,63 @@ void kernel_main() {
                                                ? k_chunk_start_r + chunks_per_worker_r
                                                : valid_k_chunks;
 
+            // Hybrid: split point between TQ chunks and ring chunks. Last
+            // `actual_W_chunks` chunks of the valid range come from the BFP8
+            // ring (most recent W positions), earlier chunks come from the
+            // TQ cache (older quantized positions). When valid_k_chunks <
+            // actual_W_chunks (early decode), split_chunk_idx clamps to 0
+            // and every chunk is read from the ring — equivalent to the
+            // standalone ring SDPA call in the legacy hybrid_sdpa_decode.
+            //
+            // ring_W_padded is required to be a multiple of k_chunk_size_tokens
+            // (host-side validation), so chunks never straddle the split.
+            constexpr uint32_t actual_W_chunks = hybrid_mode ? (ring_W_padded / k_chunk_size_tokens) : 0;
+            const uint32_t split_chunk_idx =
+                (hybrid_mode && valid_k_chunks > actual_W_chunks) ? (valid_k_chunks - actual_W_chunks) : 0;
+
             for (uint32_t k_chunk = k_chunk_start_r; k_chunk < k_chunk_end_r; ++k_chunk) {
                 const uint32_t chunk_start_row = k_chunk * Sk_chunk_t;
                 const uint32_t chunk_end_row =
                     (chunk_start_row + Sk_chunk_t < Skt) ? chunk_start_row + Sk_chunk_t : Skt;
                 const uint32_t kv_row_count = chunk_end_row - chunk_start_row;
+
+                // ── Ring chunk: read from BFP8 ring into c_18 / c_19 and
+                //    skip the TQ idx+norms reads. K transposed (matches the
+                //    pre_rescaled layout the compute matmul expects); V not
+                //    transposed.
+                if (hybrid_mode && k_chunk >= split_chunk_idx) {
+                    const uint32_t ring_chunk_idx = k_chunk - split_chunk_idx;
+                    const uint32_t ring_start_row = ring_chunk_idx * Sk_chunk_t;
+                    // ring chunks always span a full Sk_chunk_t (no boundary
+                    // since ring_W_padded is chunk-aligned).
+                    read_paged_chunk_with_padding<NKH, ring_block_size_t, DHt>(
+                        k_ring_reader,
+                        cb_k_ring,
+                        k_head,
+                        ring_start_row,
+                        Sk_chunk_t,
+                        DHt,
+                        Sk_chunk_t,
+                        DHt,
+                        k_ring_tile_bytes,
+                        barrier_threshold,
+                        ring_page_table_ptr,
+                        true /*transpose K*/);
+                    read_paged_chunk_with_padding<NKH, ring_block_size_t, vDHt>(
+                        v_ring_reader,
+                        cb_v_ring,
+                        k_head,
+                        ring_start_row,
+                        Sk_chunk_t,
+                        vDHt,
+                        Sk_chunk_t,
+                        vDHt,
+                        v_ring_tile_bytes,
+                        barrier_threshold,
+                        ring_page_table_ptr,
+                        false /*not transposed*/);
+                    continue;
+                }
 
                 // K indices: transposed when pre_rescaled (compute skips dequant),
                 // NOT transposed otherwise (compute transposes after dequant).
