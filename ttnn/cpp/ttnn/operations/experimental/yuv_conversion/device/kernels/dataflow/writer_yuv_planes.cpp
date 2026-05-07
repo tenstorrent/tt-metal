@@ -85,7 +85,7 @@ void kernel_main() {
 
                     for (uint32_t i = 0; i < n_elems; i++) {
                         float val = bf16_to_float(row[i]);
-                        out[i] = (uint8_t)val;
+                        out[i] = (uint8_t)(val + 0.5f);
                     }
 
                     noc_async_write(scratch_l1, dst.get_noc_addr(spatial, byte_off_out), n_elems);
