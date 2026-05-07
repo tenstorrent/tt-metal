@@ -1,0 +1,8 @@
+﻿ttnn.bias\_gelu
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bias_gelu:
+
+.. autooperation:: ttnn.bias_gelu
