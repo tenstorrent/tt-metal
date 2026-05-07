@@ -273,12 +273,12 @@ class LoraModel(AbstractModuleBase):
         patterns: list[re.Pattern],
         config: LoraConfig,
     ) -> list[str]:
-        injected: list[str] = []
         """Recursively replace matching linear layers with their LoRA wrappers.
 
         ModuleList and ModuleDict require index/key-based assignment instead of
         ``setattr`` because their ``__setitem__`` maintains internal bookkeeping.
         """
+        injected: list[str] = []
         for name, child in list(module.named_children()):
             full_name = f"{prefix}.{name}" if prefix else name
 
@@ -298,6 +298,7 @@ class LoraModel(AbstractModuleBase):
                     module[name] = lora_layer
                 else:
                     setattr(module, name, lora_layer)
+                injected.append(full_name)
             elif isinstance(child, AbstractModuleBase):
                 injected.extend(self._inject(child, full_name, patterns, config))
         return injected
