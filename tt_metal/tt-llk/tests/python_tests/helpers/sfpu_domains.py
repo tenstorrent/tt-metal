@@ -339,6 +339,9 @@ _SFPU_UNDEFINED_RANGES: Dict[MathOperation, List[Tuple[float, float]]] = {
     MathOperation.Reciprocal: [(-1e-6, 1e-6)],
     MathOperation.Log: [(-float("inf"), 0.0)],
     MathOperation.Sqrt: [(-float("inf"), 0.0)],
+    MathOperation.Atanh: [(-float("inf"), -1.0), (1.0, float("inf"))],
+    # log1p(x) = log(1 + x) — undefined for x <= -1.
+    MathOperation.Log1p: [(-float("inf"), -1.0)],
 }
 
 
