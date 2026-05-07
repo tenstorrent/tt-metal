@@ -323,7 +323,7 @@ def test_pipeline_performance(
                 frames,
                 output_path,
                 fps=16,
-                pix_fmt="yuv420p",
+                pix_fmt_in="yuv420p",
                 width=width,
                 height=height,
             )
