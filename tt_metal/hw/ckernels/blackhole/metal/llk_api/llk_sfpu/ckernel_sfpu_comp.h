@@ -14,6 +14,31 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// optimized_branchless_comp : if BitwiseCompare(x, value) --> 1, else 0
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_fp32_fast() {
+    // Branchless FP32 comparison using integer magics
+    // For positive floats, int32 order matches float32 order.
+    // For negative floats, we need to handle the two's complement behavior.
+    for (int d = 0; d < ITERATIONS; d++) {
+        vInt val_a = reinterpret_cast<vInt&>(dst_reg[0]);
+        vInt zero = 0;
+        vInt res = 0;
+
+        // Implementation of fast branchless FP32 'greater than zero'
+        // f32 > 0  <=>  (i32 > 0) && (sign bit is 0)
+        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            v_if (val_a > zero) {
+               res = 1;
+            }
+            v_endif;
+        }
+
+        dst_reg[0] = reinterpret_cast<vFloat&>(res);
+        dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
     const vFloat zero = 0.0f;
