@@ -595,6 +595,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing)};
+    // K mcast padded-sync flag (compute mirrors reader's padded-iter K push). Patched
+    // after chain construction once batch_mcast_enabled is known.
+    const auto compute_k_mcast_padded_sync_offset = compute_compile_time_args.size();
+    compute_compile_time_args.push_back(0);  // k_mcast_padded_sync placeholder
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -1288,6 +1292,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     if (k_uses_batch_chain) {
         reader_compile_time_args[sem_args_offset + 7] = k_mcast_enabled ? 1 : 0;
     }
+    // Compute mirrors reader's padded-iter K push iff batch K mcast is on.
+    const bool k_mcast_padded_sync = k_uses_batch_chain && k_mcast_enabled;
+    compute_compile_time_args[compute_k_mcast_padded_sync_offset] = k_mcast_padded_sync ? 1 : 0;
 
     log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
     if (k_uses_batch_chain) {
@@ -1401,6 +1408,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
+        // For K mcast padded-sync mode, compute also loops to max_q_per_core to mirror
+        // reader's padded-iter K pushes.
+        if (k_mcast_padded_sync) {
+            compute_args.push_back(max_global_q_count);
+        }
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }

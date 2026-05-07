@@ -55,6 +55,11 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
+    // K mcast padded-sync: when set, compute extends Q-loop to max_q_per_core and
+    // mirrors reader's padded-iter K push by issuing a matching cb_pop_front on K only.
+    // This restores the producer-side cb_reserve_back invariant on receivers without
+    // the older 2× reserve hack (see PADDED_ITER_RACE.md / PADDED_ITER_PERF_OPTIONS.md).
+    constexpr bool k_mcast_padded_sync = get_compile_time_arg_val(40) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
@@ -78,6 +83,13 @@ void kernel_main() {
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
+
+    // max_q_per_core is the program-factory max over per-core global_q_count; used to
+    // pad this core's Q-loop so it stays aligned with the K mcast injector.
+    uint32_t max_q_per_core = q_per_core;
+    if constexpr (k_mcast_padded_sync) {
+        max_q_per_core = get_arg_val<uint32_t>(argidx++);
+    }
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
@@ -254,7 +266,8 @@ void kernel_main() {
                 cb_signal,
                 needs_lightweight_mask,
                 is_causal,
-                is_balanced>(
+                is_balanced,
+                k_mcast_padded_sync>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -275,7 +288,8 @@ void kernel_main() {
                 q_per_core,
                 lw_mask,
                 skip_first_half_q,
-                use_zigzag_balancing);
+                use_zigzag_balancing,
+                max_q_per_core);
         } else {
             sdpa_ring<
                 cb_qk_im,
@@ -287,7 +301,8 @@ void kernel_main() {
                 DHt,
                 vDHt,
                 scale_fp32,
-                needs_lightweight_mask>(
+                needs_lightweight_mask,
+                k_mcast_padded_sync>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,
@@ -341,7 +356,8 @@ void kernel_main() {
                 lw_mask.is_causal,
                 skip_first_half_q,
                 is_last_ring_iter,
-                use_zigzag_balancing);
+                use_zigzag_balancing,
+                max_q_per_core);
         }
     }
 }

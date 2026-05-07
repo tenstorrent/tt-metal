@@ -1507,7 +1507,8 @@ template <
     uint32_t cb_signal = 0,
     bool lightweight_mask_enabled = false,
     bool is_causal_sdpa = false,
-    bool is_balanced_sdpa = false>
+    bool is_balanced_sdpa = false,
+    bool k_mcast_padded_sync = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1529,7 +1530,8 @@ void sdpa_ring_v2(
     const uint32_t q_per_core = 1,
     const LightweightMaskContext& lw_mask = {},
     const bool skip_first_half_q = false,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const uint32_t max_q_per_core = 0) {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool uniform_format = uniform_dataformat;
     const bool is_causal_iter = is_causal_sdpa && (ring_iter == 0);
@@ -1852,7 +1854,26 @@ void sdpa_ring_v2(
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
     }
 
-    // Dummy KV pop for double-buffer alignment (same as sdpa_inner_loop for RING)
+    if constexpr (k_mcast_padded_sync) {
+        // is_balanced_sdpa is compile-time; skip_first_half_q runtime gates the actual skip.
+        drain_k_mcast_padded_sync<Sk_chunk_t, DHt, vDHt>(
+            /*q_iter_start=*/global_q_end - global_q_start,
+            /*q_iter_end=*/max_q_per_core,
+            /*global_q_offset=*/global_q_start,
+            num_q_chunks,
+            use_zigzag_balancing,
+            /*skip_first_half_q=*/is_balanced_sdpa && skip_first_half_q,
+            num_kv_chunks,
+            num_local_k_chunks,
+            ring_id,
+            local_padded_Nt,
+            logical_nt,
+            cb_kt_in,
+            cb_v_in,
+            KV_chunks_processed_in_iter);
+    }
+
+    // Dummy KV pop for double-buffer alignment.
     if (KV_chunks_processed_in_iter % 2 == 0) {
         cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
         cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);

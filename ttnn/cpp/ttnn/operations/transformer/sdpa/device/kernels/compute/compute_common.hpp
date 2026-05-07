@@ -1575,6 +1575,56 @@ enum SDPAType {
  *                             SDPA INNER LOOP                                *
  ******************************************************************************/
 /**
+ * Drain the K/V CB pages that the reader pushed on padded ring-joint iters.
+ *
+ * Mirrors the reader's predicate for `q_iter ∈ [q_iter_start, q_iter_end)`:
+ *   - balanced_skip_q: skip the whole q_iter (paired device handles this Q chunk).
+ *   - OOB: skip a single k_chunk (past logical_nt).
+ * Every (q_iter, k_chunk) pair the reader pushed gets one cb_pop_front of K and V
+ * here, keeping pages_received/pages_acked in lockstep on receivers and bumping the
+ * caller's KV_chunks_processed_in_iter so the trailing alignment-parity check is right.
+ *
+ * Used by both sdpa_ring_v2 (streaming) and sdpa_inner_loop's RING tail (non-streaming).
+ */
+template <uint32_t Sk_chunk_t, uint32_t DHt, uint32_t vDHt>
+FORCE_INLINE void drain_k_mcast_padded_sync(
+    uint32_t q_iter_start,
+    uint32_t q_iter_end,
+    uint32_t global_q_offset,
+    uint32_t num_q_chunks,
+    bool use_zigzag_balancing,
+    bool skip_first_half_q,
+    uint32_t num_kv_chunks,
+    uint32_t num_local_k_chunks,
+    uint32_t ring_id,
+    uint32_t local_padded_Nt,
+    uint32_t logical_nt,
+    uint32_t cb_k_in,
+    uint32_t cb_v_in,
+    uint32_t& KV_chunks_processed_in_iter) {
+    constexpr uint32_t k_chunk_tiles_local = DHt * Sk_chunk_t;
+    constexpr uint32_t v_chunk_tiles_local = Sk_chunk_t * vDHt;
+    for (uint32_t q_iter = q_iter_start; q_iter < q_iter_end; ++q_iter) {
+        const uint32_t q_chunk_p =
+            remap_q_index(global_q_offset + q_iter, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        if (skip_first_half_q && q_chunk_p < num_q_chunks / 2) {
+            continue;
+        }
+        for (uint32_t k_chunk_p = 0; k_chunk_p < num_kv_chunks; ++k_chunk_p) {
+            const bool kv_chunk_is_joint_p = k_chunk_p >= num_local_k_chunks;
+            if (!kv_chunk_is_joint_p && (local_padded_Nt * ring_id + k_chunk_p * Sk_chunk_t >= logical_nt)) {
+                continue;
+            }
+            cb_wait_front(cb_k_in, k_chunk_tiles_local);
+            cb_pop_front(cb_k_in, k_chunk_tiles_local);
+            cb_wait_front(cb_v_in, v_chunk_tiles_local);
+            cb_pop_front(cb_v_in, v_chunk_tiles_local);
+            KV_chunks_processed_in_iter++;
+        }
+    }
+}
+
+/**
  * Use the specialized wrapper functions below instead of calling this directly.
  *
  * Template Parameters:
@@ -1670,7 +1720,8 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool k_mcast_padded_sync = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1730,7 +1781,8 @@ void sdpa_inner_loop(
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
-    const bool is_last_ring_iter = true) {
+    const bool is_last_ring_iter = true,
+    const uint32_t max_q_per_core = 0) {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -2123,6 +2175,25 @@ void sdpa_inner_loop(
     }
 
     if constexpr (sdpa_type == RING) {
+        if constexpr (k_mcast_padded_sync) {
+            // `is_balanced` here carries skip_first_half_q semantics from sdpa_ring callers.
+            drain_k_mcast_padded_sync<Sk_chunk_t, DHt, vDHt>(
+                /*q_iter_start=*/q_per_core,
+                /*q_iter_end=*/max_q_per_core,
+                /*global_q_offset=*/iter_q_start,
+                q_num_chunks,
+                use_zigzag_balancing,
+                /*skip_first_half_q=*/is_balanced,
+                /*num_kv_chunks=*/iter_k_chunk_end,
+                num_local_k_chunks,
+                ring_id,
+                local_padded_Nt,
+                logical_nt,
+                cb_k_in,
+                cb_v_in,
+                KV_chunks_processed_in_iter);
+        }
+
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_wait_front(cb_k_in, k_chunk_tiles);
             cb_wait_front(cb_v_in, v_chunk_tiles);
@@ -2409,7 +2480,8 @@ template <
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool k_mcast_padded_sync = false>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2464,7 +2536,8 @@ void sdpa_ring(
     const bool is_causal_ring_iter,
     const bool skip_first_half_q,
     const bool is_last_ring_iter,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const uint32_t max_q_per_core = 0) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2483,7 +2556,8 @@ void sdpa_ring(
         false,  // is_chunked (not used)
         scale_fp32,
         0,  // sliding_window_size (not used)
-        lightweight_mask_enabled>(
+        lightweight_mask_enabled,
+        k_mcast_padded_sync>(
         0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
@@ -2542,7 +2616,8 @@ void sdpa_ring(
         is_causal_ring_iter,
         skip_first_half_q,
         use_zigzag_balancing,
-        is_last_ring_iter);
+        is_last_ring_iter,
+        max_q_per_core);
 }
 
 /**

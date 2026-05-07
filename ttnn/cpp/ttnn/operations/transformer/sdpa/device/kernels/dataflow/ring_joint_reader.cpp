@@ -367,15 +367,12 @@ void kernel_main() {
                     }
                 }
 
-                // K: either read locally (injector or not participant) or receive from chain
-                if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
-                    // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
-                    // the next K chunk for mcast.
-                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
-                    cb_reserve_back(cb_k_in, reserve_tiles);
-                } else {
-                    cb_reserve_back(cb_k_in, k_chunk_tiles);
-                }
+                // K: either read locally (injector or not participant) or receive from chain.
+                // Single-slot reserve always — the producer-side invariant is maintained by
+                // pushing K on padded iters too (see push_back below). This replaces the older
+                // 2× reserve hack that protected against the wr-ptr drift caused by
+                // skipping cb_push_back on padded iters.
+                cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (k_chain.should_receive(nb, nq)) {
                     k_chain.receive();
@@ -398,17 +395,20 @@ void kernel_main() {
                     k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                 }
 
-                // Skip Q, V reads and V forward for padded iterations (K mcast sync only).
-                // Note: cb_push_back is intentionally skipped — without it, the write pointer
-                // doesn't advance, so cb_reserve_back returns the same address each iteration.
-                // This lets the buffer act as a reusable staging area for the mcast.
+                // Make K available to compute. Push on every non-OOB k_chunk including
+                // padded iters: the matching cb_pop_front in compute keeps producer/consumer
+                // pages_received and pages_acked in lockstep, restoring the cb_reserve_back
+                // invariant on receivers. Compute discards padded-iter K bytes — no work runs.
+                cb_push_back(cb_k_in, k_chunk_tiles);
+
+                // Padded iter: also do a no-op V reserve+push (no chain ops, no DRAM read)
+                // so K and V counts stay in lockstep — single end-of-ring-iter parity check.
                 if (is_padded_iter) {
+                    cb_reserve_back(cb_v_in, v_chunk_tiles);
+                    cb_push_back(cb_v_in, v_chunk_tiles);
+                    KV_chunks_processed_in_iter++;
                     continue;
                 }
-
-                // Make K available to compute
-                cb_push_back(cb_k_in, k_chunk_tiles);
-                KV_chunks_processed_in_iter++;
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
@@ -467,6 +467,7 @@ void kernel_main() {
 
                 // Make V available to compute
                 cb_push_back(cb_v_in, v_chunk_tiles);
+                KV_chunks_processed_in_iter++;
             }
         }
         if (KV_chunks_processed_in_iter % 2 == 0) {
