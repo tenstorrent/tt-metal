@@ -718,23 +718,12 @@ class Attention(LightweightModule):
                 k_is_cache_alias = True
                 k_seq = k_cache.shape[2]
             elif cp_prefill_mask is not None:
-                # Trace-compatible CP prefill: write K/V at constant positions 0 and 1.
-                # We split the 2-token K/V into individual tokens and write each separately.
-                # update_cache(cache, input, update_idx=0/1) is trace-compatible because
-                # update_idx is a Python constant captured once in the trace — CP prefill
-                # always writes exactly at positions 0 and 1.
-                k0 = ttnn.slice(k, [0, 0, 0, 0], [batch_size, self.num_kv_heads, 1, self.head_dim])
-                k1 = ttnn.slice(k, [0, 0, 1, 0], [batch_size, self.num_kv_heads, 2, self.head_dim])
-                v0 = ttnn.slice(v, [0, 0, 0, 0], [batch_size, self.num_kv_heads, 1, self.head_dim])
-                v1 = ttnn.slice(v, [0, 0, 1, 0], [batch_size, self.num_kv_heads, 2, self.head_dim])
-                ttnn.update_cache(k_cache, k0, update_idx=0)
-                ttnn.update_cache(k_cache, k1, update_idx=1)
-                ttnn.update_cache(v_cache, v0, update_idx=0)
-                ttnn.update_cache(v_cache, v1, update_idx=1)
-                ttnn.deallocate(k0)
-                ttnn.deallocate(k1)
-                ttnn.deallocate(v0)
-                ttnn.deallocate(v1)
+                # Trace-compatible CP prefill: write 2 K/V positions to cache at batch=0.
+                # ttnn.fill_cache(cache, input, batch_idx) writes input.shape[2] positions
+                # in one kernel launch — replaces the prior 4-slice + 4-update pattern.
+                # batch_idx is a Python constant captured in the trace → trace-safe.
+                ttnn.fill_cache(k_cache, k, 0)
+                ttnn.fill_cache(v_cache, v, 0)
                 ttnn.deallocate(k)
                 ttnn.deallocate(v)
                 # Read full cache for attention — fixed shape, trace-compatible.
