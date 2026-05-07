@@ -116,7 +116,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            ${{ (matrix.test-group.sku == 'wh_galaxy_perf' || matrix.test-group.sku == 'wh_galaxy_perf_uf' || matrix.test-group.sku == 'bh_galaxy_perf') && '-v /mnt/MLPerf:/mnt/MLPerf:ro' || '-v /donotmount:/donotmount:ro' }}
+            -v ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
           install_wheel: true
           run_args: |
             ${{ matrix.test-group.cmd }}
