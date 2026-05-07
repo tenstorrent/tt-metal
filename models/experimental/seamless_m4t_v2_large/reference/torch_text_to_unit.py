@@ -80,6 +80,36 @@ def forward_t2u_logits(
     return out.last_hidden_state
 
 
+def forward_t2u_logits_and_padding(
+    t2u: SeamlessM4Tv2TextToUnitForConditionalGeneration,
+    inputs_embeds: torch.Tensor,
+    attention_mask: torch.Tensor,
+    char_input_ids: torch.Tensor,
+    char_count_per_id: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Same forward as ``forward_t2u_logits``, but also returns HF ``padding_mask`` (float, 1 = valid).
+
+    With ``return_dict=True``, [`SeamlessM4Tv2TextToUnitOutput`] exposes up to eight optional fields;
+    in the common case (no ``labels``, no hidden-state flags), the main tensors are **two**:
+    ``last_hidden_state`` (LM logits, misnamed) and ``padding_mask``.
+    """
+    p0 = next(t2u.parameters())
+    ie = inputs_embeds.to(device=p0.device, dtype=p0.dtype)
+    am = attention_mask.to(device=p0.device)
+    cid = char_input_ids.to(device=p0.device)
+    cc = char_count_per_id.to(device=p0.device)
+    with torch.no_grad():
+        out = t2u(
+            inputs_embeds=ie,
+            attention_mask=am,
+            char_input_ids=cid,
+            char_count_per_id=cc,
+            return_dict=True,
+        )
+    return out.last_hidden_state, out.padding_mask
+
+
 def forward_t2u_encoder_hidden(
     t2u: SeamlessM4Tv2TextToUnitForConditionalGeneration,
     inputs_embeds: torch.Tensor,
