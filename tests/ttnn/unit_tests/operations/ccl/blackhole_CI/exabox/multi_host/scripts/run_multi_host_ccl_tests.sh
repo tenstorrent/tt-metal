@@ -39,7 +39,8 @@ Arguments:
   -h, --help       Show this message and exit.
 
 Required environment:
-  TT_METAL_HOME    Repo root. Default: /data/llong/tt-metal
+  TT_METAL_HOME    Repo root. Required — script aborts if unset.
+                   Example: export TT_METAL_HOME=/path/to/tt-metal
 
 Optional environment:
   MESH_DEVICE      One of SINGLE_BH | DUAL_BH | QUAD_BH. Default: QUAD_BH.
@@ -92,7 +93,12 @@ done
 
 # --- environment ----------------------------------------------------------
 
-: "${TT_METAL_HOME:?set TT_METAL_HOME first (run with --help for usage)}"
+if [ -z "${TT_METAL_HOME:-}" ]; then
+    echo "[error] TT_METAL_HOME is not set. Export it to your tt-metal repo root, e.g.:" >&2
+    echo "          export TT_METAL_HOME=/path/to/tt-metal" >&2
+    echo "        Run with --help for usage." >&2
+    exit 1
+fi
 
 MESH_DEVICE="${MESH_DEVICE:-QUAD_BH}"
 PYTEST_TIMEOUT="${PYTEST_TIMEOUT:-240}"
