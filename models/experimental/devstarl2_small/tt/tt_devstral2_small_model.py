@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ttnn
+from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistral3Model
@@ -58,7 +59,7 @@ class TtDevstral2SmallModel(LightweightModule):
             dtype=dtype,
             eps=float(text_cfg.rms_norm_eps),
         )
-        self.language_model = TtMinistral3Model(
+        lm_kwargs = dict(
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             model_args=model_args,
@@ -70,6 +71,9 @@ class TtDevstral2SmallModel(LightweightModule):
             llama_4_scaling_beta=rope_params.get("llama_4_scaling_beta"),
             original_max_position_embeddings=rope_params.get("original_max_position_embeddings"),
         )
+        if isinstance(text_cfg, Ministral3Config):
+            lm_kwargs["ministral_text_config"] = text_cfg
+        self.language_model = TtMinistral3Model(**lm_kwargs)
 
     def get_projected_image_features(self, pixel_values, image_sizes, position_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
         """
