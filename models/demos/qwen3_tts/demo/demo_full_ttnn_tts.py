@@ -3161,6 +3161,13 @@ def run_full_ttnn_tts(
 
         # Drain streaming decoder (chunks decoded in parallel during generation).
         decode_start = time.time()
+        # Wait for the background decoder thread to consume the token_queue —
+        # without this, fast AR-loops (mega-trace, aggregated D2H) finish before
+        # the thread appends the last tokens to self.all_tokens, and get_all_audio
+        # decodes a partial sequence → short / cut-off audio.
+        _drain_t0 = time.time()
+        while not streaming_decoder.token_queue.empty() and time.time() - _drain_t0 < 5.0:
+            time.sleep(0.001)
         audio = streaming_decoder.get_all_audio()
         streaming_decoder.stop()
         timings["decode"] = time.time() - decode_start
