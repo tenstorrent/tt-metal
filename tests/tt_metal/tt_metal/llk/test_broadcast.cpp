@@ -588,22 +588,36 @@ INSTANTIATE_TEST_SUITE_P(
                           20}));  // Row 20
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
-    constexpr EltwiseOp k_op = EltwiseOp::SUB;
-    constexpr BroadcastDim k_dim = BroadcastDim::COL;
-    unit_tests::compute::broadcast::BroadcastConfig cfg = {
-        .api_convention = ApiConvention::DEFAULT,
-        .eltwise_op = k_op,
-        .broadcast_dim = k_dim,
-        .tile_shape = TileShape::FULL_TILE,
-        .math_fidelity = MathFidelity::LoFi,
-        .bcast_row_idx = 0,
-    };
-    log_info(
-        tt::LogTest,
-        "Quasar binary broadcast DFB op={} dim={}",
-        eltwise_op_to_type.at(k_op),
-        broadcast_dim_to_type.at(k_dim));
-    unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), cfg);
+    for (uint8_t op = uint8_t(EltwiseOp::ADD); op <= uint8_t(EltwiseOp::MUL); op++) {
+        for (uint8_t dim = uint8_t(BroadcastDim::ROW); dim <= uint8_t(BroadcastDim::SCALAR); dim++) {
+            for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+                // MathFidelity : {0, 2, 3, 4};
+                if (math_fid == 1) {
+                    continue;
+                }
+                if (!(EltwiseOp(op) == EltwiseOp::ADD && BroadcastDim(dim) == BroadcastDim::ROW &&
+                      MathFidelity(math_fid) == MathFidelity::LoFi)) {
+                    // TODO (#38092): Remove when we can run back to back tests on Quasar
+                    continue;
+                }
+                unit_tests::compute::broadcast::BroadcastConfig cfg = {
+                    .api_convention = ApiConvention::DEFAULT,
+                    .eltwise_op = EltwiseOp(op),
+                    .broadcast_dim = BroadcastDim(dim),
+                    .tile_shape = TileShape::FULL_TILE,
+                    .math_fidelity = MathFidelity(math_fid),
+                    .bcast_row_idx = 0,
+                };
+                log_info(
+                    tt::LogTest,
+                    "Quasar binary broadcast DFB op={} dim={} math_fid={}",
+                    eltwise_op_to_type.at(EltwiseOp(op)),
+                    broadcast_dim_to_type.at(BroadcastDim(dim)),
+                    math_fid);
+                unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), cfg);
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
