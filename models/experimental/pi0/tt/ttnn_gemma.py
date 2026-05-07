@@ -407,12 +407,12 @@ class GemmaMLPTTNN:
         self.config = config
         self.device = device
 
-        # Convert weights to TTNN if they're PyTorch tensors
+        # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
                 return ttnn.from_torch(
-                    w.T.contiguous(),  # Transpose for linear
-                    dtype=ttnn.bfloat16,
+                    w.T.contiguous(),
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                 )
