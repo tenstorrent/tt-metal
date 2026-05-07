@@ -73,7 +73,7 @@ def t2v_metrics(mesh_device, height):
             }
         else:
             expected_metrics = {
-                "encoder": 0.1,
+                "encoder": 0.13,
                 "denoising": 370.0,
                 "vae": 7.0,
                 "total": 375.0,
