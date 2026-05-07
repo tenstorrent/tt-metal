@@ -68,9 +68,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
 
-TRACE_DIR_BASE = Path(
-    os.getenv("DEEPSEEK_V3_TRACE_DIR", "/data/ddjekic/bit_sculpt/results/deepseek-r1-0528/debug_trace")
-)
+TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/data/ddjekic/bit_sculpt/results/deepseek-r1-0528"))
 ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
 ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
 ABC_1k_PADD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
