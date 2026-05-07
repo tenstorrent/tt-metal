@@ -76,7 +76,7 @@ inline constexpr std::uint32_t ETH_PORT_ACTION_LINK_DOWN = 2;
 // Arguments for ETH_MSG_PORT_REINIT_MACPCS(retries, reinit_option, _).
 // The FW calls eth_port_reinit(retries, reinit_option).
 inline constexpr std::uint32_t ETH_PORT_REINIT_ENABLE = 1;
-inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_ONLY = 0;          // Reinit MAC only (SERDES already trained).
+inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_ONLY = 0;            // Reinit MAC only (SERDES already trained).
 inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES_RETRAIN = 1;  // Reinit MAC + SERDES via SERDES retrain.
 inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES = 2;          // Reinit MAC + SERDES from reset.
 inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER = 3;  // Same as 2 but with TX barrier.
@@ -84,7 +84,7 @@ inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER = 3;  /
 // Selected boot_results_t field addresses in L1. See
 // `umd/device/types/blackhole_eth.hpp` for the full layout (BOOT_RESULTS_ADDR = 0x7CC00).
 inline constexpr std::uint32_t ETH_BOOT_RESULTS_BASE_ADDR = 0x7CC00;
-inline constexpr std::uint32_t ETH_PORT_STATUS_ADDR = 0x7CC04;    // eth_status_t.port_status
+inline constexpr std::uint32_t ETH_PORT_STATUS_ADDR = 0x7CC04;  // eth_status_t.port_status
 
 // eth_live_status_t base and field addresses. Matches the struct layout in
 // `tt_metal/hw/inc/internal/tt-1xx/blackhole/eth_fw_api.h`.

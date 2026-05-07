@@ -320,11 +320,32 @@ if(ENABLE_DISTRIBUTED)
     endif()
 endif()
 
+# tt-ethtool is split into a reusable library (`tt-ethtool-core`) and a thin
+# CLI executable (`tt-ethtool`) that consumes the library's API. The library
+# intentionally depends only on UMD (no tt-metalium) so it can be reused by
+# other UMD-based programs that need to talk to the ethernet firmware.
+add_library(tt-ethtool-core OBJECT)
+add_library(TT::EthToolCore ALIAS tt-ethtool-core)
+
+target_sources(
+    tt-ethtool-core
+    PRIVATE
+        tt-ethtool/lib/parse.cpp
+        tt-ethtool/lib/list.cpp
+        tt-ethtool/lib/link.cpp
+)
+
+# Sources use "tools/scaleout/tt-ethtool/..." style includes.
+target_include_directories(tt-ethtool-core PUBLIC ${CMAKE_SOURCE_DIR})
+
+target_compile_features(tt-ethtool-core PUBLIC cxx_std_20)
+
+target_link_libraries(tt-ethtool-core PUBLIC umd::tt-umd PRIVATE fmt::fmt-header-only)
+
 add_executable(
     tt-ethtool
-    tt-ethtool/main.cpp
-    tt-ethtool/list.cpp
-    tt-ethtool/link.cpp
+    tt-ethtool/cli/main.cpp
+    tt-ethtool/cli/format.cpp
 )
 
 set_target_properties(
@@ -334,16 +355,11 @@ set_target_properties(
             ${Metalium_BINARY_DIR}/tools/scaleout
 )
 
-# Sources use "tools/scaleout/tt-ethtool/..." style includes.
-target_include_directories(tt-ethtool PRIVATE ${CMAKE_SOURCE_DIR})
-
 target_compile_features(tt-ethtool PRIVATE cxx_std_20)
 
-# tt-ethtool intentionally depends only on UMD (no tt-metalium) to keep it a
-# minimal, low-level utility.
 target_link_libraries(
     tt-ethtool
     PRIVATE
-        umd::tt-umd
+        TT::EthToolCore
         fmt::fmt-header-only
 )
