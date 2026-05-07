@@ -27,6 +27,23 @@ Compression / terse modes don't override the gates.
 
 ---
 
+## Review Cadence
+
+Gate 1 (API) and Gate 2 (test plan) are the **only** mid-pipeline blocking reviews — one before any code, one before any test runs. After Gate 2 clears, the pipeline runs Phases 4 → 5 → 6 to completion without further review prompts. The single end-of-cycle review is the Phase 6 report.
+
+Do NOT ask the user to approve continuing between:
+
+- Validation sub-stages (4a → 4b → 4c → 4d)
+- Individual test results inside a sub-stage
+- Per-kernel migrations during Phase 5
+- Phase 4 → Phase 5, Phase 5 → Phase 6
+
+Failures inside Phase 4 follow the Feedback Loops table — fix and re-run, no user prompt. Per-kernel migration failures follow the same rule: fix the kernel or skip with a structured `blocker:` row (only if heavily blocked skip), then continue.
+
+The only exception: if a test result forces a design change that re-opens Gate 1 or Gate 2 scope (e.g. a dtype combo not in the approved test plan turns out unsupported, or the API needs a new policy enum value), re-post the relevant artifact and re-enter the corresponding gate. Anything narrower stays inside the automatic feedback loop.
+
+---
+
 ## Prior Work Detection
 
 Before starting, check if outputs from previous runs exist:

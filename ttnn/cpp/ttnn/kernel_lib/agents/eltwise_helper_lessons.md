@@ -64,6 +64,8 @@ If the underlying LLK has a layout convention, bake it into the struct template 
 
 `CopyTileTag {}` is a 0-byte marker; `is_copy_tile_op_v<T> = std::is_base_of_v<CopyTileTag, T>`. That's the entire dispatch surface for "the chain treats this element as a CB load." Same pattern for any future cross-cutting category. Don't reach for std::variant, virtual dispatch, or std::any here — compile-time tags are free.
 
+Classification is not dispatch. A tag system that classifies elements into categories and a dispatch surface that calls per-element methods are two contracts, and they can drift — e.g. classification places an element in a category whose pipeline path uses a static call, but the element actually carries runtime state via an instance method. The wrong path runs silently because both methods exist and the compiler can't catch the mismatch. Pick one dispatch shape (e.g. a single member call taking the loop index) for every element; the tag classifies, the call signature is uniform.
+
 ### 1.6 `if constexpr` for opt-in capabilities
 
 When a subset of chain elements opt into a behavior (upfront wait/pop, FPU clash, etc.), give every element a static constexpr boolean trait (`is_upfront`, `clashes_with_fpu`, ...) with a sane default, and gate calls in the chain cascade with `if constexpr`:
@@ -82,6 +84,8 @@ Every element exposes the same compile-time surface; non-opted-in elements decla
 Same idea — static constexpr traits — used to enforce cross-element rules at compile time. Example: "no two upfront CB-input elements share a CB."
 
 `CopyTile` declares `static constexpr bool is_upfront` and `static constexpr uint32_t cb`. `DestReuseOp` declares the same pair. The chain walks every pair of elements and asserts no duplicate `cb` among those with `is_upfront == true`. Any future CB-input op opts in by declaring the same two statics — the `chain_has_duplicate_upfront_cbs_v` check covers it for free.
+
+Stub-default member functions are a silent footgun. Whenever a downstream check short-circuits on a stub return value (an id stub returning 0, a flag stub defaulting false), an element that forgot to override it passes the check by accident — no diagnostic. Force the contract at chain entry via a static_assert that names the missing override. Failures fire at the override site, not at a downstream trait whose meaning depends on the absent value.
 
 ### 1.8 Fill / rand tiles tagged distinctly from CB-load ops
 
@@ -127,6 +131,8 @@ WaitUpfrontPopAtEnd  upfront wait     + upfront-end pop   block access with inde
 ```
 
 `cb_wait_front` is idempotent so `WaitNoPop + WaitAndPop` works for fan-out — but `WaitNoPop + NoWaitPop` is one fewer NoC roundtrip and the "first already waited" relationship is searchable at the call site. Add a combination the moment you know it can save a wait or clarify intent. Cumulative wait is recorded as a known-unsupported lifecycle in the migration blocker list (§5 / HQ doc) until a kernel justifies the helper-side complexity.
+
+Lifecycle wants to be a type, not an enum, when each value maps to genuinely different code (different wait/pop calls, different valid index modes). A type carries its own valid-companion sets and dispatches via specialization; an enum forces a cartesian static_assert table that grows quadratically with every axis you add. Keep enums for selectors that are 1-1 with a single LLK call (which binary op fires); use types for behavior that varies across multiple calls.
 
 ### 2.2 Each chain element owns its CB lifecycle
 
@@ -238,6 +244,8 @@ Examples:
 
 Wrong output from an over-eager hoist is not a perf optimization. When in doubt, init per tile.
 
+Hoist-safety generalizes. The preconditions are uniform — single CB load, no FPU clash, one compute element, no in-loop pack — but a predicate hand-specialized at fixed chain sizes leaves longer chains stuck on per-tile init even when the same preconditions hold. Express hoist-safety as a recursive walk over the element list, not a fixed-size lookup.
+
 ### 3.5 Fan-out is N CopyTiles, one per DEST slot
 
 The hardware has no instruction to copy one CB tile into multiple DEST slots in a single op — `copy_tile` writes one source tile to one destination slot. A `CopyTile` chain element therefore stays one-to-one (one CB tile → one DEST slot), and fan-out (the same CB tile reused in multiple DEST slots) is written as N `CopyTile` elements, each with its own DEST slot and its own wait/pop policy. The chain combinator must NOT hide this as "one CopyTile expanded to N." That kind of compaction makes fan-out cost look free and hides double-wait / extra-pop bugs that only surface at specific CB capacities. The chain user writes the actual N copies, with explicit wait once + skip-wait-but-pop semantics:
@@ -294,6 +302,24 @@ Convenience entry points:
 
 Anti-pattern: shipping `binary_op` as a top-level helper with its own policy enums, its own reconfig surface, its own validation suite, parallel to `eltwise_chain`. That is the historical shape and it is wrong even though it shipped — it splits the trait machinery, splits the test surface, and forces every kernel that mixes binary FPU + SFPU + DEST reuse to know which helper owns which CB. Same critique applies to a hypothetical `unary_bcast_op`, `dest_reuse_op`, or `ternary_op` peer. There is one eltwise helper. Everything else is a chain element or a thin convenience wrapper.
 
+### 3.9 Block-mode is an axis on existing elements, not a parallel sibling kind
+
+When demand surfaces for a multi-tile-DEST variant of an existing element (multiple inner ops per acquire/release window), the temptation is to ship it as a parallel sibling type. Resist. If the new shape shares lifecycle, dispatch order, and init contract with the existing element and only differs in iteration count, the missing piece is a template parameter on the existing element, not a new kind. Parallel sibling types duplicate scaffolding and force every chain trait to be redefined to cover them.
+
+The test that distinguishes "missing parameter" from "missing kind": if the proposed sibling shares the lifecycle, dispatch hooks, and init contract with its non-block counterpart and only differs in iteration count, it's a parameter. If it has a structurally different lifecycle (different wait/pop shape, different reconfig timing) it's a kind.
+
+### 3.10 Reconfig attaches to the element that owns the CB
+
+Reconfig is a per-element capability. Every CB-touching element (CB reader, pack writer) carries a small reconfig policy that selects which side fires (input, output, both, none). The element already knows the CB id and which side it consumes; the policy slots in cleanly without threading previous-CB state across template parameters and without making the caller insert a separate reconfig element at the right spot.
+
+Anti-shapes that fail:
+
+- Reconfig as a wall of `OldCb`-style template parameters threaded across every op element. Caller threads previous-CB state by hand; omissions are silent; the parameter list explodes with reconfig bookkeeping unrelated to the op shape.
+- Reconfig as standalone chain elements the caller orders manually. Sequencing is fragile; convenience wrappers have to inject them at every call site; forgetting one ships silent wrong dtype.
+- Reconfig as a chain-wide enum the pipeline alone controls. No override path when a specific kernel needs non-standard reconfig timing.
+
+Right shape: attach a small reconfig enum to whichever element owns the CB, defaulted to a safe value. The element wires it into its own init. Convenience wrappers set the policy; advanced callers override it on the specific element that needs the override. The decision lives next to the LLK call that consumes it.
+
 ---
 
 ## 4. Internal state hygiene
@@ -315,6 +341,10 @@ chain_has_duplicate_upfront_cbs_v<Chain> // static_assert in pipeline
 ```
 
 Catch bad chains at compile time. Runtime asserts are the fallback for things the type system genuinely can't see (e.g. `WaitAndPop` policy + non-zero `cb_tile_idx` → ASSERT, since streaming pop-per-call can't index into a batch).
+
+### 4.4 One dispatch signature for every element
+
+The classification surface (tag inheritance, trait constants) and the dispatch surface (the methods the chain pipeline calls per phase) are different contracts. If they drift — for example, classification places an element in a category whose pipeline path uses a static call, but the element actually carries runtime state via an instance method — the wrong path runs silently. The compiler can't catch it because both methods exist. Pick one dispatch shape (a single member method that takes the loop index) for every element. Stateless ops cost nothing — the compiler folds zero-state members into static dispatch. Stateful ops capture their fields naturally. SFINAE detectors that pick between dispatch shapes are a band-aid for letting two contracts coexist; one contract is the fix.
 
 ---
 
@@ -429,6 +459,8 @@ Track open work in a `feature_gap_map` keyed by `GAP-N`. Each gap entry pins:
 
 Close gaps by yield: kernels-unblocked-per-LOC. The gap map is the only roadmap; closed entries get deleted, not archived in the doc.
 
+Free-text skip rationale drifts. The same blocker gets phrased three different ways across cycles, defeats aggregation, and the gap map can't auto-derive from the log. One structured row per kernel — migrated stages, skipped stages, named blocker id per skip — closes the loop. The gap map becomes a query over the log, not a hand-curated parallel document.
+
 ---
 
 ## 9. Things to avoid in the eltwise helper
@@ -440,6 +472,10 @@ Close gaps by yield: kernels-unblocked-per-LOC. The gap map is the only roadmap;
 - **Mid-loop dtype swaps without policy support.** Helpers do one entry-time reconfig. If the kernel switches dtypes mid-loop, that path stays raw or grows a mid-chain reinit policy.
 - **Skipping `fp32_dest_acc_en=True` testing.** Every binary migration runs against `fp32_dest_acc_en ∈ {False, True}` and any mixed-dtype combo the original supported.
 - **Hand-coding around a missing op struct in a kernel.** Add the op struct to the helper, rebuild, then migrate (see §10.2 — missing op struct is fix-first, not a blocker). The kernel never gets a workaround copy of the LLK call.
+- **Two dispatch contracts.** Classification by tag and dispatch by method signature drift unless held to one shape. SFINAE detectors that pick between dispatch shapes are a band-aid for letting two contracts coexist; one contract is the fix.
+- **Stub defaults that silently pass downstream checks.** A stub return value (id 0, flag false) absorbed by a downstream early-out hides missing overrides. Force the contract at the override site via a static_assert that names the missing member.
+- **Reconfig divorced from its element.** Threading reconfig through the call site (template params on every op, or standalone elements the caller orders) is fragile. Pipeline-deduced reconfig with no override path is also wrong. Attach it to the element that owns the CB.
+- **Parallel sibling kinds for an axis on an existing element.** When the proposed sibling shares lifecycle, dispatch order, and init contract and only differs in iteration count, the missing piece is a template parameter, not a new kind.
 
 Migration-pipeline rules (test-change approvals, partial-migration log format, untestable-locally handoff, HQ doc audit, Phase-2 handoff) live in [llk_helpers_hq.md → Pipeline Self-Maintenance](llk_helpers_hq.md#pipeline-self-maintenance). General helper-design rules (helper owns CB lifecycle, DEST capacity is compile-time) live in [llk_helpers_hq.md → Helper Design Principles](llk_helpers_hq.md#helper-design-principles-general).
 
