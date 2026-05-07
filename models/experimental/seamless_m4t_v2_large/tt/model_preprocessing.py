@@ -803,3 +803,24 @@ def create_code_hifigan_parameters(vocoder, *, device: ttnn.Device) -> dict:
         ),
     }
     return make_parameter_dict(out)
+
+
+def create_seamless_m4t_v2_model_parameters(model: torch.nn.Module, *, device: ttnn.Device) -> dict:
+    """
+    Full [`SeamlessM4Tv2Model`] weights for TTNN: ``text_encoder``, ``text_decoder``, ``speech_encoder``,
+    main ``lm_head``, ``t2u_model``, and ``vocoder`` (same submodules as Hugging Face).
+    """
+    w_lm = preprocess_linear_weight(
+        model.lm_head.weight.detach(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    out = {
+        "text_encoder": create_text_encoder_parameters(model.text_encoder, device=device),
+        "text_decoder": create_text_decoder_parameters(model.text_decoder, device=device),
+        "speech_encoder": create_speech_encoder_parameters(model.speech_encoder, device=device),
+        "lm_head": make_parameter_dict({"weight": ttnn.to_device(w_lm, device)}),
+        "t2u": create_text_to_unit_condgen_parameters(model.t2u_model, device=device),
+        "vocoder": create_code_hifigan_parameters(model.vocoder, device=device),
+    }
+    return make_parameter_dict(out)
