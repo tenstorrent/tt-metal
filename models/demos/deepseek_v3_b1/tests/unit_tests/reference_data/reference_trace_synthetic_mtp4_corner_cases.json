@@ -16,7 +16,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -53,7 +53,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -88,7 +88,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -123,7 +123,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -158,7 +158,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -193,7 +193,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -243,7 +243,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -253,7 +253,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -263,7 +263,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -273,7 +273,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -283,7 +283,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -311,7 +311,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -348,7 +348,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -383,7 +383,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -418,7 +418,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -453,7 +453,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -488,7 +488,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -534,7 +534,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -544,7 +544,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -554,7 +554,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -564,7 +564,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -574,7 +574,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -602,7 +602,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -639,7 +639,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -674,7 +674,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -709,7 +709,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -744,7 +744,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -779,7 +779,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -814,7 +814,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 5,
@@ -849,7 +849,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 5,
@@ -884,7 +884,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 5,
@@ -919,7 +919,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 5,
@@ -954,7 +954,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 5,
@@ -1004,7 +1004,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -1014,7 +1014,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -1024,7 +1024,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -1034,7 +1034,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -1044,7 +1044,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -1054,7 +1054,7 @@
             "token_id": 333,
             "type": "BASE",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 4,
@@ -1064,7 +1064,7 @@
             "token_id": 51,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 4,
@@ -1074,7 +1074,7 @@
             "token_id": 52,
             "type": "SPEC",
             "pos": 6,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 4,
@@ -1084,7 +1084,7 @@
             "token_id": 53,
             "type": "SPEC",
             "pos": 7,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 4,
@@ -1094,7 +1094,7 @@
             "token_id": 54,
             "type": "SPEC",
             "pos": 8,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 4,
@@ -1122,7 +1122,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -1159,7 +1159,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -1194,7 +1194,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -1229,7 +1229,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -1264,7 +1264,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -1299,7 +1299,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -1348,7 +1348,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -1358,7 +1358,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -1368,7 +1368,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -1378,7 +1378,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -1388,7 +1388,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -1416,7 +1416,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -1453,7 +1453,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -1488,7 +1488,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -1523,7 +1523,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -1558,7 +1558,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -1593,7 +1593,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -1640,7 +1640,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -1650,7 +1650,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -1660,7 +1660,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -1670,7 +1670,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -1680,7 +1680,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -1708,7 +1708,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -1745,7 +1745,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -1780,7 +1780,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -1815,7 +1815,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -1850,7 +1850,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -1885,7 +1885,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -1932,7 +1932,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -1942,7 +1942,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -1952,7 +1952,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -1962,7 +1962,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -1972,7 +1972,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -2001,7 +2001,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -2038,7 +2038,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -2077,7 +2077,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -2112,7 +2112,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -2147,7 +2147,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -2182,7 +2182,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -2228,7 +2228,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -2238,7 +2238,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -2248,7 +2248,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -2258,7 +2258,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -2268,7 +2268,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -2297,7 +2297,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -2334,7 +2334,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -2371,7 +2371,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -2406,7 +2406,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -2441,7 +2441,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -2476,7 +2476,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,
@@ -2522,7 +2522,7 @@
             "token_id": 10,
             "type": "BASE",
             "pos": 1,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -2532,7 +2532,7 @@
             "token_id": 11,
             "type": "SPEC",
             "pos": 2,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 1,
             "window_start_pos": 1,
@@ -2542,7 +2542,7 @@
             "token_id": 12,
             "type": "SPEC",
             "pos": 3,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 2,
             "window_start_pos": 1,
@@ -2552,7 +2552,7 @@
             "token_id": 13,
             "type": "SPEC",
             "pos": 4,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 3,
             "window_start_pos": 1,
@@ -2562,7 +2562,7 @@
             "token_id": 14,
             "type": "SPEC",
             "pos": 5,
-            "user_id": 0,
+            "request_id": 0,
             "prefill_id": -1,
             "lane_idx": 4,
             "window_start_pos": 1,
@@ -2590,7 +2590,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -2627,7 +2627,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -2662,7 +2662,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -2697,7 +2697,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -2732,7 +2732,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -2767,7 +2767,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -2822,7 +2822,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -2859,7 +2859,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -2894,7 +2894,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -2929,7 +2929,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -2964,7 +2964,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -2999,7 +2999,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 5,
             "window_start_pos": 2,
@@ -3054,7 +3054,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -3091,7 +3091,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -3126,7 +3126,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -3161,7 +3161,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -3196,7 +3196,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -3231,7 +3231,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 3,
@@ -3286,7 +3286,7 @@
       "device_to_host": {
         "prefill_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "PREFILL",
             "lane_idx": 0,
             "window_start_pos": 1,
@@ -3323,7 +3323,7 @@
         ],
         "read_results": [
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "BASE",
             "lane_idx": 0,
             "window_start_pos": 2,
@@ -3358,7 +3358,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 1,
             "window_start_pos": 2,
@@ -3393,7 +3393,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 2,
             "window_start_pos": 2,
@@ -3428,7 +3428,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 3,
             "window_start_pos": 2,
@@ -3463,7 +3463,7 @@
             ]
           },
           {
-            "user_id": 0,
+            "request_id": 0,
             "type": "SPEC",
             "lane_idx": 4,
             "window_start_pos": 2,

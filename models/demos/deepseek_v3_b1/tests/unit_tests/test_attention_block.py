@@ -323,7 +323,7 @@ def test_attention_block(
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
     # ========================================================================
-    metadata = DeepseekMetadata(position_id=position_id, slot_id=slot_id)
+    metadata = DeepseekMetadata(position_id=position_id, request_id=slot_id)
     metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )

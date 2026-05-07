@@ -58,7 +58,7 @@ class OutputField:
     """uint32 indices within the fixed metadata output page."""
 
     TOKEN_TYPE = 0
-    USER_ID = 1
+    REQUEST_ID = 1
     TOKEN_ID = 2
     POSITION_ID = 3
     LANE_IDX = 4
@@ -77,7 +77,7 @@ class InputField:
     """uint32 indices within the fixed metadata input page."""
 
     TOKEN_TYPE = 0
-    USER_ID = 1
+    REQUEST_ID = 1
     TOKEN_ID = 2
     POSITION_ID = 3
     LANE_IDX = 4
@@ -110,7 +110,7 @@ class DecodeResult:
 
     token_type: int
     tokens: list[CandidateToken]
-    user_id: int = 0
+    request_id: int = 0
     lane_idx: int = 0
     position_id: int = 0
     p_top15_indices: list[int] = field(default_factory=list)
@@ -120,7 +120,7 @@ class DecodeResult:
 
     def __post_init__(self) -> None:
         self.token_type = int(self.token_type)
-        self.user_id = int(self.user_id)
+        self.request_id = int(self.request_id)
         self.lane_idx = int(self.lane_idx)
         self.position_id = int(self.position_id)
         self.tokens = [
@@ -185,15 +185,15 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
     first_candidate_pos = position_id + 1
     tokens = [
         CandidateToken(
-            raw_int(OutputField.CANDIDATE_TOKEN_IDS + slot_idx),
-            first_candidate_pos + slot_idx,
+            raw_int(OutputField.CANDIDATE_TOKEN_IDS + candidate_idx),
+            first_candidate_pos + candidate_idx,
         )
-        for slot_idx in range(MAX_WINDOW_TOKENS)
+        for candidate_idx in range(MAX_WINDOW_TOKENS)
     ]
 
     return DecodeResult(
         token_type=int(raw[OutputField.TOKEN_TYPE].item()),
-        user_id=raw_int(OutputField.USER_ID),
+        request_id=raw_int(OutputField.REQUEST_ID),
         lane_idx=lane_idx,
         position_id=position_id,
         tokens=tokens,
@@ -207,7 +207,7 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
 def to_spec_input(
     token_id: int,
     prefill_token_ids: int | list[int],
-    user_id: int,
+    request_id: int,
     position_id: int,
     page_size_datums: int,
     token_type: TokenType,
@@ -216,11 +216,11 @@ def to_spec_input(
     top_k: int = 32,
     top_p: float = 1.0,
 ) -> ttnn.Tensor:
-    """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
+    """Build a PCIe-aligned input page carrying (token_id, request_id, position_id)."""
     torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
     torch_padded[0, InputField.TOKEN_ID] = token_id
     torch_padded[0, InputField.TOKEN_TYPE] = token_type
-    torch_padded[0, InputField.USER_ID] = user_id
+    torch_padded[0, InputField.REQUEST_ID] = request_id
     torch_padded[0, InputField.POSITION_ID] = position_id
     torch_padded[0, InputField.LANE_IDX] = lane_idx
     torch_padded[0, InputField.TEMPERATURE] = float_to_uint32(temperature)
@@ -382,7 +382,7 @@ class DeepSeekV3:
         self,
         token_id: int,
         prefill_token_ids: int | list[int],
-        user_id: int,
+        request_id: int,
         position_id: int,
         token_type: TokenType,
         lane_idx: int = 0,
@@ -390,11 +390,11 @@ class DeepSeekV3:
         top_k: int = 32,
         top_p: float = 1.0,
     ) -> None:
-        """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
+        """Write a single spec-decode input page (token_id, request_id, position_id) to the pipeline."""
         input_tensor = to_spec_input(
             token_id,
             prefill_token_ids,
-            user_id,
+            request_id,
             position_id,
             self._page_size_datums,
             token_type,

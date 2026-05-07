@@ -183,7 +183,7 @@ class ModelPipeline:
             to_spec_input(
                 tokens[i],
                 tokens[i + 1] if i < len(tokens) - 1 else -1,
-                user_id=0,
+                request_id=0,
                 position_id=i,
                 page_size_datums=self._page_size_datums,
                 token_type=TokenType.PREFILL,
@@ -211,7 +211,7 @@ class ModelPipeline:
             to_spec_input(
                 input_token,
                 -1,
-                user_id=0,
+                request_id=0,
                 position_id=self.position_id,
                 page_size_datums=self._page_size_datums,
                 token_type=TokenType.BASE,
@@ -264,21 +264,21 @@ class ModelPipeline:
             raise RuntimeError(f"Spec-decode result is missing speculative candidate metadata: {result}")
 
         window_start_pos = int(positions[0]) if window_start_pos is None else int(window_start_pos)
-        for slot_idx in range(1, required_slots):
-            expected_position = window_start_pos + slot_idx
-            if int(positions[slot_idx]) != expected_position:
+        for candidate_idx in range(1, required_slots):
+            expected_position = window_start_pos + candidate_idx
+            if int(positions[candidate_idx]) != expected_position:
                 raise RuntimeError(
                     "Speculative candidate positions must be contiguous from window_start_pos: "
-                    f"window_start_pos={window_start_pos}, slot_idx={slot_idx}, "
-                    f"candidate_position={positions[slot_idx]}, result={result}"
+                    f"window_start_pos={window_start_pos}, candidate_idx={candidate_idx}, "
+                    f"candidate_position={positions[candidate_idx]}, result={result}"
                 )
-            speculations_by_pos[expected_position] = int(token_ids[slot_idx])
+            speculations_by_pos[expected_position] = int(token_ids[candidate_idx])
 
     def _write_speculation_window(
         self,
         result: DecodeResult,
         *,
-        user_id: int = 0,
+        request_id: int = 0,
         num_speculative_tokens: int | None = None,
         window_start_pos: int | None = None,
     ) -> int:
@@ -303,7 +303,7 @@ class ModelPipeline:
             self.model.write_input(
                 int(token_ids[lane_idx]),
                 -1,
-                user_id,
+                request_id,
                 expected_position,
                 token_type=TokenType.BASE if lane_idx == 0 else TokenType.SPEC,
                 lane_idx=lane_idx,
@@ -352,13 +352,13 @@ class ModelPipeline:
                 )
 
             lane_start_pos = int(result.window_start_pos) + int(result.lane_idx)
-            for slot_idx in range(required_slots):
-                expected_position = lane_start_pos + slot_idx
-                if int(positions[slot_idx]) != expected_position:
+            for candidate_idx in range(required_slots):
+                expected_position = lane_start_pos + candidate_idx
+                if int(positions[candidate_idx]) != expected_position:
                     raise RuntimeError(
                         "MTP candidate positions must be contiguous from window_start_pos + lane_idx: "
                         f"window_start_pos={result.window_start_pos}, lane_idx={result.lane_idx}, "
-                        f"slot_idx={slot_idx}, candidate_position={positions[slot_idx]}, "
+                        f"candidate_idx={candidate_idx}, candidate_position={positions[candidate_idx]}, "
                         f"result={result}"
                     )
 
@@ -419,7 +419,6 @@ class ModelPipeline:
         speculations_by_pos: dict[int, int] = {}
         num_accepts = 0
         num_rejects = 0
-        num_emits = 0
         num_reads = 0
         num_writes = 0
 
@@ -435,23 +434,20 @@ class ModelPipeline:
             results_by_lane: dict[int, DecodeResult],
             accepted_tokens_by_lane: dict[int, int],
             accepts: int,
-        ) -> tuple[bool, int, int]:
-            nonlocal num_emits
+        ) -> tuple[bool, int, bool]:
             committed_accepts = 0
-            emitted_count = 0
+            emitted_owner_token = False
             for lane_idx in range(accepts + 1):
                 if lane_idx < accepts:
                     token_id = int(accepted_tokens_by_lane[lane_idx])
+                    committed_accepts += 1
                 else:
                     token_id = int(results_by_lane[lane_idx].token_ids[0])
+                    emitted_owner_token = True
                 emit(token_id)
-                num_emits += 1
-                emitted_count += 1
-                if lane_idx < accepts:
-                    committed_accepts += 1
                 if is_eos(token_id) or len(generated_tokens) >= max_new_tokens:
-                    return True, committed_accepts, emitted_count
-            return False, committed_accepts, emitted_count
+                    return True, committed_accepts, emitted_owner_token
+            return False, committed_accepts, emitted_owner_token
 
         start_time = time.time()
         prefill_results = self.prefill_forward(prompt_token_ids)
@@ -464,23 +460,25 @@ class ModelPipeline:
             allow_prefill=True,
         )[0]
         emit(int(bootstrap.token_ids[0]))
-        num_emits += 1
         if not is_eos(int(bootstrap.token_ids[0])) and len(generated_tokens) < max_new_tokens:
             self._record_speculations(bootstrap, speculations_by_pos, num_speculative_tokens)
             num_writes += self._write_speculation_window(bootstrap, num_speculative_tokens=num_speculative_tokens)
 
         while len(generated_tokens) < max_new_tokens:
+            # Wait for all packets for current speculative round to arrive
             round_results: list[DecodeResult] = []
             for _ in range(num_speculative_tokens + 1):
                 result = self.model.read_result()
                 num_reads += 1
                 round_results.append(result)
 
+            # Verify that all packets are valid
             results_by_lane = self.verify_packet_window(
                 round_results,
                 num_speculative_tokens=num_speculative_tokens,
             )
 
+            # Check which speculative lanes are accepted
             round_accepts = 0
             rejected_expected_token = False
             accepted_tokens_by_lane: dict[int, int] = {}
@@ -502,19 +500,22 @@ class ModelPipeline:
             for result in round_results:
                 speculations_by_pos.pop(int(result.positions[0]), None)
 
+            # Owner lane is the lane with lane_id=round_accepts
             owner = results_by_lane.get(round_accepts)
 
-            should_stop, committed_accepts, emitted_count = emit_committed_prefix(
+            # Emit the committed tokens and check if the generation should stop
+            should_stop, committed_accepts, emitted_owner_token = emit_committed_prefix(
                 results_by_lane,
                 accepted_tokens_by_lane,
                 round_accepts,
             )
             num_accepts += committed_accepts
-            if rejected_expected_token and emitted_count > round_accepts:
+            if rejected_expected_token and emitted_owner_token:
                 num_rejects += 1
             if should_stop:
                 break
 
+            # Record next speculation window and write to the pipeline
             next_window_start_pos = int(owner.positions[0])
             self._record_speculations(
                 owner,
@@ -540,7 +541,7 @@ class ModelPipeline:
 
         end_time = time.time()
         logger.debug(f"Time taken: {end_time - start_time} seconds")
-        logger.debug(f"Tokens per second: {num_emits / (end_time - start_time)}")
+        logger.debug(f"Tokens per second: {len(generated_tokens) / (end_time - start_time)}")
         logger.debug(
             f"Accept: {num_accepts}, Reject: {num_rejects}, Accept Rate: {num_accepts / (num_accepts + num_rejects + 1e-5)}"
         )

@@ -19,13 +19,13 @@ inline constexpr uint32_t kMetadataTensorBytes = METADATA_PAGE_WORDS * sizeof(ui
 
 struct DeepseekMetadata {
     // Fixed metadata page layout:
-    //   [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
+    //   [0] token_type, [1] request_id, [2] token_id, [3] position_id,
     //   [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
     //   [8:13] candidate_token_ids, [13:17] prefill_token_ids,
     //   [17:32] p_top15_indices, [32:40] p_top15_scores (two uint16/bf16 scores per word),
     //   [40:55] q_top15_indices, [55:63] q_top15_scores (two uint16/bf16 scores per word).
     uint32_t token_type;
-    uint32_t slot_id;
+    uint32_t request_id;
     uint32_t token_id;
     uint32_t position_id;
     uint32_t lane_idx;
@@ -43,6 +43,7 @@ struct DeepseekMetadata {
 
 static_assert(
     sizeof(DeepseekMetadata) == kMetadataTensorBytes, "DeepseekMetadata must stay one 256-byte fixed metadata page");
+static_assert(offsetof(DeepseekMetadata, request_id) == 4, "request_id offset changed");
 static_assert(offsetof(DeepseekMetadata, lane_idx) == 16, "lane_idx offset changed");
 static_assert(offsetof(DeepseekMetadata, temperature) == 20, "temperature offset changed");
 static_assert(offsetof(DeepseekMetadata, top_k) == 24, "top_k offset changed");

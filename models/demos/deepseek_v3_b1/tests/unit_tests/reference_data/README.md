@@ -136,7 +136,7 @@ A dynamic MTP packet should use this shape:
 
 ```json
 {
-  "user_id": 0,
+  "request_id": 0,
   "type": "BASE",
   "lane_idx": 0,
   "window_start_pos": 16,
@@ -151,7 +151,7 @@ A dynamic MTP packet should use this shape:
 }
 ```
 
-`user_id`
+`request_id`
 : Logical decode slot or batch slot. Current tests use single-user decode, so
   this is always `0`. It is still included because the device metadata page has
   a slot field and future batched traces may use it.
@@ -240,7 +240,7 @@ A dynamic MTP packet should use this shape:
 `expected_host.writes[].pos`
 : Absolute sequence position the written token should occupy.
 
-`expected_host.writes[].user_id`
+`expected_host.writes[].request_id`
 : Logical decode slot for the write. Current traces use `0`.
 
 `expected_host.writes[].prefill_id`

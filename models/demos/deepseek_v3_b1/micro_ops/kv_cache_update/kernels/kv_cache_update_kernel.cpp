@@ -95,7 +95,7 @@ void kernel_main() {
         uint32_t metadata_addr = get_common_arg_val<uint32_t>(1);
         volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
             reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
-        kv_cache_update.set_pos_and_slot(kv_cache_args, metadata_ptr->position_id, metadata_ptr->slot_id);
+        kv_cache_update.set_pos_and_slot(kv_cache_args, metadata_ptr->position_id, metadata_ptr->request_id);
     }
 #endif
     kv_cache_update(kv_cache_args);
