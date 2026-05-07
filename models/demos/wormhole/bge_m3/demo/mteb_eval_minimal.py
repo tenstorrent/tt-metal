@@ -39,7 +39,7 @@ from tqdm import tqdm
 import ttnn
 
 MODEL_NAME = "BAAI/bge-m3"
-ALL_TASKS = ["STSBenchmark", "SICK-R"]
+ALL_TASKS = ["STSBenchmark", "SICK-R", "ArguAna"]
 DEFAULT_TASKS = ALL_TASKS
 
 
@@ -172,6 +172,102 @@ class TTEmbedder:
         self.model.release_trace()
 
 
+class TTEmbedderNoTrace:
+    """MTEB adapter for BGE-M3 without trace capture.
+
+    Handles variable sequence lengths (needed for retrieval tasks like ArguAna
+    where texts exceed 512 tokens). Runs batch-32 forwards with per-batch
+    padded sequence length. Slower than TTEmbedder but supports full seq range.
+    """
+
+    def __init__(self, device, batch_size: int = 32, max_seq_len: int = 2048):
+        from models.common.auto_compose import to_torch_auto_compose
+        from models.demos.wormhole.bge_m3.tt.common import create_tt_model
+
+        logger.info(f"Loading TT model (no-trace): {MODEL_NAME} (batch={batch_size}, seq={max_seq_len})")
+        self.device = device
+        self.batch_size = batch_size
+        self.max_seq_len = max_seq_len
+        self.to_torch = to_torch_auto_compose
+
+        self.model_args, self.model, _ = create_tt_model(
+            mesh_device=device,
+            max_batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            dtype=ttnn.bfloat8_b,
+            hf_model_name=MODEL_NAME,
+        )
+
+        self._mteb_meta = ModelMeta.create_empty(overwrites={"name": f"tt-{MODEL_NAME}", "revision": None})
+
+        # Warmup
+        logger.info("Running warmup forward...")
+        enc = self.model_args.encode_prompts(["warmup"] * batch_size)
+        out = self.model(**enc["model_inputs"])
+        ttnn.synchronize_device(device)
+        ttnn.deallocate(out)
+        for v in enc["model_inputs"].values():
+            if hasattr(v, "deallocate"):
+                ttnn.deallocate(v)
+        logger.info("TT model ready (no-trace).")
+
+    @property
+    def mteb_model_meta(self):
+        return self._mteb_meta
+
+    def encode(self, inputs, *, task_metadata=None, hf_split=None, hf_subset=None, prompt_type=None, **kwargs):
+        all_texts = []
+        for batch in inputs:
+            all_texts.extend(batch["text"])
+
+        num_batches = math.ceil(len(all_texts) / self.batch_size)
+        all_embeddings = []
+        for start in tqdm(range(0, len(all_texts), self.batch_size), total=num_batches, desc="TT encode (no-trace)"):
+            batch_texts = all_texts[start : start + self.batch_size]
+            actual_batch_size = len(batch_texts)
+
+            # Pad to fixed batch size
+            while len(batch_texts) < self.batch_size:
+                batch_texts.append("")
+
+            enc = self.model_args.encode_prompts(batch_texts)
+            out = self.model(**enc["model_inputs"])
+            ttnn.synchronize_device(self.device)
+
+            hidden_states = self.to_torch(out, device=self.device)
+            hidden_states = hidden_states[:actual_batch_size]
+            normalized = _pool_and_normalize(hidden_states)
+            all_embeddings.append(normalized.cpu().numpy())
+
+            ttnn.deallocate(out)
+            for v in enc["model_inputs"].values():
+                if hasattr(v, "deallocate"):
+                    ttnn.deallocate(v)
+
+        return np.concatenate(all_embeddings, axis=0)
+
+    def similarity(self, embeddings1, embeddings2):
+        if isinstance(embeddings1, np.ndarray):
+            embeddings1 = torch.from_numpy(embeddings1)
+        if isinstance(embeddings2, np.ndarray):
+            embeddings2 = torch.from_numpy(embeddings2)
+        return torch.mm(embeddings1, embeddings2.t())
+
+    def similarity_pairwise(self, embeddings1, embeddings2):
+        if isinstance(embeddings1, np.ndarray):
+            embeddings1 = torch.from_numpy(embeddings1)
+        if isinstance(embeddings2, np.ndarray):
+            embeddings2 = torch.from_numpy(embeddings2)
+        return (embeddings1 * embeddings2).sum(dim=1)
+
+    def release(self):
+        pass
+
+
+# Tasks that need variable seq lengths (texts > 512 tokens)
+_RETRIEVAL_TASKS = {"ArguAna"}
+
+
 # ─── Evaluation runner ────────────────────────────────────────────────────────
 
 
@@ -183,7 +279,13 @@ def run_eval(model, task_names: list[str], output_dir: str, label: str) -> dict:
 
     logger.info(f"[{label}] Running MTEB on {len(tasks)} tasks: {[t.metadata.name for t in tasks]}")
     evaluation = mteb.MTEB(tasks=tasks)
-    results = evaluation.run(model, output_folder=output_dir, eval_splits=["test"], overwrite_results=True)
+    results = evaluation.run(
+        model,
+        output_folder=output_dir,
+        eval_splits=["test"],
+        overwrite_results=True,
+        encode_kwargs={"show_progress_bar": True},
+    )
 
     parsed = {}
     for task_result in results:
@@ -240,9 +342,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--task",
-        choices=["all", "STSBenchmark", "SICK-R"],
+        choices=["all"] + ALL_TASKS,
         default="STSBenchmark",
         help="Which MTEB task to run (default: STSBenchmark)",
+    )
+    parser.add_argument(
+        "--mode", choices=["both", "hf", "tt"], default="both", help="Which models to evaluate (default: both)"
     )
     parser.add_argument("--batch-size", type=int, default=32, help="TT model batch size")
     parser.add_argument("--max-seq-len", type=int, default=512, help="TT model max sequence length")
@@ -255,31 +360,59 @@ def main():
     output_base = Path(args.output_dir)
     output_base.mkdir(parents=True, exist_ok=True)
 
-    # ── HF ──
-    logger.info("=" * 60)
-    logger.info("Running HF reference evaluation")
-    logger.info("=" * 60)
-    hf_model = mteb.get_model(MODEL_NAME)
-    hf_results = run_eval(hf_model, tasks, str(output_base / "hf"), "HF")
-    del hf_model
+    hf_results = {}
+    tt_results = {}
 
-    logger.info("=" * 60)
-    logger.info("Running TT evaluation")
-    logger.info("=" * 60)
-    device = ttnn.open_device(
-        device_id=args.device_id,
-        trace_region_size=50_000_000,
-        num_command_queues=1,
-    )
-    try:
-        tt_model = TTEmbedder(device=device, batch_size=args.batch_size, max_seq_len=args.max_seq_len)
-        tt_results = run_eval(tt_model, tasks, str(output_base / "tt"), "TT")
-        tt_model.release()
-    finally:
-        ttnn.close_device(device)
+    # ── HF ──
+    if args.mode in ("both", "hf"):
+        logger.info("=" * 60)
+        logger.info("Running HF reference evaluation")
+        logger.info("=" * 60)
+        hf_model = mteb.get_model(MODEL_NAME)
+        hf_results = run_eval(hf_model, tasks, str(output_base / "hf"), "HF")
+        del hf_model
+
+    # ── TT ──
+    if args.mode in ("both", "tt"):
+        logger.info("=" * 60)
+        logger.info("Running TT evaluation")
+        logger.info("=" * 60)
+
+        # Split tasks: trace-based (fixed seq, fast) vs no-trace (variable seq, slow)
+        trace_tasks = [t for t in tasks if t not in _RETRIEVAL_TASKS]
+        notrace_tasks = [t for t in tasks if t in _RETRIEVAL_TASKS]
+
+        if trace_tasks:
+            device = ttnn.open_device(
+                device_id=args.device_id,
+                trace_region_size=50_000_000,
+                num_command_queues=1,
+            )
+            try:
+                tt_model = TTEmbedder(device=device, batch_size=args.batch_size, max_seq_len=args.max_seq_len)
+                tt_results.update(run_eval(tt_model, trace_tasks, str(output_base / "tt"), "TT"))
+                tt_model.release()
+            finally:
+                ttnn.close_device(device)
+
+        if notrace_tasks:
+            device = ttnn.open_device(device_id=args.device_id)
+            try:
+                tt_model = TTEmbedderNoTrace(device=device, batch_size=args.batch_size, max_seq_len=2048)
+                tt_results.update(run_eval(tt_model, notrace_tasks, str(output_base / "tt"), "TT (no-trace)"))
+                tt_model.release()
+            finally:
+                ttnn.close_device(device)
 
     # ── Compare ──
-    print_comparison(hf_results, tt_results)
+    if hf_results and tt_results:
+        print_comparison(hf_results, tt_results)
+    elif hf_results:
+        for task, score in hf_results.items():
+            logger.info(f"[HF] {task}: {score:.4f}" if score else f"[HF] {task}: N/A")
+    elif tt_results:
+        for task, score in tt_results.items():
+            logger.info(f"[TT] {task}: {score:.4f}" if score else f"[TT] {task}: N/A")
 
     results_file = output_base / "comparison.json"
     with open(results_file, "w") as f:
