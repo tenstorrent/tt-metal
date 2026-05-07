@@ -1662,6 +1662,53 @@ AdjacencyGraph<NodeId> create_1d_ring_graph(size_t length) {
     return AdjacencyGraph<NodeId>(adj_map);
 }
 
+// Ring (cycle) where each undirected ring edge is represented by `channels` parallel adjacency entries in each
+// direction — models multiple fabric links between adjacent "stages" on the ring.
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_1d_ring_graph_with_channels(size_t length, size_t channels) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    for (size_t i = 0; i < length; ++i) {
+        std::vector<NodeId> neighbors;
+        size_t left = (i == 0) ? length - 1 : i - 1;
+        size_t right = (i == length - 1) ? 0 : i + 1;
+        for (size_t c = 0; c < channels; ++c) {
+            neighbors.push_back(static_cast<NodeId>(left));
+        }
+        for (size_t c = 0; c < channels; ++c) {
+            neighbors.push_back(static_cast<NodeId>(right));
+        }
+        adj_map[static_cast<NodeId>(i)] = neighbors;
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
+// Open path (line) with `channels` parallel adjacency entries between consecutive nodes.
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_1d_chain_graph_with_channels(size_t length, size_t channels) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    for (size_t i = 0; i < length; ++i) {
+        std::vector<NodeId> neighbors;
+        if (i > 0) {
+            for (size_t c = 0; c < channels; ++c) {
+                neighbors.push_back(static_cast<NodeId>(i - 1));
+            }
+        }
+        if (i < length - 1) {
+            for (size_t c = 0; c < channels; ++c) {
+                neighbors.push_back(static_cast<NodeId>(i + 1));
+            }
+        }
+        adj_map[static_cast<NodeId>(i)] = neighbors;
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
 // Helper function to create a 2D torus graph (wraps around both dimensions)
 template <typename NodeId>
 AdjacencyGraph<NodeId> create_2d_torus_graph(size_t rows, size_t cols) {
@@ -5043,6 +5090,242 @@ TEST_F(TopologySolverTest, SatStress_MeshOnMesh_StrictChannels) {
         /* quiet_mode= */ true,
         TopologyMappingSolverEngine::Dfs);
     EXPECT_TRUE(dfs_result.success) << "DFS STRICT should also succeed: " << dfs_result.error_message;
+}
+
+// 48-node logical line (unit edges) on a 64-node physical ring with 4 parallel links per ring hop.
+TEST_F(TopologySolverTest, SolveTopologyMapping_Path48OnRing64_FourChannelsStrict) {
+    constexpr size_t kRingNodes = 64;
+    constexpr size_t kPathNodes = 48;
+    constexpr size_t kChannelsRing = 4;
+    constexpr size_t kChannelsLine = 1;
+
+    auto target_graph = create_1d_chain_graph_with_channels<TestTargetNode>(kPathNodes, kChannelsLine);
+    auto global_graph = create_1d_ring_graph_with_channels<TestGlobalNode>(kRingNodes, kChannelsRing);
+
+    ASSERT_EQ(target_graph.get_nodes().size(), kPathNodes);
+    ASSERT_EQ(global_graph.get_nodes().size(), kRingNodes);
+
+    // Endpoint degrees: one neighbor direction × kChannels; interior: two directions × kChannels.
+    EXPECT_EQ(target_graph.get_neighbors(TestTargetNode{0}).size(), kChannelsLine);
+    EXPECT_EQ(target_graph.get_neighbors(TestTargetNode{kPathNodes - 1}).size(), kChannelsLine);
+    EXPECT_EQ(target_graph.get_neighbors(TestTargetNode{kPathNodes / 2}).size(), 2 * kChannelsLine);
+
+    // Ring: each node lists kChannels edges to prev and kChannels to next.
+    EXPECT_EQ(global_graph.get_neighbors(TestGlobalNode{0}).size(), 2 * kChannelsRing);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::STRICT,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+
+    EXPECT_TRUE(result.success) << result.error_message;
+    EXPECT_TRUE(result.warnings.empty()) << "STRICT with matching channel counts should not warn";
+    EXPECT_EQ(result.target_to_global.size(), kPathNodes);
+
+    std::vector<TestGlobalNode> mapped_globals;
+    mapped_globals.reserve(kPathNodes);
+    for (size_t i = 0; i < kPathNodes; ++i) {
+        ASSERT_TRUE(result.target_to_global.contains(static_cast<TestTargetNode>(i)));
+        mapped_globals.push_back(result.target_to_global.at(static_cast<TestTargetNode>(i)));
+    }
+    std::set<TestGlobalNode> distinct(mapped_globals.begin(), mapped_globals.end());
+    EXPECT_EQ(distinct.size(), kPathNodes) << "Injective mapping onto ring nodes";
+
+    auto ring_neighbor = [](TestGlobalNode a, TestGlobalNode b, size_t ring_len) {
+        const auto ua = static_cast<size_t>(a);
+        const auto ub = static_cast<size_t>(b);
+        return (ua + 1) % ring_len == ub % ring_len || (ub + 1) % ring_len == ua % ring_len;
+    };
+
+    for (size_t i = 0; i + 1 < kPathNodes; ++i) {
+        EXPECT_TRUE(ring_neighbor(mapped_globals[i], mapped_globals[i + 1], kRingNodes))
+            << "Logical edge (" << i << "," << (i + 1) << ") must map to adjacent ring nodes";
+    }
+
+    // Labeled path P_48 in cycle C_64: choose image of target 0 on any of 64 ring positions, then traverse in one of
+    // two directions along the cycle → 64 × 2 = 128 distinct embeddings.
+    constexpr size_t kExpectedEmbeddings = 128;
+    const auto all_embeddings = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::STRICT,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Dfs);
+
+    EXPECT_EQ(all_embeddings.size(), kExpectedEmbeddings)
+        << "solve_topology_mapping_all (DFS) should find exactly 128 STRICT embeddings (64 offsets × 2 orientations)";
+    std::set<std::map<TestTargetNode, TestGlobalNode>> distinct_maps;
+    for (const auto& emb : all_embeddings) {
+        EXPECT_TRUE(emb.success) << emb.error_message;
+        EXPECT_TRUE(emb.warnings.empty());
+        EXPECT_EQ(emb.target_to_global.size(), kPathNodes);
+        distinct_maps.insert(emb.target_to_global);
+    }
+    EXPECT_EQ(distinct_maps.size(), kExpectedEmbeddings) << "Each embedding should be a distinct assignment";
+}
+
+namespace {
+
+// Physical mesh-level adjacency captured from cluster tooling output (Logical/Physical Mesh-Level Graph print).
+AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace() {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map{
+        {static_cast<TestGlobalNode>(0), {57, 57, 50, 50, 57, 57, 50, 50, 57, 57, 57, 57, 50, 50, 50, 50}},
+        {static_cast<TestGlobalNode>(1),
+         {37, 37, 37, 37, 55, 55, 16, 16, 37, 37, 37, 37, 16, 16, 55, 55, 16, 16, 16, 16}},
+        {static_cast<TestGlobalNode>(2), {53, 53, 14, 14, 53, 53, 14, 14, 53, 53, 14, 14, 53, 53, 14, 14}},
+        {static_cast<TestGlobalNode>(3), {45, 45, 45, 45, 56, 56, 45, 45, 56, 56, 56, 56, 45, 45, 56, 56}},
+        {static_cast<TestGlobalNode>(4), {13, 13, 58, 58, 13, 13, 13, 13, 58, 58, 58, 58, 13, 13, 58, 58}},
+        {static_cast<TestGlobalNode>(5), {34, 34, 57, 57, 34, 34, 57, 57, 34, 34, 57, 57, 57, 57, 34, 34}},
+        {static_cast<TestGlobalNode>(6), {31, 31, 31, 31, 48, 48, 48, 48, 48, 48, 31, 31, 31, 31, 48, 48}},
+        {static_cast<TestGlobalNode>(7), {25, 25, 25, 25, 12, 12, 25, 25, 12, 12, 12, 12, 25, 25, 12, 12}},
+        {static_cast<TestGlobalNode>(8), {55, 55, 55, 55, 42, 42, 55, 55, 42, 42, 42, 42, 55, 55, 42, 42}},
+        {static_cast<TestGlobalNode>(9), {62, 62, 62, 62, 23, 23, 62, 62, 23, 23, 23, 23, 62, 62, 23, 23}},
+        {static_cast<TestGlobalNode>(10), {29, 29, 29, 29, 28, 28, 29, 29, 28, 28, 29, 29, 28, 28, 28, 28}},
+        {static_cast<TestGlobalNode>(11),
+         {59, 59, 40, 40, 59, 59, 33, 33, 59, 59, 59, 59, 40, 40, 33, 33, 40, 40, 40, 40}},
+        {static_cast<TestGlobalNode>(12), {7, 7, 16, 16, 16, 16, 7, 7, 7, 7, 7, 7, 16, 16, 16, 16}},
+        {static_cast<TestGlobalNode>(13), {33, 33, 4, 4, 45, 45, 33, 33, 4, 4, 33, 33, 4, 4, 4, 4, 33, 33, 45, 45}},
+        {static_cast<TestGlobalNode>(14), {37, 37, 52, 52, 2, 2, 2, 2, 2, 2, 37, 37, 52, 52, 37, 37, 37, 37, 2, 2}},
+        {static_cast<TestGlobalNode>(15), {31, 31, 31, 31, 58, 58, 58, 58, 58, 58, 31, 31, 31, 31, 58, 58}},
+        {static_cast<TestGlobalNode>(16), {12, 12, 1, 1, 1, 1, 12, 12, 1, 1, 12, 12, 1, 1, 12, 12}},
+        {static_cast<TestGlobalNode>(17), {29, 29, 48, 48, 29, 29, 48, 48, 48, 48, 29, 29, 48, 48, 29, 29}},
+        {static_cast<TestGlobalNode>(18), {19, 19, 30, 30, 30, 30, 19, 19, 19, 19, 30, 30, 19, 19, 30, 30}},
+        {static_cast<TestGlobalNode>(19), {18, 18, 18, 18, 18, 18, 35, 35, 35, 35, 35, 35, 18, 18, 35, 35}},
+        {static_cast<TestGlobalNode>(20), {60, 60, 51, 51, 51, 51, 60, 60, 51, 51, 60, 60, 60, 60, 51, 51}},
+        {static_cast<TestGlobalNode>(21), {63, 63, 63, 63, 60, 60, 60, 60, 63, 63, 60, 60, 63, 63, 60, 60}},
+        {static_cast<TestGlobalNode>(22), {45, 45, 45, 45, 32, 32, 45, 45, 32, 32, 32, 32, 32, 32, 45, 45}},
+        {static_cast<TestGlobalNode>(23), {42, 42, 9, 9, 9, 9, 42, 42, 9, 9, 9, 9, 42, 42, 42, 42}},
+        {static_cast<TestGlobalNode>(24), {40, 40, 61, 61, 61, 61, 40, 40, 40, 40, 61, 61, 40, 40, 61, 61}},
+        {static_cast<TestGlobalNode>(25), {50, 50, 7, 7, 7, 7, 7, 7, 7, 7, 50, 50, 50, 50, 50, 50}},
+        {static_cast<TestGlobalNode>(26), {44, 44, 39, 39, 44, 44, 39, 39, 44, 44, 44, 44, 39, 39, 39, 39}},
+        {static_cast<TestGlobalNode>(27), {32, 32, 32, 32, 51, 51, 51, 51, 32, 32, 51, 51, 51, 51, 32, 32}},
+        {static_cast<TestGlobalNode>(28), {47, 47, 47, 47, 10, 10, 10, 10, 47, 47, 47, 47, 10, 10, 10, 10}},
+        {static_cast<TestGlobalNode>(29), {10, 10, 17, 17, 10, 10, 10, 10, 17, 17, 17, 17, 10, 10, 17, 17}},
+        {static_cast<TestGlobalNode>(30), {59, 59, 59, 59, 18, 18, 59, 59, 18, 18, 18, 18, 59, 59, 18, 18}},
+        {static_cast<TestGlobalNode>(31), {15, 15, 15, 15, 6, 6, 15, 15, 15, 15, 6, 6, 6, 6, 6, 6}},
+        {static_cast<TestGlobalNode>(32), {27, 27, 22, 22, 22, 22, 22, 22, 22, 22, 27, 27, 27, 27, 27, 27}},
+        {static_cast<TestGlobalNode>(33),
+         {52, 52, 11, 11, 13, 13, 11, 11, 13, 13, 52, 52, 13, 13, 52, 52, 13, 13, 52, 52}},
+        {static_cast<TestGlobalNode>(34), {5, 5, 5, 5, 46, 46, 5, 5, 5, 5, 46, 46, 46, 46, 46, 46}},
+        {static_cast<TestGlobalNode>(35), {19, 19, 36, 36, 36, 36, 19, 19, 19, 19, 36, 36, 19, 19, 36, 36}},
+        {static_cast<TestGlobalNode>(36), {35, 35, 35, 35, 62, 62, 62, 62, 35, 35, 62, 62, 35, 35, 62, 62}},
+        {static_cast<TestGlobalNode>(37), {14, 14, 1, 1, 1, 1, 41, 41, 14, 14, 1, 1, 1, 1, 14, 14, 14, 14, 41, 41}},
+        {static_cast<TestGlobalNode>(38), {49, 49, 52, 52, 52, 52, 52, 52, 49, 49, 49, 49, 52, 52, 49, 49}},
+        {static_cast<TestGlobalNode>(39), {41, 41, 41, 41, 26, 26, 26, 26, 26, 26, 26, 26, 41, 41, 41, 41}},
+        {static_cast<TestGlobalNode>(40),
+         {24, 24, 11, 11, 24, 24, 24, 24, 54, 54, 24, 24, 11, 11, 11, 11, 54, 54, 11, 11}},
+        {static_cast<TestGlobalNode>(41),
+         {54, 54, 37, 37, 39, 39, 54, 54, 39, 39, 39, 39, 37, 37, 54, 54, 54, 54, 39, 39}},
+        {static_cast<TestGlobalNode>(42), {8, 8, 23, 23, 8, 8, 23, 23, 8, 8, 23, 23, 23, 23, 8, 8}},
+        {static_cast<TestGlobalNode>(43), {46, 46, 53, 53, 53, 53, 46, 46, 46, 46, 53, 53, 46, 46, 53, 53}},
+        {static_cast<TestGlobalNode>(44), {63, 63, 26, 26, 26, 26, 63, 63, 63, 63, 26, 26, 63, 63, 26, 26}},
+        {static_cast<TestGlobalNode>(45), {22, 22, 13, 13, 22, 22, 22, 22, 3, 3, 3, 3, 3, 3, 22, 22, 3, 3, 13, 13}},
+        {static_cast<TestGlobalNode>(46), {43, 43, 43, 43, 34, 34, 43, 43, 34, 34, 34, 34, 43, 43, 34, 34}},
+        {static_cast<TestGlobalNode>(47), {49, 49, 28, 28, 28, 28, 49, 49, 28, 28, 28, 28, 49, 49, 49, 49}},
+        {static_cast<TestGlobalNode>(48), {6, 6, 6, 6, 17, 17, 17, 17, 17, 17, 6, 6, 6, 6, 17, 17}},
+        {static_cast<TestGlobalNode>(49), {38, 38, 47, 47, 47, 47, 38, 38, 47, 47, 38, 38, 47, 47, 38, 38}},
+        {static_cast<TestGlobalNode>(50), {25, 25, 25, 25, 0, 0, 0, 0, 0, 0, 0, 0, 25, 25, 25, 25}},
+        {static_cast<TestGlobalNode>(51), {20, 20, 27, 27, 20, 20, 20, 20, 27, 27, 27, 27, 27, 27, 20, 20}},
+        {static_cast<TestGlobalNode>(52),
+         {14, 14, 38, 38, 33, 33, 33, 33, 33, 33, 14, 14, 38, 38, 38, 38, 38, 38, 33, 33}},
+        {static_cast<TestGlobalNode>(53), {2, 2, 43, 43, 43, 43, 2, 2, 2, 2, 2, 2, 43, 43, 43, 43}},
+        {static_cast<TestGlobalNode>(54),
+         {41, 41, 41, 41, 40, 40, 41, 41, 56, 56, 41, 41, 40, 40, 56, 56, 56, 56, 56, 56}},
+        {static_cast<TestGlobalNode>(55), {61, 61, 8, 8, 8, 8, 8, 8, 61, 61, 61, 61, 8, 8, 1, 1, 61, 61, 1, 1}},
+        {static_cast<TestGlobalNode>(56), {54, 54, 3, 3, 54, 54, 3, 3, 54, 54, 3, 3, 3, 3, 54, 54}},
+        {static_cast<TestGlobalNode>(57), {5, 5, 5, 5, 0, 0, 0, 0, 5, 5, 5, 5, 0, 0, 0, 0}},
+        {static_cast<TestGlobalNode>(58), {4, 4, 4, 4, 15, 15, 4, 4, 15, 15, 15, 15, 15, 15, 4, 4}},
+        {static_cast<TestGlobalNode>(59), {11, 11, 11, 11, 30, 30, 30, 30, 11, 11, 11, 11, 30, 30, 30, 30}},
+        {static_cast<TestGlobalNode>(60), {21, 21, 20, 20, 20, 20, 20, 20, 21, 21, 21, 21, 21, 21, 20, 20}},
+        {static_cast<TestGlobalNode>(61), {24, 24, 24, 24, 24, 24, 55, 55, 55, 55, 24, 24, 55, 55, 55, 55}},
+        {static_cast<TestGlobalNode>(62), {36, 36, 9, 9, 36, 36, 9, 9, 9, 9, 9, 9, 36, 36, 36, 36}},
+        {static_cast<TestGlobalNode>(63), {44, 44, 44, 44, 21, 21, 21, 21, 44, 44, 21, 21, 21, 21, 44, 44}},
+    };
+    return AdjacencyGraph<TestGlobalNode>(global_adj_map);
+}
+
+}  // namespace
+
+// Logical mesh-level path (48 meshes in a line, unit edges) into the physical mesh-level graph from a captured
+// cluster trace; enumerate embeddings up to the implementation cap (topology_solver.tpp).
+// Multi-solution Sat requests fall back to DFS internally (Kissat is not incremental); we still compare explicit DFS
+// vs Sat-engine enumeration and require identical solution sets.
+//
+// Injective path embeddings for this multigraph fixture total 4734 (below the enumeration hard cap), so both engines
+// must return exactly that many distinct mappings.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MeshLevelClusterTrace48Into64_AllSolutions) {
+    constexpr size_t kPathNodes = 48;
+    constexpr size_t kExpectedReturnedSolutions = 4734;
+    auto target_graph = create_1d_chain_graph<TestTargetNode>(kPathNodes);
+    auto global_graph = make_mesh_level_physical_graph_cluster_trace();
+
+    ASSERT_EQ(target_graph.get_nodes().size(), kPathNodes);
+    ASSERT_EQ(global_graph.get_nodes().size(), 64u);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto sat_once = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_once.success) << sat_once.error_message;
+    EXPECT_EQ(sat_once.target_to_global.size(), kPathNodes);
+
+    const auto dfs_embeddings = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Dfs);
+
+    const auto sat_engine_embeddings = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+
+    log_info(tt::LogFabric, "Found {} solutions with Sat", sat_engine_embeddings.size());
+    log_info(tt::LogFabric, "Found {} solutions with DFS", dfs_embeddings.size());
+
+    ASSERT_EQ(dfs_embeddings.size(), kExpectedReturnedSolutions)
+        << "DFS enumeration must match exhaustive embedding count for this fixture";
+    ASSERT_EQ(sat_engine_embeddings.size(), kExpectedReturnedSolutions)
+        << "Sat-engine enumeration must match exhaustive embedding count for this fixture";
+    ASSERT_EQ(dfs_embeddings.size(), sat_engine_embeddings.size())
+        << "DFS and Sat-engine must report the exact same solution count";
+
+    std::set<std::map<TestTargetNode, TestGlobalNode>> dfs_maps;
+    for (const auto& emb : dfs_embeddings) {
+        ASSERT_TRUE(emb.success) << "DFS: " << emb.error_message;
+        ASSERT_TRUE(emb.warnings.empty()) << "DFS";
+        ASSERT_EQ(emb.target_to_global.size(), kPathNodes) << "DFS";
+        dfs_maps.insert(emb.target_to_global);
+    }
+    ASSERT_EQ(dfs_maps.size(), dfs_embeddings.size()) << "DFS enumeration must not list duplicate mappings";
+
+    std::set<std::map<TestTargetNode, TestGlobalNode>> sat_maps;
+    for (const auto& emb : sat_engine_embeddings) {
+        ASSERT_TRUE(emb.success) << "Sat-engine: " << emb.error_message;
+        ASSERT_TRUE(emb.warnings.empty()) << "Sat-engine";
+        ASSERT_EQ(emb.target_to_global.size(), kPathNodes) << "Sat-engine";
+        sat_maps.insert(emb.target_to_global);
+    }
+    ASSERT_EQ(sat_maps.size(), sat_engine_embeddings.size())
+        << "Sat-engine enumeration must not list duplicate mappings";
+
+    ASSERT_EQ(dfs_maps, sat_maps) << "DFS and Sat-engine must find exactly the same set of embeddings";
 }
 
 // 32-node ring on 8×8 mesh with forbidden + required + cardinality constraints.

@@ -35,6 +35,11 @@
 
 namespace tt::tt_fabric {
 
+namespace {
+// Single definition of the enumeration safety cap for solve_topology_mapping_n (max_solutions 0 or over-limit).
+constexpr std::size_t kTopologyMappingEnumerateSolutionsHardCap = 10000;
+}  // namespace
+
 // AdjacencyGraph template method implementations
 template <typename NodeId>
 AdjacencyGraph<NodeId>::AdjacencyGraph(const typename AdjacencyGraph<NodeId>::AdjacencyMap& adjacency_map) : adj_map_(adjacency_map) {
@@ -1170,9 +1175,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     TopologyMappingSolverEngine solver_engine) {
     using namespace tt::tt_fabric::detail;
 
-    static constexpr size_t kHardCap = 1000;
-    if (max_solutions == 0 || max_solutions > kHardCap) {
-        max_solutions = kHardCap;
+    if (max_solutions == 0 || max_solutions > kTopologyMappingEnumerateSolutionsHardCap) {
+        max_solutions = kTopologyMappingEnumerateSolutionsHardCap;
     }
 
     constraints.set_quiet_mode(quiet_mode);
@@ -1183,7 +1187,13 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     std::vector<std::vector<int>> raw_mappings;
     raw_mappings.reserve(max_solutions);
 
-    if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
+    const bool use_sat_single =
+        topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global) &&
+        max_solutions <= 1;
+
+    // Kissat forbids kissat_add after kissat_solve; listing multiple SAT models would require a full CNF re-encode per
+    // blocking clause (topology_sat_search_n). For max_solutions > 1, enumerate with DFS instead — same embedding rules.
+    if (use_sat_single) {
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
         sat_engine.search_n(graph_data, constraint_data, connection_validation_mode, max_solutions, raw_mappings, quiet_mode);
     } else {
@@ -1223,10 +1233,22 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine) {
-    static constexpr size_t kAllCap = 1000;
-    return solve_topology_mapping_n<TargetNode, GlobalNode>(
-        target_graph, global_graph, constraints, kAllCap,
-        connection_validation_mode, quiet_mode, solver_engine);
+    std::vector<MappingResult<TargetNode, GlobalNode>> results = solve_topology_mapping_n<TargetNode, GlobalNode>(
+        target_graph,
+        global_graph,
+        constraints,
+        0,
+        connection_validation_mode,
+        quiet_mode,
+        solver_engine);
+    if (results.size() == kTopologyMappingEnumerateSolutionsHardCap) {
+        log_warning(
+            tt::LogFabric,
+            "solve_topology_mapping_all: enumeration safety cap reached ({} solutions); more valid mappings may "
+            "exist",
+            kTopologyMappingEnumerateSolutionsHardCap);
+    }
+    return results;
 }
 
 // ============================================================================
@@ -3519,4 +3541,3 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
 }  // namespace tt::tt_fabric::detail
 
 #endif  // TOPOLOGY_SOLVER_TPP
-

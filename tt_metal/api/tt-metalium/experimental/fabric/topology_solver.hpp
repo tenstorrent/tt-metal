@@ -605,10 +605,15 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
  * collecting distinct solutions until either max_solutions mappings have been found or the
  * problem space is exhausted. Each returned MappingResult is individually validated.
  *
+ * With TopologyMappingSolverEngine::Sat and max_solutions > 1, enumeration uses DFS: Kissat cannot add clauses after a
+ * solve, so SAT multi-model listing would otherwise require a full re-encode per solution. Single-solve (max_solutions
+ * <= 1) still uses Kissat when SAT is selected.
+ *
  * @param target_graph The target (sub-)graph pattern to embed
  * @param global_graph The host graph to embed into
  * @param constraints Mapping constraints
- * @param max_solutions Maximum number of solutions to return (0 means return all, capped at 1000)
+ * @param max_solutions Maximum number of solutions to return (0 means enumerate up to the
+ *        implementation-defined safety limit; values above that limit are clamped the same way)
  * @param connection_validation_mode STRICT or RELAXED channel validation
  * @param quiet_mode Suppress verbose logging
  * @param solver_engine Which backend to use
@@ -625,9 +630,9 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
 
 /**
- * @brief Find all distinct valid topology mappings, capped at 1000 to prevent runaway.
+ * @brief Find all distinct valid topology mappings up to the implementation enumeration limit.
  *
- * Equivalent to solve_topology_mapping_n(..., 1000, ...).
+ * Equivalent to solve_topology_mapping_n(..., 0, ...) (see max_solutions semantics there).
  *
  * @param target_graph The target (sub-)graph pattern to embed
  * @param global_graph The host graph to embed into
@@ -635,7 +640,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
  * @param connection_validation_mode STRICT or RELAXED channel validation
  * @param quiet_mode Suppress verbose logging
  * @param solver_engine Which backend to use
- * @return Vector of all valid MappingResults found (capped at 1000)
+ * @return Vector of all valid MappingResults found within that limit. If the result count equals the
+ *         implementation enumeration cap, a warning is logged: more solutions may exist.
  */
 template <typename TargetNode, typename GlobalNode>
 std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
@@ -1403,4 +1409,3 @@ struct MappingValidator {
 #endif
 // NOLINTNEXTLINE(misc-header-include-cycle) - Guard macro prevents actual circular dependency
 #include <tt-metalium/experimental/fabric/topology_solver.tpp>
-

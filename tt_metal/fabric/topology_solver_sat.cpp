@@ -1343,11 +1343,12 @@ bool topology_sat_search_n(
         return false;
     }
 
-    // Kissat does NOT support incremental solving. Reinitialise a fresh solver for every
-    // iteration, re-encoding all hard constraints plus accumulated blocking clauses.
+    // Kissat forbids kissat_add after kissat_solve (no incremental clauses). Enumerating models therefore
+    // requires either a fresh solver + full re-encode per blocking clause (very slow) or delegating multi-solution
+    // enumeration to DFS from solve_topology_mapping_n. This function keeps the re-encode loop for callers that
+    // invoke it directly with max_solutions==1 only.
     std::vector<std::vector<int>> blocking_clauses;
 
-    // Dry-run to establish the literal layout (enc indices are stable across fresh instances).
     TopologySatHardEncoding enc;
     {
         TopologySatSolver probe;
@@ -1392,7 +1393,7 @@ bool topology_sat_search_n(
                 break;
             }
             const auto& globs = iter_enc.allowed_global_idx[t];
-            const auto& lits  = iter_enc.assign_lit[t];
+            const auto& lits = iter_enc.assign_lit[t];
             bool found_k = false;
             for (size_t k = 0; k < globs.size(); ++k) {
                 if (static_cast<int>(globs[k]) == chosen_global) {

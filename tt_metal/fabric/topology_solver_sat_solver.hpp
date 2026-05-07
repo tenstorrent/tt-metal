@@ -9,9 +9,9 @@
 namespace tt::tt_fabric::detail {
 
 /**
- * Thin IPASIR-style facade over CaDiCaL (`cadical.hpp`). The wire protocol matches DIMACS conventions: positive
- * integers identify variables, 0 terminates a clause, solve() returns kSat / kUnsat / 0 (undetermined) following
- * IPASIR semantics. CaDiCaL is incremental: add() after solve() is supported.
+ * Thin IPASIR-style facade over CaDiCaL (`cadical.hpp`). DIMACS wire protocol: positive variable ids, 0 ends a
+ * clause; solve() returns kSat / kUnsat / 0 (IPASIR). CaDiCaL is incremental — add() after solve() is supported,
+ * which multi-model and blocking-clause enumeration rely on for throughput versus one-shot solvers.
  */
 struct TopologySatSolver {
     TopologySatSolver();
