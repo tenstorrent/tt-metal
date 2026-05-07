@@ -26,6 +26,7 @@ from models.experimental.tt_symbiote.core.run_config import TracedRun
 
 # FIXED IMPORTS: Use Qwen-specific modules from their dedicated files
 from models.experimental.tt_symbiote.modules.qwen_moe import TTNNQwen3MoE
+from models.experimental.tt_symbiote.modules.qwen_norm import TTNNQwen3MoeRMSNorm
 from models.experimental.tt_symbiote.modules.attention import PagedAttentionConfig
 from models.experimental.tt_symbiote.modules.qwen_attention import (
     TTNNQwen3LinearAttention,
@@ -138,6 +139,7 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     linear_attn_class = None
     full_attn_class = None
     moe_class = None
+    rms_norm_class = None
 
     for layer in model.model.layers:
         layer_type = getattr(layer, "layer_type", None)
@@ -156,8 +158,14 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
             moe_class = layer.mlp.__class__
             print(f"Found MoE class: {moe_class.__name__}")
 
+        # Identify the per-block RMSNorm class (input_layernorm shares its class
+        # with post_attention_layernorm and the final model.norm).
+        if rms_norm_class is None and hasattr(layer, "input_layernorm"):
+            rms_norm_class = layer.input_layernorm.__class__
+            print(f"Found RMSNorm class: {rms_norm_class.__name__}")
+
         # Stop once we've found all classes
-        if linear_attn_class and full_attn_class and moe_class:
+        if linear_attn_class and full_attn_class and moe_class and rms_norm_class:
             break
 
     # Fallback: if layer_type attribute doesn't exist, inspect class names
@@ -186,6 +194,8 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     # Build module replacement dict
     # Check if we should skip TTNN for linear attention (useful for debugging)
     use_cpu_linear_attn = os.environ.get("TT_QWEN_CPU_LINEAR_ATTN", "0").lower() in ("1", "true", "yes")
+    # Allow disabling the RMSNorm port for A/B comparison.
+    use_cpu_rms_norm = os.environ.get("TT_QWEN_CPU_RMS_NORM", "0").lower() in ("1", "true", "yes")
 
     nn_to_ttnn = {}
     if linear_attn_class:
@@ -199,6 +209,13 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     # When sparsity_sum == 0, we return zeros instead of calling sparse_matmul
     if moe_class:
         nn_to_ttnn[moe_class] = TTNNQwen3MoE
+    # Replace Qwen3_5MoeRMSNorm so input_layernorm / post_attention_layernorm /
+    # model.norm stop falling back to torch (the dominant `_unwrap_to_torch`
+    # cost in the current host trace -- ~20 s over 128 generated tokens).
+    if rms_norm_class and not use_cpu_rms_norm:
+        nn_to_ttnn[rms_norm_class] = TTNNQwen3MoeRMSNorm
+    elif use_cpu_rms_norm:
+        print("[DEBUG] TT_QWEN_CPU_RMS_NORM=1: Using PyTorch for Qwen3_5MoeRMSNorm")
 
     print(f"Module mappings: {nn_to_ttnn}")
 

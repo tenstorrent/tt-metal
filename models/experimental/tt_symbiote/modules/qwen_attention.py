@@ -1049,9 +1049,18 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # TTNN linear projections
         self.in_proj_qkv = None  # TTNNLinear: hidden_size -> key_dim * 2 + value_dim
         self.in_proj_z = None  # TTNNLinear: hidden_size -> value_dim
-        self.in_proj_a = None  # TTNNLinear: hidden_size -> num_v_heads
-        self.in_proj_b = None  # TTNNLinear: hidden_size -> num_v_heads
+        self.in_proj_a = None  # nn.Linear (kept for torch fallback / DEBUG); hot path uses _in_proj_a_weight_tt
+        self.in_proj_b = None  # nn.Linear (kept for torch fallback / DEBUG); hot path uses _in_proj_b_weight_tt
         self.out_proj = None  # TTNNLinear: value_dim -> hidden_size
+
+        # Replicated TTNN weights for the small a/b projections (hidden_size -> num_v_heads).
+        # Populated in ``move_weights_to_device_impl``; consumed by ``forward`` via
+        # ``ttnn.linear`` so we no longer round-trip ``hidden_states`` through torch just to
+        # multiply against tiny weight matrices.
+        self._in_proj_a_torch_weight = None  # bf16 torch tensor [num_v_heads, hidden_size]
+        self._in_proj_b_torch_weight = None  # bf16 torch tensor [num_v_heads, hidden_size]
+        self._in_proj_a_weight_tt = None  # device tensor [hidden_size, num_v_heads], replicated
+        self._in_proj_b_weight_tt = None  # device tensor [hidden_size, num_v_heads], replicated
 
         # DeltaNet kernel parameters (kept on PyTorch)
         self.conv1d = None  # PyTorch Conv1d for causal convolution
@@ -1101,11 +1110,17 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # These take replicated input (full hidden_states) and produce sharded output
         new_layer.in_proj_qkv = LinearClsIn.from_torch(torch_layer.in_proj_qkv)
         new_layer.in_proj_z = LinearClsIn.from_torch(torch_layer.in_proj_z)
-        # in_proj_a and in_proj_b have tiny output dims (num_v_heads=4) that can't be col-sharded
-        # Keep as PyTorch layers to avoid distributed weight replication issues
-        # (TTNNLinear doesn't replicate weights across mesh devices, causing garbage on non-device-0)
-        new_layer.in_proj_a = torch_layer.in_proj_a  # PyTorch nn.Linear
-        new_layer.in_proj_b = torch_layer.in_proj_b  # PyTorch nn.Linear
+        # in_proj_a / in_proj_b have a tiny output dim (num_v_heads, e.g. 32) that can't be
+        # col-sharded across the mesh. Instead of dropping back to torch, we stash the
+        # weights here and stage them as REPLICATED TTNN tensors in
+        # ``move_weights_to_device_impl`` so each device computes the full output locally.
+        # The torch nn.Linear modules are kept around for the pure-torch fallback branch and
+        # for DEBUG comparisons; the hybrid hot path uses ``self._in_proj_a_weight_tt`` /
+        # ``self._in_proj_b_weight_tt`` instead.
+        new_layer.in_proj_a = torch_layer.in_proj_a  # PyTorch nn.Linear (kept for fallback / debug only)
+        new_layer.in_proj_b = torch_layer.in_proj_b  # PyTorch nn.Linear (kept for fallback / debug only)
+        new_layer._in_proj_a_torch_weight = torch_layer.in_proj_a.weight.detach().to(torch.bfloat16)
+        new_layer._in_proj_b_torch_weight = torch_layer.in_proj_b.weight.detach().to(torch.bfloat16)
         new_layer.out_proj = LinearClsOut.from_torch(torch_layer.out_proj)
 
         # Keep DeltaNet kernel components as references (not TTNN)
@@ -1123,19 +1138,77 @@ class TTNNQwen3LinearAttention(TTNNModule):
 
         return new_layer
 
+    def preprocess_weights_impl(self):
+        """Preprocess TTNN children plus the small a/b projection weights.
+
+        The base ``TTNNModule.preprocess_weights_impl`` only recurses into TTNN child
+        modules (``in_proj_qkv`` / ``in_proj_z`` / ``out_proj``). We additionally
+        transpose ``in_proj_a`` / ``in_proj_b`` weights into the ``[in_features,
+        out_features]`` layout that ``ttnn.linear`` expects so that
+        ``move_weights_to_device_impl`` only has to push a single contiguous host
+        tensor per projection across the mesh.
+        """
+        super().preprocess_weights_impl()
+        if self._in_proj_a_torch_weight is not None:
+            # ``torch_layer.in_proj_a.weight`` is ``[num_v_heads, hidden_size]``; ttnn.linear
+            # consumes ``[hidden_size, num_v_heads]`` weights, so transpose once here.
+            self._in_proj_a_torch_weight = self._in_proj_a_torch_weight.T.contiguous()
+        if self._in_proj_b_torch_weight is not None:
+            self._in_proj_b_torch_weight = self._in_proj_b_torch_weight.T.contiguous()
+
+    def move_weights_to_device_impl(self):
+        """Move TTNN child weights and replicate the a/b projection weights across mesh.
+
+        The a/b projections produce a tiny output (``num_v_heads``, e.g. 32 elements),
+        which is too small to col-shard cleanly across a T3K mesh. Instead we replicate
+        the weight onto every device with ``ReplicateTensorToMesh`` so that a plain
+        ``ttnn.linear`` against a replicated input yields a replicated output, ready to
+        feed straight into the (torch) DeltaNet kernel without any extra reduce/gather.
+        """
+        super().move_weights_to_device_impl()
+        if self._in_proj_a_torch_weight is None or self._in_proj_b_torch_weight is None:
+            return
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        self._in_proj_a_weight_tt = ttnn.from_torch(
+            self._in_proj_a_torch_weight,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._in_proj_b_weight_tt = ttnn.from_torch(
+            self._in_proj_b_torch_weight,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Drop the host copies now that the device tensors are staged.
+        self._in_proj_a_torch_weight = None
+        self._in_proj_b_torch_weight = None
+
     def deallocate_weights_impl(self):
         """Deallocate TTNN weights from device.
 
-        Note: in_proj_a and in_proj_b are PyTorch layers, not TTNN, so we skip them.
+        Note: ``self.in_proj_a`` / ``self.in_proj_b`` are PyTorch layers (kept for the
+        pure-torch fallback / DEBUG paths) and are not TTNN modules, so they have no
+        ``deallocate_weights``. The replicated ``_in_proj_*_weight_tt`` tensors used by
+        the hybrid hot path are released here.
         """
         if self.in_proj_qkv is not None:
             self.in_proj_qkv.deallocate_weights()
         if self.in_proj_z is not None:
             self.in_proj_z.deallocate_weights()
-        # in_proj_a and in_proj_b are PyTorch nn.Linear layers, not TTNN modules
-        # They don't have deallocate_weights() method
         if self.out_proj is not None:
             self.out_proj.deallocate_weights()
+        if self._in_proj_a_weight_tt is not None:
+            ttnn.deallocate(self._in_proj_a_weight_tt)
+            self._in_proj_a_weight_tt = None
+        if self._in_proj_b_weight_tt is not None:
+            ttnn.deallocate(self._in_proj_b_weight_tt)
+            self._in_proj_b_weight_tt = None
 
     def set_output_tensors_config_impl(self, output_tensors):
         """Set output tensor config for col-sharded output.
@@ -1582,13 +1655,48 @@ class TTNNQwen3LinearAttention(TTNNModule):
             z_diff = (z.float() - z_ref.float()).abs()
             print(f"[DEBUG] z max diff: {z_diff.max().item():.6f}, mean: {z_diff.mean().item():.6f}")
 
-        # Get hidden_states as PyTorch tensor for small projections
-        # in_proj_a and in_proj_b are PyTorch nn.Linear layers (not TTNN) to avoid
-        # distributed weight replication issues - they have tiny output dims (num_v_heads=4)
-        # hidden_states_ttnn was converted via _to_ttnn which replicates, so use replicated conversion
-        hidden_states_pt = self._to_pytorch_replicated(hidden_states_ttnn)
-        b = self.in_proj_b(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
-        a = self.in_proj_a(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
+        # === TTNN small-projection matmuls (in_proj_a, in_proj_b) ===
+        # Replicated input * replicated weight => replicated output, so each device computes
+        # the same `[batch, seq, num_v_heads]` result locally. This removes the
+        # whole-tensor `_to_pytorch_replicated(hidden_states_ttnn)` round trip that the
+        # previous torch path needed and eliminates the matching `_unwrap_to_torch` /
+        # `Linear` host calls per linear-attention layer per token.
+        # Note: ``_in_proj_*_weight_tt`` may be ``None`` if the module hasn't been moved to
+        # device yet (e.g. unit tests poking ``forward`` directly); fall back to the torch
+        # nn.Linear in that case so behavior matches the previous implementation.
+        if self._in_proj_a_weight_tt is not None and self._in_proj_b_weight_tt is not None:
+            b_ttnn = ttnn.linear(
+                hidden_states_ttnn,
+                self._in_proj_b_weight_tt,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=True,
+                ),
+            )
+            a_ttnn = ttnn.linear(
+                hidden_states_ttnn,
+                self._in_proj_a_weight_tt,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=True,
+                ),
+            )
+            b = self._to_pytorch_replicated(b_ttnn).contiguous()
+            a = self._to_pytorch_replicated(a_ttnn).contiguous()
+        else:
+            # Fallback (weights not yet on device): replicate the input via the existing
+            # _to_pytorch_replicated helper and use the torch nn.Linear modules.
+            hidden_states_pt = self._to_pytorch_replicated(hidden_states_ttnn)
+            b = self.in_proj_b(hidden_states_pt).contiguous()
+            a = self.in_proj_a(hidden_states_pt).contiguous()
 
         # DEBUG: Compare a and b projections with PyTorch reference
         if os.environ.get("DEBUG_LINEAR_ATTN", "0") == "1":
