@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import threading
 from pathlib import Path
 from shutil import copyfile
 
