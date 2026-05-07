@@ -4325,9 +4325,6 @@ class MoeOp:
 
         self._persistent_fabric_core = None
         self._persistent_target_node = None
-        self._persistent_local_dst_noc_x = 0
-        self._persistent_local_dst_noc_y = 0
-        self._persistent_local_dst_sem_addr = 0
         persistent_fc_wait_sem_noc_x = 0
         persistent_fc_wait_sem_noc_y = 0
         persistent_fc_wait_sem_addr = 0
@@ -4373,29 +4370,12 @@ class MoeOp:
             entry_partner_coord = ttnn.MeshCoordinate(row, entry_partner_col)
             self._persistent_target_node = mesh_device.get_fabric_node_id(entry_partner_coord)
 
-            is_same_chip = entry_partner_col == col
-            if not is_same_chip:
-                # Cross-chip mode: fabric atomic_inc to entry device's sender,
-                # plus local release for this chip's own sender.
-                self._persistent_bcast_dst_noc_x = sender_core_physical.x
-                self._persistent_bcast_dst_noc_y = sender_core_physical.y
-                self._persistent_bcast_dst_mesh_id = int(self._persistent_target_node.mesh_id)
-                self._persistent_bcast_dst_chip_id = int(self._persistent_target_node.chip_id)
-                self._persistent_bcast_dst_sem_addr = self.persistent_next_iter_sem_addr
-                self._persistent_local_dst_noc_x = sender_core_physical.x
-                self._persistent_local_dst_noc_y = sender_core_physical.y
-                self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
-            else:
-                # Local-only mode: entry == exit on same chip. Set dst_sem_addr=0
-                # so the kernel skips the fabric path and uses local_dst instead.
-                self._persistent_bcast_dst_noc_x = 0
-                self._persistent_bcast_dst_noc_y = 0
-                self._persistent_bcast_dst_mesh_id = 0
-                self._persistent_bcast_dst_chip_id = 0
-                self._persistent_bcast_dst_sem_addr = 0
-                self._persistent_local_dst_noc_x = sender_core_physical.x
-                self._persistent_local_dst_noc_y = sender_core_physical.y
-                self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
+            self._persistent_bcast_dst_noc_x = sender_core_physical.x
+            self._persistent_bcast_dst_noc_y = sender_core_physical.y
+            self._persistent_bcast_dst_mesh_id = int(self._persistent_target_node.mesh_id)
+            self._persistent_bcast_dst_chip_id = int(self._persistent_target_node.chip_id)
+            self._persistent_bcast_dst_sem_addr = self.persistent_next_iter_sem_addr
+
             for i, desc in enumerate(self.device_unified_core_descs):
                 if desc.named_compile_time_arg == "reduce_persistent_fabric_signal_enable":
                     self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
@@ -4539,12 +4519,6 @@ class MoeOp:
                     self._persistent_bcast_dst_mesh_id,
                     self._persistent_bcast_dst_chip_id,
                     self._persistent_bcast_dst_sem_addr,
-                    # Local secondary dst: release this chip's own sender
-                    # after the cross-chip send. Zero in bcast mode (sender
-                    # == cross-chip target).
-                    self._persistent_local_dst_noc_x,
-                    self._persistent_local_dst_noc_y,
-                    self._persistent_local_dst_sem_addr,
                 ]
             # FC NCRISC: BWD forwarding (R1+R2)
             reduce_ncrisc_per_core_args.append((fc, [bwd_r1_sem_addr, bwd_r2_sem_addr]))
@@ -5354,9 +5328,6 @@ class MoeOp:
         """Build all per-device state: compile-time args, descriptor copies, and reduce modifications."""
         self._persistent_fabric_core = None
         self._persistent_target_node = None
-        self._persistent_local_dst_noc_x = 0
-        self._persistent_local_dst_noc_y = 0
-        self._persistent_local_dst_sem_addr = 0
         self._persistent_fc_payload = None
         # Start from shared descriptors
         self.ncrisc_args = []

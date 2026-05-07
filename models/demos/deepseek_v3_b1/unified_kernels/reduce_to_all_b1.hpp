@@ -453,13 +453,6 @@ struct ReduceToAllB1 {
                 // workers bump this FC's wait_sem directly after finishing their
                 // iteration. The FC waits for total_num_workers increments, then
                 // signals the entry device's sender_core.
-                //
-                // Two modes (selected by dst_sem_addr at runtime):
-                //   dst_sem_addr != 0  → cross-chip: fabric atomic_inc to entry
-                //                        device, plus optional local_dst release.
-                //   dst_sem_addr == 0  → local-only: entry == exit on same chip,
-                //                        just do a local NoC inc via local_dst.
-                // DPRINT << "persistent signal: " << (uint32_t)CTArgs::persistent_fabric_signal_enable << "\n";
                 if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
                     DPRINT << "persistent: waiting for workers\n";
                     uint32_t wait_sem_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -468,9 +461,6 @@ struct ReduceToAllB1 {
                     uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
                     uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
                     uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t local_dst_noc_x = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t local_dst_noc_y = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t local_dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
                     volatile tt_l1_ptr uint32_t* wait_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
@@ -479,14 +469,6 @@ struct ReduceToAllB1 {
                     DPRINT << "persistent: all workers signaled\n";
 
                     if (dst_sem_addr != 0) {
-                        // Cross-chip mode: optional local release first, then
-                        // fabric atomic_inc to remote entry device.
-                        if (local_dst_sem_addr != 0) {
-                            uint64_t local_sem_noc = get_noc_addr(local_dst_noc_x, local_dst_noc_y, local_dst_sem_addr);
-                            noc_semaphore_inc(local_sem_noc, 1);
-                            noc_async_atomic_barrier();
-                        }
-
                         constexpr uint32_t pkt_hdr_bytes_p = sizeof(PACKET_HEADER_TYPE);
                         PacketHeaderPool::reset();
                         auto route_id = PacketHeaderPool::allocate_header_n(1);
@@ -505,12 +487,6 @@ struct ReduceToAllB1 {
                         persistent_sender.close();
                         noc_async_full_barrier();
                         DPRINT << "persistent: cross-chip signal sent\n";
-                    } else {
-                        // Local-only mode: entry == exit on same chip.
-                        DPRINT << "persistent: local signal\n";
-                        uint64_t local_sem_noc = get_noc_addr(local_dst_noc_x, local_dst_noc_y, local_dst_sem_addr);
-                        noc_semaphore_inc(local_sem_noc, 1);
-                        noc_async_atomic_barrier();
                     }
                 }
 
