@@ -112,7 +112,7 @@ inline void calculate_i1() {
                 1.2293555930e-12f);
             sfpi::vFloat denom = PolynomialEvaluator::eval(
                 t,
-                1.0000000000e+00f,
+                sfpi::vConst1,
                 -1.1361218989e-02f,
                 6.1268139689e-05f,
                 -1.9771712800e-07f,
@@ -123,8 +123,8 @@ inline void calculate_i1() {
 #else
             sfpi::vFloat numer = PolynomialEvaluator::eval(
                 t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
-            sfpi::vFloat denom = PolynomialEvaluator::eval(
-                t, 1.0000000000e+00f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
+            sfpi::vFloat denom =
+                PolynomialEvaluator::eval(t, sfpi::vConst1, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
 #endif
 #ifdef INP_FLOAT32
             sfpi::dst_reg[0] = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
