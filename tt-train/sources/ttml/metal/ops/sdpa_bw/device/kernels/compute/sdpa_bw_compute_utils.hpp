@@ -105,23 +105,37 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 // to subtract column 0 (lse values) broadcast across all columns — entirely in DST.
 // Scores stay in DST at full FP32 — no CB roundtrip, no TF32 truncation.
 // Must be called inside a tile_regs_acquire/commit block, after matmul + mask.
+//
+// Context: this function is called inside a tile_regs_acquire block AFTER:
+//   1. matmul_tiles() accumulated Q @ K^T into DST[scores_reg] (FPU matmul)
+//   2. mul_unary_tile(scores_reg, scaler_bits) scaled the result (SFPU scalar mul)
+//   (optionally: apply_mask_on_reg() for causal masking)
+//
+// At this point DST[scores_reg] contains the scaled scores in FP32.
+// We want to compute: DST[scores_reg] = exp(DST[scores_reg] - bcast_col(lse))
+//
+// sfpu_sub_bcast_col should do exactly this: subtract column 0 of DST[lse_reg]
+// broadcast across all 32 columns from DST[scores_reg], entirely within DST.
+// However, when tested it appears to be a no-op (DST[scores_reg] unchanged after call).
+// cb_intermediates is Float32, fp32_dest_acc_en = true.
 void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
     const uint32_t lse_reg = scores_reg + 1U;
 
-    // TODO(vmelnykov): sfpu_sub_bcast_col appears to be a no-op here.
-    // Reported to LLK team — waiting for guidance on correct usage.
-    // For now, use the proven unary_bcast + sub_binary_tile path.
-    reconfig_data_format_srcb(cb_intermediates);
+    // --- sfpu_sub_bcast_col attempt (BROKEN — no-op observed) ---
+    // Step 1: Load lse tile into DST[lse_reg] via copy_tile.
+    //   cb_intermediates contains logsumexp values in column 0 (from forward pass row-reduce).
+    //   copy_tile places the full tile into DST[lse_reg] without any broadcast.
+    reconfig_data_format(cb_intermediates, cb_intermediates);
+    copy_tile_init(cb_intermediates);
+    copy_tile(cb_intermediates, /* tile_idx */ 0, lse_reg);
 
-    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
-        false, false, cb_intermediates)));
-    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_intermediates)));
+    // Step 2: SFPU column-broadcast subtract.
+    //   Expected: DST[scores_reg][r][c] -= DST[lse_reg][r][0] for all c in [0..31]
+    //   Observed: DST[scores_reg] is unchanged after this call.
+    sfpu_sub_bcast_col_init();
+    sfpu_sub_bcast_col(scores_reg, lse_reg);
 
-    unary_bcast<BroadcastType::COL>(cb_intermediates, /* tile_idx */ 0, lse_reg);
-
-    sub_binary_tile_init();
-    sub_binary_tile(scores_reg, lse_reg, scores_reg);
-
+    // Step 3: exp in-place
     exp_tile_init</* approx */ false>();
     exp_tile</* approx */ false>(scores_reg);
 }
