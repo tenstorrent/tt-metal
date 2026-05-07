@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: Hugging Face ``Ministral3MLP`` vs ``TtMinistralMLP`` on Devstral text weights."""
+"""PCC: Hugging Face ``Ministral3MLP`` vs ``TtMinistralMLP`` on Devstral text weights.
+
+Patches ``Fp8Dequantize._dequantize_one`` at import for scalar FP8 scales (see ``demo_devstral2_tt_multimodal``).
+"""
 
 from __future__ import annotations
 
@@ -11,13 +14,15 @@ import os
 import pytest
 import torch
 from loguru import logger
+from transformers.integrations.finegrained_fp8 import Fp8Dequantize
 from transformers.models.ministral3.modeling_ministral3 import Ministral3MLP
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstarl2_small.tt.tt_ministralmlp import TtMinistralMLP
-from transformers.integrations.finegrained_fp8 import Fp8Dequantize
-
+from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import ModelArgs
 
 _ORIGINAL_FP8_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
 
@@ -36,9 +41,6 @@ def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) 
 
 
 Fp8Dequantize._dequantize_one = _dequantize_one_compat
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import ModelArgs
 
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
