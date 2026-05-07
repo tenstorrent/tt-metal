@@ -29,7 +29,6 @@ constexpr std::uint32_t buffer_B_tilized = 0xA1000;
 #include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common.h"
-#include "llk_unpack_tilize.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -51,13 +50,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
         4 /* num_faces */,
         4 /* num_faces */);
 
-    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1, FACE_R_DIM, false);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, FACE_R_DIM, false /* narrow_tile */);
     _llk_unpack_tilize_wrapper_(
-        L1_ADDRESS(params.buffer_A[0]), 0, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, block_ct_dim, FACE_R_DIM, 4, false);
+        L1_ADDRESS(params.buffer_A[0]),
+        0 /* tile_index */,
+        formats_array[run].unpack_A_src,
+        formats_array[run].unpack_A_dst,
+        block_ct_dim,
+        FACE_R_DIM,
+        4 /* num_faces */,
+        false /* narrow_tile */);
 
-    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, 1, FACE_R_DIM, false);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, 1 /* ct_dim */, FACE_R_DIM, false /* narrow_tile */);
     _llk_unpack_tilize_wrapper_(
-        L1_ADDRESS(params.buffer_B[0]), 0, formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, block_ct_dim, FACE_R_DIM, 4, false);
+        L1_ADDRESS(params.buffer_B[0]),
+        0 /* tile_index */,
+        formats_array[run].unpack_B_src,
+        formats_array[run].unpack_B_dst,
+        block_ct_dim,
+        FACE_R_DIM,
+        4 /* num_faces */,
+        false /* narrow_tile */);
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(
         semaphore::PACK_DONE); // Unpacker waits on signal when packer will increment semaphore to 1 (waits while semaphore == 0), utilizing SEMWAIT.
