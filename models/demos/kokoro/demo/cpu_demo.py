@@ -40,16 +40,7 @@ def main() -> int:
     parser.add_argument("--output", type=str, default="kokoro_reference.wav", help="Output WAV path.")
     args = parser.parse_args()
 
-    try:
-        from kokoro import KPipeline
-    except Exception as e:
-        logger.error(
-            "Failed to import kokoro. Install deps first:\n"
-            "  pip install 'kokoro>=0.9.2' soundfile\n"
-            "  sudo apt-get update && sudo apt-get install -y espeak-ng\n"
-            f"Import error: {e}"
-        )
-        return 2
+    from models.demos.kokoro.reference import KokoroPipelineReference, load_reference_model
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device={device} (torch.cuda.is_available()={torch.cuda.is_available()})")
@@ -57,25 +48,27 @@ def main() -> int:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    pipeline = KPipeline(lang_code=args.lang_code)
+    kmodel = load_reference_model(repo_id="hexgrad/Kokoro-82M", device=device)
+    logger.info(f"Loaded repo_id={kmodel.repo_id} params={kmodel.param_count():,}")
+    pipeline = KokoroPipelineReference(lang_code=args.lang_code, repo_id=kmodel.repo_id, model=kmodel, device=device)
 
     # Upstream API yields (gs, ps, audio) chunks. Concatenate audio if multiple chunks.
     audios: list[torch.Tensor] = []
     last_ps = None
-    for i, (gs, ps, audio) in enumerate(pipeline(args.text, voice=args.voice, speed=args.speed)):
-        last_ps = ps
-        logger.info(f"Chunk {i}: gs={gs} ps_len={len(ps) if ps is not None else 0} samples={len(audio)}")
-        # audio is typically a numpy array, but keep this robust.
-        if isinstance(audio, torch.Tensor):
-            audios.append(audio.detach().cpu())
-        else:
-            audios.append(torch.from_numpy(audio))
+    for i, chunk in enumerate(pipeline.generate(args.text, voice=args.voice, speed=args.speed)):
+        last_ps = chunk.phonemes
+        if chunk.audio is None:
+            continue
+        logger.info(
+            f"Chunk {i}: gs_len={len(chunk.graphemes)} ps_len={len(chunk.phonemes)} samples={chunk.audio.numel()}"
+        )
+        audios.append(chunk.audio.detach().cpu().flatten())
 
     if not audios:
         logger.error("No audio produced (empty generator output).")
         return 3
 
-    audio_cat = torch.cat([a.flatten() for a in audios], dim=0).numpy()
+    audio_cat = torch.cat(audios, dim=0).numpy()
 
     # Kokoro sample rate is 24kHz per upstream docs.
     sf.write(str(out_path), audio_cat, 24000)
