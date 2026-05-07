@@ -54,7 +54,7 @@ def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
         return {}
 
     if local_files_only is None:
-        local_files_only = os.getenv("CI") == "true"
+        local_files_only = False
 
     ckpt_dir = str(ckpt_dir)
     is_local_dir = os.path.isdir(ckpt_dir)
