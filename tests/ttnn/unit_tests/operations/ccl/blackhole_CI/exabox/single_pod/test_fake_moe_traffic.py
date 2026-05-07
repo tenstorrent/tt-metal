@@ -27,7 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._vendored.pipeline import (
+from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_fabric_router_config,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc

@@ -43,11 +43,11 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._fake_m
     make_fake_moe_decoder_stage_factory,
     make_synthetic_embedding_weights,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._vendored.pipeline import (
+from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
     create_fabric_router_config,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._vendored.stage import (
+from models.demos.deepseek_v3_b1.demo.stage import (
     EmbeddingStage,
     PassthroughPayload,
     PassthroughStage,

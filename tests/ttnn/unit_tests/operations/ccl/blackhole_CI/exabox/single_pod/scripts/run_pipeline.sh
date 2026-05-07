@@ -30,8 +30,8 @@ Pytest target:
 Fabric / dispatch:
   FABRIC_2D_TORUS_Y, fabric_router_config(15232), worker_l1_size=1431568
   *** SLOW DISPATCH *** (TT_METAL_SLOW_DISPATCH_MODE=1) — required by the
-  pipeline framework (see _vendored/pipeline.py). Cannot share a process
-  with sub-device CCL ops like ttnn.broadcast / all_to_all_*.
+  pipeline framework (see models.demos.deepseek_v3_b1.demo.pipeline). Cannot
+  share a process with sub-device CCL ops like ttnn.broadcast / all_to_all_*.
 
 Expected: PASSED=16/16. Wallclock ≈ 5-10 minutes (slow dispatch + pipeline init).
 

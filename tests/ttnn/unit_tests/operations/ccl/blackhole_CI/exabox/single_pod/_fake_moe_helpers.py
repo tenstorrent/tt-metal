@@ -152,7 +152,7 @@ def step_reduce_to_one_b1(
     is_torus: bool = True,
 ):
     """Run the demo's actual `ReduceToOneB1` op (3-level tree, 8 → 1 device)."""
-    from ._vendored.reduce_to_one_b1 import ReduceToOneB1
+    from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
 
     if isinstance(root_coord, tuple):
         root_coord = ttnn.MeshCoordinate(root_coord[0], root_coord[1])
@@ -185,7 +185,7 @@ def make_synthetic_embedding_weights(mesh_device, *, vocab_size: int = 129280, h
     test never drives any tokens through the pipeline, so the actual content
     is irrelevant — only the shape and on-device residency matter.
     """
-    from ._vendored.stage import DeepSeekV3EmbeddingLayerWeights
+    from models.demos.deepseek_v3_b1.demo.stage import DeepSeekV3EmbeddingLayerWeights
 
     emb = ttnn.from_torch(
         torch.zeros((vocab_size, hidden_size), dtype=torch.bfloat16),
@@ -201,7 +201,7 @@ def make_synthetic_embedding_weights(mesh_device, *, vocab_size: int = 129280, h
 def make_fake_moe_decoder_stage_factory():
     """Stage factory producing a `PassthroughStage(ACTIVATION)` — used as
     a no-compute drop-in for `MoEDecoderStage` in the pipeline test."""
-    from ._vendored.stage import PassthroughPayload, PassthroughStage
+    from models.demos.deepseek_v3_b1.demo.stage import PassthroughPayload, PassthroughStage
 
     return lambda mesh_device: PassthroughStage(PassthroughPayload.ACTIVATION)
 
@@ -215,7 +215,7 @@ def make_fake_lm_head_stage_factory():
     LMHead persistent kernel that strands rank 14 in teardown when no
     token is ever driven through the pipeline.
     """
-    from ._vendored.stage import (
+    from models.demos.deepseek_v3_b1.demo.stage import (
         ACTIVATION_FIFO_SIZE,
         ACTIVATION_PAGE_SIZE_BYTES,
         PIPELINE_CORE_COORD,
@@ -223,7 +223,7 @@ def make_fake_lm_head_stage_factory():
         TOKEN_PAGE_SIZE_BYTES,
         StageKind,
     )
-    from ._vendored.pipeline_block import PipelineBlock
+    from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 
     class _FakeLMHeadStage(StageKind):
         def create_pipeline_block(self, ctx):
