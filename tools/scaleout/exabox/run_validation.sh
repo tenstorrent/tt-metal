@@ -17,7 +17,9 @@ Optional:
     --deployment-descriptor-path <path>     Path to deployment descriptor file
                                             (default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto)
     --iterations <number>                   Number of times to run the full validation sequence (default: 50)
-                                            Each iteration runs run_cluster_validation with 10 internal iterations
+                                            Each iteration resets the cluster and then invokes run_cluster_validation.
+    --num-internal-iterations <number>      Number of traffic iterations passed to run_cluster_validation per
+                                            outer iteration via --num-iterations (default: 10)
 
     --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
                                             (if provided, cabling and deployment descriptors are ignored)
@@ -41,6 +43,7 @@ DOCKER_IMAGE=""
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
+NUM_INTERNAL_ITERATIONS=10
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
@@ -99,6 +102,18 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ITERATIONS="$2"
+            shift 2
+            ;;
+        --num-internal-iterations)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --num-internal-iterations requires a non-empty value"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --num-internal-iterations must be a positive integer, got '$2'"
+                exit 1
+            fi
+            NUM_INTERNAL_ITERATIONS="$2"
             shift 2
             ;;
         --output)
@@ -172,7 +187,7 @@ run_cluster_validation() {
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
             --send-traffic \
-            --num-iterations 10
+            --num-iterations "$NUM_INTERNAL_ITERATIONS"
     else
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
@@ -181,7 +196,7 @@ run_cluster_validation() {
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
             --send-traffic \
-            --num-iterations 10
+            --num-iterations "$NUM_INTERNAL_ITERATIONS"
     fi
 }
 
@@ -249,6 +264,7 @@ else
     echo "Deployment descriptor path: $DEPLOYMENT_DESCRIPTOR_PATH"
 fi
 echo "Number of iterations: $ITERATIONS"
+echo "Number of internal iterations (per outer iteration): $NUM_INTERNAL_ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
 echo ""
 
