@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import ttnn
@@ -15,6 +18,7 @@ from models.demos.ace_step_v1_5.ttnn_impl.safetensors_loader import load_safeten
 
 if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
+    import torch
 
 
 @dataclass(frozen=True)
@@ -32,14 +36,22 @@ class AceStepV15LikeConfig:
 
 class AceStepV15TTNNPipeline:
     """
-    Minimal TTNN-only pipeline scaffold.
+    TTNN-only DiT decoder path (subset of HF ``AceStepDiTModel``).
 
-    This currently wires:
-      input acoustic/context tensor -> patch embed -> (TODO: DiT blocks) -> output head
+    Wired on device:
+      ``hidden_states [B,T,C]`` → ``proj_in`` (patch embed) → ``TtAceStepDiTCore`` (layers +
+      ``condition_embedder``) → output head (``norm_out`` + ``scale_shift_table`` + ``proj_out``).
 
-    Notes on strict rules:
-    - Host->device occurs in __init__ for weights.
-    - Device->host is not performed here; callers should do it once at the end.
+    Hugging Face parity (important):
+      The TTNN core aims to mirror HF layer math (AdaLN scale/shift/gates, Qwen3 MLP, GQA, SDPA),
+      but it is **not** guaranteed bit-accurate vs ``modeling_acestep_v15_*.py``. Known gaps include:
+      - **RoPE**: HF applies ``apply_rotary_pos_emb`` in self-attention; this TTNN path does not.
+      - **Sliding vs full attention**: HF sets ``sliding_window`` per ``layer_types[i]``; TTNN SDPA here
+        uses **full bidirectional** self-attention for every layer (``is_causal=False``, no window).
+      - **TimestepEmbedding**: HF computes sinusoidal embeddings at runtime; TTNN uses a **fixed
+        lookup table** over ``timesteps_host`` passed at init (must cover indices used in ``forward``).
+
+    Host→device: weight upload in ``__init__``. Device→host: left to the caller (e.g. demo saves ``.npy``).
     """
 
     def __init__(
@@ -95,13 +107,25 @@ class AceStepV15TTNNPipeline:
         if norm_w is None:
             raise KeyError("Missing decoder norm_out.weight in safetensors")
 
-        # eps is in config.json; default to 1e-6 to match HF config default.
+        ckpt_parent = Path(checkpoint_safetensors_path).resolve().parent
+        hf_cfg_path = ckpt_parent / "config.json"
+        hf_cfg: dict = {}
+        if hf_cfg_path.is_file():
+            hf_cfg = json.loads(hf_cfg_path.read_text())
+        rms_eps = float(hf_cfg.get("rms_norm_eps", 1e-6))
+        head_dim = int(hf_cfg.get("head_dim", 128))
+        sw = hf_cfg.get("sliding_window", None)
+        sliding_window = int(sw) if sw is not None else None
+        layer_types = hf_cfg.get("layer_types", None)
+        max_position_embeddings = int(hf_cfg.get("max_position_embeddings", 4096))
+        rope_theta = float(hf_cfg.get("rope_theta", 10000.0))
+
         cfg = AceStepV15LikeConfig(
             patch_size=patch_size,
             in_channels=in_channels,
             hidden_size=hidden_size,
             audio_acoustic_hidden_dim=audio_acoustic_hidden_dim,
-            rms_norm_eps=1e-6,
+            rms_norm_eps=rms_eps,
         )
 
         self.patch_embed = TtAceStepPatchEmbed1D(
@@ -128,7 +152,6 @@ class AceStepV15TTNNPipeline:
         # q_proj weight: [H*Dh, D]
         q_w = sd["layers.0.self_attn.q_proj.weight"]
         hidden = int(q_w.shape[1])
-        head_dim = 128  # AceStepConfig default; also stored in config.json but not loaded here
         num_attention_heads = int(q_w.shape[0]) // head_dim
         kv_w = sd["layers.0.self_attn.k_proj.weight"]
         num_kv_heads = int(kv_w.shape[0]) // head_dim
@@ -141,7 +164,10 @@ class AceStepV15TTNNPipeline:
             num_key_value_heads=num_kv_heads,
             head_dim=head_dim,
             rms_norm_eps=float(getattr(cfg, "rms_norm_eps", 1e-6)),
-            sliding_window=None,
+            sliding_window=sliding_window,
+            layer_types=layer_types,
+            max_position_embeddings=max_position_embeddings,
+            rope_theta=rope_theta,
         )
 
         # Default to 8-step schedule if not provided. Caller should pass the exact sampler schedule.
@@ -172,6 +198,7 @@ class AceStepV15TTNNPipeline:
         )
 
         self.core = TtAceStepDiTCore(cfg=core_cfg, state_dict=sd, mesh_device=device, dtype=self.activation_dtype)
+        self.cond_dim = int(sd["condition_embedder.weight"].shape[1])
 
     def forward(
         self,
@@ -201,3 +228,203 @@ class AceStepV15TTNNPipeline:
 
         acoustic = self.output_head.forward(patches_out, temb, meta)
         return acoustic
+
+
+def _find_model_safetensors(snapshot_root: Path) -> Path:
+    """Return ``model.safetensors`` under a HF snapshot (repo root or nested)."""
+    direct = snapshot_root / "model.safetensors"
+    if direct.is_file():
+        return direct
+    candidates = sorted(snapshot_root.rglob("model.safetensors"))
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        rel = [str(p.relative_to(snapshot_root)) for p in candidates[:12]]
+        raise RuntimeError(
+            "Multiple model.safetensors files under this HF snapshot. "
+            "Pass --checkpoint-safetensors explicitly, or set --hf-subfolder to pick one variant "
+            f"(e.g. acestep-v15-turbo). Found:\n  " + "\n  ".join(rel)
+        )
+    raise FileNotFoundError(f"No model.safetensors under HF snapshot: {snapshot_root}")
+
+
+def resolve_acestep_decoder_checkpoint(
+    *,
+    checkpoint_safetensors: str | None,
+    hf_repo_id: str,
+    hf_revision: str | None = None,
+    hf_cache_dir: str | None = None,
+    hf_subfolder: str | None = None,
+) -> str:
+    """
+    Resolve decoder weights path.
+
+    If ``checkpoint_safetensors`` is set, return it. Otherwise download ``hf_repo_id``
+    (default: ACE-Step **Base**) via huggingface_hub and return ``model.safetensors``.
+    """
+    if checkpoint_safetensors:
+        p = Path(checkpoint_safetensors).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"Checkpoint not found: {p}")
+        return str(p.resolve())
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError("Missing huggingface_hub. Install it or pass --checkpoint-safetensors explicitly.") from e
+
+    snap = Path(
+        snapshot_download(
+            repo_id=hf_repo_id,
+            revision=hf_revision,
+            cache_dir=hf_cache_dir,
+            local_files_only=bool(os.environ.get("HF_HUB_OFFLINE")),
+        )
+    )
+    root = snap / hf_subfolder if hf_subfolder else snap
+    if hf_subfolder and not root.is_dir():
+        raise FileNotFoundError(f"--hf-subfolder does not exist in snapshot: {root}")
+    return str(_find_model_safetensors(root).resolve())
+
+
+def _load_torch_tensor(path: str) -> "torch.Tensor":
+    import torch
+
+    obj = torch.load(path, map_location="cpu")
+    if isinstance(obj, torch.Tensor):
+        return obj
+    if isinstance(obj, dict):
+        # Common HF / training checkpoints: look for a single tensor value.
+        if "tensor" in obj and isinstance(obj["tensor"], torch.Tensor):
+            return obj["tensor"]
+        tensors = [v for v in obj.values() if isinstance(v, torch.Tensor)]
+        if len(tensors) == 1:
+            return tensors[0]
+    raise TypeError(f"Unsupported torch.load() payload in {path!r}: expected Tensor or dict containing a Tensor")
+
+
+def _main() -> int:
+    """
+    Minimal "noise -> corrected features" demo.
+
+    Important: this produces **acoustic feature tensors** (the DiT decoder output), not a waveform.
+    Converting those features into audio requires the downstream decoder/vocoder stages, which are
+    not implemented in this TTNN demo folder.
+    """
+    import argparse
+
+    import numpy as np
+    import torch
+
+    ap = argparse.ArgumentParser(description="ACE-Step v1.5 TTNN demo: denoise acoustic latent/features.")
+    ap.add_argument(
+        "--checkpoint-safetensors",
+        default=None,
+        help=(
+            "Path to decoder ``model.safetensors``. If omitted, downloads HF repo "
+            "``--hf-repo-id`` (default: ACE-Step/acestep-v15-base)."
+        ),
+    )
+    ap.add_argument(
+        "--hf-repo-id",
+        default="ACE-Step/acestep-v15-base",
+        help="Hugging Face repo for decoder weights when --checkpoint-safetensors is omitted.",
+    )
+    ap.add_argument("--hf-revision", default=None, help="Optional HF revision (branch/tag/commit).")
+    ap.add_argument("--hf-cache-dir", default=None, help="Optional HF cache directory override.")
+    ap.add_argument(
+        "--hf-subfolder",
+        default=None,
+        help=(
+            "When downloading an umbrella repo (e.g. ACE-Step/Ace-Step1.5), select the DiT variant folder "
+            "(e.g. acestep-v15-turbo). Ignored for single-checkpoint repos like ACE-Step/acestep-v15-base."
+        ),
+    )
+    ap.add_argument("--timestep-index", type=int, default=0, help="Index into the precomputed timestep table.")
+    ap.add_argument(
+        "--noise-pt",
+        default=None,
+        help="Optional path to a torch tensor .pt/.pth containing noisy input [T,C] or [B,T,C]. If omitted, random noise is used.",
+    )
+    ap.add_argument(
+        "--encoder-hidden-states-pt",
+        default=None,
+        help="Optional torch tensor .pt/.pth for conditioning [B,S_enc,cond_dim]. If omitted, zeros are used.",
+    )
+    ap.add_argument("--seed", type=int, default=0, help="Seed used when generating random noise/conditioning.")
+    ap.add_argument(
+        "--seq-len", type=int, default=512, help="Sequence length T for generated noise (if --noise-pt omitted)."
+    )
+    ap.add_argument("--batch", type=int, default=1, help="Batch size B for generated noise (if --noise-pt omitted).")
+    ap.add_argument(
+        "--out-npy",
+        required=True,
+        help="Output path for the corrected acoustic features as a NumPy .npy array (written on host).",
+    )
+    args = ap.parse_args()
+
+    ckpt_path = resolve_acestep_decoder_checkpoint(
+        checkpoint_safetensors=args.checkpoint_safetensors,
+        hf_repo_id=args.hf_repo_id,
+        hf_revision=args.hf_revision,
+        hf_cache_dir=args.hf_cache_dir,
+        hf_subfolder=args.hf_subfolder,
+    )
+    print(f"[ace_step_v1_5] using decoder checkpoint: {ckpt_path}", flush=True)
+
+    if not hasattr(ttnn, "open_device"):
+        raise RuntimeError("This demo requires a TTNN runtime with device support (ttnn.open_device).")
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
+    device = ttnn.open_device(device_id=0, trace_region_size=128 << 20)
+    try:
+        if hasattr(device, "enable_program_cache"):
+            device.enable_program_cache()
+
+        pipe = AceStepV15TTNNPipeline(device=device, checkpoint_safetensors_path=ckpt_path)
+
+        # Load or generate noisy input (host -> device once).
+        if args.noise_pt is None:
+            B = int(args.batch)
+            T = int(args.seq_len)
+            C = int(pipe.patch_embed.in_channels)
+            noise = torch.randn((B, T, C), dtype=torch.bfloat16)
+        else:
+            noise = _load_torch_tensor(args.noise_pt).to(torch.bfloat16)
+            if noise.ndim == 2:
+                noise = noise.unsqueeze(0)  # [1,T,C]
+            if noise.ndim != 3:
+                raise ValueError(f"--noise-pt must be [T,C] or [B,T,C], got shape {tuple(noise.shape)}")
+
+        # Load or generate conditioning encoder_hidden_states (host -> device once).
+        if args.encoder_hidden_states_pt is None:
+            B = int(noise.shape[0])
+            S_enc = 1
+            enc = torch.zeros((B, S_enc, int(pipe.cond_dim)), dtype=torch.bfloat16)
+        else:
+            enc = _load_torch_tensor(args.encoder_hidden_states_pt).to(torch.bfloat16)
+            if enc.ndim != 3:
+                raise ValueError(f"--encoder-hidden-states-pt must be [B,S_enc,cond_dim], got shape {tuple(enc.shape)}")
+
+        noise_tt = ttnn.from_torch(noise, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        enc_tt = ttnn.from_torch(enc, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # Single-step "correction": feed noisy features + conditioning at the chosen timestep.
+        out_tt = pipe.forward(
+            hidden_states_btC=noise_tt, timestep_index=int(args.timestep_index), encoder_hidden_states_btd=enc_tt
+        )
+
+        out = ttnn.to_torch(out_tt).float().cpu().numpy()
+        out_path = Path(args.out_npy)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(str(out_path), out)
+        print(f"[ace_step_v1_5] wrote corrected features: {out_path} shape={out.shape}", flush=True)
+    finally:
+        ttnn.close_device(device)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

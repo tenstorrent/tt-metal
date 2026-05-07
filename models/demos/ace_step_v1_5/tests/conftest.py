@@ -12,10 +12,16 @@ import sys
 import pytest
 import torch
 
-import ttnn
-
-_TT_METAL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+# This conftest lives at:
+#   tt-metal/models/demos/ace_step_v1_5/tests/conftest.py
+# We need the repo root `tt-metal/` on sys.path, and also `tt-metal/ttnn/`
+# so `import ttnn` resolves to `tt-metal/ttnn/ttnn/__init__.py` (not the
+# namespace package at `tt-metal/ttnn/`).
+_TT_METAL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 _TTNN_ROOT = os.path.join(_TT_METAL_ROOT, "ttnn")
+# NOTE: Do not add `tt-metal/tools` to sys.path here. Some environments contain an optional
+# `tools/tracy` package that depends on extra plotting libs (e.g. seaborn). Importing TTNN
+# should not require those extras for unit tests.
 for _p in (_TT_METAL_ROOT, _TTNN_ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -30,6 +36,7 @@ def torch_seed():
 
 @pytest.fixture(scope="session")
 def device():
+    ttnn = require_ttnn()
     dev = ttnn.open_device(device_id=0, trace_region_size=128 << 20)
     dev.enable_program_cache()
     yield dev
@@ -37,7 +44,9 @@ def device():
 
 
 def require_ttnn():
-    return pytest.importorskip("ttnn")
+    # TTNN native extension may fail to initialize on hosts without a proper runtime.
+    # Treat that as a skip for demo tests.
+    return pytest.importorskip("ttnn", exc_type=ImportError)
 
 
 @pytest.fixture(scope="session")
@@ -50,12 +59,26 @@ def mesh_device():
     Remote-only meshes can also abort if many MeshDevice instances are torn down.
     """
     ttnn = require_ttnn()
-    if not os.environ.get("MESH_DEVICE"):
-        pytest.skip("Requires TT device (set MESH_DEVICE)")
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-    if hasattr(mesh, "enable_program_cache"):
-        mesh.enable_program_cache()
-    try:
-        yield mesh
-    finally:
-        ttnn.close_mesh_device(mesh)
+    # Prefer a mesh device when supported.
+    if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape") and os.environ.get("MESH_DEVICE"):
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+        if hasattr(mesh, "enable_program_cache"):
+            mesh.enable_program_cache()
+        try:
+            yield mesh
+        finally:
+            ttnn.close_mesh_device(mesh)
+        return
+
+    # Fallback: some TTNN builds only expose single-device APIs.
+    if hasattr(ttnn, "open_device"):
+        dev = ttnn.open_device(device_id=0, trace_region_size=128 << 20)
+        if hasattr(dev, "enable_program_cache"):
+            dev.enable_program_cache()
+        try:
+            yield dev
+        finally:
+            ttnn.close_device(dev)
+        return
+
+    pytest.skip("No TT device API available (missing open_mesh_device/open_device).")
