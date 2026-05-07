@@ -27,7 +27,6 @@ from matrix_runner_config import (
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
-    is_model_traced_ccl_module,
 )
 
 
@@ -170,8 +169,6 @@ def compute_validation_matrix(
     if unmatched_modules:
         grouped_items.append((None, unmatched_modules))
 
-    batch_counter = 0
-
     for hardware_group, grouped_modules in grouped_items:
         base_modules = sorted({strip_grouping_suffix(module) for module in grouped_modules})
         if not base_modules:
@@ -183,32 +180,25 @@ def compute_validation_matrix(
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
+        runner_batches = chunk_modules(base_modules, batch_size)
+        total_batches = len(runner_batches)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
-        ccl_modules = [m for m in base_modules if is_model_traced_ccl_module(m)]
-        non_ccl_modules = [m for m in base_modules if not is_model_traced_ccl_module(m)]
-
-        for label_prefix, module_subset in [("", non_ccl_modules), ("ccl:", ccl_modules)]:
-            if not module_subset:
-                continue
-            runner_batches = chunk_modules(module_subset, batch_size)
-            total_batches = len(runner_batches)
-            for index, batch in enumerate(runner_batches, start=1):
-                batch_counter += 1
-                include.append(
-                    {
-                        **runner_config,
-                        "batch_display": f"{validation_scope}:{label_prefix}{hardware_label}:{batch}",
-                        "batch_ordinal": f"{index}/{total_batches}",
-                        "batch_index": batch_counter,
-                        "module_selector": batch,
-                        "suite_name": "model_traced",
-                        "validation_scope": validation_scope,
-                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
-                        "trace_ids": trace_id_list,
-                        "hardware_group": hardware_label,
-                    }
-                )
+        for index, batch in enumerate(runner_batches, start=1):
+            include.append(
+                {
+                    **runner_config,
+                    "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
+                    "batch_ordinal": f"{index}/{total_batches}",
+                    "batch_index": index,
+                    "module_selector": batch,
+                    "suite_name": "model_traced",
+                    "validation_scope": validation_scope,
+                    "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                    "trace_ids": trace_id_list,
+                    "hardware_group": hardware_label,
+                }
+            )
 
     return {"include": include}
 
