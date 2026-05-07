@@ -147,6 +147,7 @@ def _hard_upsample_nlc(
 def _discrete_duration_counts(log_dur_bf16: ttnn.Tensor, *, batch: int, seq: int) -> list[int]:
     """Match HF ``torch.clamp(torch.round(torch.expm1(log_dur)), min=1).long()`` per position (host ints)."""
     ld = ttnn.reshape(log_dur_bf16, (int(batch), int(seq)))
+    ld = ttnn.typecast(ld, ttnn.float32)
     x = ttnn.expm1(ld, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.round(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.clamp(x, min=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -690,6 +691,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         encoder_attention_mask_4d: ttnn.Tensor,
         char_input_ids: ttnn.Tensor,
         char_count_per_id: Union[Sequence[int], ttnn.Tensor],
+        *,
+        reference_discrete_durations: Optional[Sequence[int]] = None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Args:
@@ -698,6 +701,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             char_input_ids: ``uint32`` ``[1, char_len]`` on device (padded).
             char_count_per_id: length ``enc_seq`` sequence of ints (sum = ``char_len``), or a ``uint32``
                 ``[1, enc_seq]`` device tensor (batch 1).
+            reference_discrete_durations: optional per-character integer durations (length ``char_len``),
+                e.g. from [`hf_discrete_duration_counts_batch1`], to match HF unit length in PCC tests while
+                the TTNN duration predictor is converged. When ``None``, durations come from the TT predictor.
 
         Returns:
             ``(lm_logits, padding_mask)`` both tile bf16 on device (``padding_mask`` is ``1`` = valid),
@@ -778,14 +784,18 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
 
         char_pad_tt = ttnn.reshape(char_pad, (batch, char_len, 1))
 
-        log_dur = self._duration_predictor(char_h, char_pad_tt, seq=char_len)
-        dur_list = _discrete_duration_counts(log_dur, batch=batch, seq=char_len)
-        ttnn.deallocate(log_dur)
+        if reference_discrete_durations is None:
+            log_dur = self._duration_predictor(char_h, char_pad_tt, seq=char_len)
+            dur_list = _discrete_duration_counts(log_dur, batch=batch, seq=char_len)
+            ttnn.deallocate(log_dur)
+        else:
+            dur_list = [int(x) for x in reference_discrete_durations]
+            if len(dur_list) != char_len:
+                raise ValueError(f"reference_discrete_durations length {len(dur_list)} must equal char_len {char_len}.")
 
         for j in range(char_len):
             if j < len(char_pad_valid_host) and char_pad_valid_host[j] < 0.5:
                 dur_list[j] = 0
-        # ``char_pad_tt`` may alias ``char_pad``; free once after duration path.
         ttnn.deallocate(char_pad)
 
         up2 = _hard_upsample_nlc(char_h, dur_list, device=self.device, hidden_size=self.hidden_size)
@@ -823,7 +833,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         ttnn.deallocate(pos2_tt)
         ttnn.deallocate(up2)
 
-        dur_sum = unit_seq
+        dur_sum = int(sum(dur_list))
+        assert dur_sum == unit_seq
         pad_unit = _mask_row_valid_prefix(self.device, unit_seq, dur_sum)
         attn_4d_tt = _expand_4d_padding_additive_b1(self.device, pad_unit, unit_seq, unit_seq)
         pad_unit_tt = ttnn.reshape(pad_unit, (1, unit_seq, 1))
