@@ -16,8 +16,10 @@ namespace deepseek_b1_ops {
 inline constexpr uint32_t kMetadataTensorBytes = 256;
 
 // Layout (total: 256 bytes):
-//   bytes 0..51   : 13 scalar fields (existing metadata, 13 * 4B = 52B)
-//   bytes 52..63  : padding to 64B (3 * 4B)
+//   words 0..8    : token metadata fields
+//   word  9       : reserved padding
+//   words 10..12  : sampling controls
+//   words 13..15  : padding to 64B
 //   bytes 64..191 : p_indices[32]        (32 * uint32_t, 128B)
 //   bytes 192..255: p_scores[32]         (32 * packed bf16 as uint16_t, 64B)
 //
@@ -27,17 +29,17 @@ inline constexpr uint32_t kMetadataTensorBytes = 256;
 // at [kept_tokens, k) are zeroed out (filtered by the top-P cutoff).
 struct DeepseekMetadata {
     // Output fields
+    uint32_t token_type;
     uint32_t tok0_id;
-    uint32_t tok0_type;
     uint32_t tok0_pos;
     uint32_t tok1_id;
-    uint32_t tok1_type;
     uint32_t tok1_pos;
     // Input fields
     uint32_t slot_id;
     uint32_t token_id;
     uint32_t position_id;
     uint32_t prefill_token_id;
+    uint32_t _reserved0;
     float temperature;
     uint32_t k;
     float probability_mass_threshold;
