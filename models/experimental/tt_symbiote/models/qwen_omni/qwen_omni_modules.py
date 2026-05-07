@@ -58,6 +58,101 @@ from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbed
 from models.experimental.tt_symbiote.modules.tensor import TTNNReshape
 
 
+# ---------------------------------------------------------------------------
+# Qwen3-Omni RoPE: extends shared rope.TTNNRotaryPositionEmbedding for mesh /
+# replicated cos/sin quirks (narrow cos/sin; tile-aligned full rotary). Generic
+# attention modules keep importing the baseline class from ``rope.py``.
+# ---------------------------------------------------------------------------
+class TTNNQwenOmniRotaryPositionEmbedding(TTNNRotaryPositionEmbedding):
+    """Same API as ``TTNNRotaryPositionEmbedding`` with Omni-specific last-dim handling."""
+
+    def forward(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ):
+        if q.layout != ttnn.TILE_LAYOUT:
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if k.layout != ttnn.TILE_LAYOUT:
+            k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if cos.layout != ttnn.TILE_LAYOUT:
+            cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if sin.layout != ttnn.TILE_LAYOUT:
+            sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if len(sin.shape) == 3:
+            sin = ttnn.unsqueeze(sin, dim=0)
+        if len(cos.shape) == 3:
+            cos = ttnn.unsqueeze(cos, dim=0)
+        batch_size, n_q_heads, seq_len, head_dim = q.shape
+        batch_size2, n_k_heads, seq_len2, head_dim2 = k.shape
+        assert seq_len == seq_len2, "Query and Key sequence lengths must match."
+        assert batch_size == batch_size2, "Query and Key batch sizes must match."
+        assert head_dim == head_dim2, "Query and Key head dimensions must match."
+
+        original_head_dim = head_dim
+        original_seq_len = seq_len
+        rotary_dim = cos.shape[-1]
+
+        # Replicated cos/sin can be errantly all-gathered to head_dim×num_devices; slice to match Q/K.
+        if rotary_dim > head_dim:
+            cos = cos[:, :, :, :head_dim]
+            sin = sin[:, :, :, :head_dim]
+            rotary_dim = head_dim
+
+        if rotary_dim < head_dim:
+            q_rot = q[:, :, :, :rotary_dim]
+            q_pass = q[:, :, :, rotary_dim:]
+            k_rot = k[:, :, :, :rotary_dim]
+            k_pass = k[:, :, :, rotary_dim:]
+
+            padded_rotary_dim = rotary_dim
+            if rotary_dim % 32 != 0:
+                padded_rotary_dim = ((rotary_dim + 31) // 32) * 32
+                cos = ttnn.pad(cos, [1, 1, cos.shape[-2], padded_rotary_dim], [0, 0, 0, 0], 0.0)
+                sin = ttnn.pad(sin, [1, 1, sin.shape[-2], padded_rotary_dim], [0, 0, 0, 0], 0.0)
+                q_rot = ttnn.pad(q_rot, [batch_size, n_q_heads, seq_len, padded_rotary_dim], [0, 0, 0, 0], 0.0)
+                k_rot = ttnn.pad(k_rot, [batch_size2, n_k_heads, seq_len2, padded_rotary_dim], [0, 0, 0, 0], 0.0)
+
+            q_rot_embedded = ttnn.experimental.rotary_embedding(q_rot, cos, sin)
+            k_rot_embedded = ttnn.experimental.rotary_embedding(k_rot, cos, sin)
+
+            if q_rot_embedded.shape[-2] != seq_len:
+                q_rot_embedded = q_rot_embedded[:, :, :seq_len, :]
+            if k_rot_embedded.shape[-2] != seq_len:
+                k_rot_embedded = k_rot_embedded[:, :, :seq_len, :]
+            if padded_rotary_dim != rotary_dim:
+                q_rot_embedded = q_rot_embedded[:, :, :, :rotary_dim]
+                k_rot_embedded = k_rot_embedded[:, :, :, :rotary_dim]
+
+            q_rotated = ttnn.concat([q_rot_embedded, q_pass], dim=-1)
+            k_rotated = ttnn.concat([k_rot_embedded, k_pass], dim=-1)
+        else:
+            padded_dim = rotary_dim
+            if rotary_dim % 32 != 0:
+                padded_dim = ((rotary_dim + 31) // 32) * 32
+                pad_shape = [int(cos.shape[i]) for i in range(len(cos.shape) - 1)] + [padded_dim]
+                cos = ttnn.pad(cos, pad_shape, [0, 0, 0, 0], 0.0)
+                sin = ttnn.pad(sin, pad_shape, [0, 0, 0, 0], 0.0)
+                q = ttnn.pad(q, [batch_size, n_q_heads, seq_len, padded_dim], [0, 0, 0, 0], 0.0)
+                k = ttnn.pad(k, [batch_size2, n_k_heads, seq_len2, padded_dim], [0, 0, 0, 0], 0.0)
+
+            q_rotated = ttnn.experimental.rotary_embedding(q, cos, sin)
+            k_rotated = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+        if q_rotated.shape[-1] != original_head_dim:
+            q_rotated = q_rotated[:, :, :, :original_head_dim]
+        if k_rotated.shape[-1] != original_head_dim:
+            k_rotated = k_rotated[:, :, :, :original_head_dim]
+        if q_rotated.shape[-2] != original_seq_len:
+            q_rotated = q_rotated[:, :, :original_seq_len, :]
+        if k_rotated.shape[-2] != original_seq_len:
+            k_rotated = k_rotated[:, :, :original_seq_len, :]
+
+        return q_rotated, k_rotated
+
+
 def _mesh_host_stitch_device_shards(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor | None:
     """Concat host tensors when each mesh device holds a shard on one logical dimension."""
     if mesh_device is None or not hasattr(mesh_device, "get_num_devices"):
@@ -2471,7 +2566,7 @@ class TTNNQwen3OmniAttention(TTNNModule):
     def __init__(self):
         super().__init__()
         self.sdpa = TTNNSDPAAttention()
-        self.rope = TTNNRotaryPositionEmbedding()
+        self.rope = TTNNQwenOmniRotaryPositionEmbedding()
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
 
     def init_parameters(self):
@@ -2680,7 +2775,7 @@ class TTNNQwen3Attention(TTNNModule):
         super().__init__()
 
         self.sdpa = TTNNSDPAAttention()
-        self.rope = TTNNRotaryPositionEmbedding()
+        self.rope = TTNNQwenOmniRotaryPositionEmbedding()
 
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
 
@@ -2879,7 +2974,7 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
         super().__init__()
 
         self.sdpa = TTNNSDPAAttention()
-        self.rope = TTNNRotaryPositionEmbedding()
+        self.rope = TTNNQwenOmniRotaryPositionEmbedding()
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
 
         self.num_heads = None
@@ -5268,6 +5363,7 @@ __all__ = [
     "TTNNQwenOmniIColShardedWAllReduced",
     "TTNNQwenOmniLinear",
     "TTNNQwenOmniMoERouterDecode",
+    "TTNNQwenOmniRotaryPositionEmbedding",
     "TTNNQwenOmniThinkerLmHead",
     "TTNNSnakeBeta",
     "replace_code_predictor_lm_head_with_ttnn",
