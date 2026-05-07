@@ -11,10 +11,11 @@
 #include <filesystem>
 #include <string>
 #include <stdexcept>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
-#include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -23,7 +24,6 @@
 #include "device_fixture.hpp"
 #include "jit_build/build.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -32,16 +32,7 @@ namespace {
 namespace fs = std::filesystem;
 
 using BinaryPolicy = experimental::PrecompiledKernelConfig::FallbackPolicy;
-
-struct ScopedCopiedPrecompiledRoot {
-    explicit ScopedCopiedPrecompiledRoot(fs::path root) : root_(std::move(root)) {}
-    ~ScopedCopiedPrecompiledRoot() {
-        std::error_code ec;
-        fs::remove_all(root_, ec);
-    }
-
-    fs::path root_;
-};
+using CBCompileConfig = experimental::OfflineKernelCompileParams::CBCompileConfig;
 
 struct ScopedTempDir {
     explicit ScopedTempDir(const std::string& tag) {
@@ -94,44 +85,31 @@ struct JitSrcsBaseline {
     uint32_t delta() const { return BuildCacheTelemetry::inst().get_srcs_count() - baseline; }
 };
 
-Program create_regular_program(const std::string& kernel_path = kReaderKernelPath) {
-    Program program = CreateProgram();
-    CreateKernel(program, kernel_path, CoreCoord{0, 0}, kReaderDmConfig);
-    return program;
-}
-
-ScopedCopiedPrecompiledRoot precompiled_root_from_live_compile(IDevice* device) {
-    // AOT kernel compilation is not implemented yet, so we seed precompiled artifacts
-    // by compiling once on a live device, then copying the resulting kernel subtree into
-    // a temporary directory used only as the "precompiled" source.
-    Program jit_program = create_regular_program();
-    jit_build_cache_clear();
-    JitSrcsBaseline jit_srcs;
-    detail::CompileProgram(device, jit_program);
-    TT_FATAL(jit_srcs.delta() > 0, "Expected seed JIT compile to invoke jit_build");
-    const fs::path jit_kernel_root = BuildEnvManager::get_instance(extract_context_id(device))
-                                         .get_device_build_env(device->build_id())
-                                         .build_env.get_out_kernel_root_path();
-    const fs::path jit_kernel_subdir = jit_kernel_root / kReaderKernelName;
-    TT_FATAL(fs::exists(jit_kernel_subdir), "Expected JIT kernel artifacts at {}", jit_kernel_subdir.string());
-
-    const auto timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-    const fs::path copied_precompiled_root =
-        fs::temp_directory_path() / ("tt_metal_precompiled_copy_" + std::to_string(timestamp_ns));
-    fs::create_directories(copied_precompiled_root);
-    fs::copy(
-        jit_kernel_subdir,
-        copied_precompiled_root / kReaderKernelName,
-        fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-    return ScopedCopiedPrecompiledRoot(copied_precompiled_root);
+// Seed `output_dir` with offline-compiled kernel artifacts for every supported product, so
+// runtime tests can point `PrecompiledKernelConfig::precompiled_dir` at it. Driving this
+// through `experimental::CompileKernelOffline(AllSupportedProducts)` (instead of a live
+// JIT compile + tree copy) is the contract this slice asserts: the offline-emitted hash
+// buckets must match what the runtime precompiled-loader path searches for.
+void seed_precompiled_root(
+    const fs::path& output_dir,
+    const std::string& kernel_path,
+    const std::variant<DataMovementConfig, ComputeConfig>& kernel_config,
+    const std::vector<CBCompileConfig>& cb_compile_configs = {}) {
+    using Params = experimental::OfflineKernelCompileParams;
+    Params params{
+        .mode = Params::AllSupportedProducts{},
+        .output_dir = output_dir.string(),
+        .cb_compile_configs = cb_compile_configs,
+    };
+    experimental::CompileKernelOffline(kernel_path, kernel_config, params);
 }
 
 TEST_F(OfflineKernelCompileMockFixture, MetadataFromProgramDerivesConfiguredCbMetadata) {
     Program program = CreateProgram();
     const Tile tile({16, 32});
     const auto page_size = tile.get_tile_size(DataFormat::Float16_b);
-    CircularBufferConfig cb_config(page_size, {{0, DataFormat::Float16_b}});
-    cb_config.set_page_size(0, page_size).set_tile_dims(0, tile);
+    CircularBufferConfig cb_config(page_size, {{CBIndex::c_0, DataFormat::Float16_b}});
+    cb_config.set_page_size(CBIndex::c_0, page_size).set_tile_dims(CBIndex::c_0, tile);
     CreateCircularBuffer(program, CoreCoord{0, 0}, cb_config);
     const KernelHandle kernel = CreateKernel(program, kReaderKernelPath, CoreCoord{0, 0}, kReaderDmConfig);
 
@@ -152,9 +130,15 @@ TEST_F(OfflineKernelCompileMockFixture, CBCompileConfigsFromProgramDeduplicatesO
 
     constexpr uint32_t kPageSize = 2048;
     CreateCircularBuffer(
-        program, left_core, CircularBufferConfig(kPageSize, {{0, DataFormat::Float16_b}}).set_page_size(0, kPageSize));
+        program,
+        left_core,
+        CircularBufferConfig(kPageSize, {{CBIndex::c_0, DataFormat::Float16_b}})
+            .set_page_size(CBIndex::c_0, kPageSize));
     CreateCircularBuffer(
-        program, right_core, CircularBufferConfig(kPageSize, {{0, DataFormat::Bfp8_b}}).set_page_size(0, kPageSize));
+        program,
+        right_core,
+        CircularBufferConfig(kPageSize, {{CBIndex::c_0, DataFormat::Bfp8_b}})
+            .set_page_size(CBIndex::c_0, kPageSize));
 
     const auto cb_compile_configs = experimental::CBCompileConfigsFromProgram(program, kernel);
     ASSERT_EQ(cb_compile_configs.size(), 1);
@@ -233,15 +217,60 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtree
 
 TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
     auto* device = this->devices_.at(0)->get_devices().at(0);
-    auto copied_precompiled_root = precompiled_root_from_live_compile(device);
 
-    const auto precompiled_config =
-        make_precompiled_config(copied_precompiled_root.root_.string(), BinaryPolicy::Error);
+    ScopedTempDir precompiled_root("tt_metal_precompiled_seed_hit");
+    seed_precompiled_root(precompiled_root.path_, kReaderKernelPath, kReaderDmConfig);
+
+    const auto precompiled_config = make_precompiled_config(precompiled_root.path_.string(), BinaryPolicy::Error);
     Program program = create_precompiled_program(precompiled_config);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_EQ(jit_srcs.delta(), 0u);
+}
+
+TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
+    // Verifies the CBCompileConfigsFromProgram + CompileKernelOffline path produces a
+    // bucket whose hash inputs (build_key + hlk_desc CB metadata + kernel compute hash)
+    // match the runtime-computed hash for an equivalently-configured program. If the
+    // hlk_desc contributions diverge, this test fails as `jit_srcs.delta() > 0` (runtime
+    // falls through to JIT) rather than as a layout assertion, which is exactly the
+    // failure mode that justifies surfacing CBCompileConfigsFromProgram in the public API.
+    auto* device = this->devices_.at(0)->get_devices().at(0);
+
+    constexpr uint32_t kPageSize = 2048;
+    constexpr DataFormat kCbFormat = DataFormat::Float16_b;
+
+    // Reference program: built only to derive CB compile configs that mirror the runtime
+    // CB layout. CBCompileConfigsFromProgram does not require the program to be compiled.
+    Program metadata_program = CreateProgram();
+    CircularBufferConfig metadata_cb_config(kPageSize, {{CBIndex::c_0, kCbFormat}});
+    metadata_cb_config.set_page_size(CBIndex::c_0, kPageSize);
+    CreateCircularBuffer(metadata_program, CoreCoord{0, 0}, metadata_cb_config);
+    const KernelHandle metadata_kernel =
+        CreateKernel(metadata_program, kReaderKernelPath, CoreCoord{0, 0}, kReaderDmConfig);
+    const auto cb_compile_configs = experimental::CBCompileConfigsFromProgram(metadata_program, metadata_kernel);
+    ASSERT_EQ(cb_compile_configs.size(), 1);
+    EXPECT_EQ(cb_compile_configs[0].cb_index, 0);
+    EXPECT_EQ(cb_compile_configs[0].data_format, kCbFormat);
+
+    ScopedTempDir precompiled_root("tt_metal_precompiled_seed_cb_hit");
+    seed_precompiled_root(precompiled_root.path_, kReaderKernelPath, kReaderDmConfig, cb_compile_configs);
+
+    // Runtime program: same CB layout + precompiled kernel. Hash inputs must match offline
+    // emission for the load-without-JIT contract to hold.
+    const auto precompiled_config = make_precompiled_config(precompiled_root.path_.string(), BinaryPolicy::Error);
+    Program runtime_program = CreateProgram();
+    CircularBufferConfig runtime_cb_config(kPageSize, {{CBIndex::c_0, kCbFormat}});
+    runtime_cb_config.set_page_size(CBIndex::c_0, kPageSize);
+    CreateCircularBuffer(runtime_program, CoreCoord{0, 0}, runtime_cb_config);
+    experimental::CreateKernelFromPrecompiled(
+        runtime_program, kReaderKernelPath, CoreCoord{0, 0}, kReaderDmConfig, precompiled_config);
+
+    jit_build_cache_clear();
+    JitSrcsBaseline jit_srcs;
+    EXPECT_NO_THROW(detail::CompileProgram(device, runtime_program));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
