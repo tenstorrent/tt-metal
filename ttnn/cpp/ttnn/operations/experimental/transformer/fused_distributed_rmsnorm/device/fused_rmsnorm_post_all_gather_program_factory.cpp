@@ -19,39 +19,10 @@
 
 namespace ttnn::experimental::prim {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGatherProgramFactory::create(
     const FusedRmsnormPostAllGatherParams& operation_attributes,
     const FusedRmsnormPostAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -115,7 +86,8 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats_tensor.dtype());
     tt::DataFormat intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat reduce_scalar_data_format =
+        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     tt::DataFormat weight_data_format =
         has_weight ? tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.value().dtype())
@@ -270,9 +242,6 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {
         float f;
         uint32_t u;
@@ -291,7 +260,7 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        packed_winv_value,
+        W * num_devices,  // reduce_factor
         e.u,
         has_weight,
         fuse_rope,
@@ -332,7 +301,6 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    bool use_float32_reduction = fp32_dest_acc_en;  // legacy_reduction=false
     bool use_legacy_rsqrt = false;
     std::vector<uint32_t> compute_args = {
         input_cb_id,
@@ -350,7 +318,6 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        use_float32_reduction,
         use_legacy_rsqrt,
         has_weight,
         fuse_rope,

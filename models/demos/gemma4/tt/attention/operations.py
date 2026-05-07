@@ -34,6 +34,14 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_
     """
     num_local_heads = config.num_attention_heads // tp
     num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
+    # Workaround for Blackhole bug in nlp_create_qkv_heads_decode interleaved
+    # reader kernel: with DRAM input the kernel zeros odd-indexed Q rows due
+    # to a NoC DRAM-read alignment-match violation (see tt-metal #16667). Move
+    # the fused QKV from DRAM to L1 before the split — the L1 path uses a
+    # different code path that's not affected. No-op on Wormhole (correctness
+    # preserved; small extra L1 copy in exchange for arch-portable behavior).
+    if xqkv_fused.memory_config().buffer_type == ttnn.BufferType.DRAM:
+        xqkv_fused = ttnn.to_memory_config(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
     return ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,

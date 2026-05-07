@@ -64,7 +64,9 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    apply_tensor_placement_topology,
     create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
 )
 
@@ -301,6 +303,40 @@ def extract_rope_parameters(traced_source: str = None) -> dict:
     return rope_params
 
 
+def _rel_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape=None,
     input_a_dtype=None,
@@ -351,6 +387,9 @@ def run(
 
     is_mesh_device = hasattr(device, "get_num_devices")
     input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -386,10 +425,23 @@ def run(
         shape_c = input_shape["input_c"]  # sin_cache: [1, n_heads_or_1, cache_size, head_dim]
     else:
         shape_a = list(input_shape)
-        batch, n_heads, seq_len, head_dim = shape_a
-        # Use explicit shapes from V2 vectors if available, otherwise derive
-        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(seq_len, 1024), head_dim]))
-        shape_c = list(_kwargs.get("input_c_shape", [1, 1, max(seq_len, 1024), head_dim]))
+        # Defer dim unpack until after potential shard-axis shrink.
+        # Use explicit shapes from V2 vectors if available, otherwise derive.
+        # shape_c is only consumed in the traced-config branch above; the
+        # non-traced cos/sin path constructs caches from shape_b alone.
+        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(shape_a[2], 1024), shape_a[3]]))
+
+    # Decode mode (HEIGHT_SHARDED) uses replicate-with-topology to put the
+    # SAME per-chip tensor on every chip; V2 expanded the head_dim axis to
+    # global, so we must shrink shape_a back to per-chip there. Prefill mode
+    # (INTERLEAVED) uses create_tensor_on_mesh, which actually shards the
+    # global tensor across chips — so we MUST keep the global shape and skip
+    # the shrink.
+    # V2 vectors carry the per-chip shape (master's original_shape).
+    # create_tensor_on_mesh routes Shard placements through
+    # replicate_with_topology, which keeps per-chip .shape == torch input shape
+    # and stamps the master topology — so we keep shape_a as-is.
+    _rel_a_axis, _rel_a_factor = _rel_input_shard_axis_and_factor(input_a_tensor_placement)
 
     # Detect decode mode from memory config
     # Decode mode uses HEIGHT_SHARDED memory layout
@@ -457,9 +509,13 @@ def run(
     else:
         # For sample configs, generate based on cache_size
         cache_size = shape_b[2]
+        # In Shard(-1) prefill, input_a stays global so create_tensor_on_mesh
+        # can shard it; cos/sin are Replicated and need to be sized per-chip.
+        # Use shape_b[3] when present — that's the per-chip cos head_dim.
+        _cache_head_dim = shape_b[3] if len(shape_b) >= 4 else head_dim
         cos_cache, sin_cache = generate_cos_sin_for_prefill(
             cache_size,
-            head_dim,
+            _cache_head_dim,
             theta=rope_params["theta"],
             scale_factor=rope_params["scale_factor"],
             orig_context_len=rope_params["orig_context_len"],
@@ -504,13 +560,34 @@ def run(
 
         # Interleave back to original format
         torch_output_tensor = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(torch.bfloat16)
+
+        # Decode shrinks shape_a to per-chip on the input shard axis, so the
+        # per-chip golden above is per-chip. mesh_tensor_to_torch later
+        # reassembles outputs by concatenating along that same shard axis.
+        # Tile to match the reassembled global shape.
+        if _rel_a_factor > 1 and _rel_a_axis is not None:
+            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
+            if 0 <= _ax_g < torch_output_tensor.ndim:
+                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
     else:
-        # For prefill mode
+        # For prefill mode. torch_input_tensor is GLOBAL (shape_a is unshrunk),
+        # while torch_cos_cache / torch_sin_cache were generated at the per-chip
+        # head_dim because cos/sin are Replicated and create_tensor_on_mesh
+        # shards Q along the shard axis. Run rope per-chunk with the replicated
+        # cos/sin and concat along the shard axis to produce the global golden
+        # that matches what mesh_tensor_to_torch reassembles.
         torch_output_tensor = apply_rotary_emb_golden(
-            torch_input_tensor.float(),  # Use float for golden computation
+            torch_input_tensor.float(),
             torch_cos_cache.float(),
             torch_sin_cache.float(),
         ).to(torch.bfloat16)
+        # All chips have the same per-chip data; Shard(-1) topology causes
+        # mesh_tensor_to_torch to concatenate chip outputs along the shard
+        # axis, so tile the golden the same way.
+        if _rel_a_factor > 1 and _rel_a_axis is not None:
+            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
+            if 0 <= _ax_g < torch_output_tensor.ndim:
+                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
 
     # --- Create TTNN Tensors ---
     if is_decode_mode:
@@ -576,6 +653,18 @@ def run(
         )
         trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
 
+        # Restore 2D mesh topology on decode-path tensors so the tracer
+        # records the canonical distribution_shape matching the master.
+        if is_mesh_device:
+            _mesh_shape = get_model_traced_mesh_shape()
+            for _t, _tp in [
+                (input_tensor_a, input_a_tensor_placement),
+                (cos_cache_tt, input_b_tensor_placement or input_a_tensor_placement),
+                (sin_cache_tt, input_c_tensor_placement or input_a_tensor_placement),
+                (trans_mat_tt, input_d_tensor_placement or input_a_tensor_placement),
+            ]:
+                apply_tensor_placement_topology(_t, _tp, _mesh_shape)
+
     else:
         # --- Prefill Mode: Use interleaved memory ---
         if is_mesh_device and input_a_tensor_placement:
@@ -588,13 +677,28 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+                torch_cos_cache,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_b_tensor_placement or input_a_tensor_placement,
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+                torch_sin_cache,
+                device,
+                input_c_dtype,
+                input_c_layout,
+                input_c_memory_config,
+                input_c_tensor_placement or input_a_tensor_placement,
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+                torch_trans_mat,
+                device,
+                input_d_dtype,
+                input_d_layout,
+                input_d_memory_config,
+                input_d_tensor_placement or input_a_tensor_placement,
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -629,9 +733,11 @@ def run(
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()
 
+    # Do NOT inject memory_config — the master trace only has it when the model
+    # explicitly passed it.  Injecting from the vector's output_memory_config or
+    # memory_config metadata causes extra_key diffs in validation.
+
     rope_call_kwargs = {"is_decode_mode": is_decode_mode}
-    if output_memory_config is not None:
-        rope_call_kwargs["memory_config"] = output_memory_config
     rope_call_kwargs.update(op_kwargs)
     output_tensor = ttnn.experimental.rotary_embedding_llama(
         input_tensor_a,
@@ -643,6 +749,11 @@ def run(
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # In decode mode the input n_heads dim (e.g. 8) is tile-padded to 32 by
+    # TILE_LAYOUT.  Slice back to the logical shape before the PCC check.
+    if is_decode_mode and len(output_tensor.shape) == 4 and output_tensor.shape[2] != torch_output_tensor.shape[2]:
+        output_tensor = output_tensor[:, :, : torch_output_tensor.shape[2], :]
 
     # --- Check Results ---
     # Use high PCC threshold (0.9997) to match reference test expectations

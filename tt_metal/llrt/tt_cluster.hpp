@@ -27,7 +27,8 @@
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/tt_io.hpp>
+#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -202,12 +203,30 @@ public:
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
-    // Returns a writer object which holds a pointer to a static tlb
-    // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
-    // traversals
-    umd::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+    /**
+     * Returns a pointer to the static TLB window associated with the given target.
+     *
+     * Ownership:
+     *   - The returned TlbWindow is owned and managed by the underlying driver.
+     *   - Callers must not delete, free, or otherwise take ownership of the pointer.
+     *
+     * Lifetime:
+     *   - The pointer remains valid for as long as the underlying driver/device
+     *     context for this Cluster instance remains initialized and the static TLB
+     *     configuration is not torn down by the driver.
+     *   - Callers may cache the pointer, but must ensure they do not use it after
+     *     the Cluster/driver has been destroyed or the device has been deinitialized.
+     *
+     * Concurrency:
+     *   - The driver may return the same TlbWindow instance across multiple calls
+     *     (i.e., this is typically a cached/static window).
+     *   - It is safe to share the pointer across threads for read-only operations.
+     *   - If callers perform operations that mutate the TlbWindow or its underlying
+     *     mappings, they must provide appropriate external synchronization.
+     */
+    tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_writer(target.chip, target_coord);
+        return driver_->get_static_tlb_window(target.chip, target_coord);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {

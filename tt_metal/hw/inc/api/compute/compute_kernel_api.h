@@ -34,6 +34,10 @@
 #ifdef TRISC_PACK
 #include "llk_pack_api.h"
 #include "llk_io_pack.h"
+#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "llk_math_eltwise_unary_sfpu_tanh.h"
+#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
+#include "llk_math_eltwise_unary_sfpu_activations.h"
 #define PACK(x) x
 #else
 #define PACK(x)
@@ -57,6 +61,7 @@
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 /**
  * Please refer to documentation for any_init.
  */
@@ -64,6 +69,11 @@ namespace ckernel {
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
+}
+
+template <bool fast_and_approx = false>
+ALWI void sigmoid_tile_init_pack() {
+    PACK((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
 }
 
 // clang-format off
@@ -83,6 +93,11 @@ ALWI void sigmoid_tile_init() {
 template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
+}
+
+template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
+ALWI void sigmoid_tile_pack(uint32_t idst) {
+    PACK((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
 
 /**
@@ -156,6 +171,11 @@ ALWI void tanh_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_tanh_init<fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
 
+template <bool fast_and_approx = false>
+ALWI void tanh_tile_init_pack() {
+    PACK((llk_math_eltwise_unary_sfpu_tanh_init<fast_and_approx, DST_ACCUM_MODE>()));
+}
+
 // TODO: Move to trigonometry.h
 // clang-format off
 /**
@@ -177,6 +197,11 @@ ALWI void tanh_tile_init() {
 template <bool fast_and_approx = false>
 ALWI void tanh_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));
+}
+
+template <bool fast_and_approx = false>
+ALWI void tanh_tile_pack(uint32_t idst) {
+    PACK((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
 
 /**
@@ -466,8 +491,10 @@ ALWI void expm1_tile_init() {
  */
 // clang-format on
 ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst))); }
+ALWI void silu_tile_pack(uint32_t idst) { PACK((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst))); }
 
 ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
+ALWI void silu_tile_init_pack() { PACK((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
 
 // topK local sort
 // clang-format off
@@ -970,5 +997,7 @@ ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_spe
 ALWI void store_compute_special_value_flags_to_l1(uint32_t l1_addr) {
     MATH((llk_math_store_compute_special_value_flags_to_l1(l1_addr)));
 }
+
+#endif
 
 }  // namespace ckernel

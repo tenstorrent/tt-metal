@@ -123,13 +123,6 @@ target_sources(
             cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
             cpp/ttnn/kernel/kernel_common_utils.hpp
             cpp/ttnn/kernel/kernel_utils.hpp
-            cpp/ttnn/kernel_lib/cb_helpers.hpp
-            cpp/ttnn/kernel_lib/cb_helpers.inl
-            cpp/ttnn/kernel_lib/dest_helpers.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.inl
-            cpp/ttnn/kernel_lib/untilize_helpers.hpp
-            cpp/ttnn/kernel_lib/untilize_helpers.inl
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -166,6 +159,7 @@ target_sources(
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
+        cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
         core/tensor/tensor_utils.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
@@ -700,7 +694,6 @@ target_link_libraries(
         TTNN::Ops::Eltwise::Ternary
         TTNN::Ops::Eltwise::Ternary::Backward
         TTNN::Ops::Eltwise::Unary
-        TTNN::Ops::Eltwise::UnaryNG
         TTNN::Ops::Eltwise::Unary::Backward
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
@@ -956,7 +949,6 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary_ng)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
@@ -997,6 +989,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
+add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)

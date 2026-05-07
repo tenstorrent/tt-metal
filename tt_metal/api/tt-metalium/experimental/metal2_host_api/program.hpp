@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 
@@ -17,14 +18,15 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 
 // Create a Program object from a ProgramSpec
 // (This will become a constructor for the Program class)
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false);
+Program MakeProgramFromSpec(
+    const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
 
 // Configure the mutable parameters of an existing Program
 // (This will become a member function for the Program class)
 // This performs a copy from the ProgramRunParams to the Program's internal data structures.
 //
-// COMPLETENESS: You must specify runtime_args for every (kernel, node) pair that
-// requires runtime arguments. Missing entries will cause an error.
+// COMPLETENESS: You must specify runtime args (named and vararg alike) for every
+// (kernel, node) pair that requires runtime arguments. Missing entries will cause an error.
 //
 // For high-performance inner loops, prefer the in-place power user API below.
 // If stateful behavior of parameters is required, use the power user API.

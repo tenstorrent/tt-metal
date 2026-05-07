@@ -61,10 +61,14 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 }
 
 // Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
-string build_trisc_prolog(const char* trisc_define) {
+// Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
+string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
-    prolog << "#include \"kernel_bindings_generated.h\"\n";
+    if (is_metal2_kernel) {
+        prolog << "#include \"kernel_bindings_generated.h\"\n";
+        prolog << "#include \"kernel_args_generated.h\"\n";
+    }
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -82,29 +86,145 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+// METAL 2.0 only:
+// This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
+// Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
 void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
     const string path = out_dir + "kernel_bindings_generated.h";
-    vector<pair<string, uint16_t>> entries;
-    settings.process_dataflow_buffer_local_accessor_handles(
-        [&entries](const string& name, uint16_t id) { entries.emplace_back(name, id); });
-    sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Get the DFB bindings from the settings callback
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    vector<pair<string, uint16_t>> dfb_entries;
+    settings.process_dataflow_buffer_local_accessor_handles(
+        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
+    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Get the semaphore bindings from the settings callback
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    vector<pair<string, uint16_t>> sem_entries;
+    settings.process_semaphore_local_accessor_handles(
+        [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
+    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Emit the header content:
+    //  - DFB accessors are emitted into the dfb namespace
+    //  - Semaphore accessors are emitted into the sem namespace
+    //
+    // NOTE: Both accessor types are emitted as constexpr variables, i.e. as implicit CTAs.
+    //       This is a design decision; we could alternatively emit them as implicit CRTAs.
+    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-accessor basis.)
+    //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
+    //       We are starting simple and can adjust later if problems arise.
+    //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     ostringstream content;
-    content << "// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n"
-               "//\n"
-               "// SPDX-License-Identifier: Apache-2.0\n\n"
-               "// AUTO-GENERATED — do not edit.\n\n"
+    content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
-        content << "#include \"experimental/dataflow_buffer.h\"\n\n"
-                   "namespace dfb {\n";
-        for (const auto& [name, id] : entries) {
-            content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
+        if (!dfb_entries.empty()) {
+            content << "#include \"experimental/dataflow_buffer.h\"\n";
         }
-        content << "}  // namespace dfb\n";
+        if (!sem_entries.empty()) {
+            content << "#include <cstdint>\n";
+        }
+        content << "\n";
+
+        if (!dfb_entries.empty()) {
+            content << "namespace dfb {\n";
+            for (const auto& [name, id] : dfb_entries) {
+                content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
+            }
+            content << "}  // namespace dfb\n";
+        }
+
+        if (!sem_entries.empty()) {
+            content << "namespace sem {\n";
+            for (const auto& [name, id] : sem_entries) {
+                content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+            }
+            content << "}  // namespace sem\n";
+        }
     }
+    write_file(path, content.str());
+}
+
+// METAL 2.0 only:
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
+// Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
+// in, so that vararg indices in kernel code are stable across schema changes.
+//
+// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
+//       Legacy kernels do not get kernel_args_generated.h.
+void write_kernel_args_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
+    const fs::path path = out_dir / "kernel_args_generated.h";
+
+    // Named RTAs/CRTAs come straight from the settings as ordered vectors.
+    const vector<string>& rta_names = settings.get_named_runtime_args();
+    const vector<string>& crta_names = settings.get_named_common_runtime_args();
+
+    // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
+    // The order in which we emit them DOES matter!
+    // We sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    vector<pair<string, uint32_t>> cta_entries;
+    settings.process_named_compile_time_args(
+        [&cta_entries](const std::unordered_map<std::string, uint32_t>& named_args) {
+            for (const auto& [name, value] : named_args) {
+                cta_entries.emplace_back(name, value);
+            }
+        });
+    sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    ostringstream content;
+    content << "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n"
+               "#include \"experimental/kernel_args.h\"\n\n";
+
+    // Named args namespace: emit only when the kernel has at least one named arg or CTA.
+    // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
+    // so we keep emitting those unconditionally.
+    const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
+    if (has_named_args) {
+        content << "namespace args {\n";
+
+        // Named RTAs
+        // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
+        // (Only uint32_t arg types are currently supported, but we later want to extend this.)
+        uint32_t rta_offset = 0;
+        for (const auto& name : rta_names) {
+            content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
+            rta_offset += sizeof(uint32_t);
+        }
+        // Named CRTAs
+        uint32_t crta_offset = 0;
+        for (const auto& name : crta_names) {
+            content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+            crta_offset += sizeof(uint32_t);
+        }
+        // Named CTAs
+        // No offsets to deal with here; CTA values are emitted directly into the generated header.
+        for (const auto& [name, value] : cta_entries) {
+            content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+        }
+
+        content << "}  // namespace args\n\n";
+    }
+
+    // Vararg helpers — always emitted.
+    // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
+    // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
+    // there are no named args, the offset is zero and these helpers are just thin wrappers
+    // around get_arg_val / get_common_arg_val.
+    const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
+    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size());
+    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
+            << " + idx); }\n"
+            << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
+            << named_crta_words << " + idx); }\n";
+
     write_file(path, content.str());
 }
 
@@ -116,11 +236,20 @@ void jit_build_genfiles_kernel_include(
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    write_kernel_bindings_generated_header(out_dir, settings);
-    string kernel_header = out_dir + "kernel_includes.hpp";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
-    const string kernel_header_content = string("#include \"kernel_bindings_generated.h\"\n") + kernel_src_to_include;
+    // Metal 2.0 generated headers and their includes are emitted only for Metal 2.0 kernels.
+    // Legacy kernels created via the old host API are fenced out of this code path.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    string kernel_header_content;
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+        kernel_header_content =
+            string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
+    }
+    kernel_header_content += get_kernel_source_to_include(kernel_src);
+
+    string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
 }
 
@@ -130,17 +259,24 @@ void jit_build_genfiles_triscs_src(
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    write_kernel_bindings_generated_header(out_dir, settings);
+
+    // Metal 2.0 generated headers are emitted and referenced only for Metal 2.0 kernels.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+    }
+
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
     const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
 
     // Build prologs for each TRISC
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
-    const string math_prolog = build_trisc_prolog("TRISC_MATH");
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK");
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
+    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2);
+    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2);
+    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2);
+    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2);
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
@@ -328,6 +464,12 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
+    if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::MxFp4;
+        })) {
+        TT_FATAL(arch == tt::ARCH::QUASAR, "MxFp4 format is only supported on Quasar");
+    }
+
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
@@ -452,6 +594,11 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
     out << "#pragma once\n\n"
            "#if defined(UCK_CHLKC_MATH)\n"
+           "#include \"llk_defs.h\"\n";
+    emit_math_scalar_descriptors(out, desc);
+    out << "#endif\n\n";
+
+    out << "#if defined(UCK_CHLKC_PACK)\n"
            "#include \"llk_defs.h\"\n";
     emit_math_scalar_descriptors(out, desc);
     out << "#endif\n\n";

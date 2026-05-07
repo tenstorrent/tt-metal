@@ -44,6 +44,7 @@ _INFRA_KEYS = frozenset(
         "timestamp",
         "input_hash",
         "tag",
+        "__absent_keys__",
     }
 )
 
@@ -67,6 +68,8 @@ _TENSOR_PREFIXES = (
     "input_tensor_k",
     "input_tensor_v",
     "page_table_tensor",
+    "cur_pos_tensor",
+    "attn_mask",
 )
 
 
@@ -253,11 +256,18 @@ def build_op_kwargs(
     exclude = exclude or set()
     op_kwargs = {}
 
-    for key, value in kwargs.items():
-        # Skip None values
-        if value is None:
-            continue
+    # V2 vectors carry __absent_keys__: parameter names that were *absent* in
+    # the master config (vs explicitly None). A None value whose key is not in
+    # this set was explicitly None in master and must be preserved so the
+    # sweep trace records the same kwarg. Without this, ops drop kwargs like
+    # sub_core_grids=None and produce a hash divergence vs master.
+    absent_keys = kwargs.get("__absent_keys__") or set()
+    if not isinstance(absent_keys, (set, frozenset, list, tuple)):
+        absent_keys = set()
+    else:
+        absent_keys = set(absent_keys)
 
+    for key, value in kwargs.items():
         # Skip __ABSENT__ sentinel values (parameter not present in traced config)
         if value == "__ABSENT__":
             continue
@@ -274,6 +284,14 @@ def build_op_kwargs(
                 continue
             if key in exclude:
                 continue
+
+        # None handling: keep explicit None when V2 says the key was present
+        # in master (i.e. not in __absent_keys__). Drop None when absent.
+        if value is None:
+            if key in absent_keys:
+                continue
+            op_kwargs[key] = None
+            continue
 
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)

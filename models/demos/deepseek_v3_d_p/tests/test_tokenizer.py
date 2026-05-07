@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 )
 
 
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 def test_tokenize_prompt_to_isl(tokenizer):
     max_isl = 10
     input_ids, attention_mask, tokens = tokenize_prompt_to_isl(
@@ -36,10 +37,11 @@ def test_tokenize_prompt_to_isl(tokenizer):
     assert input_ids.shape == (1, max_isl), f"Expected input_ids shape (1, {max_isl}), got {input_ids.shape}"
 
     torch.set_printoptions(threshold=float("inf"), edgeitems=3, precision=2, linewidth=200)
-    logger.debug(f"4D Causal Attention Mask shape:\n{get_4d_causal_mask(attention_mask, ignore_padding=True)}")
-    logger.debug(f"4D Causal Attention Mask Paddshape:\n{get_4d_causal_mask(attention_mask, ignore_padding=False)}")
+    logger.debug(f"4D Causal Attention Mask shape:\n{get_4d_causal_mask(attention_mask, causal_only=True)}")
+    logger.debug(f"4D Causal Attention Mask Paddshape:\n{get_4d_causal_mask(attention_mask, causal_only=False)}")
 
 
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 def test_tokenize_prompt_to_chat_template(tokenizer):
     max_isl = 64
     input_ids, tokens = tokenize_prompt_to_chat_template(
@@ -56,6 +58,42 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
 
 
 @pytest.mark.parametrize(
+    "json_path",
+    [
+        Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.json"),
+        Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json"),
+        Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json"),
+        Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json"),
+    ],
+    ids=["short", "64tok", "960tok", "pie"],
+)
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
+def test_token_count(tokenizer, json_path):
+    """Tokenize a prompt JSON without padding and report token count."""
+    from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+    logger.info(f"{json_path=}")
+    prompts = load_prompts_from_json(str(json_path))
+    assert prompts, f"No prompts found in {json_path}"
+    prompt_text = prompts[0]
+
+    tokens = tokenizer.encode(prompt_text, add_special_tokens=False)
+    logger.info(f"{len(tokens)=}")
+    logger.debug(f"Prompt: {repr(prompt_text)}")
+    logger.debug(f"Token IDs: {tokens}")
+
+    input_ids, attention_mask, tokens_padded = tokenize_prompt_to_isl(
+        tokenizer, max_isl=1024, prompt_text=prompts, debug=True
+    )
+    number_of_non_padded_tokens = attention_mask.sum().item()  # should be returned by tokenize..
+    logger.info(f"{number_of_non_padded_tokens=}")
+    logger.debug(f"Prompt: {repr(tokens_padded)}")
+    logger.debug(f"Token IDs: {input_ids}")
+
+    # note number_of_non_padded_tokens is len(tokens) + 1 for the added BOS token
+
+
+@pytest.mark.parametrize(
     "input_path",
     [
         Path("/tmp/r1/pretrained_abc_1k_isl1024_layers61_experts256.pt"),
@@ -67,6 +105,7 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
         ),
     ],
 )
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 def test_first_token_from_reference(input_path, model_path, config_only, tokenizer):
     # Use weights_only=False since this is a trusted local file with custom objects
     logger.info(f"{input_path=}")
@@ -133,21 +172,22 @@ def test_first_token_from_reference(input_path, model_path, config_only, tokeniz
         return probs.div_(torch.empty_like(probs).exponential_(1)).argmax(dim=-1)
 
     index = -1  # Last token
-    for temperature in [0.0, 0.5, 1]:
-        first_token = sample(logits=logits[index].clone(), temperature=temperature)
-        token_text = tokenizer.decode([first_token.item()])
-        logger.info(f"{index} First token (temperature={temperature}): {first_token.item()} -> {repr(token_text)}")
-
-    last_logit = logits[-1, :].clone()
+    last_logit = logits[index, :].clone()
     top_k = 5
-    top_logits, top_indices = torch.topk(last_logit, top_k, dim=-1)
-    probs = torch.softmax(last_logit, dim=-1)
 
-    for i, (token_id, logit_value) in enumerate(zip(top_indices.tolist(), top_logits.tolist())):
-        token_text = tokenizer.decode([token_id])
-        prob = probs[token_id].item()
+    for temperature in [0.0, 0.5, 1.0]:
+        # Sample token
+        first_token = sample(logits=last_logit.clone(), temperature=temperature)
+        token_text = tokenizer.decode([first_token.item()])
+        logger.info(f"First token (temp={temperature}): ID={first_token.item()} [{repr(token_text)}]")
 
-        logger.info(
-            f"{i+1}. Token ID: {token_id:6d} | Logit: {logit_value:8.4f} | "
-            f"Prob: {prob:8.6f} | Text: {repr(token_text)}"
-        )
+        # Compute temperature-scaled probabilities
+        scaled_logits = last_logit / max(temperature, 1e-5)
+        probs = torch.softmax(scaled_logits, dim=-1)
+
+        # Get top-5 by probability (after temperature scaling)
+        top_probs, top_indices = torch.topk(probs, top_k, dim=-1)
+
+        for i, (token_id, prob) in enumerate(zip(top_indices.tolist(), top_probs.tolist())):
+            token_text = tokenizer.decode([token_id])
+            logger.info(f"  top{i+1}: ID={token_id:6d} | Prob: {prob*100:6.2f}% | Text: {repr(token_text)}")

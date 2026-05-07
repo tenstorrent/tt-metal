@@ -98,7 +98,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
     sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
+    sfpi::vInt zif = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x007fffff in paper
 
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
@@ -144,7 +144,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven));
+        y = sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven);
     }
 
     return y;
