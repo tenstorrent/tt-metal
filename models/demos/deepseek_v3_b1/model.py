@@ -67,10 +67,10 @@ class OutputField:
     TOP_P = 7
     CANDIDATE_TOKEN_IDS = 8
     PREFILL_TOKEN_IDS = 13
-    P_TOP32_INDICES = 17
-    P_TOP32_SCORES = 49
-    Q_TOP32_INDICES = 65
-    Q_TOP32_SCORES = 97
+    P_TOP15_INDICES = 17
+    P_TOP15_SCORES = 32
+    Q_TOP15_INDICES = 40
+    Q_TOP15_SCORES = 55
 
 
 class InputField:
@@ -113,10 +113,10 @@ class DecodeResult:
     user_id: int = 0
     lane_idx: int = 0
     position_id: int = 0
-    p_top32_indices: list[int] = field(default_factory=list)
-    p_top32_scores: list[float] = field(default_factory=list)
-    q_top32_indices: list[int] = field(default_factory=list)
-    q_top32_scores: list[float] = field(default_factory=list)
+    p_top15_indices: list[int] = field(default_factory=list)
+    p_top15_scores: list[float] = field(default_factory=list)
+    q_top15_indices: list[int] = field(default_factory=list)
+    q_top15_scores: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.token_type = int(self.token_type)
@@ -129,10 +129,10 @@ class DecodeResult:
         ]
         if not self.tokens:
             raise ValueError("DecodeResult requires at least one candidate token")
-        self.p_top32_indices = [int(token) for token in self.p_top32_indices]
-        self.p_top32_scores = [float(prob) for prob in self.p_top32_scores]
-        self.q_top32_indices = [int(token) for token in self.q_top32_indices]
-        self.q_top32_scores = [float(prob) for prob in self.q_top32_scores]
+        self.p_top15_indices = [int(token) for token in self.p_top15_indices]
+        self.p_top15_scores = [float(prob) for prob in self.p_top15_scores]
+        self.q_top15_indices = [int(token) for token in self.q_top15_indices]
+        self.q_top15_scores = [float(prob) for prob in self.q_top15_scores]
 
     @property
     def token_ids(self) -> list[int]:
@@ -152,11 +152,11 @@ class DecodeResult:
 
     @property
     def target_topn_tokens(self) -> list[int]:
-        return self.p_top32_indices
+        return self.p_top15_indices
 
     @property
     def target_topn_probs(self) -> list[float]:
-        return self.p_top32_scores
+        return self.p_top15_scores
 
 
 def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
@@ -171,9 +171,11 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
 
     def unpack_bf16_scores(start_word: int) -> list[float]:
         scores = []
-        for word_idx in range(TOPK_METADATA_COUNT // 2):
+        for word_idx in range((TOPK_METADATA_COUNT + 1) // 2):
             word = raw_bf16_pair_word(start_word + word_idx)
             for shift in (0, 16):
+                if len(scores) == TOPK_METADATA_COUNT:
+                    break
                 bf16_bits = (word >> shift) & 0xFFFF
                 scores.append(torch.tensor(bf16_bits << 16, dtype=torch.uint32).view(torch.float32).item())
         return scores
@@ -195,10 +197,10 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
         lane_idx=lane_idx,
         position_id=position_id,
         tokens=tokens,
-        p_top32_indices=[raw_int(OutputField.P_TOP32_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
-        p_top32_scores=unpack_bf16_scores(OutputField.P_TOP32_SCORES),
-        q_top32_indices=[raw_int(OutputField.Q_TOP32_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
-        q_top32_scores=unpack_bf16_scores(OutputField.Q_TOP32_SCORES),
+        p_top15_indices=[raw_int(OutputField.P_TOP15_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
+        p_top15_scores=unpack_bf16_scores(OutputField.P_TOP15_SCORES),
+        q_top15_indices=[raw_int(OutputField.Q_TOP15_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
+        q_top15_scores=unpack_bf16_scores(OutputField.Q_TOP15_SCORES),
     )
 
 
