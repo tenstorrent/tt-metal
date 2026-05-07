@@ -182,36 +182,6 @@ class TestYUVConversion:
             ttnn.close_device(device)
 
 
-def test_dprint_debug():
-    """Deterministic constant-input test for DPRINT debugging."""
-    H, W, T = 2, 2, 1
-    device = ttnn.open_device(device_id=0)
-    try:
-        cpu_bf16 = torch.zeros(3, H, W, T, dtype=torch.bfloat16)  # R=G=B=0.0
-        ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(cpu_bf16)
-        print(f"\n=== Expected Y (every element should be ~126): ===\n{ref_Y}")
-        print(f"=== Expected Cb: ===\n{ref_Cb}")
-        print(f"=== Expected Cr: ===\n{ref_Cr}")
-
-        tt_in = ttnn.from_torch(cpu_bf16, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
-        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
-        ttnn.synchronize_device(device)
-
-        dev_Y = ttnn.to_torch(tt_Y)
-        dev_Cb = ttnn.to_torch(tt_Cb)
-        dev_Cr = ttnn.to_torch(tt_Cr)
-        print(f"=== Device Y: ===\n{dev_Y}")
-        print(f"=== Device Cb: ===\n{dev_Cb}")
-        print(f"=== Device Cr: ===\n{dev_Cr}")
-
-        diff_Y = (dev_Y.squeeze(0).int() - ref_Y.int()).abs()
-        print(f"=== Y diff: ===\n{diff_Y}")
-        assert diff_Y.max().item() <= 1, f"Y max error {diff_Y.max().item()}"
-    finally:
-        ttnn.close_device(device)
-
-
 class TestYUVPerformance:
     """Measure op latency on the 720p shard size."""
 

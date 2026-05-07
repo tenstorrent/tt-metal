@@ -4,6 +4,7 @@
 
 #include "yuv_conversion_device_op.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <cmath>
 
 using namespace tt::tt_metal;
 
@@ -15,7 +16,7 @@ YUVConversionDeviceOperation::program_factory_t YUVConversionDeviceOperation::se
 }
 
 void YUVConversionDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& in = tensor_args.input;
     TT_FATAL(in.storage_type() == StorageType::DEVICE, "Input must be on device");
     TT_FATAL(in.buffer() != nullptr, "Input buffer must be allocated");
@@ -25,8 +26,27 @@ void YUVConversionDeviceOperation::validate_on_program_cache_miss(
     const auto& shape = in.logical_shape();
     TT_FATAL(shape.rank() == 4, "Input must be 4D (C, H, W, T)");
     TT_FATAL(shape[0] == 3, "Input must have C=3 (RGB)");
-    TT_FATAL(shape[1] % 2 == 0, "H must be even for 4:2:0 subsampling");
-    TT_FATAL(shape[2] % 2 == 0, "W must be even for 4:2:0 subsampling");
+    TT_FATAL(shape[1] >= 2 && shape[1] % 2 == 0, "H must be even and >= 2 for 4:2:0 subsampling (got {})", shape[1]);
+    TT_FATAL(shape[2] >= 2 && shape[2] % 2 == 0, "W must be even and >= 2 for 4:2:0 subsampling (got {})", shape[2]);
+    TT_FATAL(shape[3] > 0, "T must be positive (got {})", shape[3]);
+
+    TT_FATAL(
+        in.logical_shape() == in.padded_shape(),
+        "Padded input is not supported (logical {} vs padded {})",
+        in.logical_shape(),
+        in.padded_shape());
+
+    TT_FATAL(
+        in.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Input memory must be interleaved, got {}",
+        in.memory_config().memory_layout());
+
+    const auto& c = attrs.coefficients;
+    for (int i = 0; i < 4; i++) {
+        TT_FATAL(std::isfinite(c.y[i]), "y coefficient [{}] is not finite", i);
+        TT_FATAL(std::isfinite(c.cb[i]), "cb coefficient [{}] is not finite", i);
+        TT_FATAL(std::isfinite(c.cr[i]), "cr coefficient [{}] is not finite", i);
+    }
 }
 
 void YUVConversionDeviceOperation::validate_on_program_cache_hit(
@@ -58,13 +78,6 @@ YUVConversionDeviceOperation::tensor_return_value_t YUVConversionDeviceOperation
         create_device_tensor(u_spec, device),
         create_device_tensor(v_spec, device),
     };
-}
-
-ttsl::hash::hash_t YUVConversionDeviceOperation::compute_program_hash(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto& in = tensor_args.input;
-    return operation::hash_operation<YUVConversionDeviceOperation>(
-        in.dtype(), in.memory_config(), in.logical_shape().volume());
 }
 
 }  // namespace ttnn::experimental::prim
