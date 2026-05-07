@@ -38,6 +38,7 @@ import pytest
 # CONFIGURATION CONSTANTS
 # ============================================================================
 from tests.nightly.sdpa_perf_utils import MeshConfig
+import json
 
 MESH_CONFIG = MeshConfig.detect()
 
@@ -436,6 +437,9 @@ def run_ring_joint_sdpa(
     do_check=True,
     num_iterations=1,
     sp_size_override=None,
+    topology_override: Optional[Topology] = None,
+    force_open_full_4x8: bool = False,
+    force_tp1: bool = False,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -497,10 +501,14 @@ def run_ring_joint_sdpa(
     if sp_size_override is not None and sp_size_override > mesh_config.sp_size:
         pytest.skip(f"sp_size_override={sp_size_override} exceeds detected ring size {mesh_config.sp_size}")
 
-    # Ring topology requires >2 devices; fall back to linear for <=2
-    use_ring = False
+    # Choose topology: optional override (from traced configs), else default linear
+    if topology_override is not None:
+        topology = topology_override
+        use_ring = topology_override == Topology.Ring
+    else:
+        use_ring = False
+        topology = Topology.Ring if use_ring else Topology.Linear
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
-    topology = Topology.Ring if use_ring else Topology.Linear
 
     # Configure fabric for ring joint attention
     ttnn.set_fabric_config(
@@ -518,28 +526,79 @@ def run_ring_joint_sdpa(
 
     joint_seq_len = 0  # Use empty joint sequence (WAN 2.2 compatible)
 
-    # Open mesh device — create a submesh when sp_size_override < detected ring size
-    mesh_shape = ttnn.MeshShape(mesh_config.tp_size, actual_sp_size)
+    # Open mesh device
+    # If requested (and supported), always open a 4x8 parent and carve 1xSP submesh (TP=1)
     parent_mesh_device = None
-    if sp_size_override is not None and sp_size_override < mesh_config.sp_size:
-        parent_mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size))
-        mesh_device = parent_mesh_device.create_submesh(mesh_shape)
+    effective_tp_size = mesh_config.tp_size
+    is_bh = hasattr(ttnn.device, "is_blackhole") and ttnn.device.is_blackhole()
+    # Device params to increase available program space (Wormhole) or keep defaults (Blackhole)
+    dev_params = {
+        "worker_l1_size": 1344544,
+        "trace_region_size": 200000,
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    }
+    if is_bh and topology == Topology.Ring:
+        dev_params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING
+    if force_open_full_4x8:
+        parent_mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(4, 8),
+            worker_l1_size=dev_params["worker_l1_size"],
+            trace_region_size=dev_params["trace_region_size"],
+        )
+        if force_tp1:
+            mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(1, actual_sp_size))
+            effective_tp_size = 1
+        else:
+            mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(effective_tp_size, actual_sp_size))
     else:
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
-    num_links = 2
+        mesh_shape = ttnn.MeshShape(mesh_config.tp_size, actual_sp_size)
+        if sp_size_override is not None and sp_size_override < mesh_config.sp_size:
+            parent_mesh_device = ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size),
+                worker_l1_size=dev_params["worker_l1_size"],
+                trace_region_size=dev_params["trace_region_size"],
+            )
+            if force_tp1:
+                mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(1, actual_sp_size))
+                effective_tp_size = 1
+            else:
+                mesh_device = parent_mesh_device.create_submesh(mesh_shape)
+        else:
+            mesh_device = ttnn.open_mesh_device(
+                mesh_shape=mesh_shape,
+                worker_l1_size=dev_params["worker_l1_size"],
+                trace_region_size=dev_params["trace_region_size"],
+            )
+            if force_tp1 and effective_tp_size > 1:
+                try:
+                    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, actual_sp_size))
+                    effective_tp_size = 1
+                except Exception:
+                    pass
+    # Links: use 4
+    num_links = 4
 
     try:
-        if mesh_config.tp_size > 1 and nhq % mesh_config.tp_size != 0:
+        if effective_tp_size > 1 and nhq % effective_tp_size != 0:
             pytest.skip(
-                f"num_heads ({nhq}) must be divisible by TP size ({mesh_config.tp_size}) for multi-ring architecture"
+                f"num_heads ({nhq}) must be divisible by TP size ({effective_tp_size}) for multi-ring architecture"
             )
 
         # Configure compute grid and CCL coordination
-        sdpa_compute_grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
-        ccl_column = mesh_config.ccl_column
-
-        # Get actual device grid for sub-device creation
+        # Use device grid; reserve CCL region to avoid overlap with SDPA.
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
+        if is_bh and topology == Topology.Ring:
+            # Blackhole ring: reserve last column for CCL (column-major)
+            sdpa_compute_grid = (max(1, full_compute_grid.x - 1), full_compute_grid.y)
+            ccl_column = max(0, sdpa_compute_grid[0])
+            ccl_offset = (ccl_column, 0)
+            use_col_major_ccl = True
+        else:
+            # Wormhole or linear: reserve last row for CCL (row-major)
+            sdpa_compute_grid = (full_compute_grid.x, max(1, full_compute_grid.y - 1))
+            ccl_column = 0
+            ccl_offset = (0, sdpa_compute_grid[1])  # place CCL below SDPA grid
+            use_col_major_ccl = False
 
         # Create sub-device for CCL operations - Must include ALL cores that operations will use
         ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -587,7 +646,7 @@ def run_ring_joint_sdpa(
         # Create persistent output buffers
         kv_shard_dims = [None, None]
         kv_shard_dims[sp_axis] = None
-        if mesh_config.tp_size > 1:
+        if effective_tp_size > 1:
             kv_shard_dims[tp_axis] = 1
 
         # Persistent K output buffer uses nhk and d_k dimensions
@@ -597,7 +656,7 @@ def run_ring_joint_sdpa(
         # For K buffer: handle nhk=1 case (MLA) - may need different sharding
         persistent_k_shard_dims = [None, None]
         persistent_k_shard_dims[sp_axis] = None
-        if mesh_config.tp_size > 1 and nhk != 1:
+        if effective_tp_size > 1 and nhk != 1:
             persistent_k_shard_dims[tp_axis] = 1
 
         persistent_output_buffer_k = ttnn.from_torch(
@@ -637,21 +696,21 @@ def run_ring_joint_sdpa(
         # Convert to TT tensors with appropriate mesh sharding
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
-        if mesh_config.tp_size > 1:
+        if effective_tp_size > 1:
             sdpa_input_shard_dims[tp_axis] = 1
 
         # K tensor may have nhk=1 (MLA), different sharding
         sdpa_k_shard_dims = [None, None]
         sdpa_k_shard_dims[sp_axis] = 2
-        if mesh_config.tp_size > 1 and nhk != 1:
+        if effective_tp_size > 1 and nhk != 1:
             sdpa_k_shard_dims[tp_axis] = 1
 
         sdpa_joint_shard_dims = [None, None]
-        if mesh_config.tp_size > 1:
+        if effective_tp_size > 1:
             sdpa_joint_shard_dims[tp_axis] = 1
 
         sdpa_joint_k_shard_dims = [None, None]
-        if mesh_config.tp_size > 1 and nhk != 1:
+        if effective_tp_size > 1 and nhk != 1:
             sdpa_joint_k_shard_dims[tp_axis] = 1
 
         # Q tensor uses q_dtype
@@ -743,8 +802,8 @@ def run_ring_joint_sdpa(
                 mesh_device=mesh_device,
                 topology=topology,
                 subdevice_id=worker_sub_device_id,
-                ccl_core_grid_offset=(ccl_column, 0),  # Point to CCL column
-                use_column_major_ccl=True,
+                ccl_core_grid_offset=ccl_offset,
+                use_column_major_ccl=use_col_major_ccl,
             )
 
             # Convert main output to torch and slice out tile-padding
@@ -1183,6 +1242,120 @@ def run_ring_joint_sdpa_chunked(
 TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
 
+# -----------------------------------------------------------------------------
+# Traced ring-attention shapes loader (from shape_trace_summary.json)
+# -----------------------------------------------------------------------------
+
+
+def _load_traced_ring_attention_shapes():
+    """
+    Parse shape_trace_summary.json ring_attention entries.
+    Returns a list of dictionaries with:
+      {
+        "mesh_shape": (H, W),
+        "sp": S,
+        "tp": T,
+        "q_heads": Hq,
+        "seq_local": S_local,
+        "d": d_head,
+        "N_logical": N_logical,
+        "topology": Topology.<Ring|Linear>,
+      }
+    """
+    # Locate file at repo root (fallback to CWD)
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+    candidates = [
+        os.path.join(repo_root, "shape_trace_summary.json"),
+        os.path.abspath("shape_trace_summary.json"),
+    ]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if path is None:
+        logger.warning("shape_trace_summary.json not found; traced ring shapes sweep disabled")
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    ring = data.get("ring_attention", {})
+
+    def mesh_key_to_tuple(k: str):
+        # key format: "mesh=HxW|sp=S|tp=T"
+        parts = dict(part.split("=") for part in k.split("|"))
+        H, W = map(int, parts["mesh"].split("x"))
+        return (H, W), int(parts["sp"]), int(parts["tp"])
+
+    def map_topology(mesh_hw: tuple[int, int]) -> Topology:
+        # Follow WAN2.1 test_mesh_sweep_1536p topologies:
+        # Linear: 2x2, 1x4, 2x4, 4x4; Ring: 4x8
+        return Topology.Ring if mesh_hw == (4, 8) else Topology.Linear
+
+    traced = []
+    for key, entries in ring.items():
+        mesh_hw, sp, tp = mesh_key_to_tuple(key)
+        topo = map_topology(mesh_hw)
+        for e in entries:
+            q = e.get("q") or []
+            if not (isinstance(q, list) and len(q) == 4):
+                continue
+            b, q_heads, seq_local, d = map(int, q)
+            N_logical = int(e.get("N_logical", seq_local * sp))
+            traced.append(
+                {
+                    "mesh_shape": mesh_hw,
+                    "sp": sp,
+                    "tp": tp,
+                    "q_heads": q_heads,
+                    "seq_local": seq_local,
+                    "d": d,
+                    "N_logical": N_logical,
+                    "topology": topo,
+                }
+            )
+    return traced
+
+
+def _generate_traced_configs():
+    """
+    Build pytest params for traced ring-attention shapes.
+    We sweep q/k chunk sizes similar to WAN2.2 configs: q in [224,256,288], k in [128,256,512].
+    Always open 4x8 then submesh 1xSP (TP=1).
+    """
+    shapes = _load_traced_ring_attention_shapes()
+    if not shapes:
+        return [], []
+    q_chunks = [224, 256, 288]
+    k_chunks = [128, 256, 512]
+    params = []
+    ids = []
+    for s in shapes:
+        sp = s["sp"]
+        nh = s["q_heads"]
+        d = s["d"]
+        N = s["N_logical"]  # use as global logical_n and global seq
+        topo = s["topology"]
+        for qc in q_chunks:
+            for kc in k_chunks:
+                params.append(
+                    (
+                        BATCH_SIZE,  # b
+                        N,  # sq (global logical N)
+                        nh,  # nhq (TP=1)
+                        nh,  # nhk
+                        nh,  # nhv
+                        d,  # d_q
+                        d,  # d_k
+                        d,  # d_v
+                        qc,  # q_chunk
+                        kc,  # k_chunk
+                        False,  # is_causal
+                        False,  # is_balanced
+                        ttnn.bfloat16,  # q_dtype
+                        ttnn.bfloat16,  # kv_dtype
+                        sp,  # sp_size_override (open submesh 1xSP)
+                        topo,  # topology override
+                    )
+                )
+                ids.append(f"traced_mesh{ s['mesh_shape'][0]}x{s['mesh_shape'][1] }_sp{sp}_nh{nh}_N{N}_q{qc}_k{kc}")
+    return params, ids
+
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
@@ -1233,6 +1406,65 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
         is_balanced=is_balanced,
         do_check=False,
         sp_size_override=sp_size_override,
+    )
+
+
+# === TEST 1b: PERFORMANCE SWEEP FOR TRACED RING SHAPES (skipped on CI) ===
+TRACED_CONFIGS, TRACED_CONFIG_IDS = _generate_traced_configs()
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize(
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,sp_size_override,topology_override",
+    TRACED_CONFIGS,
+    ids=TRACED_CONFIG_IDS,
+)
+def test_ring_joint_attention_sdpa_traced_sweep_perf_impl(
+    b,
+    sq,
+    nhq,
+    nhk,
+    nhv,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    is_balanced,
+    q_dtype,
+    kv_dtype,
+    sp_size_override,
+    topology_override,
+):
+    """
+    Performance sweep using traced WAN ring-attention shapes.
+    Always opens 4x8 mesh and creates a 1xSP submesh (TP=1).
+    Topology (Ring/Linear) is set per WAN2.1 mesh mapping.
+    """
+    mesh_config = MESH_CONFIG
+    is_bh = hasattr(ttnn.device, "is_blackhole") and ttnn.device.is_blackhole()
+    run_ring_joint_sdpa(
+        mesh_config,
+        b,
+        nhq,
+        nhk,
+        sq,
+        d_q,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        nhv=nhv,
+        d_k=d_k,
+        d_v=d_v,
+        kv_dtype=kv_dtype,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        do_check=False,
+        sp_size_override=sp_size_override,
+        topology_override=topology_override,
+        force_open_full_4x8=True,
+        force_tp1=True,
     )
 
 

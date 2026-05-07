@@ -6,6 +6,9 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+import os
+import json
+from itertools import product
 
 from models.common.utility_functions import comp_pcc
 
@@ -625,3 +628,178 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
             util_str = f"{math_util:.1f}"
 
         print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
+
+
+# ---------------------------------------------------------------------------
+# WAN2.2 matmul shape sweep (bf16, HiFi2, fp32_acc=True) using shapes from shape_trace_summary.json
+# ---------------------------------------------------------------------------
+
+
+def _load_wan_matmul_shapes() -> list[tuple[int, int, int]]:
+    """
+    Read matmul shapes from shape_trace_summary.json and return unique (M, K, N) triples.
+    Expects entries like:
+      { "input": [1, 1, M, K], "weight": [K, N] }
+    """
+    candidates: list[tuple[int, int, int]] = []
+    # Try repo root; fall back to CWD
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../"))
+    path_candidates = [
+        os.path.join(repo_root, "shape_trace_summary.json"),
+        os.path.abspath("shape_trace_summary.json"),
+    ]
+    json_path = next((p for p in path_candidates if os.path.exists(p)), None)
+    if json_path is None:
+        logger.warning("shape_trace_summary.json not found; WAN matmul sweep will be empty")
+        return []
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    matmuls = data.get("matmul", {})
+    seen = set()
+    for _, shapes in matmuls.items():
+        for s in shapes:
+            inp = s.get("input") or []
+            w = s.get("weight") or []
+            if not (isinstance(inp, list) and len(inp) >= 4 and isinstance(w, list) and len(w) >= 2):
+                continue
+            M = int(inp[-2])
+            K_in = int(inp[-1])
+            K_w = int(w[0])
+            N = int(w[1])
+            if K_in != K_w:
+                # Skip inconsistent entries
+                continue
+            key = (M, K_in, N)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(key)
+    return candidates
+
+
+WAN_MATMUL_SHAPES = _load_wan_matmul_shapes()
+WAN_MATMUL_IDS = [f"M{M}_K{K}_N{N}" for (M, K, N) in WAN_MATMUL_SHAPES]
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("M,K,N", WAN_MATMUL_SHAPES, ids=WAN_MATMUL_IDS)
+def test_minimal_matmul_block_sweep_wan_shapes_bf16_hifi2_fp32acc(device, M, K, N):
+    """
+    Sweep block sizes for WAN matmul shapes under: dtype=bf16, math_fidelity=HiFi2, fp32_acc=True.
+    For each viable block/subblock config, run minimal_matmul and verify numerical quality.
+    """
+    if not WAN_MATMUL_SHAPES:
+        pytest.skip("No WAN matmul shapes loaded from shape_trace_summary.json")
+
+    # Host tensors
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
+
+    # TT tensors
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    core_grid = device.compute_with_storage_grid_size()
+
+    # Conservative sweep; expand if needed
+    m_block_sizes = [2, 4, 8, 12, 16]
+    n_block_sizes = [2, 4, 8, 12, 16]
+    k_block_sizes = [2, 4, 8, 12, 16]
+    subblocks = [(2, 2)]  # fp32_acc=True case
+
+    for M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) in product(
+        m_block_sizes, k_block_sizes, n_block_sizes, subblocks
+    ):
+        # Validity filters (match earlier sweep logic)
+        if (M_block_size < subblock_h) or (N_block_size < subblock_w):
+            continue
+        if (M_block_size % subblock_h) != 0 or (N_block_size % subblock_w) != 0:
+            continue
+
+        matmul_config = ttnn.MinimalMatmulConfig(
+            M_block_size=M_block_size,
+            K_block_size=K_block_size,
+            N_block_size=N_block_size,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=core_grid,
+        )
+        try:
+            tt_output = ttnn.experimental.minimal_matmul(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                bias_tensor=None,
+                compute_kernel_config=compute_config,
+                config=matmul_config,
+            )
+            tt_output = ttnn.to_torch(tt_output)
+            # Basic correctness gate
+            res = assert_quality(torch_output, tt_output)
+            assert res["pcc"] > 0.999_500
+            assert res["relative_rmse"] < 0.02
+        except Exception as e:
+            # Don't fail the entire shape sweep on one bad config; log and continue
+            logger.warning(
+                f"[WAN sweep] M={M} K={K} N={N} failed for blocks "
+                f"M={M_block_size} K={K_block_size} N={N_block_size} sub=({subblock_h},{subblock_w}): {e}"
+            )
+
+
+# @pytest.mark.skip()
+@pytest.mark.timeout(0)
+def test_create_wan_matmul_perf_table():
+    """
+    Profile all WAN matmul shapes by running the block-sweep test under tracy,
+    then extract the best (min kernel duration) config and print a summary table.
+    Fixed config: dtype=bf16, fidelity=HiFi2, fp32_acc=True.
+    """
+    if not WAN_MATMUL_SHAPES:
+        pytest.skip("No WAN matmul shapes loaded from shape_trace_summary.json")
+
+    subdir = "ttnn_minimal_matmul_wan_shapes"
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+
+    perf_results = []
+    attrs_results = []
+    shapes = []
+
+    for (M, K, N), tid in zip(WAN_MATMUL_SHAPES, WAN_MATMUL_IDS):
+        cmd = (
+            "pytest tests/ttnn/nightly/unit_tests/operations/experimental/"
+            f"test_minimal_matmul.py::test_minimal_matmul_block_sweep_wan_shapes_bf16_hifi2_fp32acc[{tid}] -q -s"
+        )
+        run_device_profiler(cmd, subdir, device_analysis_types=["device_kernel_duration"])
+        r = post_process_ops_log(
+            subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+        )
+        core_count = int(r["CORE COUNT"][0])
+        duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+        duration_arg_min = int(r["DEVICE KERNEL DURATION [ns]"].argmin())
+        attrs = r["ATTRIBUTES"][duration_arg_min]
+        # Keep only the MinimalMatmulConfig attributes portion if present
+        if "'config': " in attrs:
+            attrs = attrs.split("'config': ")[1].split("'fused_")[0]
+
+        shapes.append((M, K, N, core_count))
+        perf_results.append(duration_ns)
+        attrs_results.append(attrs)
+
+    # Pretty summary table
+    header = "| (M,K,N) | cores | measured (ms) | best config |"
+    sep = "|---:|---:|---:|---|"
+    print("WAN matmul sweep — bf16, HiFi2, fp32_acc=True")
+    print(header)
+    print(sep)
+    for (M, K, N, cores), measured_ns, attrs in zip(shapes, perf_results, attrs_results):
+        measured_ms = measured_ns / 1e6
+        print(f"| ({M},{K},{N}) | {cores} | {measured_ms:.3f} | {attrs} |")
