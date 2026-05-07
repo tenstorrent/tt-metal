@@ -324,6 +324,9 @@ void kernel_main() {
         output_buffer_idx = !output_buffer_idx;
         combine_semaphore_val += height_shard_dim;
     }
+
+    // wait for combine to do its final semaphore increment before resetting. Otherwise, leads to hang.
+    noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
     noc_semaphore_set(combine_semaphore_ptr, 0);
     noc_async_posted_writes_flushed(/*noc=*/1);
 }
