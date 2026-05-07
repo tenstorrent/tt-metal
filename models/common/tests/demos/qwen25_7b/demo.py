@@ -230,6 +230,37 @@ def log_teacher_forcing_text(prompt_tokens, predicted_tokens_per_user, reference
         )
 
 
+def select_teacher_forcing_top5_slice(
+    top5_tokens: torch.Tensor, reference_tokens: torch.Tensor, prompt_len: int
+) -> torch.Tensor:
+    """Align ``top5_tokens`` with teacher-forcing targets across refpt conventions."""
+    num_target = len(reference_tokens) - prompt_len
+    target_tokens = reference_tokens[prompt_len : prompt_len + num_target]
+    if num_target <= 0:
+        raise ValueError("prompt_len must be smaller than reference length")
+
+    candidates = []
+    for start in (prompt_len - 1, prompt_len):
+        end = start + num_target
+        if start < 0 or end > top5_tokens.shape[0]:
+            continue
+        aligned = top5_tokens[start:end]
+        probe = min(16, num_target)
+        score = sum(int(aligned[i, 0].item() == target_tokens[i].item()) for i in range(probe))
+        candidates.append((score, start, aligned))
+
+    if not candidates:
+        raise ValueError(
+            f"Cannot align top5 tokens: prompt_len={prompt_len}, num_target={num_target}, top5_len={top5_tokens.shape[0]}"
+        )
+
+    best_score, best_start, best = max(candidates, key=lambda x: x[0])
+    logger.info(
+        f"Teacher-forcing top5 alignment: start={best_start}, boundary score={best_score}/{min(16, num_target)}"
+    )
+    return best
+
+
 def create_model(mesh_device, optimizations: str, cache_dir: Path, *, max_batch_size: int = 32):
     """Build ``Qwen25_7BTTT`` in executor (paged KV) mode.
 
@@ -244,9 +275,11 @@ def create_model(mesh_device, optimizations: str, cache_dir: Path, *, max_batch_
     if optimizations == "accuracy":
         wqkv_dtype = ttnn.bfloat16
         mlp_w_dtype = ttnn.bfloat16
+        kv_cache_dtype = ttnn.bfloat16
     else:
         wqkv_dtype = ttnn.bfloat16
         mlp_w_dtype = ttnn.bfloat8_b
+        kv_cache_dtype = ttnn.bfloat8_b
 
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 4:
@@ -264,6 +297,7 @@ def create_model(mesh_device, optimizations: str, cache_dir: Path, *, max_batch_
             cache_dir=cache_dir,
             wqkv_dtype=wqkv_dtype,
             mlp_w_dtype=mlp_w_dtype,
+            kv_cache_dtype=kv_cache_dtype,
             executor_mode=True,
         )
     except Exception as e:
@@ -346,7 +380,7 @@ def _run_token_accuracy(model, mesh_device, expected):
     kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
-    target_top5 = top5_tokens[half - 1 :] if top5_tokens.shape[0] < len(reference_tokens) else top5_tokens[half:]
+    target_top5 = select_teacher_forcing_top5_slice(top5_tokens, reference_tokens, half)
     result = run_teacher_forcing(
         executor,
         prompt_tokens=prompt_tokens,
