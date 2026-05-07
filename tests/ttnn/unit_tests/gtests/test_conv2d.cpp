@@ -37,7 +37,46 @@ struct Conv2DParam {
     std::array<uint32_t, 2> padding;
 };
 
-class Conv2DFixture : public ::testing::Test, public testing::WithParamInterface<Conv2DParam> {};
+// Conv2DFixture opens device 0 once per suite in SetUpTestSuite.  If the open
+// fails (e.g. ETH/fabric hardware is degraded on T3K), setup_failed_ is set and
+// every test in the suite is skipped rather than propagating the failure into
+// per-test device creates that corrupt MetalContext.
+class Conv2DFixture : public ::testing::Test, public testing::WithParamInterface<Conv2DParam> {
+public:
+    inline static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> fixture_device_;
+    inline static bool setup_failed_ = false;
+
+    static void SetUpTestSuite() {
+        setup_failed_ = false;
+        constexpr size_t l1_small_size = 16384;
+        try {
+            fixture_device_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0, l1_small_size);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogTest,
+                "Conv2DFixture: failed to open device: {}. All tests in this suite will be skipped.",
+                e.what());
+            setup_failed_ = true;
+        }
+    }
+
+    static void TearDownTestSuite() {
+        if (fixture_device_) {
+            try {
+                fixture_device_->close();
+            } catch (...) {
+            }
+            fixture_device_.reset();
+        }
+        setup_failed_ = false;
+    }
+
+    void SetUp() override {
+        if (setup_failed_ || !fixture_device_) {
+            GTEST_SKIP() << "Conv2DFixture: device setup failed — hardware may be degraded.";
+        }
+    }
+};
 
 /*
     Reference implementation of Conv2D
@@ -120,14 +159,7 @@ std::vector<float> reference_implementation_conv2d(
 
 TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     const Conv2DParam param = GetParam();
-
-    // Sets the size for L1 small on the device - 16KB
-    // The halo op which is contained in the Conv2D op uses L1 small memory
-    // Without this, the convolution operation will fail due to L1_SMALL Out of Memory error
-    const size_t l1_small_size = 16384;
-
-    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
-        /*device_id=*/0, l1_small_size);
+    auto& device = fixture_device_;
 
     try {
         MemoryConfig dram_mem_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
