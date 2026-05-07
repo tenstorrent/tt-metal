@@ -58,15 +58,18 @@ class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
 
         Qwen3.5 routing has no bias and no group-based selection, so we skip
         creating the bias, scatter_input, and scatter_src tensors that the
-        parent class creates for GLM4.
+        parent class creates for GLM4. The scale tensor is staged in float32 +
+        TILE_LAYOUT so the forward pass can broadcast-multiply directly against
+        the float32 normalized weights, avoiding a per-call repeat/to_layout/
+        typecast chain.
         """
         r = self._fallback_torch_layer
-        self._scale_torch = torch.full((1, 1, 1, r.top_k), r.routed_scaling_factor, dtype=torch.bfloat16)
+        self._scale_torch = torch.full((1, 1, 1, r.top_k), r.routed_scaling_factor, dtype=torch.float32)
 
     def move_weights_to_device_impl(self):
-        """Move only the scale tensor to device."""
+        """Move the scale tensor to device pre-staged in float32 / TILE layout."""
         self._scale_dev = ttnn.to_device(
-            ttnn.from_torch(self._scale_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(self._scale_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT),
             self.device,
         )
 
@@ -145,23 +148,18 @@ class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
         topk_weights = ttnn.gather(scores_f32, dim=3, index=topk_expert_idx)
         ttnn.deallocate(scores_f32)
 
-        # --- Normalize weights by their sum ---
+        # --- Normalize weights by their sum (in-place add to fold epsilon) ---
         denom = ttnn.sum(topk_weights, dim=3, keepdim=True)
-        # Add epsilon to match PyTorch reference and prevent division by zero
-        denom = ttnn.add(denom, 1e-20)
+        # Epsilon matches PyTorch reference and prevents division by zero
+        denom = ttnn.add_(denom, 1e-20)
         topk_weights = ttnn.div(topk_weights, denom)
         ttnn.deallocate(denom)
 
-        # --- Apply routing scale ---
-        scale_rep_rm = ttnn.repeat(self._scale_dev, ttnn.Shape((1, 1, T, 1)))
-        scale_bf16 = ttnn.to_layout(scale_rep_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if scale_bf16.dtype != ttnn.float32:
-            scale_f32 = ttnn.typecast(scale_bf16, ttnn.float32)
-            ttnn.deallocate(scale_bf16)
-        else:
-            scale_f32 = scale_bf16
-        topk_weights = ttnn.mul(topk_weights, scale_f32)
-        ttnn.deallocate(scale_f32)
+        # --- Apply routing scale (broadcast a tiny float32 TILE tensor) ---
+        # Pre-staged in float32/TILE in move_weights_to_device_impl so we just
+        # broadcast-multiply across T without a per-call repeat or layout/dtype
+        # conversion.
+        topk_weights = ttnn.mul(topk_weights, self._scale_dev)
 
         # --- Reshape outputs to (T, top_k) ---
         topk_expert_idx = ttnn.reshape(topk_expert_idx, ttnn.Shape((T, r.top_k)))
@@ -354,7 +352,11 @@ class TTNNQwenExperts(TTNNExperts):
                 seq_len = tokens_per_device // batch_size_per_device
                 total_tokens = tokens_per_device * self.num_dispatch_devices
 
-        x = ttnn.typecast(x, ttnn.bfloat16)
+        # Only typecast when the upstream tensor isn't already bf16. The all-gather
+        # in TTNNQwen3MoE.forward returns bf16 in the steady state, so we usually
+        # skip an entire whole-tensor typecast inside the captured trace.
+        if x.dtype != ttnn.bfloat16:
+            x = ttnn.typecast(x, ttnn.bfloat16)
 
         # STEP 1: PREPARE INPUTS FOR ALL_TO_ALL_DISPATCH
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -416,16 +418,14 @@ class TTNNQwenExperts(TTNNExperts):
         )
         ttnn.deallocate(x_sparse)
 
-        # Split fused output into w1 (gate) and w3 (up) components
-        # Shape: [1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, 2*I] -> two [1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, I]
+        # Split fused output into w1 (gate) and w3 (up) along the last dim.
+        # The sparse_matmul output rank is configuration-dependent (e.g. 4D or
+        # 6D depending on the program config), so we derive the slice indices
+        # from the actual tensor shape but only touch the last dim.
         intermediate_size = self.intermediate_size
-
-        # Get actual tensor shape to build correct slice indices
         actual_shape = list(w1_w3_out.shape)
         rank = len(actual_shape)
 
-        # Build slice indices dynamically - only slice the last dimension
-        # First half: w1 (gate projection)
         slice_start_w1 = [0] * rank
         slice_end_w1 = list(actual_shape)
         slice_end_w1[-1] = intermediate_size
@@ -436,7 +436,6 @@ class TTNNQwenExperts(TTNNExperts):
             slice_end=slice_end_w1,
         )
 
-        # Second half: w3 (up projection)
         slice_start_w3 = [0] * rank
         slice_start_w3[-1] = intermediate_size
         slice_end_w3 = list(actual_shape)
@@ -472,22 +471,22 @@ class TTNNQwenExperts(TTNNExperts):
         )
         ttnn.deallocate(intermediate)
 
-        # Reshape to expected format
+        # Reshape to expected format. Fold the original two metadata-only
+        # intermediate reshapes ([1, E, T, H] and [E, 1, T, H]) into the final
+        # post-permute reshape since they differ only by where the leading
+        # singleton sits.
         expert_output = ttnn.permute(expert_output, (1, 0, 2, 3))
         expert_output = ttnn.reshape(
-            expert_output, shape=(1, self.num_experts_per_device, num_tokens, self.hidden_size)
+            expert_output,
+            shape=(self.num_experts_per_device, 1, total_tokens, self.hidden_size),
         )
 
         ttnn.deallocate(post_dispatch)
 
         # STEP 5: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
-        expert_output = ttnn.reshape(
-            expert_output,
-            shape=(self.num_experts_per_device, 1, total_tokens, self.hidden_size),
-        )
         expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT, memory_config=decode_memory_config)
 
-        # Reshape to match combine expected format
+        # Reshape to match combine expected format (metadata-only).
         expert_output = ttnn.reshape(
             expert_output, shape=(self.num_experts_per_device, batch_size, seq_len, self.hidden_size)
         )
@@ -513,11 +512,11 @@ class TTNNQwenExperts(TTNNExperts):
             )
         combined_output = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
 
-        # Prepare routing weights for broadcasting
+        # Prepare routing weights for broadcasting.
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         # topk_experts_weights shape: [tokens, K] -> transpose to [K, tokens]
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (1, 0))
-        # Now [K, tokens] -> [K, 1, tokens, 1] for broadcasting
+        # Now [K, tokens] -> [K, 1, tokens, 1] for broadcasting (metadata-only)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 1)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 3)
         topk_experts_weights_tile = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
@@ -721,23 +720,24 @@ class TTNNQwen3MoE(TTNNMoE):
         """Preprocess weights including shared_expert_gate.
 
         Extends parent to also preprocess shared_expert_gate weight if present.
+        Stores the host tensor as torch to avoid an extra ttnn round-trip when
+        we materialize the device tensor in move_weights_to_device_impl.
         """
         # Call parent preprocess for gate weight and submodules
         super().preprocess_weights_impl()
 
-        # KEY DIFFERENCE: Preprocess shared_expert_gate weight if present
+        # KEY DIFFERENCE: Preprocess shared_expert_gate weight if present.
+        # Shape: [1, hidden_size] -> transpose to [hidden_size, 1] for linear.
         if self._shared_expert_gate_weight_torch is not None:
-            # Shape: [1, hidden_size] -> transpose to [hidden_size, 1] for linear
-            self._shared_expert_gate_tt_host = ttnn.from_torch(
-                self._shared_expert_gate_weight_torch.T.contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
+            self._shared_expert_gate_torch_host = self._shared_expert_gate_weight_torch.T.contiguous()
 
     def move_weights_to_device_impl(self):
         """Move weights to device including shared_expert_gate.
 
-        Extends parent to also move shared_expert_gate weight to device.
+        Extends parent to also move shared_expert_gate weight to device. Builds
+        the device tensor directly from the torch host tensor (one allocation /
+        one transfer) instead of materializing a host ttnn tensor first and
+        round-tripping back through torch.
         """
         # Call parent move_weights_to_device
         super().move_weights_to_device_impl()
@@ -745,9 +745,8 @@ class TTNNQwen3MoE(TTNNMoE):
         # KEY DIFFERENCE: Move shared_expert_gate weight to device with replication
         if self._shared_expert_gate_weight_torch is not None:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-            gate_torch = ttnn.to_torch(self._shared_expert_gate_tt_host)
             self._shared_expert_gate_tt = ttnn.from_torch(
-                gate_torch,
+                self._shared_expert_gate_torch_host,
                 device=self.device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -814,14 +813,15 @@ class TTNNQwen3MoE(TTNNMoE):
         # 2. MoE gate routing
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        if x.dtype != ttnn.float32:
-            x_f32 = ttnn.typecast(x, ttnn.float32)
-        else:
-            x_f32 = x
-        router_logits_f32 = ttnn.linear(
-            x_f32,
+        # The matmul already accumulates in fp32 (fp32_dest_acc_en=True), so we
+        # can feed bf16 directly and avoid a whole-tensor input upcast plus a
+        # whole-tensor output downcast. The router itself promotes the small
+        # logits tensor to fp32 before softmax/centering.
+        router_logits = ttnn.linear(
+            x,
             self._gate_weight_tt,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
@@ -829,16 +829,21 @@ class TTNNQwen3MoE(TTNNMoE):
                 packer_l1_acc=True,
             ),
         )
-        if x_f32 is not x:
-            ttnn.deallocate(x_f32)
-        # Convert back to bfloat16 for router (ttnn.softmax / ttnn.topk require bf16)
-        router_logits = ttnn.typecast(router_logits_f32, ttnn.bfloat16)
-        ttnn.deallocate(router_logits_f32)
 
         T = router_logits.shape[-2]
         router_logits = ttnn.reshape(router_logits, ttnn.Shape((T, self.n_routed_experts)))
 
         topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
+
+        # Fold the 1/num_devices reduce-scatter compensation into the tiny
+        # routing-weights tensor instead of running a whole-tensor mul on the
+        # post-experts (1, 1, tokens, hidden) result. Mathematically equivalent
+        # because routing_weights * expert_out * (1/N) == (routing_weights/N) *
+        # expert_out, and reduce-scatter sums identical replicas across the N
+        # devices on the cluster axis.
+        n_rs = self.num_dispatch_devices
+        if n_rs > 1:
+            topk_experts_weights = ttnn.mul(topk_experts_weights, 1.0 / float(n_rs))
 
         x = ttnn.unsqueeze(x, 1)  # Add experts dimension for compatibility with experts module
 
@@ -890,14 +895,12 @@ class TTNNQwen3MoE(TTNNMoE):
         else:
             routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
 
-        # 4. Reduce-scatter final output.
-        n_rs = self.device.get_num_devices()  # devices along cluster_axis=1
-        # Extract underlying TTNN tensor - handle both wrapped and raw tensors
-        routed_out = routed_output
-        if n_rs > 1:
-            routed_out = ttnn.mul(routed_out, 1.0 / float(n_rs))
+        # 4. Reduce-scatter final output. The 1/num_devices compensation has
+        # already been folded into topk_experts_weights above, so we hand the
+        # post-experts tensor straight to reduce-scatter and avoid an extra
+        # whole-tensor multiply.
         routed_output = ttnn.reduce_scatter(
-            routed_out,
+            routed_output,
             dim=3,
             num_links=1,
             cluster_axis=1,
