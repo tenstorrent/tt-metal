@@ -61,7 +61,13 @@ public:
             const auto& port = board->get_port_for_asic_channel(
                 tt::scaleout_tools::AsicChannel{*(desc.asic_location), tt::scaleout_tools::ChanId{chan}});
             return fmt::format("{}#{}", enchantum::to_string(port.port_type), *port.port_id);
-        } catch (const std::exception&) {
+        } catch (const std::runtime_error& e) {
+            log_debug(
+                tt::LogTest,
+                "port_label: no board port for asic={:#x} chan={}: {}",
+                *asic_id,
+                static_cast<unsigned>(chan),
+                e.what());
             return "";
         }
     }
@@ -90,8 +96,43 @@ public:
                                             ? fmt::format("ch{}", static_cast<unsigned>(dst_chan))
                                             : fmt::format("ch{}[{}]", static_cast<unsigned>(dst_chan), dst_port);
             return fmt::format("{} -> {} {}", src_part, dst_chip_label, dst_chan_part);
-        } catch (const std::exception&) {
+        } catch (const std::exception& e) {
+            log_debug(
+                tt::LogTest,
+                "link_label: no PSD connection for src_asic={:#x} src_chan={}: {}",
+                *src_asic,
+                static_cast<unsigned>(src_chan),
+                e.what());
             return src_part;
+        }
+    }
+
+    // Returns a single-line, fully-qualified description of the *specific*
+    // physical first-hop wire affected by a given (src_asic, src_chan), e.g.:
+    //   "bh-glx-b06u08_0/T1/N8 ch4[UBB#1, LINKING_BOARD_3#1]  ->  bh-glx-b06u08_3/T2/N8 ch4[UBB#2, LINKING_BOARD_3#1]"
+    // hostname / tray / asic location / eth channel / [UBB id, port type#id]
+    // are emitted explicitly on BOTH sides so a single glance identifies the
+    // affected connection without relying on surrounding context. This describes
+    // the actual hung wire (first hop from src), NOT the configured src->dst
+    // flow endpoints, which for multi-hop routes can be many wires away.
+    // For internal/trace channels with no board port the bracket collapses to
+    // "[UBB#<n>]"; if the asic descriptor is missing locally the chan falls
+    // back to "ch<n>"; the dst side becomes "(unknown)" when PSD connection
+    // lookup fails.
+    std::string affected_link_label(tt::tt_metal::AsicID src_asic, uint8_t src_chan) {
+        std::string src_part = endpoint_label(src_asic, src_chan);
+        try {
+            auto [dst_asic, dst_chan] = psd_.get_connected_asic_and_channel(src_asic, src_chan);
+            std::string dst_part = endpoint_label(dst_asic, dst_chan);
+            return fmt::format("{}  ->  {}", src_part, dst_part);
+        } catch (const std::exception& e) {
+            log_debug(
+                tt::LogTest,
+                "affected_link_label: no PSD connection for src_asic={:#x} src_chan={}: {}",
+                *src_asic,
+                static_cast<unsigned>(src_chan),
+                e.what());
+            return fmt::format("{}  ->  (unknown)", src_part);
         }
     }
 
@@ -104,9 +145,51 @@ private:
         try {
             auto inserted = boards_.emplace(board_type, tt::scaleout_tools::create_board(board_type));
             return &inserted.first->second;
-        } catch (const std::exception&) {
+        } catch (const std::exception& e) {
+            log_debug(tt::LogTest, "create_board failed for board_type={}: {}", static_cast<int>(board_type), e.what());
             return nullptr;
         }
+    }
+
+    // Helper for affected_link_label: formats one side of the affected wire as
+    //   "<host>/T<tray>/N<asic_loc> ch<n>[UBB#<tray>, <port_type>#<port_id>]"
+    // The bracket carries both the UBB id (= tray_id on UBB-based systems) and
+    // the board port "<type>#<id>", so the affected port is unambiguous at a
+    // glance even when reading a single line in isolation.
+    //
+    // Bracket variants by what's available:
+    //   - desc + board port:  "ch<n>[UBB#<tray>, <port_type>#<port_id>]"
+    //   - desc, internal/trace chan (no board port):  "ch<n>[UBB#<tray>]"
+    //   - no desc, board port:  "ch<n>[<port_type>#<port_id>]"
+    //   - no desc, no port:  "ch<n>"
+    // Chip part falls back to "(unknown)" when the asic descriptor is missing
+    // locally (e.g. cross-host asic id not in the local PSD).
+    std::string endpoint_label(tt::tt_metal::AsicID asic_id, uint8_t chan) {
+        const auto& descriptors = psd_.get_asic_descriptors();
+        auto desc_it = descriptors.find(asic_id);
+
+        std::string chip_part;
+        std::string ubb_part;
+        if (desc_it != descriptors.end()) {
+            const auto& d = desc_it->second;
+            chip_part = fmt::format("{}/T{}/N{}", d.host_name, *d.tray_id, *d.asic_location);
+            ubb_part = fmt::format("UBB#{}", *d.tray_id);
+        } else {
+            chip_part = "(unknown)";
+        }
+
+        std::string port_str = port_label(asic_id, chan);
+        std::string bracket;
+        if (!ubb_part.empty() && !port_str.empty()) {
+            bracket = fmt::format("[{}, {}]", ubb_part, port_str);
+        } else if (!ubb_part.empty()) {
+            bracket = fmt::format("[{}]", ubb_part);
+        } else if (!port_str.empty()) {
+            bracket = fmt::format("[{}]", port_str);
+        }
+        std::string chan_part = bracket.empty() ? fmt::format("ch{}", static_cast<unsigned>(chan))
+                                                : fmt::format("ch{}{}", static_cast<unsigned>(chan), bracket);
+        return fmt::format("{} {}", chip_part, chan_part);
     }
 
     // Compact identifier for a neighbor chip. Omits the host prefix only when
@@ -131,6 +214,9 @@ private:
 
 }  // namespace
 
+// Returns the absolute report path; on directory-creation failure logs once
+// and returns an empty path so the writers short-circuit instead of emitting
+// a duplicate "Failed to open" warning for the same root cause.
 static std::filesystem::path resolve_report_path(const std::string& filename) {
     std::filesystem::path root =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
@@ -142,7 +228,13 @@ static std::filesystem::path resolve_report_path(const std::string& filename) {
         std::error_code ec;
         std::filesystem::create_directories(parent, ec);
         if (ec) {
-            log_warning(tt::LogTest, "Failed to create report directory '{}': {}", parent.string(), ec.message());
+            log_warning(
+                tt::LogTest,
+                "Failed to create report directory '{}': {}. Report '{}' will be skipped.",
+                parent.string(),
+                ec.message(),
+                filename);
+            return {};
         }
     }
     return path;
@@ -905,6 +997,9 @@ static std::string get_timestamp_string() {
 
 void TestProgressMonitor::write_summary_report(
     const std::vector<HungEndpointWireRecord>& all_records, const std::vector<FlowDescriptor>& flow_descriptors) {
+    if (summary_report_path_.empty()) {
+        return;  // resolve_report_path() already logged the reason at ctor time
+    }
     std::ofstream ofs(summary_report_path_);
     if (!ofs.is_open()) {
         log_warning(tt::LogTest, "Failed to open summary report file: {}", summary_report_path_.string());
@@ -1011,11 +1106,15 @@ void TestProgressMonitor::write_summary_report(
                 auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(agg.src_node, agg.dst_node);
                 auto src_asic_id = control_plane.get_asic_id_from_fabric_node_id(agg.src_node);
                 if (fwd_chans.empty()) {
-                    ofs << "      Eth Links (first hop from src): (none reported)\n";
+                    ofs << "      Affected first-hop links: (none reported)\n";
                 } else {
-                    ofs << "      Eth Links (first hop from src):\n";
+                    // Each line is the *specific* physical wire the flow is hung on:
+                    // host/tray(UBB)/asic + eth chan + port[type#id], explicit on both
+                    // sides. Distinct from the configured src->dst pair above, which
+                    // for multi-hop routes can be many wires away from the affected one.
+                    ofs << "      Affected first-hop links:\n";
                     for (const auto& chan : fwd_chans) {
-                        ofs << "        " << port_resolver.link_label(src_asic_id, chan) << "\n";
+                        ofs << "        " << port_resolver.affected_link_label(src_asic_id, chan) << "\n";
                     }
                 }
 
@@ -1041,6 +1140,9 @@ void TestProgressMonitor::write_summary_report(
 
 void TestProgressMonitor::write_detailed_report(
     const std::vector<HungEndpointWireRecord>& all_records, const std::vector<FlowDescriptor>& flow_descriptors) {
+    if (detail_report_path_.empty()) {
+        return;  // resolve_report_path() already logged the reason at ctor time
+    }
     std::ofstream ofs(detail_report_path_);
     if (!ofs.is_open()) {
         log_warning(tt::LogTest, "Failed to open detailed report file: {}", detail_report_path_.string());

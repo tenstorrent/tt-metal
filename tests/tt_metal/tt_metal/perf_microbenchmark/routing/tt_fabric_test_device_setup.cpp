@@ -643,11 +643,10 @@ ConnectionKey TestDevice::register_fabric_connection(
         link_idx,
         static_cast<int>(outgoing_direction));
 
-    // Normalize dst_node_id to the immediate next-hop neighbor so that:
-    //  1. append_fabric_connection_rt_args() receives the direct neighbor (not a multi-hop final dest)
-    //  2. All cardinal-direction traffic sharing the same physical link collapses to one ConnectionKey,
-    //     preventing semaphore exhaustion in all-to-all patterns.
-    // For Z links the provided dst_node_id already IS the direct Z-neighbor.
+    // Collapse cardinal-direction dst to the immediate next-hop neighbor so multi-hop flows
+    // sharing the same first-hop link dedup to one ConnectionKey (avoids per-key worker
+    // semaphore allocations in append_fabric_connection_rt_args). Z is single-hop; keep dst
+    // as-is to preserve cross-mesh disambiguation.
     FabricNodeId key_dst = (outgoing_direction == RoutingDirection::Z)
                                ? dst_node_id
                                : route_manager_->get_neighbor_node_id(fabric_node_id_, outgoing_direction);
