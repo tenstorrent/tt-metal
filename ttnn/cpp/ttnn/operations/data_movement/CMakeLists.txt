@@ -160,6 +160,7 @@ target_sources(
             indexed_fill/device/indexed_fill_device_operation.hpp
             indexed_fill/device/indexed_fill_device_operation_types.hpp
             indexed_fill/device/indexed_fill_program_factory.hpp
+            indexed_fill/device/indexed_fill_utils.hpp
             # moe_expert_token_remap/
             moe_expert_token_remap/moe_expert_token_remap.hpp
             moe_expert_token_remap/moe_expert_token_remap_nanobind.hpp
@@ -385,6 +386,7 @@ target_sources(
         fold/fold.cpp
         indexed_fill/device/indexed_fill_device_operation.cpp
         indexed_fill/device/indexed_fill_program_factory.cpp
+        indexed_fill/device/indexed_fill_utils.cpp
         indexed_fill/indexed_fill.cpp
         moe_expert_token_remap/moe_expert_token_remap.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
