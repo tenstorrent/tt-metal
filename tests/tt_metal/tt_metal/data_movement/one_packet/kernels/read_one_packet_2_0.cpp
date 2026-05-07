@@ -7,17 +7,17 @@
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint.h"
 #include "api/dataflow/endpoints.h"
-
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t num_packets = get_compile_time_arg_val(0);
-    constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t test_id = get_compile_time_arg_val(2);
+    constexpr uint32_t num_packets = get_arg(args::num_packets);
+    constexpr uint32_t packet_size_bytes = get_arg(args::packet_size);
+    constexpr uint32_t test_id = get_arg(args::test_id);
 
-    uint32_t master_l1_addr = get_arg_val<uint32_t>(0);
-    uint32_t subordinate_l1_addr = get_arg_val<uint32_t>(1);
-    uint32_t responder_x_coord = get_arg_val<uint32_t>(2);
-    uint32_t responder_y_coord = get_arg_val<uint32_t>(3);
+    uint32_t master_l1_addr = get_vararg(0);
+    uint32_t subordinate_l1_addr = get_vararg(1);
+    uint32_t responder_x_coord = get_vararg(2);
+    uint32_t responder_y_coord = get_vararg(3);
 
     Noc noc(noc_index);
     UnicastEndpoint unicast_endpoint;

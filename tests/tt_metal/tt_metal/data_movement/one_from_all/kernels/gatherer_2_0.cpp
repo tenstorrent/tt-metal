@@ -6,21 +6,22 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/endpoints.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 
 // L1 to L1 request
 void kernel_main() {
-    constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
-    constexpr uint32_t transaction_size_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t test_id = get_compile_time_arg_val(3);
-    constexpr uint32_t total_subordinate_cores = get_compile_time_arg_val(4);
-    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(5);
+    constexpr uint32_t l1_local_addr = get_arg(args::l1_addr);
+    constexpr uint32_t num_of_transactions = get_arg(args::num_transactions);
+    constexpr uint32_t transaction_size_bytes = get_arg(args::tx_size);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t total_subordinate_cores = get_arg(args::num_subordinates);
+    constexpr uint32_t num_virtual_channels = get_arg(args::num_vc);
 
     std::array<std::array<uint32_t, 2>, total_subordinate_cores> responder_coords;
     uint32_t rt_args_idx = 0;
     for (uint32_t i = 0; i < total_subordinate_cores; i++) {
-        responder_coords[i][0] = get_arg_val<uint32_t>(rt_args_idx++);
-        responder_coords[i][1] = get_arg_val<uint32_t>(rt_args_idx++);
+        responder_coords[i][0] = get_vararg(rt_args_idx++);
+        responder_coords[i][1] = get_vararg(rt_args_idx++);
     }
 
     experimental::Noc noc(noc_index);

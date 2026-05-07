@@ -7,17 +7,18 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 #include "api/dataflow/endpoints.h"
+#include "experimental/kernel_args.h"
 
 // DRAM to L1 read
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t l1_addr = get_arg_val<uint32_t>(1);
+    uint32_t src_addr = get_vararg(0);
+    uint32_t l1_addr = get_vararg(1);
 
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(0);
-    constexpr uint32_t num_banks = get_compile_time_arg_val(1);
-    constexpr uint32_t pages_per_bank = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t test_id = get_compile_time_arg_val(4);
+    constexpr uint32_t num_of_transactions = get_arg(args::num_transactions);
+    constexpr uint32_t num_banks = get_arg(args::num_banks);
+    constexpr uint32_t pages_per_bank = get_arg(args::pages_per_bank);
+    constexpr uint32_t page_size_bytes = get_arg(args::page_size);
+    constexpr uint32_t test_id = get_arg(args::test_id);
 
     Noc noc(noc_index);
     UnicastEndpoint unicast_endpoint;

@@ -6,6 +6,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -31,7 +32,7 @@ struct LoopbackConfig {
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::NOC_0;
-    bool use_2_0_api = false;  // Use Device 2.0 API
+    bool use_2_0_api = false;  // Use Metal 2.0 API on both host and device
 
     // TODO: Add the following parameters
     //  1. Virtual Channel (only useful for unicast)
@@ -46,8 +47,7 @@ struct LoopbackConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const LoopbackConfig& test_config) {
     IDevice* device = mesh_device->impl().get_device(0);
-    // Program
-    Program program = CreateProgram();
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
 
     // Buffer Parameters
     const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
@@ -81,20 +81,75 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
 
     // Kernels
     std::string sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender";
-    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+    if (test_config.use_2_0_api || is_quasar) {
         sender_kernel_path += "_2_0";
     }
     sender_kernel_path += ".cpp";
 
-    KernelHandle sender_kernel;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        sender_kernel = experimental::quasar::CreateKernel(
-            program,
-            sender_kernel_path,
-            master_core_set,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
+    CoreCoord worker = device->worker_core_from_logical_core(test_config.master_core_coord);
+    CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
+
+    Program program;
+    KernelHandle sender_kernel = 0;
+    if (test_config.use_2_0_api || is_quasar) {
+        constexpr const char* SENDER_KERNEL = "loopback_sender";
+        constexpr const char* SYNC_SEM = "sync_sem";
+
+        experimental::metal2_host_api::SemaphoreSpec sync_semaphore{
+            .unique_id = SYNC_SEM,
+            .target_nodes = sem_core_set,
+            .initial_value = 0,
+        };
+
+        experimental::metal2_host_api::KernelSpec sender_spec{
+            .unique_id = SENDER_KERNEL,
+            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{sender_kernel_path},
+            .num_threads = 1,
+            .semaphore_bindings = {{.semaphore_spec_name = SYNC_SEM, .accessor_name = "sync_sem"}},
+            .compile_time_arg_bindings =
+                {{"src_addr", (uint32_t)master_l1_byte_address},
+                 {"dst_addr", (uint32_t)subordinate_l1_byte_address},
+                 {"num_transactions", (uint32_t)test_config.num_of_transactions},
+                 {"tx_num_pages", (uint32_t)test_config.transaction_size_pages},
+                 {"page_size", (uint32_t)test_config.page_size_bytes},
+                 {"test_id", (uint32_t)test_config.test_id}},
+            .runtime_arguments_schema = {.num_runtime_varargs = 2},
+            .config_spec =
+                experimental::metal2_host_api::DataMovementConfiguration{
+                    .gen1_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                            .processor = DataMovementProcessor::RISCV_0, .noc = test_config.noc_id},
+                    .gen2_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        };
+
+        experimental::metal2_host_api::WorkUnitSpec main_wu{
+            .unique_id = "main",
+            .kernels = {SENDER_KERNEL},
+            .target_nodes = master_core_set,
+        };
+
+        experimental::metal2_host_api::ProgramSpec spec{
+            .program_id = "loopback",
+            .kernels = {sender_spec},
+            .semaphores = {sync_semaphore},
+            .work_units = {main_wu},
+        };
+        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+        experimental::metal2_host_api::ProgramRunParams params;
+        std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeVarargs> per_node_args;
+        for (const auto& core : corerange_to_cores(master_core_set)) {
+            per_node_args.push_back(
+                {experimental::metal2_host_api::NodeCoord{core.x, core.y}, {(uint32_t)worker.x, (uint32_t)worker.y}});
+        }
+        params.kernel_run_params = {{
+            .kernel_spec_name = SENDER_KERNEL,
+            .runtime_varargs = std::move(per_node_args),
+        }};
+        experimental::metal2_host_api::SetProgramRunParameters(program, params);
     } else {
+        program = CreateProgram();
         sender_kernel = CreateKernel(
             program,
             sender_kernel_path,
@@ -103,16 +158,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = test_config.noc_id,
                 .compile_args = sender_compile_args});
+        const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
+        vector<uint32_t> master_run_args = {sem_id, worker.x, worker.y};
+        SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
     }
-
-    // Semaphores
-    CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
-    const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
-
-    // Runtime Arguments
-    CoreCoord worker = device->worker_core_from_logical_core(test_config.master_core_coord);
-    vector<uint32_t> master_run_args = {sem_id, worker.x, worker.y};
-    SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

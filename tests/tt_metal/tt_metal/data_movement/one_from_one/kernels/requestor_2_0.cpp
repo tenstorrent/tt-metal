@@ -5,17 +5,18 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 
 // L1 to L1 request
 void kernel_main() {
-    constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
-    constexpr uint32_t transaction_size_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t test_id = get_compile_time_arg_val(3);
-    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(4);
+    constexpr uint32_t l1_local_addr = get_arg(args::l1_addr);
+    constexpr uint32_t num_of_transactions = get_arg(args::num_transactions);
+    constexpr uint32_t transaction_size_bytes = get_arg(args::tx_size);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t num_virtual_channels = get_arg(args::num_vc);
 
-    uint32_t responder_x_coord = get_arg_val<uint32_t>(0);
-    uint32_t responder_y_coord = get_arg_val<uint32_t>(1);
+    uint32_t responder_x_coord = get_vararg(0);
+    uint32_t responder_y_coord = get_vararg(1);
 
     Noc noc(noc_index);
     UnicastEndpoint unicast_endpoint;

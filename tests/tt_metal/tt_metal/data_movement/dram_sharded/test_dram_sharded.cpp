@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -32,7 +33,7 @@ struct DramShardedConfig {
     CoreRangeSet cores;
     bool use_trid = false;
     uint32_t num_of_trids = 0;
-    bool use_2_0_api = false;  // Use Device 2.0 API
+    bool use_2_0_api = false;  // Use Metal 2.0 API on both host and device
 };
 
 /// @brief Reads from Sharded DRAM to L1 using stateful API
@@ -42,9 +43,7 @@ struct DramShardedConfig {
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramShardedConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->impl().get_device(0);
-
-    // Program
-    Program program = CreateProgram();
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
 
     uint32_t num_pages = test_config.num_banks * test_config.pages_per_bank;
     const size_t total_size_bytes = num_pages * test_config.page_size_bytes;
@@ -96,24 +95,70 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
         kernel_path += "_trid";
         reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
     }
-    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+    if (test_config.use_2_0_api || is_quasar) {
         kernel_path += "_2_0";
         reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
     }
     kernel_path += ".cpp";
 
-    // Create kernel on reader cores - branch by architecture
-    KernelHandle reader_kernel;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        // Quasar path: Use experimental API
-        reader_kernel = experimental::quasar::CreateKernel(
-            program,
-            kernel_path,
-            test_config.cores,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
+    uint32_t l1_addr = get_l1_address_and_size(mesh_device, corerange_to_cores(test_config.cores)[0]).base_address;
+
+    Program program;
+    KernelHandle reader_kernel = 0;
+    if (test_config.use_2_0_api || is_quasar) {
+        constexpr const char* READER_KERNEL = "dram_sharded_reader";
+        experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings = {
+            {"num_transactions", (uint32_t)test_config.num_of_transactions},
+            {"num_banks", (uint32_t)test_config.num_banks},
+            {"pages_per_bank", (uint32_t)test_config.pages_per_bank},
+            {"page_size", (uint32_t)test_config.page_size_bytes},
+            {"test_id", (uint32_t)test_config.test_id},
+        };
+        if (test_config.use_trid || test_config.use_2_0_api || is_quasar) {
+            cta_bindings.push_back({"num_trids", (uint32_t)test_config.num_of_trids});
+        }
+
+        experimental::metal2_host_api::KernelSpec reader_spec{
+            .unique_id = READER_KERNEL,
+            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+            .num_threads = 1,
+            .compile_time_arg_bindings = cta_bindings,
+            .runtime_arguments_schema = {.num_runtime_varargs = 2},
+            .config_spec =
+                experimental::metal2_host_api::DataMovementConfiguration{
+                    .gen1_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+                    .gen2_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        };
+
+        experimental::metal2_host_api::WorkUnitSpec main_wu{
+            .unique_id = "main",
+            .kernels = {READER_KERNEL},
+            .target_nodes = test_config.cores,
+        };
+
+        experimental::metal2_host_api::ProgramSpec spec{
+            .program_id = "dram_sharded",
+            .kernels = {reader_spec},
+            .work_units = {main_wu},
+        };
+        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+        experimental::metal2_host_api::ProgramRunParams params;
+        std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeVarargs> per_node_args;
+        for (const auto& core : corerange_to_cores(test_config.cores)) {
+            per_node_args.push_back(
+                {experimental::metal2_host_api::NodeCoord{core.x, core.y}, {input_buffer_address, l1_addr}});
+        }
+        params.kernel_run_params = {{
+            .kernel_spec_name = READER_KERNEL,
+            .runtime_varargs = std::move(per_node_args),
+        }};
+        experimental::metal2_host_api::SetProgramRunParameters(program, params);
     } else {
-        // WH/BH path: Use legacy API
+        program = CreateProgram();
         reader_kernel = CreateKernel(
             program,
             kernel_path,
@@ -122,11 +167,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = reader_compile_args});
+        std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addr};
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel, test_config.cores, reader_run_time_args);
     }
-
-    uint32_t l1_addr = get_l1_address_and_size(mesh_device, corerange_to_cores(test_config.cores)[0]).base_address;
-    std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addr};
-    tt::tt_metal::SetRuntimeArgs(program, reader_kernel, test_config.cores, reader_run_time_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

@@ -4,8 +4,25 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hw/inc/api/debug/dprint.h"
+#ifdef ARCH_QUASAR
+#include "experimental/kernel_args.h"
+#endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t num_writes = get_arg(args::num_writes);
+    constexpr uint32_t sub_base_addr = get_arg(args::sub_base_addr);
+    constexpr uint32_t write_value_base = get_arg(args::write_val_base);
+    constexpr uint32_t same_destination = get_arg(args::same_dest);
+    constexpr uint32_t addr_stride = get_arg(args::addr_stride);
+    constexpr uint32_t noc_index = get_arg(args::noc_id);
+    constexpr uint32_t num_subordinates = get_arg(args::num_subordinates);
+    constexpr uint32_t start_x = get_arg(args::start_x);
+    constexpr uint32_t start_y = get_arg(args::start_y);
+    constexpr uint32_t end_x = get_arg(args::end_x);
+    constexpr uint32_t end_y = get_arg(args::end_y);
+#else
     constexpr uint32_t test_id = get_compile_time_arg_val(0);
     constexpr uint32_t num_writes = get_compile_time_arg_val(1);
     constexpr uint32_t sub_base_addr = get_compile_time_arg_val(2);
@@ -18,6 +35,7 @@ void kernel_main() {
     constexpr uint32_t start_y = get_compile_time_arg_val(9);
     constexpr uint32_t end_x = get_compile_time_arg_val(10);
     constexpr uint32_t end_y = get_compile_time_arg_val(11);
+#endif
 
     {
         DeviceZoneScopedN("RISCV0");
