@@ -211,19 +211,13 @@ class PI0ModelTTNN:
         # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
-        # OPTIMIZATION: Pre-compute all timestep tensors on device using TTNN
+        # Compute timestep tensor on device
         pad_steps = ((num_steps + 31) // 32) * 32
-
-        # Create timestep indices on device using ttnn.arange
         timestep_indices = self.timestep_indices
         timestep_indices = ttnn.to_layout(timestep_indices, ttnn.TILE_LAYOUT)
-
-        # Convert to timestep values: 1.0 - index / num_steps
         timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
         timesteps_ttnn = ttnn.add(timestep_values, 1.0)
         timesteps_ttnn = ttnn.reshape(timesteps_ttnn, (1, pad_steps))
-
-        # Cleanup
         ttnn.deallocate(timestep_indices)
         ttnn.deallocate(timestep_values)
 

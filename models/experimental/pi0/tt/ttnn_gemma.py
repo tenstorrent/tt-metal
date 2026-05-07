@@ -547,9 +547,6 @@ class GemmaMLPTTNN:
                 output = ttnn.concat([output, output_chunks[i]], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(output_chunks[i])
 
-        # Move final output to L1
-        output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         # Reshape back to 3D if input was 3D
         if was_3d:
             output = ttnn.reshape(output, [batch_size, seq_len, hidden])

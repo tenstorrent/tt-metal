@@ -480,11 +480,11 @@ class SigLIPMLPTTNN:
         self.config = config
         self.device = device
 
-        # FC1 (input -> intermediate)
+        # FC1 (input -> intermediate) - BF8_B for 2x DRAM bandwidth savings
         fc1_weight = weights["mlp.fc1.weight"].T.contiguous()
         self.fc1_weight = ttnn.from_torch(
             fc1_weight,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -495,11 +495,11 @@ class SigLIPMLPTTNN:
         else:
             self.fc1_bias = None
 
-        # FC2 (intermediate -> output)
+        # FC2 (intermediate -> output) - BF8_B for 2x DRAM bandwidth savings
         fc2_weight = weights["mlp.fc2.weight"].T.contiguous()
         self.fc2_weight = ttnn.from_torch(
             fc2_weight,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
