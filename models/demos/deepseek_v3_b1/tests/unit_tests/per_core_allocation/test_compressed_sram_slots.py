@@ -26,15 +26,17 @@ from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, Comp
 from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors, encode_expert_indices
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
-from models.demos.deepseek_v3_b1.weights.prepare import (
+from models.demos.deepseek_v3_b1.weights.sram_slots import (
     SramCompressedExpertSlots,
+    _build_l1_compressed_tensor,
+    prepare_compressed_sram_slots,
+)
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
     SramExpertCoreGrids,
     SramHotExpertConfig,
-    _build_l1_compressed_tensor,
     _predict_expert_per_core_bytes,
     build_sram_hot_expert_config,
     compute_expert_l1_bytes,
-    prepare_compressed_sram_slots,
 )
 
 TILE_W = 32

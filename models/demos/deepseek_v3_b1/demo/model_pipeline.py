@@ -82,7 +82,7 @@ class ModelPipeline:
                 raise ValueError("weights_mode='real' requires model_path")
             if enable_sram_hot_experts:
                 from models.demos.deepseek_v3_b1.compressed_tensor.assigner import CompressedTensorAssigner
-                from models.demos.deepseek_v3_b1.weights.prepare import (
+                from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
                     SramExpertCoreGrids,
                     _load_routing_frequencies,
                     build_sram_hot_expert_config,

@@ -29,8 +29,6 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3MoELayerWeights,
     DeepSeekV3MTPWeights,
     DeepSeekV3SpecWeights,
-    SramExpertCoreGrids,
-    SramHotExpertConfig,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
@@ -38,6 +36,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_mtp_weights,
     prepare_spec_weights,
 )
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
 from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
 

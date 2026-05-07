@@ -34,12 +34,14 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     extract_routed_expert_output,
 )
 from models.demos.deepseek_v3_b1.weights.prepare import (
-    SramExpertCoreGrids,
-    _load_routing_frequencies,
-    build_sram_hot_expert_config,
     get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
+)
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
+    SramExpertCoreGrids,
+    _load_routing_frequencies,
+    build_sram_hot_expert_config,
 )
 
 MTP_LAYER_IDX = 61

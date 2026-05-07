@@ -32,8 +32,8 @@ from models.demos.deepseek_v3_b1.compressed_tensor.assigner import CompressedTen
 from models.demos.deepseek_v3_b1.demo.mesh_device_context import DEFAULT_WORKER_L1_SIZE, _worker_l1_size_for_rank
 from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights import _deallocate_layer
-from models.demos.deepseek_v3_b1.weights.prepare import (
-    NUM_ROUTED_EXPERTS,
+from models.demos.deepseek_v3_b1.weights.prepare import NUM_ROUTED_EXPERTS
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
     SramExpertCoreGrids,
     _load_routing_frequencies,
     build_sram_hot_expert_config,
