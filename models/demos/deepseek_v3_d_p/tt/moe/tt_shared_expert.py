@@ -19,6 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -26,6 +27,86 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
+
+
+def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+    """Program configs for the gate / up / down matmuls on Blackhole (11x9 sub-device)."""
+    grid = ttnn.CoreCoord(11, 9)
+    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+    )
+    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=down_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    return gate, up, down
+
+
+def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+    """Program configs for the gate / up / down matmuls on Wormhole (8x7 sub-device)."""
+    grid = ttnn.CoreCoord(8, 7)
+    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+    )
+    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=per_core_M,
+        per_core_N=down_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    return gate, up, down
 
 
 class TtSharedExpert(LightweightModule):
@@ -333,50 +414,29 @@ class TtSharedExpert(LightweightModule):
             self.gate_proj.shape[-1] == self.down_proj.shape[-2]
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
-        # ===== Inlined shared expert FFN — height-sharded on BH 11x9 sub-device =====
-        # in0_block_w / subblocks pinned to 1 for minimum L1 — you'll tune.
+        # ===== Inlined shared expert FFN — height-sharded sub-device matmuls =====
+        # Available compute grid: BH = 11x9, WH = 8x7.
         TILE = 32
-        MAX_CORES = 11 * 9  # available cores in the shared sub-device
+        max_cores = 11 * 9 if is_blackhole() else 8 * 7
 
         # Pick the largest divisor of M_tiles that fits in the sub-device — gives
         # max parallelism with no padding waste.
         m_tiles = x.padded_shape[-2] // TILE
         num_cores = m_tiles
-        while num_cores > MAX_CORES or m_tiles % num_cores != 0:
+        while num_cores > max_cores or m_tiles % num_cores != 0:
             num_cores -= 1
         per_core_M = m_tiles // num_cores
 
-        gate_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
-            in0_block_w=4,
-            out_subblock_h=1,
-            out_subblock_w=8,
-            per_core_M=per_core_M,
-            per_core_N=self.gate_proj.padded_shape[-1] // TILE,
-            fuse_batch=False,
-            mcast_in0=False,
-            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-        )
-        up_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
-            in0_block_w=4,
-            out_subblock_h=1,
-            out_subblock_w=8,
-            per_core_M=per_core_M,
-            per_core_N=self.gate_proj.padded_shape[-1] // TILE,
-            fuse_batch=False,
-            mcast_in0=False,
-        )
-        down_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
-            in0_block_w=1,
-            out_subblock_h=1,
-            out_subblock_w=8,
-            per_core_M=per_core_M,
-            per_core_N=self.down_proj.padded_shape[-1] // TILE,
-            fuse_batch=False,
-            mcast_in0=False,
-        )
+        gate_n_tiles = self.gate_proj.padded_shape[-1] // TILE
+        down_n_tiles = self.down_proj.padded_shape[-1] // TILE
+        if is_blackhole():
+            gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
+                per_core_M, gate_n_tiles, down_n_tiles
+            )
+        else:
+            gate_program_config, up_program_config, down_program_config = get_wh_program_configs(
+                per_core_M, gate_n_tiles, down_n_tiles
+            )
 
         # 1) Compute gate and up projections
         gate_out = ttnn.matmul(
