@@ -134,7 +134,7 @@ TEST_GROUPS = {
     "wormhole-t3k-sweeps": {"runner_profile": "t3k"},
     "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
     "lead-models-single-chip": {"runner_profile": "n150"},
-    "lead-models-galaxy": {"runner_profile": "galaxy-g04glx03"},
+    "lead-models-galaxy": {"runner_profile": "galaxy-topology-6u"},
 }
 
 
