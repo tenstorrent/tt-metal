@@ -32,7 +32,6 @@ using tt::tt_metal::ProgramDescriptor;
 namespace ttnn::prim {
 namespace reuse_dram_sharded_optimized_helpers {
 
-using dram_sharded_helpers::get_device_for_dram_banks;
 using dram_sharded_helpers::get_max_page_size_and_num_pages;
 using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 using dram_sharded_helpers::move_common_entries;
