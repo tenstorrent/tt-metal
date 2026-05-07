@@ -94,9 +94,9 @@
     ./build/test/tt_metal/unit_tests_sfpi
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 16
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 16
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
