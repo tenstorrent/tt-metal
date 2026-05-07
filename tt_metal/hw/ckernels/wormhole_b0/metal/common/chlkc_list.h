@@ -40,6 +40,7 @@ using namespace ckernel;
 uint run_kernel() {
 #ifdef UCK_CHLKC_MATH
     zeroacc();
+    // The test for Simulator run in tt-umd-simulators. Should trigger WH sim run.
     chlkc_math::math_main();
 #endif
 
