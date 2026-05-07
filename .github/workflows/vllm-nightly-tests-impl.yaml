@@ -462,24 +462,34 @@ jobs:
           elapsed=0
           interval=20
 
-          # Read the launcher PID once; non-existent file means we never
-          # captured one and we silently skip the liveness check below
-          # rather than fail closed.
+          # Read the launcher PID once. ``read -r`` consumes only the
+          # first line, so a stray trailing line in the PID file can't
+          # turn ``$server_pid`` into a multi-token argument to
+          # ``kill -0``. A missing file or non-numeric content leaves
+          # ``$server_pid`` empty and the liveness check below silently
+          # skips rather than failing closed.
           server_pid=""
           if [ -f "${FILE_SERVER_PID}" ]; then
-            server_pid=$(cat "${FILE_SERVER_PID}")
+            read -r server_pid < "${FILE_SERVER_PID}" || server_pid=""
+          fi
+          if ! [[ "$server_pid" =~ ^[0-9]+$ ]]; then
+            server_pid=""
           fi
 
-          # vLLM writes these to the server log within seconds of an
-          # engine-core crash. Polling /health for the full server-timeout
-          # after one of these has appeared just burns CI minutes — fail
-          # fast so the rest of the matrix can move on.
-          fatal_markers=(
-            "EngineCore failed to start"
-            "EngineCore encountered a fatal error"
-            "EngineDeadError"
-            "Engine core initialization failed"
-            "Failed core proc"
+          # vLLM writes one of these to the server log within seconds of
+          # an engine-core crash. Polling /health for the full
+          # server-timeout after one has appeared just burns CI minutes —
+          # fail fast so the rest of the matrix can move on. Using a
+          # single ``grep -m1`` with multiple ``-e`` patterns gives one
+          # bounded-by-first-match file scan per poll cycle even as the
+          # log grows.
+          fatal_grep_args=(
+            -F -m1
+            -e "EngineCore failed to start"
+            -e "EngineCore encountered a fatal error"
+            -e "EngineDeadError"
+            -e "Engine core initialization failed"
+            -e "Failed core proc"
           )
 
           while [ $elapsed -lt $timeout_seconds ]; do
@@ -499,13 +509,12 @@ jobs:
             # may stay alive after engine cores crash (e.g. multiprocess
             # DP), so the log signal complements the liveness check.
             if [ -f "${FILE_SERVER_LOG}" ]; then
-              for marker in "${fatal_markers[@]}"; do
-                if grep -qF "$marker" "${FILE_SERVER_LOG}" 2>/dev/null; then
-                  echo "❌ Fatal marker '$marker' in server log [$elapsed sec]."
-                  echo "Check out the server log in a step below."
-                  exit 1
-                fi
-              done
+              fatal_match=$(grep "${fatal_grep_args[@]}" "${FILE_SERVER_LOG}" 2>/dev/null) || true
+              if [ -n "$fatal_match" ]; then
+                echo "❌ Fatal marker in server log [$elapsed sec]: $fatal_match"
+                echo "Check out the server log in a step below."
+                exit 1
+              fi
             fi
 
             sleep $interval
