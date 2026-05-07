@@ -317,8 +317,11 @@ def test_pipeline_performance(
     if not is_ci_env:
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
-            export_to_video(frames, output_path, fps=16)
-            print(f"✓ Saved video to: {output_path}")
+            try:
+                export_to_video(frames, output_path, fps=16)
+                print(f"✓ Saved video to: {output_path}")
+            except ImportError:
+                print("Could not export video - imageio_ffmpeg not available")
         else:
             print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
