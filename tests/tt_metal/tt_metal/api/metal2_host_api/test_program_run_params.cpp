@@ -33,6 +33,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -45,9 +47,11 @@ namespace {
 
 // Import shared test helpers
 using test_helpers::BindDFBToKernel;
+using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ScopedSlowDispatchOverride;
@@ -701,10 +705,10 @@ TEST_F(ProgramRunParamsTestQuasar, NamedCRTACountMismatchFails) {
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
+    // Validation now reports the specific missing name first (more useful than a count mismatch).
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("expects 2 named CRTAs, but 1 were provided")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is missing named CRTA 'scale'")));
 }
 
 // ============================================================================
@@ -1003,6 +1007,106 @@ TEST_F(ProgramRunParamsTestGen1, WrongRuntimeArgsCountFails) {
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 3 vararg runtime args, but 2 were provided")));
+}
+
+// ============================================================================
+// SECTION: TensorParameter Run-Params Validation Tests (Gen1 / WH)
+// ============================================================================
+// Validation paths exercised by SetProgramRunParameters / ValidateProgramRunParams for the
+// Metal 2.0 TensorAccessor binding feature.
+
+TEST_F(ProgramRunParamsTestGen1, MissingTensorArgFails) {
+    // Spec declares a TensorParameter; user supplies no TensorArg entry for it.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Run params with no tensor_args entries.
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "TensorParameter 'input_tensor' is declared in the Program but has no TensorArg entry")));
+}
+
+TEST_F(ProgramRunParamsTestGen1, DuplicateTensorArgFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Allocate one MeshTensor; reference it twice in tensor_args under the same name.
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate tensor_parameter_name 'input_tensor'")));
+}
+
+TEST_F(ProgramRunParamsTestGen1, UnknownTensorParameterInRunParamsFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+
+    // tensor_parameter_name doesn't match any TensorParameter in the spec.
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "ghost_tensor", .tensor = std::cref(tensor)},
+    };
+
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("TensorArg references unknown TensorParameter 'ghost_tensor'")));
+}
+
+TEST_F(ProgramRunParamsTestGen1, TensorSpecMismatchFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    // Binding declares spec with shape {1, 32}; runtime tensor has a different shape ({1, 64}).
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // default {1, 32}
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, tensor_layout);  // different shape!
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "TensorArg for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
 
 }  // namespace
