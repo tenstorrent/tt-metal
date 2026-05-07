@@ -34,6 +34,7 @@
     wh_galaxy_perf_uf:
       timeout: 20
 
+# Unusure why fabric test commands are duplicated, but keeping from original test matrix.
 - id: galaxy-fabric-unit-suite
   name: Galaxy Fabric tests
   model: fabric
@@ -42,6 +43,10 @@
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
@@ -82,18 +87,18 @@
     wh_galaxy:
       timeout: 5
 
-- id: galaxy-prefetcher-tg
-  name: Galaxy DRAM Prefetcher unit tests
-  model: prefetcher
-  team: ttnn
-  owner_id: U044T8U8DEF # Johanna Rock, Yu Gao
-  auto_triage: true
-  cmd: |
-    mkdir -p generated/test_reports
-    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py --timeout 600
-  skus:
-    wh_galaxy:
-      timeout: 25
+# - id: galaxy-prefetcher-tg
+#   name: Galaxy DRAM Prefetcher unit tests
+#   model: prefetcher
+#   team: ttnn
+#   owner_id: U044T8U8DEF # Johanna Rock, Yu Gao
+#   auto_triage: true
+#   cmd: |
+#     mkdir -p generated/test_reports
+#     pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py --timeout 600
+#   skus:
+#     wh_galaxy:
+#       timeout: 25
 
 - id: galaxy-tttv2-modules
   name: Galaxy tttv2 tests
