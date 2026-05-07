@@ -15,6 +15,7 @@ This script:
 
 import argparse
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -206,7 +207,21 @@ def load_or_create_model(model_class, config, checkpoint_path=None):
         if not resolved_checkpoint.is_file():
             raise ValueError(f"Checkpoint path does not point to a valid file: {resolved_checkpoint}")
         print(f"Loading checkpoint from {resolved_checkpoint}")
-        checkpoint = torch.load(resolved_checkpoint, map_location="cpu")
+
+        # Prefer a safer load path when supported by the installed PyTorch.
+        # Fallback preserves compatibility for older versions, but should only
+        # be used with checkpoints from trusted sources.
+        try:
+            checkpoint = torch.load(resolved_checkpoint, map_location="cpu", weights_only=True)
+        except TypeError:
+            warnings.warn(
+                "This PyTorch version does not support weights_only=True. "
+                "Falling back to torch.load with full deserialization. "
+                "Only load checkpoints from trusted sources.",
+                RuntimeWarning,
+            )
+            checkpoint = torch.load(resolved_checkpoint, map_location="cpu")
+
         if "model_state_dict" in checkpoint:
             model.load_state_dict(checkpoint["model_state_dict"])
         else:
@@ -396,10 +411,12 @@ def run_benchmark(
         config["prediction_length"] = prediction_length
     elif task_mode == "regression":
         config["num_targets"] = num_targets
+        config["head_aggregation"] = head_aggregation
         if output_range is not None:
             config["output_range"] = output_range
     elif task_mode == "classification":
         config["num_classes"] = num_classes
+        config["head_aggregation"] = head_aggregation
     # pretraining has no extra params
 
     # Load PyTorch model
@@ -422,8 +439,9 @@ def run_benchmark(
             torch_predictions.append(to_metric_output(pred, task_mode))
 
     torch_predictions = np.concatenate(torch_predictions, axis=0)
+    torch_throughput = len(samples) / torch_time
     print(f"   Time: {torch_time:.2f}s")
-    print(f"   Throughput: {len(samples) / torch_time:.2f} samples/sec")
+    print(f"   Throughput: {torch_throughput:.2f} samples/sec")
 
     # Open TTNN device
     print(f"\n5. Setting up TTNN model on device {device_id}...")
@@ -494,8 +512,9 @@ def run_benchmark(
             tt_predictions.append(to_metric_output(tt_out_torch, task_mode))
 
         tt_predictions = np.concatenate(tt_predictions, axis=0)
+        ttnn_throughput = len(samples) / ttnn_time
         print(f"   Time: {ttnn_time:.2f}s")
-        print(f"   Throughput: {len(samples) / ttnn_time:.2f} samples/sec")
+        print(f"   Throughput: {ttnn_throughput:.2f} samples/sec")
 
     finally:
         ttnn.close_device(device)
@@ -533,17 +552,40 @@ def run_benchmark(
     mse_diff_pct = abs(ttnn_metrics["mse"] - torch_metrics["mse"]) / torch_metrics["mse"] * 100
     mae_diff_pct = abs(ttnn_metrics["mae"] - torch_metrics["mae"]) / torch_metrics["mae"] * 100
 
+    checkpoint_check = checkpoint_path is not None
     mse_check = mse_diff_pct <= 5.0
     mae_check = mae_diff_pct <= 5.0
-    corr_check = ttnn_vs_torch["correlation"] >= 0.90
+    impl_corr_check = ttnn_vs_torch["correlation"] >= 0.90
 
+    # Bounty gates: trained checkpoint path + ground-truth correlation + device perf targets.
+    gt_corr_check = ttnn_metrics["correlation"] >= 0.90
+    throughput_check = ttnn_throughput >= 200.0
+    latency_ms = (ttnn_time / len(samples)) * 1000.0
+    latency_check = latency_ms < 30.0
+
+    print(f"   Checkpoint provided: {'✅' if checkpoint_check else '❌'} (required for acceptance)")
     print(f"   MSE difference: {mse_diff_pct:.2f}% {'✅' if mse_check else '❌'} (target: ≤5%)")
     print(f"   MAE difference: {mae_diff_pct:.2f}% {'✅' if mae_check else '❌'} (target: ≤5%)")
     print(
-        f"   TTNN-PyTorch correlation: {ttnn_vs_torch['correlation']:.4f} {'✅' if corr_check else '❌'} (target: ≥0.90)"
+        f"   TTNN-PyTorch correlation: {ttnn_vs_torch['correlation']:.4f} "
+        f"{'✅' if impl_corr_check else '❌'} (target: ≥0.90)"
     )
+    print(
+        f"   TTNN-ground-truth correlation: {ttnn_metrics['correlation']:.4f} "
+        f"{'✅' if gt_corr_check else '❌'} (target: >0.90)"
+    )
+    print(f"   Throughput: {ttnn_throughput:.2f} samples/sec {'✅' if throughput_check else '❌'} (target: ≥200)")
+    print(f"   Single-sequence latency: {latency_ms:.2f} ms {'✅' if latency_check else '❌'} (target: <30)")
 
-    all_passed = mse_check and mae_check and corr_check
+    all_passed = (
+        checkpoint_check
+        and mse_check
+        and mae_check
+        and impl_corr_check
+        and gt_corr_check
+        and throughput_check
+        and latency_check
+    )
 
     print("\n" + "=" * 80)
     if all_passed:
@@ -559,6 +601,9 @@ def run_benchmark(
         "ttnn_vs_torch": ttnn_vs_torch,
         "torch_time": torch_time,
         "ttnn_time": ttnn_time,
+        "torch_throughput": torch_throughput,
+        "ttnn_throughput": ttnn_throughput,
+        "ttnn_latency_ms": latency_ms,
         "passed": all_passed,
     }
 
@@ -575,7 +620,12 @@ def main():
         help="Dataset to benchmark on",
     )
     parser.add_argument("--data-dir", type=str, default="./data", help="Directory to store datasets")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Path to trained model checkpoint (optional)")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to trained model checkpoint from a trusted source (optional)",
+    )
 
     # Task mode
     parser.add_argument(
@@ -593,7 +643,13 @@ def main():
     parser.add_argument("--patch-stride", type=int, default=8)
     parser.add_argument("--d-model", type=int, default=64)
     parser.add_argument("--num-layers", type=int, default=4)
-    parser.add_argument("--mode", type=str, default="common_channel", choices=["common_channel", "mix_channel"])
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="common_channel",
+        choices=["common_channel", "mix_channel"],
+        help="Channel mode. Hybrid mode is not currently supported in this benchmark flow.",
+    )
     parser.add_argument("--expansion", type=int, default=2)
     parser.add_argument("--gated-attn", action="store_true")
 

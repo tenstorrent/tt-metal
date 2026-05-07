@@ -348,7 +348,7 @@ class TtFeatureMixerBlock:
             device=device,
             base_address=f"{self.base}.norm",
             parameters=parameters,
-            norm_type="layer_norm",
+            norm_type=norm_type,
             eps=eps,
         )
 

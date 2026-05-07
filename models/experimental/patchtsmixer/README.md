@@ -6,7 +6,7 @@
 
 PatchTSMixer is a lightweight MLP-Mixer based architecture for multivariate time series forecasting, implemented using TTNN APIs for Tenstorrent hardware (Wormhole).
 
-**Status:** ✅ Stage 1 Complete + Stage 2 Optimizations Applied - 3x baseline performance achieved
+**Status:** ✅ Stage 1 (common_channel + mix_channel) complete, ⚠️ hybrid mode unmet + Stage 2 optimizations applied (3x baseline performance)
 
 ## Quick Links
 - [Architecture](#architecture) | [Benchmarks](#benchmarks--validation) | [Getting Started](#getting-started) | [Performance](#performance-metrics) | [Stage Progress](#bounty-stage-progress)
@@ -23,6 +23,8 @@ PatchTSMixer is a lightweight MLP-Mixer based architecture for multivariate time
 - Output: `(batch, prediction_length, num_channels)`
 
 **Modes:** `common_channel` (independent) | `mix_channel` (cross-variate dependencies)
+
+Hybrid channel mode is not implemented in this PR's TTNN runtime path and is therefore explicitly left unmet for the bounty checklist.
 
 PatchTSMixer TTNN supports the HuggingFace channel modes `common_channel` and `mix_channel` (https://github.com/huggingface/transformers/blob/main/src/transformers/models/patchtsmixer/modeling_patchtsmixer.py). In `common_channel`, channels are processed independently. In `mix_channel`, the model applies a channel mixer before the patch and feature mixers, matching HuggingFace behavior. When `gated_attn=True`, gated attention is also applied over the channel dimension in the `mix_channel` path.
 
@@ -175,7 +177,7 @@ pytest test_pretraining.py -v      # Pre-training task
 
 ## Bounty Requirements Checklist
 
-### ✅ Stage 1: Bring-Up (Core Requirements: 90% | Performance: 0%)
+### ⚠️ Stage 1: Bring-Up (Hybrid mode criterion explicitly unmet)
 
 #### Core Implementation
 - [x] **Implement PatchTSMixer using TTNN APIs (Python)**
@@ -201,7 +203,7 @@ pytest test_pretraining.py -v      # Pre-training task
 #### Channel Modeling Modes
 - [x] **Channel-independent:** Each variable processed separately (common_channel)
 - [x] **Channel-mixing:** Cross-variate dependencies modeled (mix_channel)
-- [ ] **Hybrid:** Combination of both approaches *(architecture supports, needs testing)*
+- [ ] **Hybrid:** Combination of both approaches *(explicitly unmet in this PR; no CLI/runtime support yet)*
 
 #### Benchmarking & Validation
 - [x] **Produces valid predictions on standard benchmarks** (ETTh2 dataset)
@@ -218,7 +220,7 @@ pytest test_pretraining.py -v      # Pre-training task
 #### Documentation
 - [x] **Clear instructions for setup and running the model**
 
-**Stage 1 Status:** ✅ All correctness requirements met | ✅ Performance targets exceeded (3x baseline)
+**Stage 1 Status:** ⚠️ Hybrid mode criterion unmet | ✅ Other correctness/performance criteria met (3x baseline throughput target)
 
 ---
 
@@ -294,7 +296,7 @@ pytest test_pretraining.py -v      # Pre-training task
 
 | Stage | Core Features | Performance | Status |
 |-------|---------------|-------------|--------|
-| **Stage 1** | 24/24 (100%) | 2/2 (100%) | ✅ Complete |
+| **Stage 1** | Hybrid criterion unmet | 2/2 (100%) | ⚠️ Partially complete |
 | **Stage 2** | 15/15 (100%) | 2/2 (100%) | ✅ Complete - **3x baseline target** |
 | **Stage 3** | 1/4 stretch goals | <10ms latency ✅ | ⏸️ Stretch goals (53-60% of 1000 seq/s target) |
 

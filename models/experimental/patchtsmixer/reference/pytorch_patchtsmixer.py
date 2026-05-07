@@ -605,6 +605,7 @@ class PatchTSMixerForTimeSeriesClassification(nn.Module):
         expansion: int = 2,
         dropout: float = 0.0,
         use_gated_attn: bool = False,
+        head_aggregation: str = "avg_pool",
         head_dropout: float = 0.0,
         eps: float = 1e-5,
     ):
@@ -646,7 +647,7 @@ class PatchTSMixerForTimeSeriesClassification(nn.Module):
             num_channels=num_channels,
             num_patches=num_patches,
             num_targets=num_classes,
-            head_aggregation="avg_pool",  # Common for classification
+            head_aggregation=head_aggregation,
             head_dropout=head_dropout,
         )
 
@@ -678,6 +679,7 @@ class PatchTSMixerForRegression(nn.Module):
         expansion: int = 2,
         dropout: float = 0.0,
         use_gated_attn: bool = False,
+        head_aggregation: str = "avg_pool",
         head_dropout: float = 0.0,
         eps: float = 1e-5,
     ):
@@ -714,7 +716,7 @@ class PatchTSMixerForRegression(nn.Module):
             num_channels=num_channels,
             num_patches=num_patches,
             num_targets=num_targets,
-            head_aggregation="avg_pool",
+            head_aggregation=head_aggregation,
             output_range=output_range,
             head_dropout=head_dropout,
         )
