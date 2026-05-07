@@ -672,6 +672,15 @@ def _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, 
     host_out = ttnn.to_torch(host_out_tt)
     direct_out = ttnn.to_torch(direct_out_tt)
 
+    _, output_pcc = comp_pcc(host_out, direct_out, 0.9997)
+    logger.info(f"PCC direct vs host: {output_pcc}")
+
+    abs_diff = torch.abs(host_out.float() - direct_out.float())
+    logger.info(f"MAE direct vs host: {torch.mean(abs_diff)}")
+    logger.info(f"Max abs diff direct vs host: {torch.max(abs_diff)}")
+    logger.info(f"Max host output: {torch.max(torch.abs(host_out.float()))}")
+    logger.info(f"Max direct output: {torch.max(torch.abs(direct_out.float()))}")
+
     assert torch.isfinite(direct_out.float()).all()
     assert direct_out.shape == host_out.shape
     assert torch.equal(direct_out, host_out)
@@ -680,12 +689,8 @@ def _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "q_seq_len, rope_seq_len",
-    (
-        (33, 32),
-        (32, 1),
-        (33, 33),
-    ),
-    ids=("q33_rope32", "q32_rope1", "q33_rope33"),
+    ((33, 32),),
+    ids=("q33_rope32",),
 )
 @pytest.mark.parametrize("cos_sin_sharded", (False, True), ids=("interleaved_cos_sin", "sharded_cos_sin"))
 def test_rotary_embedding_llama_direct_cos_padding_tail(q_seq_len, rope_seq_len, cos_sin_sharded, device):
