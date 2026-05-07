@@ -41,10 +41,10 @@ class DeepseekMetadata:
     #   [3] position_id
     #   [4] lane_idx
     #   [5] temperature
-    #   [6] k
+    #   [6] top_k
     #   [7] top_p
     #   [8:13] candidate_token_ids
-    #   [13:17] prefill_token_id
+    #   [13:17] prefill_token_ids
     #   [17:32] p_top15_indices
     #   [32:40] p_top15_scores, two bf16/uint16 scores per uint32 word
     #   [40:55] q_top15_indices
@@ -55,10 +55,10 @@ class DeepseekMetadata:
     position_id: int = 0
     lane_idx: int = 0
     temperature: float = 0.0
-    k: int = 0
+    top_k: int = 0
     top_p: float = 0.0
     candidate_token_ids: list[int] = field(default_factory=list)
-    prefill_token_id: list[int] = field(default_factory=list)
+    prefill_token_ids: list[int] = field(default_factory=list)
     p_top15_indices: list[int] = field(default_factory=list)
     p_top15_scores: list[int] = field(default_factory=list)
     q_top15_indices: list[int] = field(default_factory=list)
@@ -78,12 +78,12 @@ class DeepseekMetadata:
 
     def to_list(self) -> list[int]:
         candidate_token_ids = [int(value) for value in self.candidate_token_ids[: self.MAX_WINDOW_TOKENS]]
-        prefill_token_id = [int(value) for value in self.prefill_token_id[: self.MAX_SPECULATIVE_TOKENS]]
+        prefill_token_ids = [int(value) for value in self.prefill_token_ids[: self.MAX_SPECULATIVE_TOKENS]]
         p_top15_indices = [int(value) for value in self.p_top15_indices[: self.TOPK_METADATA_COUNT]]
         q_top15_indices = [int(value) for value in self.q_top15_indices[: self.TOPK_METADATA_COUNT]]
 
         candidate_token_ids += [0] * (self.MAX_WINDOW_TOKENS - len(candidate_token_ids))
-        prefill_token_id += [0] * (self.MAX_SPECULATIVE_TOKENS - len(prefill_token_id))
+        prefill_token_ids += [0] * (self.MAX_SPECULATIVE_TOKENS - len(prefill_token_ids))
         p_top15_indices += [0] * (self.TOPK_METADATA_COUNT - len(p_top15_indices))
         q_top15_indices += [0] * (self.TOPK_METADATA_COUNT - len(q_top15_indices))
         p_top15_scores = self._pack_u16_pairs(self.p_top15_scores, self.TOPK_METADATA_COUNT)
@@ -96,10 +96,10 @@ class DeepseekMetadata:
             int(self.position_id),
             int(self.lane_idx),
             _f32_bits(self.temperature),
-            int(self.k),
+            int(self.top_k),
             _f32_bits(self.top_p),
             *candidate_token_ids,
-            *prefill_token_id,
+            *prefill_token_ids,
             *p_top15_indices,
             *p_top15_scores,
             *q_top15_indices,

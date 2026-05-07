@@ -2033,7 +2033,7 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
     Layout (64 uint32 words = 256 bytes), kept in lock-step with metadata.hpp:
       [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
       [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
-      [8:13] candidate_token_ids, [13:17] prefill_token_id,
+      [8:13] candidate_token_ids, [13:17] prefill_token_ids,
       [17:32] p_top15_indices, [32:40] p_top15_scores,
       [40:55] q_top15_indices, [55:63] q_top15_scores.
     """
@@ -2066,11 +2066,11 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
         "token_id": int(raw[2].item()),
         "position_id": position_id,
         "lane_idx": int(raw[4].item()),
-        "prefill_token_id": prefill_token_ids,
+        "prefill_token_ids": prefill_token_ids,
         "candidate_token_ids": candidate_token_ids,
         "candidate_positions": candidate_positions,
         "temperature": _u32_to_f32(raw[5].item()),
-        "k": int(raw[6].item()),
+        "top_k": int(raw[6].item()),
         "top_p": _u32_to_f32(raw[7].item()),
         "p_top15_indices": [int(raw[17 + idx].item()) for idx in range(15)],
         "p_top15_scores": _bf16_score_words_to_f32(32),
@@ -2082,7 +2082,7 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
 def create_input_page(
     token_id: int,
     position_id: int,
-    prefill_token_id: int,
+    prefill_token_ids: int | list[int],
     slot_id: int,
     temperature: float = 0.0,
     top_k: int = 1,
@@ -2097,7 +2097,7 @@ def create_input_page(
     Layout (uint32 word indices, full DeepseekMetadata struct):
       [0] token_type, [1] slot_id, [2] token_id, [3] position_id,
       [4] lane_idx, [5] temperature, [6] top_k, [7] top_p,
-      [13:17] prefill_token_id.
+      [13:17] prefill_token_ids.
     """
     page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
     page[0, 0] = token_type
@@ -2108,7 +2108,11 @@ def create_input_page(
     page[0, 5] = float_to_uint32(temperature)
     page[0, 6] = top_k
     page[0, 7] = float_to_uint32(top_p)
-    page[0, 13] = prefill_token_id
+    prefill_ids = (
+        [int(prefill_token_ids)] if isinstance(prefill_token_ids, int) else [int(value) for value in prefill_token_ids]
+    )
+    for idx, value in enumerate(prefill_ids[:4]):
+        page[0, 13 + idx] = value
     return ttnn.from_torch(page, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -2241,7 +2245,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
             token_tensor = create_input_page(
                 token_id=iteration,
                 position_id=base_hidden_pos,
-                prefill_token_id=int(base_token_ids[iteration].item()),
+                prefill_token_ids=int(base_token_ids[iteration].item()),
                 slot_id=slot_id,
                 temperature=1.0,
                 top_k=1,

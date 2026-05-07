@@ -1390,7 +1390,7 @@ struct TopKSampling {
                             // generate_bcast_unary_scalar writes a correctly-filled tile word.
                             inv_temp_bf16 = float_to_bf16_packed(1.0f / temperature);
                             K = std::min(
-                                std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
+                                std::max(static_cast<uint32_t>(metadata_ptr->top_k), static_cast<uint32_t>(1)),
                                 static_cast<uint32_t>(32));
                             p = std::min(std::max(static_cast<float>(metadata_ptr->top_p), 0.0f), 1.0f);
                         }

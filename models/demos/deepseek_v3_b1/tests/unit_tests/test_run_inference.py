@@ -59,7 +59,7 @@ class _TraceBackedModel:
     def write_input(
         self,
         token_id: int,
-        prefill_token_id: int,
+        prefill_token_ids: int | list[int],
         user_id: int,
         position_id: int,
         token_type: int,
@@ -76,7 +76,7 @@ class _TraceBackedModel:
             "type": TOKEN_TYPE_NAME_BY_VALUE[int(token_type)],
             "pos": int(position_id),
             "user_id": int(user_id),
-            "prefill_id": int(prefill_token_id),
+            "prefill_id": int(prefill_token_ids[0] if isinstance(prefill_token_ids, list) else prefill_token_ids),
         }
         if self._capture_dynamic_fields:
             write.update(
