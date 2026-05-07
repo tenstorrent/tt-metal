@@ -464,19 +464,17 @@ class TtMoe(LightweightModule):
         # Squeeze the first two dimensions
 
         # Convert dispatched_buffer to TILE_LAYOUT for routed experts
-        dispatched_buffer = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0), ttnn.TILE_LAYOUT
+        dispatched_buffer_tiled = ttnn.to_layout(
+            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
+            ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
         )
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer.shape}")
+        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
-        expert_outputs = self.routed_expert(dispatched_buffer, tt_expert_token_counts, tt_expert_region_offsets)
+        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
 
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        else:
-            # add squeezed dimenisions back for intermediates to match original dispatch output shape
-            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
-            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
 
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
