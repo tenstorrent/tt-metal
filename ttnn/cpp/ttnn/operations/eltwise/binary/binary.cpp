@@ -217,8 +217,7 @@
             sub_core_grids);                                                         \
     }
 
-namespace ttnn::operations::binary {
-namespace detail {
+namespace ttnn::operations::binary::detail {
 
 inline Tensor to_dtype(const Tensor& input, DataType dtype) {
     if (input.dtype() == dtype) {
@@ -376,9 +375,7 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
     return false;
 }
 
-}  // namespace detail
-
-}  // namespace ttnn::operations::binary
+}  // namespace ttnn::operations::binary::detail
 
 namespace ttnn::detail {
 
