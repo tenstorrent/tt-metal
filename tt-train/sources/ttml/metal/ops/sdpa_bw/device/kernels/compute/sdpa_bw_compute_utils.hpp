@@ -117,12 +117,14 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 //
 // sfpu_sub_bcast_col should do exactly this: subtract column 0 of DST[lse_reg]
 // broadcast across all 32 columns from DST[scores_reg], entirely within DST.
-// However, when tested it appears to be a no-op (DST[scores_reg] unchanged after call).
+// However, when tested it appears to corrupt subsequent matmul operations —
+// sfpu_sub_bcast_col_init() modifies persistent MATH thread state (ADDR_MOD_7,
+// replay slot 0, LREG6) that is not restored by mm_init_short, causing all
+// matmul operations after the first call to produce garbage in DST.
 // cb_intermediates is Float32, fp32_dest_acc_en = true.
 void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
     const uint32_t lse_reg = scores_reg + 1U;
 
-    // --- sfpu_sub_bcast_col attempt (BROKEN — no-op observed) ---
     // Step 1: Load lse tile into DST[lse_reg] via copy_tile.
     //   cb_intermediates contains logsumexp values in column 0 (from forward pass row-reduce).
     //   copy_tile places the full tile into DST[lse_reg] without any broadcast.
@@ -139,7 +141,9 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
 
     // Step 2: SFPU column-broadcast subtract.
     //   Expected: DST[scores_reg][r][c] -= DST[lse_reg][r][0] for all c in [0..31]
-    //   Observed: DST[scores_reg] is unchanged after this call.
+    //   Observed: First invocation per core works correctly. All subsequent matmuls
+    //   produce garbage — sfpu_sub_bcast_col_init() corrupts persistent state.
+    //   Moving init to kernel_main() (before the loop) does NOT fix the issue.
     sfpu_sub_bcast_col_init();
     sfpu_sub_bcast_col(scores_reg, lse_reg);
 

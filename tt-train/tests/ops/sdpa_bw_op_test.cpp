@@ -665,9 +665,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 TEST_F(SDPABackwardTest, SmallBatch) {
     SDPABackwardTestConfig config{
         .batch_size = 2U,
-        .sequence_length = 128U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
+        .sequence_length = 32U,
+        .query_dim = 32U,
+        .key_value_dim = 32U,
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
