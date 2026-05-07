@@ -235,7 +235,9 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
-    // noc_async_write_barrier();
+    // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
+    // so the exit-sem signal cannot reach peers ahead of the last data writes.
+    noc_async_write_barrier();
 
     // Exit semaphore exchange — uses a dedicated semaphore (exit_semaphore_address)
     // and the dedicated sem_packet_header so neither can collide with anything from
@@ -257,6 +259,9 @@ void kernel_main() {
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
         noc_semaphore_set(exit_sem_ptr, 0);
     }
+
+    // Final drain: ensure any in-flight atomic-inc and writes settle before kernel exit.
+    noc_async_full_barrier();
 
     close_direction_connections(directions, fabric_connections);
 #endif
