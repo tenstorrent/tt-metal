@@ -58,7 +58,7 @@ def resolve_op_to_op_perf_json_paths():
         if not is_blackhole() and (device_key is None or device_key in ("N150", "N300", "N150x4", "T3K", "TG")):
             return leg_t, leg_m
 
-    pytest.skip(
+    raise pytest.skip.Exception(
         f"No op-to-op perf target JSON pair for MESH_DEVICE/inferred device {device_key!r}. "
         f"For Blackhole, set MESH_DEVICE and add targets_*_<device>.json plus margins under {_PERF_TARGETS_DIR}/ "
         "(run target_maker() in this module with make_new_targets=True on that hardware). "

@@ -173,6 +173,7 @@ class ModelArgs(TTModelArgs):
             if os.path.isdir(os.path.join(snapshots_dir, s))
         ]
         return max(snaps, key=os.path.getmtime) if snaps else None
+
     def get_max_prefill_chunk_size(self):
         model_overrides = {
             "gemma-3-4b": {"P150": 128},

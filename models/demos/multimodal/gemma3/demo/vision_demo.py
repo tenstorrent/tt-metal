@@ -427,7 +427,6 @@ def test_multimodal_demo_text(
                             sampling_params=device_sampling_params,
                         )
                         next_tokens = tok.long().reshape(-1)[:max_batch_size]
-                        next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
                     else:
                         logits, _ = generator.decode_forward(
                             next_token_tensor,
@@ -445,6 +444,8 @@ def test_multimodal_demo_text(
                 _num_decode_tokens += (
                     gen_idx * max_batch_size
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
+
+            next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
 
             # Log full text output for each user in batch
             # For HF models, get vision tokens from the processor if they exist
