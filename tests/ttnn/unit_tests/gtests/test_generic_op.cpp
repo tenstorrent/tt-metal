@@ -1187,8 +1187,8 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             Tensor::from_vector(std::move(out_data), output_tensor_spec).to_device(submeshes.back().get()));
     }
 
-    auto input_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(input_tensors);
-    auto output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+    auto input_tensor = ttnn::experimental::unit_mesh::aggregate(input_tensors);
+    auto output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
     mesh_device_->quiesce_devices();
 
@@ -1492,7 +1492,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     ttnn::generic_op(std::vector<Tensor>{input_tensor, output_tensor}, mesh_program_descriptor);
     mesh_device_->quiesce_devices();
 
-    auto disaggregated_output = tt::tt_metal::experimental::unit_mesh::disaggregate(output_tensor);
+    auto disaggregated_output = ttnn::experimental::unit_mesh::disaggregate(output_tensor);
     for (uint32_t dev_idx = 0; dev_idx < ring_size; dev_idx++) {
         auto data = disaggregated_output[dev_idx].to_vector<bfloat16>();
         for (size_t i = 0; i < data.size(); i++) {

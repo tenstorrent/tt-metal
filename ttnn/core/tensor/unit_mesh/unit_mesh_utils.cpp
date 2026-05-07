@@ -12,7 +12,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_metal::experimental::unit_mesh {
+namespace ttnn::experimental::unit_mesh {
 
 namespace {
 
@@ -95,7 +95,7 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     auto topology = tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
         tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0);
 
-    MeshTensor mesh_tensor(mesh_buffer, reference_spec, topology);
+    tt::tt_metal::MeshTensor mesh_tensor(mesh_buffer, reference_spec, topology);
 
     auto result = ttnn::Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     return result;
@@ -150,4 +150,4 @@ std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
     return result;
 }
 
-}  // namespace tt::tt_metal::experimental::unit_mesh
+}  // namespace ttnn::experimental::unit_mesh

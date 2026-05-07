@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal::experimental::unit_mesh {
+namespace ttnn::experimental::unit_mesh {
 
 // Aggregates tensors from unit meshes (1x1 submeshes) into a single tensor on the parent mesh.
 //
@@ -27,4 +27,4 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors);
 // Returns a vector of tensors, one per submesh, all sharing the same buffer address.
 std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor);
 
-}  // namespace tt::tt_metal::experimental::unit_mesh
+}  // namespace ttnn::experimental::unit_mesh
