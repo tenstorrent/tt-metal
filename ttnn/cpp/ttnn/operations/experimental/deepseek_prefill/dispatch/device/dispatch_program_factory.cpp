@@ -44,6 +44,11 @@ void create_tensor_cb(
     auto num_pages = detail::get_num_pages(tensor);
     auto aligned_page_size = get_aligned_page_size(tensor);
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    if (data_format == tt::DataFormat::UInt8) {
+        // TODO: remove once FP8 has a dedicated dtype. In this op, UINT8 tensors only appear
+        // on the FP8 dispatch path (DRAM is allocated as UINT8 but content is Fp8_e4m3).
+        data_format = tt::DataFormat::Fp8_e4m3;
+    }
 
     uint32_t cb_size = buffering_factor * aligned_page_size;
 
@@ -271,6 +276,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
     }
     // c_11: untilize output (compute → writer)
+    // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
     detail::create_tensor_cb(
         program,
         idle_core_grid,
@@ -391,7 +397,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         /*buffering_factor=*/detail::get_num_pages(dispatch_table_tensor),
         /*cb_id=*/tt::CBIndex::c_9,
         "dispatch_table_tensor");
-    // c_18: receive buffer for untilized data from idle cores
+    // c_18: receive buffer for untilized data from idle cores (also sender self-untilize output)
+    // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
     detail::create_tensor_cb(
         program,
         sender_core_grid,
@@ -648,7 +655,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
                 .compile_args = idle_writer_compile_args}));
     }
 
-    // Compute kernel on idle cores (same untilize kernel, unchanged)
+    // Compute kernel on idle cores
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/compute/"
@@ -1255,6 +1262,12 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     const GlobalSemaphore& cross_device_semaphore) {
     const bool is_tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
     log_info(tt::LogOp, "Prefill dispatch: input tensor is {} layout", is_tile_layout ? "TILE" : "ROW_MAJOR");
+    if (operation_attributes.use_fp8_dispatch) {
+        log_warning(
+            tt::LogOp,
+            "Prefill dispatch: FP8 path — output buffer is allocated as UINT8 but content is Fp8_e4m3. "
+            "CBs reinterpret UINT8 tensors as Fp8_e4m3 (temporary, until FP8 has a dedicated dtype).");
+    }
     if (is_tile_layout) {
         return create_at_tile_layout(
             operation_attributes,
