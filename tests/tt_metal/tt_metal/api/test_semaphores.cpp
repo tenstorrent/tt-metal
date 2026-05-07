@@ -221,4 +221,25 @@ TEST_F(MeshDeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     EXPECT_EQ(sem6_id, 0);
 }
 
+TEST_F(MeshDeviceFixture, TensixCreateSemaphoreOnMultipleRanges) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
+    CoreCoord core_a(0, 0);
+    CoreCoord core_b(2, 0);
+    CoreCoord core_c(4, 0);
+
+    CoreRangeSet ac_set(std::set<CoreRange>{CoreRange(core_a), CoreRange(core_c)});
+    CoreRangeSet bc_set(std::set<CoreRange>{CoreRange(core_b), CoreRange(core_c)});
+    CoreRangeSet ab_set(std::set<CoreRange>{CoreRange(core_a), CoreRange(core_b)});
+
+    EXPECT_EQ(tt_metal::CreateSemaphore(program_, ac_set, 0), 0u);
+    EXPECT_EQ(tt_metal::CreateSemaphore(program_, bc_set, 0), 1u);
+    EXPECT_EQ(tt_metal::CreateSemaphore(program_, ab_set, 0), 2u);
+}
+
 }  // namespace tt::tt_metal
