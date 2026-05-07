@@ -20,6 +20,8 @@ using namespace ckernel;
 #include "chlkc_pack.cpp"
 #endif
 
+//Some test for Simulator run in tt-umd-simulators. Should trigger QSR sim run.
+
 #ifdef UCK_CHLKC_UNPACK
 #include "chlkc_descriptors.h"
 #include "chlkc_unpack.cpp"
