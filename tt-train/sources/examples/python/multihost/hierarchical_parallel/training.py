@@ -138,6 +138,7 @@ def main(config: str, worker_type: str):
             device_config.enable_ddp,
             device_config.enable_tp,
             num_workers,
+            use_vocab_parallel_loss=model_factory.use_vocab_parallel_loss,
         )
         print(f"[Worker {rank}] Completed with {len(train_losses)} loss values")
     elif worker_type == "aggregator":
@@ -150,9 +151,7 @@ def main(config: str, worker_type: str):
     elif worker_type == "aggregator_optimizer":
         # Combined aggregator and optimizer for 2-tier architecture
         optimizer_instance = create_optimizer(model, yaml_config)
-        aggregator_optimizer(
-            model, training_cfg, optimizer_instance, device_config.enable_ddp
-        )
+        aggregator_optimizer(model, training_cfg, optimizer_instance, device_config.enable_ddp)
 
     # Cleanup
     distributed_ctx.barrier()

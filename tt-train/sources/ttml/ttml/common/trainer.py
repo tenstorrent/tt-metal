@@ -10,9 +10,7 @@ from ttml.common.data import get_batch, build_causal_mask
 from tqdm import tqdm
 
 
-def get_batch_ttml(
-    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
-):
+def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -36,18 +34,14 @@ def get_batch_ttml(
             ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
     return tt_x, tt_y
 
 
@@ -58,6 +52,7 @@ def train(
     train_ids: np.ndarray,
     use_ddp: bool = False,
     use_tp: bool = False,
+    use_vocab_parallel_loss: bool = False,
 ):
     """Execute training loop.
 
@@ -68,12 +63,18 @@ def train(
         train_ids: Training data token IDs
         use_ddp: Whether to use distributed data parallel
         use_tp: Whether to use tensor parallel
+        use_vocab_parallel_loss: Whether the model emits vocab-sharded logits and
+            therefore expects ``ttml.ops.distributed.vocab_parallel_cross_entropy_loss``.
+            Should be sourced from ``TransformerModelFactory.use_vocab_parallel_loss``
+            so the loss matches the LM-head's actual sharding (``gather_output=False``
+            for ``models.distributed.{llama,gpt2}`` vs ``True`` for pipeline-parallel
+            Llama and the single-device path).
 
     Returns:
         Tuple of (train_losses, val_losses) lists
     """
-    loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
+    tp_cluster_axis = ttml.mesh().axis_index("tp") if use_vocab_parallel_loss else None
 
     causal_mask = build_causal_mask(cfg.seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(
@@ -105,7 +106,12 @@ def train(
 
             # ---- forward/backward ----
             logits = model(tt_x, tt_mask)
-            loss = loss_fn(logits, tt_y, reduce)
+            if use_vocab_parallel_loss:
+                loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                    logits, tt_y, cluster_axis=tp_cluster_axis
+                )
+            else:
+                loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, reduce)
 
             # Scale loss by accumulation steps
             if cfg.gradient_accumulation_steps > 1:
@@ -144,9 +150,7 @@ def train(
             last_val_loss = val_losses[-1]
             model.train()
             # Update bar with validation loss
-            postfix = {
-                "train_loss": f"{train_losses[-1]:.4f}" if train_losses else "N/A"
-            }
+            postfix = {"train_loss": f"{train_losses[-1]:.4f}" if train_losses else "N/A"}
             postfix["val_loss"] = f"{last_val_loss:.4f}"
             bar.set_postfix(postfix, refresh=False)
 

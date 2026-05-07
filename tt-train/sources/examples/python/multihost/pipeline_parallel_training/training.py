@@ -138,6 +138,7 @@ def main(config: str):
         val_ids,
         device_config.enable_ddp,
         device_config.enable_tp,
+        use_vocab_parallel_loss=model_factory.use_vocab_parallel_loss,
     )
 
     # Cleanup

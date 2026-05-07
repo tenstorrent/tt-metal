@@ -168,3 +168,18 @@ class TransformerModelFactory:
             return self._create_llama()
         else:
             raise ValueError(f"Model type {self.model_type} not supported")
+
+    @property
+    def use_vocab_parallel_loss(self) -> bool:
+        """Whether the model the factory builds expects vocab-parallel CE.
+
+        Mirrors the C++ trainer in nano_gpt/main.cpp: the TP-only paths build
+        ``models.distributed.{llama,gpt2}`` whose LM heads are
+        ``ColumnParallelLinear(gather_output=False)``, so they emit vocab-sharded
+        logits ([B,1,S,padded_V/tp_size] per device) and must be paired with
+        ``ttml.ops.distributed.vocab_parallel_cross_entropy_loss``.  The
+        pipeline-parallel Llama path still hardcodes ``gather_output=true`` at
+        the LM head, so the last stage gets full-vocab logits and plain
+        ``cross_entropy_loss`` is the right call there.
+        """
+        return self.device_config.enable_tp and self.multihost_config.pipeline_parallel_config is None
