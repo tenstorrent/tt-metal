@@ -110,6 +110,7 @@ def _allowed_stack_trace_source_roots(
     try:
         add(site.getusersitepackages())
     except (AttributeError, OSError):
+        # User site-packages may be unavailable on some Python builds/environments; ignore.
         pass
     add(tempfile.gettempdir())
     for entry in sys_path:
