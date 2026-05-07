@@ -182,6 +182,21 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
 
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+
+        if constexpr (enforce_fp32_accumulation)
+        {
+            for (std::uint32_t t = 0; t <= dst_index; t++)
+            {
+                if (tensor_shape.num_faces_c_dim > 1)
+                {
+                    TT_ZEROACC(p_zeroacc::CLR_16, is_fp32_dest_acc_en, 0, ADDR_MOD_0, get_dest_index_in_faces(t, 1));
+                    if (tensor_shape.num_faces_r_dim > 1)
+                    {
+                        TT_ZEROACC(p_zeroacc::CLR_16, is_fp32_dest_acc_en, 0, ADDR_MOD_0, get_dest_index_in_faces(t, 3));
+                    }
+                }
+            }
+        }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
