@@ -22,7 +22,7 @@ The ``trust_remote_ministral`` fixture monkeypatches ``ModelArgs.get_hf_model_cl
 
 At import time this module patches ``Fp8Dequantize._dequantize_one`` so scalar FP8 scales from
 Devstral checkpoints do not trip Hugging Face's fine-grained FP8 dequantizer (same workaround as
-``demo_agent.py`` / ``reference/inference.py``).
+``demo_devstral2_tt_multimodal.py`` / ``reference/inference.py``).
 
 Reference attention is asserted to be Hugging Face ``Ministral3Attention`` from
 ``transformers.models.ministral3.modeling_ministral3`` before PCC vs TT.

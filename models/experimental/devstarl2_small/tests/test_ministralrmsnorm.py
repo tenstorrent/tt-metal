@@ -6,7 +6,7 @@
 
 At import time this module patches ``Fp8Dequantize._dequantize_one`` so scalar FP8 scales from
 Devstral checkpoints do not trip Hugging Face's fine-grained FP8 dequantizer (same as
-``test_ministralattn.py`` / ``demo_agent.py``).
+``test_ministralattn.py`` / ``demo_devstral2_tt_multimodal.py``).
 """
 
 from __future__ import annotations

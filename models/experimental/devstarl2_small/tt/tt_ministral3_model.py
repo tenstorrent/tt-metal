@@ -4,18 +4,28 @@
 """
 Minimal TT ``Ministral3Model`` (text stack): embeddings -> decoder layers -> final RMSNorm.
 
+Optionally owns :class:`TtMinistral3RotaryEmbedding` (device cos/sin from ``Ministral3Config`` via
+``ministral_text_config``). If configured, ``forward_prefill`` / ``forward_prefill_from_embeddings`` may
+omit ``rot_mats`` (``None``) and slice tables in-model; otherwise pass ``rot_mats`` as before.
+
 Composes existing TT submodules from this experimental folder; no Torch fallback in forward.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
 
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.experimental.devstarl2_small.tt.tt_ministral3_decoder_layer import TtMinistral3DecoderLayer
+from models.experimental.devstarl2_small.tt.tt_ministral_rotary_emb import TtMinistral3RotaryEmbedding
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.embedding import Embedding
+
+if TYPE_CHECKING:
+    from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
 
 class TtMinistral3Model(LightweightModule):
@@ -31,11 +41,30 @@ class TtMinistral3Model(LightweightModule):
         configuration,
         llama_4_scaling_beta=None,
         original_max_position_embeddings=None,
+        ministral_text_config: Optional["Ministral3Config"] = None,
+        tt_rotary_embedding: Optional[TtMinistral3RotaryEmbedding] = None,
     ):
         super().__init__()
         self.args = model_args
         self.mesh_device = mesh_device
         self.n_layers = int(model_args.n_layers)
+
+        if tt_rotary_embedding is not None and ministral_text_config is not None:
+            raise ValueError("Pass at most one of tt_rotary_embedding and ministral_text_config.")
+
+        if tt_rotary_embedding is not None:
+            self.tt_rotary_embedding = tt_rotary_embedding
+        elif ministral_text_config is not None:
+            self.tt_rotary_embedding = TtMinistral3RotaryEmbedding(
+                device=mesh_device,
+                batch_size=model_args.max_batch_size,
+                head_dim=model_args.head_dim,
+                max_seq_len=model_args.max_seq_len,
+                config=ministral_text_config,
+                datatype=ttnn.bfloat16,
+            )
+        else:
+            self.tt_rotary_embedding = None
 
         self.embed_tokens = Embedding(
             mesh_device=mesh_device,
@@ -77,15 +106,44 @@ class TtMinistral3Model(LightweightModule):
             tt_ccl=tt_ccl,
         )
 
-    def forward_prefill_from_embeddings(self, hidden_states_11SH: ttnn.Tensor, rot_mats, position_ids) -> ttnn.Tensor:
+    def forward_prefill_from_embeddings(
+        self,
+        hidden_states_11SH: ttnn.Tensor,
+        rot_mats,
+        position_ids,
+        rope_start_pos: int = 0,
+    ) -> ttnn.Tensor:
+        if rot_mats is None:
+            if self.tt_rotary_embedding is None:
+                raise ValueError(
+                    "rot_mats is required when tt_rotary_embedding is not set (pass ministral_text_config "
+                    "or tt_rotary_embedding to TtMinistral3Model.__init__, or supply rot_mats explicitly)."
+                )
+            seq_len = int(hidden_states_11SH.shape[2])
+            rot_mats = self.tt_rotary_embedding.slice_rot_mats_prefill(rope_start_pos, seq_len)
         h = hidden_states_11SH
         for layer in self.layers:
             h = layer.forward_prefill(h, rot_mats, position_ids=position_ids)
         return self.norm(h, Mode.PREFILL)
 
-    def forward_prefill(self, input_ids_tt: ttnn.Tensor, rot_mats, position_ids) -> ttnn.Tensor:
+    def forward_prefill(
+        self,
+        input_ids_tt: ttnn.Tensor,
+        position_ids,
+        rot_mats=None,
+        rope_start_pos: int = 0,
+    ) -> ttnn.Tensor:
+        if rot_mats is None:
+            if self.tt_rotary_embedding is None:
+                raise ValueError(
+                    "rot_mats is required when tt_rotary_embedding is not set (pass ministral_text_config "
+                    "or tt_rotary_embedding to TtMinistral3Model.__init__, or supply rot_mats explicitly)."
+                )
+            seq_len = int(input_ids_tt.shape[-1])
+            rot_mats = self.tt_rotary_embedding.slice_rot_mats_prefill(rope_start_pos, seq_len)
         h = self.embed_tokens(input_ids_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return self.forward_prefill_from_embeddings(h, rot_mats, position_ids)
+        h = ttnn.unsqueeze_to_4D(h)
+        return self.forward_prefill_from_embeddings(h, rot_mats, position_ids, rope_start_pos)
 
 
 __all__ = ["TtMinistral3Model"]
