@@ -26,18 +26,52 @@ import sqlite3
 import subprocess
 from pathlib import Path
 from typing import Union
+from urllib.parse import urlparse, urlunparse
 
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 2.1
+
+
+def sanitize_git_remote_url(url: str) -> str:
+    """Return a remote URL safe to persist in shared artifacts (no credentials or query parts).
+
+    Strips userinfo and query/fragment for ``http``, ``https``, ``ssh``, and ``git`` URLs. For
+    SCP-style remotes (``git@host:path``), drops the ``user@`` prefix so tokens cannot appear
+    there. Unrecognized forms are returned unchanged.
+    """
+    s = (url or "").strip()
+    if not s:
+        return ""
+    # SCP-style: no scheme, exactly one '@' before the path delimiter ':' (e.g. git@host:repo).
+    if "://" not in s and s.count("@") == 1 and ":" in s.split("@", 1)[1]:
+        _user, hostpath = s.split("@", 1)
+        return hostpath
+    parsed = urlparse(s)
+    if parsed.scheme not in ("http", "https", "ssh", "git"):
+        return s
+    host = parsed.hostname
+    if host is None:
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[-1]
+        return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
+    port = parsed.port
+    if ":" in host and not host.startswith("["):
+        host_bracketed = f"[{host}]"
+    else:
+        host_bracketed = host
+    netloc = f"{host_bracketed}:{port}" if port is not None else host_bracketed
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
 
 
 def get_tt_metal_git_report_metadata() -> dict[str, str]:
     """Return ``git_url`` and ``git_sha`` for the tt-metal tree that contains this module.
 
     Values are empty strings when git is unavailable (e.g. unpacked release). Used to populate
-    ``report_metadata`` in the visualizer database.
+    ``report_metadata`` in the visualizer database. ``git_url`` is sanitized so embedded
+    credentials are not stored.
     """
     root = Path(__file__).resolve().parents[2]
     out: dict[str, str] = {"git_url": "", "git_sha": ""}
@@ -51,8 +85,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
         )
         if proc.returncode == 0:
             out["git_sha"] = proc.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning(f"Unable to determine git SHA for report metadata; leaving empty. Reason: {e}")
     try:
         proc = subprocess.run(
             ["git", "-C", str(root), "remote", "get-url", "origin"],
@@ -62,9 +96,9 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
             check=False,
         )
         if proc.returncode == 0:
-            out["git_url"] = proc.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+            out["git_url"] = sanitize_git_remote_url(proc.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning(f"Unable to determine git remote URL for report metadata; leaving empty. Reason: {e}")
     return out
 
 
