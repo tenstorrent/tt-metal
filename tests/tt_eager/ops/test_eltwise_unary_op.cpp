@@ -52,7 +52,7 @@ Tensor gelu_slow(const Tensor& t) { return ttnn::gelu(t, false); }
 
 template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
-    auto input_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor);
+    auto input_buffer = ttnn::host_buffer::get_as<bfloat16>(input_tensor);
 
     auto output_buffer = std::vector<bfloat16>(input_tensor.physical_volume());
 

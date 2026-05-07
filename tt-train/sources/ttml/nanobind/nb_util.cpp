@@ -292,11 +292,11 @@ nb::object make_numpy_tensor(
         if (tensor.storage_type() == ttnn::StorageType::HOST) {
             if (tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
                 const auto row_major_tensor = convert_to_row_major(tensor);
-                const auto row_major_tensor_data = tt::tt_metal::host_buffer::get_as<MetalType const>(row_major_tensor);
+                const auto row_major_tensor_data = ttnn::host_buffer::get_as<MetalType const>(row_major_tensor);
                 return make_numpy_tensor_from_data.template operator()<NumpyType>(
                     row_major_tensor_data, row_major_tensor.tensor_spec());
             }
-            const auto tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(tensor);
+            const auto tensor_data = ttnn::host_buffer::get_as<const MetalType>(tensor);
             return make_numpy_tensor_from_data.template operator()<NumpyType>(tensor_data, tensor.tensor_spec());
         }
 
@@ -315,7 +315,7 @@ nb::object make_numpy_tensor(
             return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec);
         }
 
-        const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
+        const auto cpu_tensor_data = ttnn::host_buffer::get_as<const MetalType>(cpu_tensor);
         const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
         const auto cpu_tensor_strides = cpu_tensor.strides();
 

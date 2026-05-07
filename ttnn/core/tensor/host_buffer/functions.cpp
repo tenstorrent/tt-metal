@@ -11,21 +11,21 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 
-namespace tt::tt_metal::host_buffer {
+namespace ttnn::host_buffer {
 
-HostBuffer get_host_buffer(const ttnn::Tensor& tensor) {
+tt::tt_metal::HostBuffer get_host_buffer(const ttnn::Tensor& tensor) {
     TT_FATAL(is_cpu_tensor(tensor), "Tensor must have on host");
-    return get_host_buffer(tensor.host_tensor());
+    return tt::tt_metal::host_buffer::get_host_buffer(tensor.host_tensor());
 }
 
 template <typename T>
 ttsl::Span<const T> get_as(const ttnn::Tensor& tensor) {
-    return get_as<T>(tensor.host_tensor());
+    return tt::tt_metal::host_buffer::get_as<T>(tensor.host_tensor());
 }
 
 template <typename T>
 ttsl::Span<T> get_as(ttnn::Tensor& tensor) {
-    return get_as<T>(tensor.host_storage().host_tensor());
+    return tt::tt_metal::host_buffer::get_as<T>(tensor.host_storage().host_tensor());
 }
 
 // Explicit template instantiations
@@ -44,4 +44,4 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 
-}  // namespace tt::tt_metal::host_buffer
+}  // namespace ttnn::host_buffer

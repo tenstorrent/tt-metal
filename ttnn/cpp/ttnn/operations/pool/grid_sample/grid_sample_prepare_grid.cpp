@@ -30,7 +30,7 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
     const std::string& mode,
     bool align_corners,
     const std::vector<uint32_t>& tensor_input_shape) {
-    auto input_buffer = tt::tt_metal::host_buffer::get_as<InputType>(input_tensor);
+    auto input_buffer = host_buffer::get_as<InputType>(input_tensor);
     std::vector<OutputType> output_buffer(output_shape.volume());
 
     // Extract dimensions

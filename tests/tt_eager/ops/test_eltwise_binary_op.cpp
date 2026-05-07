@@ -25,8 +25,8 @@ using ttnn::Tensor;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_a_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_a);
-    auto input_b_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_b);
+    auto input_a_buffer = ttnn::host_buffer::get_as<bfloat16>(input_tensor_a);
+    auto input_b_buffer = ttnn::host_buffer::get_as<bfloat16>(input_tensor_b);
 
     auto output_buffer = std::vector<bfloat16>(input_tensor_a.physical_volume());
 

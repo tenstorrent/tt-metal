@@ -233,7 +233,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B: {
                 const auto& tile = tensor_spec.tile();
-                ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
+                ttsl::Span<const std::uint32_t> uint32_data = tt::tt_metal::host_buffer::get_as<std::uint32_t>(buffer);
                 auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
                                                ? unpack_bfp8_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)

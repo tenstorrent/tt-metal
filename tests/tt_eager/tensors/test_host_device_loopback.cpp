@@ -34,8 +34,8 @@ bool test_single_tile_single_dram_bank_loopback(distributed::MeshDevice* device)
     Tensor host_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE);
     Tensor device_a = host_a.to_device(device);
     Tensor loopbacked_a = device_a.cpu();
-    auto host_a_data = host_buffer::get_as<bfloat16>(host_a);
-    auto loopbacked_a_data = host_buffer::get_as<bfloat16>(loopbacked_a);
+    auto host_a_data = ttnn::host_buffer::get_as<bfloat16>(host_a);
+    auto loopbacked_a_data = ttnn::host_buffer::get_as<bfloat16>(loopbacked_a);
     pass &= std::equal(host_a_data.begin(), host_a_data.end(), loopbacked_a_data.begin());
 
     return pass;
@@ -48,8 +48,8 @@ bool test_multi_tile_multi_dram_bank_loopback(distributed::MeshDevice* device) {
     Tensor host_a = ttnn::random::random(multi_tile_shape).to_layout(Layout::TILE);
     Tensor device_a = host_a.to_device(device);
     Tensor loopbacked_a = device_a.cpu();
-    auto host_a_data = host_buffer::get_as<bfloat16>(host_a);
-    auto loopbacked_a_data = host_buffer::get_as<bfloat16>(loopbacked_a);
+    auto host_a_data = ttnn::host_buffer::get_as<bfloat16>(host_a);
+    auto loopbacked_a_data = ttnn::host_buffer::get_as<bfloat16>(loopbacked_a);
     pass &= std::equal(host_a_data.begin(), host_a_data.end(), loopbacked_a_data.begin());
     return pass;
 }

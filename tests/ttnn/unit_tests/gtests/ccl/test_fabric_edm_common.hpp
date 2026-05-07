@@ -642,10 +642,10 @@ bool RunPipelinedWorkersTest(
         auto input_cpu = device_tensors[0].cpu();
         auto final_out_cpu = device_tensors.back().cpu();
 
-        auto in_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(input_cpu);
-        auto out_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(final_out_cpu);
+        auto in_tensor_copyback = ttnn::host_buffer::get_as<uint32_t>(input_cpu);
+        auto out_tensor_copyback = ttnn::host_buffer::get_as<uint32_t>(final_out_cpu);
 
-        auto in_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(host_tensors[0]);
+        auto in_tensor_data = ttnn::host_buffer::get_as<uint32_t>(host_tensors[0]);
 
         bool input_copyback_check_passed = run_output_check(in_tensor_data, in_tensor_copyback) == Correctness::Correct;
         TT_FATAL(input_copyback_check_passed, "Input 0 copyback check failed");

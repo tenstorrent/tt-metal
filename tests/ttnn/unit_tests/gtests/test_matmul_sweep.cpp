@@ -84,8 +84,8 @@ TEST_P(MatmulSweepFixture, MatmulSweep) {
         // Dump first mismatches for debugging flaky failures
         auto c_host = ttnn::from_device(c_tensor);
         auto e_host = ttnn::from_device(expected);
-        auto c_buf = tt::tt_metal::host_buffer::get_as<::bfloat16>(c_host);
-        auto e_buf = tt::tt_metal::host_buffer::get_as<::bfloat16>(e_host);
+        auto c_buf = host_buffer::get_as<::bfloat16>(c_host);
+        auto e_buf = host_buffer::get_as<::bfloat16>(e_host);
         uint32_t total = c_buf.size();
         int printed = 0;
         for (uint32_t i = 0; i < total && printed < 20; i++) {

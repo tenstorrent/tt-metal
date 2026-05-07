@@ -96,7 +96,7 @@ void test_raw_host_memory_pointer() {
     // Set every value of tt Tensor to the same non-zero number
     bfloat16 a_value = 4.0f;
 
-    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(a_cpu)) {
+    for (auto& element : ttnn::host_buffer::get_as<bfloat16>(a_cpu)) {
         element = a_value;
     }
 
@@ -113,13 +113,13 @@ void test_raw_host_memory_pointer() {
     Tensor c_dev = ttnn::sqrt(a_dev);
 
     {
-        auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
+        auto dst_host_buffer = ttnn::host_buffer::get_host_buffer(tensor_for_printing);
         tt::tt_metal::copy_to_host(c_dev.device()->mesh_command_queue(), c_dev, dst_host_buffer.view_bytes().data());
     }
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 2.0f;
-    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
+    for (auto& element : ttnn::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_FATAL(element == output_value, "Element does not match expected output_value");
     }
 
@@ -143,7 +143,7 @@ void test_raw_host_memory_pointer() {
         Tensor(std::move(alternative_tensor_for_printing_buffer), shape, DataType::BFLOAT16, Layout::TILE);
     std::cout << ttnn::to_string(alternative_tensor_for_printing) << "\n";
 
-    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
+    for (auto& element : ttnn::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
         TT_FATAL(element == output_value, "Element does not match expected output_value");
     }
 
@@ -157,20 +157,20 @@ void test_raw_host_memory_pointer() {
     Tensor d_cpu = Tensor(std::move(d_data_buffer), shape, DataType::BFLOAT16, Layout::TILE);
 
     bfloat16 d_value = 8.0f;
-    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(d_cpu)) {
+    for (auto& element : ttnn::host_buffer::get_as<bfloat16>(d_cpu)) {
         element = d_value;
     }
 
     Tensor d_dev = a_dev;
-    auto d_cpu_buffer = tt::tt_metal::host_buffer::get_host_buffer(d_cpu);
+    auto d_cpu_buffer = ttnn::host_buffer::get_host_buffer(d_cpu);
     tt::tt_metal::copy_to_device(d_dev.device()->mesh_command_queue(), d_cpu_buffer.view_bytes().data(), d_dev);
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
-    auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
+    auto dst_host_buffer = ttnn::host_buffer::get_host_buffer(tensor_for_printing);
     tt::tt_metal::copy_to_host(e_dev.device()->mesh_command_queue(), e_dev, dst_host_buffer.view_bytes().data());
 
-    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
+    for (auto& element : ttnn::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");
     }
 }

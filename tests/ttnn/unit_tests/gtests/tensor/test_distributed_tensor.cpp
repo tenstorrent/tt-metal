@@ -498,7 +498,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
     auto check_borrow = []<typename T>(const Tensor& distributed, const T* src, size_t count) {
         auto shards = get_device_tensors(distributed);
         for (const auto& shard : shards) {
-            auto buf = tt::tt_metal::host_buffer::get_host_buffer(shard);
+            auto buf = host_buffer::get_host_buffer(shard);
             auto span = buf.view_as<T>();
             if (span.data() < src || span.data() + span.size() > src + count) {
                 return false;

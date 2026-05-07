@@ -8,14 +8,14 @@
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
-namespace tt::tt_metal::host_buffer {
+namespace ttnn::host_buffer {
 
-HostBuffer get_host_buffer(const ttnn::Tensor& tensor);
-
-template <typename T>
-ttsl::Span<const T> get_as(const ttnn::Tensor& tensor);
+tt::tt_metal::HostBuffer get_host_buffer(const Tensor& tensor);
 
 template <typename T>
-ttsl::Span<T> get_as(ttnn::Tensor& tensor);
+ttsl::Span<const T> get_as(const Tensor& tensor);
 
-}  // namespace tt::tt_metal::host_buffer
+template <typename T>
+ttsl::Span<T> get_as(Tensor& tensor);
+
+}  // namespace ttnn::host_buffer

@@ -238,7 +238,7 @@ static Tensor fill_first_val_into_tensor(
     auto physical_volume = input_tensor.physical_volume();
     auto output_buffer = std::vector<T>(physical_volume);
     auto input_cpu_tensor = input_tensor.cpu();
-    ttsl::Span<const T> host_buffer = tt::tt_metal::host_buffer::get_as<T>(input_cpu_tensor);
+    ttsl::Span<const T> host_buffer = host_buffer::get_as<T>(input_cpu_tensor);
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     for (uint32_t i = 0; i < physical_volume; i++) {
         output_buffer[i] = host_buffer[0];
@@ -269,7 +269,7 @@ static Tensor prod_result_computation_WH_B0(
     const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(tt::constants::TILE_HW);
     auto input_cpu_tensor = input_tensor.cpu();
-    ttsl::Span<const T> input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_cpu_tensor);
+    ttsl::Span<const T> input_buffer = host_buffer::get_as<T>(input_cpu_tensor);
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     T result = static_cast<T>(1.0f);
 
@@ -392,7 +392,7 @@ static Tensor manual_insertion(
         "Required shape volume must match old shape volume");
     auto input_cpu_tensor = input_tensor.cpu();
     auto output = Tensor(
-                      tt::tt_metal::host_buffer::get_host_buffer(input_cpu_tensor),
+                      host_buffer::get_host_buffer(input_cpu_tensor),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -511,8 +511,8 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... arg
         return false;
     }
 
-    ttsl::Span<const DataType> tensor_a_buffer = tt::tt_metal::host_buffer::get_as<DataType>(tensor_a);
-    ttsl::Span<const DataType> tensor_b_buffer = tt::tt_metal::host_buffer::get_as<DataType>(tensor_b);
+    ttsl::Span<const DataType> tensor_a_buffer = host_buffer::get_as<DataType>(tensor_a);
+    ttsl::Span<const DataType> tensor_b_buffer = host_buffer::get_as<DataType>(tensor_b);
 
     for (int index = 0; index < tensor_a_buffer.size(); index++) {
         using ::ttnn::detail::nearly_equal;

@@ -22,7 +22,7 @@ void print_tensor(const ttnn::Tensor& tensor) {
 
     // Move tensor to host and get data as a span
     auto host_tensor = tensor.cpu();
-    auto data = tt::tt_metal::host_buffer::get_as<bfloat16>(host_tensor);
+    auto data = ttnn::host_buffer::get_as<bfloat16>(host_tensor);
 
     // print the data
     for (size_t dim0 = 0; dim0 < shape[0]; dim0++) {

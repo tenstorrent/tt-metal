@@ -99,7 +99,7 @@ void py_module_types(nb::module_& mod) {
                 TT_FATAL(
                     tensor.storage_type() == StorageType::HOST, "write_tensor: tensor must be on host (HostStorage)");
 
-                auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
+                auto host_buffer = host_buffer::get_host_buffer(tensor);
                 auto data_span = host_buffer.view_bytes();
                 uint32_t page_size = self.get_page_size();
                 TT_FATAL(page_size > 0, "write_tensor: page_size must be set before calling write_tensor");
@@ -248,7 +248,7 @@ void py_module_types(nb::module_& mod) {
                 TT_FATAL(
                     tensor.storage_type() == StorageType::HOST, "read_tensor: tensor must be on host (HostStorage)");
 
-                auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
+                auto host_buffer = host_buffer::get_host_buffer(tensor);
                 auto data_span = host_buffer.view_bytes();
                 uint32_t page_size = self.get_page_size();
                 TT_FATAL(page_size > 0, "read_tensor: page_size must be set before calling read_tensor");

@@ -130,7 +130,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
         data[i] = static_cast<uint16_t>(i);
     }
     auto data_tensor = ttnn::Tensor::from_vector(data, tensor_spec);
-    auto tensor_data_span = host_buffer::get_as<uint16_t>(data_tensor);
+    auto tensor_data_span = ttnn::host_buffer::get_as<uint16_t>(data_tensor);
     auto tensor_data = std::vector<uint16_t>(tensor_data_span.begin(), tensor_data_span.end());
 
     std::vector<uint16_t> empty_data(volume);

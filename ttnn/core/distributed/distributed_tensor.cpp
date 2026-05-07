@@ -97,7 +97,7 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
         }
     }
 
-    return tt::tt_metal::host_buffer::get_host_buffer(Tensor::from_span(
+    return host_buffer::get_host_buffer(Tensor::from_span(
         ttsl::make_const_span(span),
         tensor_spec,
         /*device=*/nullptr,
@@ -124,8 +124,8 @@ public:
         auto extract_logical_data = [this]<typename T>(const Tensor& tensor) -> Tensor {
             const bool data_viewable = tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                                        tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
-            tt::tt_metal::HostBuffer host_buffer = data_viewable ? tt::tt_metal::host_buffer::get_host_buffer(tensor)
-                                                                 : tt::tt_metal::HostBuffer(tensor.to_vector<T>());
+            tt::tt_metal::HostBuffer host_buffer =
+                data_viewable ? host_buffer::get_host_buffer(tensor) : tt::tt_metal::HostBuffer(tensor.to_vector<T>());
             return (*this)(
                 host_buffer.view_as<T>(),
                 tensor.tensor_spec().logical_shape(),
@@ -347,7 +347,7 @@ private:
                             std::nullopt,
                             pad_value);
                     }
-                    auto buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
+                    auto buffer = host_buffer::get_host_buffer(shard_tensor);
                     converted_buffers.emplace(&xtensor_view->get(), buffer);
                     return buffer;
                 };

@@ -42,8 +42,8 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
     // host tensor to host tensor copy constructor
     Tensor host_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE);
     Tensor host_a_copy = host_a;
-    auto host_a_data = host_buffer::get_as<bfloat16>(host_a);
-    auto host_a_copy_data = host_buffer::get_as<bfloat16>(host_a_copy);
+    auto host_a_data = ttnn::host_buffer::get_as<bfloat16>(host_a);
+    auto host_a_copy_data = ttnn::host_buffer::get_as<bfloat16>(host_a_copy);
     TT_FATAL(std::equal(host_a_data.begin(), host_a_data.end(), host_a_copy_data.begin()), "Test Failed");
 
     // dev tensor to dev tensor copy constructor
@@ -52,8 +52,8 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
     Tensor dev_a_copy = dev_a;
     auto dev_a_on_host = dev_a.cpu();
     auto dev_a_copy_on_host = dev_a_copy.cpu();
-    auto dev_a_data = host_buffer::get_as<bfloat16>(dev_a_on_host);
-    auto dev_a_copy_data = host_buffer::get_as<bfloat16>(dev_a_copy_on_host);
+    auto dev_a_data = ttnn::host_buffer::get_as<bfloat16>(dev_a_on_host);
+    auto dev_a_copy_data = ttnn::host_buffer::get_as<bfloat16>(dev_a_copy_on_host);
     TT_FATAL(std::equal(dev_a_data.begin(), dev_a_data.end(), dev_a_copy_data.begin()), "Test Failed");
 
     // host tensor updated with host tensor copy assignment
@@ -62,8 +62,8 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
                         .to_layout(Layout::TILE);
     Tensor host_c_copy = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE);
     host_c_copy = host_c;
-    auto host_c_data = host_buffer::get_as<bfloat16>(host_c);
-    auto host_c_copy_data = host_buffer::get_as<bfloat16>(host_c_copy);
+    auto host_c_data = ttnn::host_buffer::get_as<bfloat16>(host_c);
+    auto host_c_copy_data = ttnn::host_buffer::get_as<bfloat16>(host_c_copy);
     TT_FATAL(std::equal(host_c_data.begin(), host_c_data.end(), host_c_copy_data.begin()), "Test Failed");
 
     // host tensor updated with dev tensor copy assignment
@@ -71,7 +71,7 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
     host_d_copy = dev_a;
     TT_FATAL(host_d_copy.storage_type() == ttnn::StorageType::DEVICE, "Test Failed");
     auto host_d_copy_on_host = host_d_copy.cpu();
-    auto host_d_copy_data = host_buffer::get_as<bfloat16>(host_d_copy_on_host);
+    auto host_d_copy_data = ttnn::host_buffer::get_as<bfloat16>(host_d_copy_on_host);
     TT_FATAL(std::equal(dev_a_data.begin(), dev_a_data.end(), host_d_copy_data.begin()), "Test Failed");
 
     // dev tensor updated with host tensor copy assignment
@@ -79,8 +79,8 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
     Tensor dev_e_copy = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE).to_device(device);
     dev_e_copy = host_e;
     TT_FATAL(dev_e_copy.storage_type() == ttnn::StorageType::HOST, "Test Failed");
-    auto host_e_data = host_buffer::get_as<bfloat16>(host_e);
-    auto dev_e_copy_data = host_buffer::get_as<bfloat16>(dev_e_copy);
+    auto host_e_data = ttnn::host_buffer::get_as<bfloat16>(host_e);
+    auto dev_e_copy_data = ttnn::host_buffer::get_as<bfloat16>(dev_e_copy);
     TT_FATAL(std::equal(host_e_data.begin(), host_e_data.end(), dev_e_copy_data.begin()), "Test Failed");
 
     // dev tensor updated with dev tensor copy assignment
@@ -90,8 +90,8 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
     TT_FATAL(dev_b_copy.storage_type() == ttnn::StorageType::DEVICE, "Test Failed");
     auto dev_b_on_host = dev_b.cpu();
     auto dev_b_copy_on_host = dev_b_copy.cpu();
-    auto dev_b_data = host_buffer::get_as<bfloat16>(dev_b_on_host);
-    auto dev_b_copy_data = host_buffer::get_as<bfloat16>(dev_b_copy_on_host);
+    auto dev_b_data = ttnn::host_buffer::get_as<bfloat16>(dev_b_on_host);
+    auto dev_b_copy_data = ttnn::host_buffer::get_as<bfloat16>(dev_b_copy_on_host);
     TT_FATAL(std::equal(dev_b_data.begin(), dev_b_data.end(), dev_b_copy_data.begin()), "Test Failed");
 }
 
@@ -99,7 +99,7 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     auto random_tensor = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
-    auto bfloat_data = host_buffer::get_as<bfloat16>(random_tensor);
+    auto bfloat_data = ttnn::host_buffer::get_as<bfloat16>(random_tensor);
 
     // host tensor to host tensor move constructor
     Tensor host_a = Tensor(
@@ -108,7 +108,7 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
         DataType::BFLOAT16,
         Layout::TILE);
     Tensor host_a_copy = std::move(host_a);
-    auto host_a_copy_data = host_buffer::get_as<bfloat16>(host_a_copy);
+    auto host_a_copy_data = ttnn::host_buffer::get_as<bfloat16>(host_a_copy);
     TT_FATAL(std::equal(host_a_copy_data.begin(), host_a_copy_data.end(), bfloat_data.begin()), "Test Failed");
 
     // dev tensor to dev tensor move constructor
@@ -122,12 +122,12 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
     Tensor dev_a_copy = std::move(dev_a);
     TT_FATAL(dev_a_copy.buffer() == og_buffer_a, "Test Failed");
     auto dev_a_copy_on_host = dev_a_copy.cpu();
-    auto dev_a_copy_data = host_buffer::get_as<bfloat16>(dev_a_copy_on_host);
+    auto dev_a_copy_data = ttnn::host_buffer::get_as<bfloat16>(dev_a_copy_on_host);
     TT_FATAL(std::equal(dev_a_copy_data.begin(), dev_a_copy_data.end(), bfloat_data.begin()), "Test Failed");
 
     // host tensor updated with host tensor move assignment
     auto random_tensor_three = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
-    auto bfloat_data_three = host_buffer::get_as<bfloat16>(random_tensor_three);
+    auto bfloat_data_three = ttnn::host_buffer::get_as<bfloat16>(random_tensor_three);
     Tensor host_c = Tensor(
         HostBuffer(std::vector<bfloat16>(bfloat_data_three.begin(), bfloat_data_three.end())),
         single_tile_shape,
@@ -135,7 +135,7 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
         Layout::TILE);
     Tensor host_c_copy = dev_a_copy_on_host;
     host_c_copy = std::move(host_c);
-    auto host_c_copy_data = host_buffer::get_as<bfloat16>(host_c_copy);
+    auto host_c_copy_data = ttnn::host_buffer::get_as<bfloat16>(host_c_copy);
     TT_FATAL(std::equal(host_c_copy_data.begin(), host_c_copy_data.end(), bfloat_data_three.begin()), "Test Failed");
 
     // host tensor updated with dev tensor move assignment
@@ -143,28 +143,28 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
     host_d_copy = std::move(dev_a_copy);
     TT_FATAL(host_d_copy.storage_type() == ttnn::StorageType::DEVICE, "Test Failed");
     auto host_d_copy_on_host = host_d_copy.cpu();
-    auto host_d_copy_data = host_buffer::get_as<bfloat16>(host_d_copy_on_host);
+    auto host_d_copy_data = ttnn::host_buffer::get_as<bfloat16>(host_d_copy_on_host);
     TT_FATAL(std::equal(host_d_copy_data.begin(), host_d_copy_data.end(), bfloat_data.begin()), "Test Failed");
 
     // dev tensor updated with host tensor copy assignment
     auto random_tensor_four = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
-    auto bfloat_data_four = host_buffer::get_as<bfloat16>(random_tensor_four);
+    auto bfloat_data_four = ttnn::host_buffer::get_as<bfloat16>(random_tensor_four);
     Tensor host_e = random_tensor_four;
     Tensor dev_e_copy = host_c_copy.to_device(device);
     dev_e_copy = std::move(host_e);
     TT_FATAL(dev_e_copy.storage_type() == ttnn::StorageType::HOST, "Test Failed");
-    auto dev_e_copy_data = host_buffer::get_as<bfloat16>(dev_e_copy);
+    auto dev_e_copy_data = ttnn::host_buffer::get_as<bfloat16>(dev_e_copy);
     TT_FATAL(std::equal(dev_e_copy_data.begin(), dev_e_copy_data.end(), bfloat_data_four.begin()), "Test Failed");
 
     // dev tensor updated with dev tensor copy assignment
     auto random_tensor_five = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
-    auto bfloat_data_five = host_buffer::get_as<bfloat16>(random_tensor_five);
+    auto bfloat_data_five = ttnn::host_buffer::get_as<bfloat16>(random_tensor_five);
     Tensor dev_b = random_tensor_four.to_device(device);
     Tensor dev_b_copy = dev_e_copy.to_device(device);
     dev_b_copy = std::move(dev_b);
     TT_FATAL(dev_b_copy.storage_type() == ttnn::StorageType::DEVICE, "Test Failed");
     auto dev_b_copy_on_host = dev_b_copy.cpu();
-    auto dev_b_copy_data = host_buffer::get_as<bfloat16>(dev_b_copy_on_host);
+    auto dev_b_copy_data = ttnn::host_buffer::get_as<bfloat16>(dev_b_copy_on_host);
     TT_FATAL(std::equal(dev_b_copy_data.begin(), dev_b_copy_data.end(), bfloat_data_five.begin()), "Test Failed");
 }
 
