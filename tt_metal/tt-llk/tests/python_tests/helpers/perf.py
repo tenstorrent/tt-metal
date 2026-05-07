@@ -384,7 +384,7 @@ class PerfConfig(TestConfig):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
-    def run(self, perf_report: PerfReport, run_count=2):
+    def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
         code_sizes = {}

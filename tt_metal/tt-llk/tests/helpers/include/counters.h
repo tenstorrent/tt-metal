@@ -51,47 +51,20 @@ constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_BASE_ADD
 namespace llk_perf
 {
 
-// Start: no-op. BRISC handles arm before TRISCs start.
+// Start: no-op. BRISC arms counters before releasing TRISCs.
 __attribute__((always_inline)) inline void start_perf_counters(std::uint32_t zone)
 {
     asm volatile("" : : "r"(zone) : "memory");
 }
 
-// Stop: all threads write per-thread L1 flag to signal BRISC. Always runs in WC
-// (function only compiled with PERF_COUNTERS_COMPILED); BRISC has already armed
-// counters before TRISCs start, so no runtime enabled-flag check is needed.
+// Stop: no-op. BRISC observes zone boundaries by scanning each TRISC's profiler
+// buffer (ZONE_END entries written by zone_scoped). TRISCs do zero extra work.
 __attribute__((always_inline)) inline void stop_perf_counters(std::uint32_t zone)
 {
-    volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
-    std::uint32_t tid                  = 0;
-#if defined(LLK_TRISC_MATH)
-    tid = 1;
-#elif defined(LLK_TRISC_PACK)
-    tid = 2;
-#elif defined(LLK_TRISC_ISOLATE_SFPU)
-    tid = 3;
-#endif
-    stop_flags[tid] = 1;
+    asm volatile("" : : "r"(zone) : "memory");
 }
 
 } // namespace llk_perf
-
-// ============================================================================
-// Profiler hook state — only compiled in WC. The hook logic itself is now
-// inlined into zone_scoped ctor/dtor in profiler.h (no function call overhead).
-// ============================================================================
-
-#ifdef PERF_COUNTERS_COMPILED
-
-namespace llk_perf
-{
-namespace detail
-{
-__attribute__((used, section(".bss.perf_counters"))) inline std::uint32_t profiler_zone_counter;
-}
-} // namespace llk_perf
-
-#endif // PERF_COUNTERS_COMPILED
 
 // ============================================================================
 // BRISC-only code — only compiled when PERF_COUNTERS_COMPILED is defined.
@@ -108,20 +81,7 @@ __attribute__((noinline, section(".text.zzz_perf_counters"))) inline void config
     asm volatile("" ::: "memory");
 }
 
-__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void write_counter_config_from_brisc()
-{
-    asm volatile("" ::: "memory");
-}
-
-inline void init_perf_counter_metadata()
-{
-}
-
-inline void read_counters_from_brisc()
-{
-}
-
-inline void handle_zone_boundary_from_brisc(std::uint32_t)
+inline void monitor_zones_from_brisc()
 {
 }
 } // namespace llk_perf
@@ -928,70 +888,150 @@ inline void configure_and_arm_from_brisc()
     mgr.configure_all_zones(); // L1 metadata + hw configure + arm
 }
 
-// Handle zone boundary from BRISC: wait for TRISCs to signal "zone done",
-// then freeze + read counter values + re-arm for next zone.
-// Called from BRISC main loop after releasing TRISCs.
-// Handle zone boundary from BRISC: wait for TRISCs to signal "zone done",
-// then freeze + read counter values + re-arm for next zone.
-inline void handle_zone_boundary_from_brisc(std::uint32_t zone)
+// ============================================================================
+// Profiler-buffer based zone monitoring (BRISC-only).
+//
+// Replaces the old stop_flags signaling: TRISCs no longer write per-thread L1
+// flags at zone end (zero TRISC overhead — WC TRISC ELF is bit-identical to NC).
+// Instead, BRISC scans each TRISC's profiler ring buffer (BUFFERS_START..)
+// looking for top-level ZONE_END entries that the existing zone_scoped class
+// already writes regardless of build mode.
+// ============================================================================
+
+// Mirrors of llk_profiler buffer layout (profiler.h is not included from BRISC).
+constexpr std::uint32_t PROFILER_BUFFER_LENGTH = 0x400;
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t PROFILER_NUM_CORES   = 4;
+constexpr std::uint32_t PROFILER_BUFFERS_END = 0x16F000;
+#else
+constexpr std::uint32_t PROFILER_NUM_CORES   = 3;
+constexpr std::uint32_t PROFILER_BUFFERS_END = 0x16E000;
+#endif
+constexpr std::uint32_t PROFILER_BUFFERS_START = PROFILER_BUFFERS_END - (PROFILER_NUM_CORES * PROFILER_BUFFER_LENGTH * 4u);
+
+// Initial wait so BRISC doesn't start polling the profiler buffer before
+// TRISC's own llk_profiler::reset() has zeroed it. We deliberately do NOT
+// pre-clear from BRISC: that 12KB L1 write burst leaves the L1 fabric busy
+// at the exact moment TRISCs are released, slowing INIT-zone L1 access by
+// ~13 cycles. Instead, BRISC just waits long enough for TRISC reset() to
+// memset the 4KB-per-core buffer. ~8000 cycles is plenty.
+constexpr std::uint32_t PERF_COUNTERS_INITIAL_WAIT_CYCLES = 8000;
+
+inline void perf_counters_initial_wait()
 {
-    auto& mgr = PerfCounterManager::instance();
-
-    // Wait for ALL 3 TRISCs to signal zone done (per-thread flags).
-    // This ensures no thread is still pushing coprocessor instructions when we freeze.
-    volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
-    for (std::uint32_t t = 0; t < PERF_COUNTERS_THREAD_COUNT; ++t)
+    for (std::uint32_t i = 0; i < PERF_COUNTERS_INITIAL_WAIT_CYCLES; ++i)
     {
-        while (stop_flags[t] == 0)
-        {
-            ckernel::invalidate_data_cache();
-        }
+        asm volatile("nop");
     }
-
-    // All threads done — freeze + read counter values, re-arm for next zone
-    mgr.freeze_read_and_rearm(zone);
-
-    // Clear per-thread flags for next zone
-    for (std::uint32_t t = 0; t < PERF_COUNTERS_THREAD_COUNT; ++t)
-    {
-        stop_flags[t] = 0;
-    }
-
-    // Signal TRISCs: counters re-armed, proceed to next zone.
-    // TRISCs poll sync_ctrl[zone+1] in start(zone+1).
-    volatile std::uint32_t* ready_flag = reinterpret_cast<volatile std::uint32_t*>(perf_counters_sync_ctrl_addr(zone + 1));
-    *ready_flag                        = SYNC_ZONE_COMPLETE;
 }
 
-// Handle LAST zone from BRISC: wait for all TRISCs, freeze + read + deconfigure.
-// No re-arm (no next zone). Called from BRISC START handler for the final zone.
-inline void handle_last_zone_from_brisc(std::uint32_t zone)
+constexpr std::uint32_t PROFILER_ENTRY_TYPE_SHAMT    = 28u;
+constexpr std::uint32_t PROFILER_ENTRY_EXISTS_BIT    = 0x80000000u;
+constexpr std::uint32_t PROFILER_TYPE_TIMESTAMP      = 0b1000;
+constexpr std::uint32_t PROFILER_TYPE_TIMESTAMP_DATA = 0b1001;
+constexpr std::uint32_t PROFILER_TYPE_ZONE_START     = 0b1010;
+constexpr std::uint32_t PROFILER_TYPE_ZONE_END       = 0b1011;
+
+// Per-TRISC scan state. Tracks position in the ring buffer and current nesting
+// depth so we only treat depth==0 ZONE_END as a top-level zone boundary.
+struct TriscScanState
 {
-    auto& mgr = PerfCounterManager::instance();
+    std::uint32_t write_idx;
+    std::uint32_t zone_ends_seen;
+};
 
-    volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
-    for (std::uint32_t t = 0; t < PERF_COUNTERS_THREAD_COUNT; ++t)
+// Advance the scan for one TRISC by one entry, updating zone_ends_seen.
+// Stops without consuming an entry when the next slot is unwritten — the
+// caller polls again later.
+inline void advance_trisc_scan(TriscScanState& state, std::uint32_t trisc_id)
+{
+    volatile std::uint32_t* buf = reinterpret_cast<volatile std::uint32_t*>(PROFILER_BUFFERS_START + trisc_id * PROFILER_BUFFER_LENGTH * 4u);
+
+    ckernel::invalidate_data_cache();
+    std::uint32_t meta = buf[state.write_idx];
+    if ((meta & PROFILER_ENTRY_EXISTS_BIT) == 0u)
     {
-        while (stop_flags[t] == 0)
-        {
-            ckernel::invalidate_data_cache();
-        }
+        return; // not yet written
     }
-
-    mgr.freeze_and_read(zone); // freeze + read + deconfigure + set sync_ctrl
+    std::uint32_t type = (meta >> PROFILER_ENTRY_TYPE_SHAMT) & 0xFu;
+    if (type == PROFILER_TYPE_TIMESTAMP_DATA)
+    {
+        state.write_idx += 4u; // meta + ts_low + data_high + data_low
+    }
+    else
+    {
+        state.write_idx += 2u;
+    }
+    if (type == PROFILER_TYPE_ZONE_END)
+    {
+        ++state.zone_ends_seen;
+    }
 }
 
-// Read all zone counters from BRISC after TRISCs complete.
-// Zone 0 was frozen+re-armed between zones (data still in hw? No — re-arm resets!).
-// Zone 1 counters ran during TILE_LOOP, need freeze+read now.
-inline void read_counters_from_brisc()
+// BRISC poll backoff between L1 reads. A tight `while (!done) { read L1 }` loop
+// hammers the L1 fabric and creates contention with TRISC unpack/pack traffic
+// (~0.5 cyc/iter slow-down on UNPACK/PACK/L1_TO_L1). 256 BRISC cycles (~190ns
+// on BH) is short enough to catch zone boundaries with negligible drift, but
+// long enough that BRISC reads only ~once per a TRISC tile iteration —
+// removing the L1 contention.
+constexpr std::uint32_t PERF_COUNTERS_POLL_BACKOFF_CYCLES = 64;
+
+inline void perf_counters_poll_backoff()
+{
+    for (std::uint32_t i = 0; i < PERF_COUNTERS_POLL_BACKOFF_CYCLES; ++i)
+    {
+        asm volatile("nop");
+    }
+}
+
+// Spin until every TRISC has emitted at least `target` ZONE_END entries.
+inline void wait_for_zone_end_count(TriscScanState (&states)[PERF_COUNTERS_THREAD_COUNT], std::uint32_t target)
+{
+    while (true)
+    {
+        bool all_done = true;
+        for (std::uint32_t t = 0; t < PERF_COUNTERS_THREAD_COUNT; ++t)
+        {
+            if (states[t].zone_ends_seen < target)
+            {
+                advance_trisc_scan(states[t], t);
+                if (states[t].zone_ends_seen < target)
+                {
+                    all_done = false;
+                }
+            }
+        }
+        if (all_done)
+        {
+            return;
+        }
+        perf_counters_poll_backoff();
+    }
+}
+
+// Drives the full per-zone counter snapshot lifecycle in one call.
+// Test kernels emit ZONE_ENDs in a fixed order: INIT → TILE_LOOP → KERNEL.
+// Snapshot after the 1st ZONE_END (INIT done) and the 2nd (TILE_LOOP done).
+// KERNEL_END is ignored — TRISCs may still be inside it when BRISC finishes.
+inline void monitor_zones_from_brisc()
 {
     auto& mgr = PerfCounterManager::instance();
 
-    // Zone 0 (INIT): counters were reset by re-arm. Data lost.
-    // TODO: separate pass for INIT data or accumulate approach.
-    // For now, just read zone 1 (TILE_LOOP).
-    mgr.freeze_and_read(1); // zone 1 = TILE_LOOP
+    TriscScanState states[PERF_COUNTERS_THREAD_COUNT] = {};
+
+    // Wait for TRISC reset() to memset the profiler buffer before we start
+    // polling — otherwise BRISC could see stale entries from the previous run.
+    perf_counters_initial_wait();
+
+    // Zone 0 (INIT): wait for the first ZONE_END on every TRISC, then
+    // freeze+read+re-arm for zone 1.
+    wait_for_zone_end_count(states, 1u);
+    mgr.freeze_read_and_rearm(0);
+
+    // Zone 1 (TILE_LOOP): wait for the second ZONE_END on every TRISC, then
+    // freeze+read and deconfigure the hardware.
+    wait_for_zone_end_count(states, 2u);
+    mgr.freeze_and_read(1);
 }
 
 // ============================================================================
@@ -1214,7 +1254,7 @@ __attribute__((noinline, cold)) inline std::uint32_t get_zone_id(std::uint32_t h
     return (hash_val < detail::ZONE_LOOKUP_SIZE) ? detail::zone_lookup[hash_val] : 0;
 }
 
-// Hooks and profiler_zone_counter are defined above (always compiled — shared by NC and WC).
+// Hooks (start_perf_counters / stop_perf_counters) are defined above as no-ops.
 
 } // namespace llk_perf
 

@@ -157,20 +157,6 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
 
 } // namespace llk_profiler
 
-#ifdef PERF_COUNTERS_COMPILED
-// Forward declarations for inlined hook bodies. Definitions in counters.h.
-namespace llk_perf
-{
-namespace detail
-{
-extern std::uint32_t profiler_zone_counter;
-}
-
-__attribute__((always_inline)) inline void start_perf_counters(std::uint32_t zone);
-__attribute__((always_inline)) inline void stop_perf_counters(std::uint32_t zone);
-} // namespace llk_perf
-#endif
-
 namespace llk_profiler
 {
 
@@ -179,10 +165,6 @@ class zone_scoped
 {
 private:
     bool is_opened = false;
-#ifdef PERF_COUNTERS_COMPILED
-    std::uint32_t m_counter_zone = 0;
-    bool m_counter_active        = false;
-#endif
 
 public:
     zone_scoped(const zone_scoped&)            = delete;
@@ -192,21 +174,6 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
-#ifdef PERF_COUNTERS_COMPILED
-        // Inlined counter-start hook (was _profiler_counter_start in counters.h)
-        std::uint32_t pz = llk_perf::detail::profiler_zone_counter++;
-        if (pz == 0)
-        {
-            m_counter_zone   = 0;
-            m_counter_active = false;
-        }
-        else
-        {
-            m_counter_zone   = pz - 1;
-            m_counter_active = true;
-            llk_perf::start_perf_counters(m_counter_zone);
-        }
-#endif
         if (!is_buffer_full())
         {
             is_opened = true;
@@ -222,13 +189,6 @@ public:
             write_entry(EntryType::ZONE_END, id16);
             --open_zone_cnt;
         }
-#ifdef PERF_COUNTERS_COMPILED
-        // Inlined counter-stop hook (was _profiler_counter_stop in counters.h)
-        if (m_counter_active)
-        {
-            llk_perf::stop_perf_counters(m_counter_zone);
-        }
-#endif
     }
 };
 

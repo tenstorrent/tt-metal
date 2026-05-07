@@ -1132,8 +1132,11 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
-                if TestConfig.ENABLE_PERF_COUNTERS:
-                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                # NOTE: -DPERF_COUNTERS_COMPILED is intentionally NOT added to
+                # TRISC builds. Only BRISC needs the perf-counter machinery
+                # (PerfCounterManager, monitor_zones_from_brisc, etc.). Adding
+                # it to TRISC pulls in the WC-only custom memset and changes
+                # ELF layout, breaking the bit-identical-to-NC guarantee.
 
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "

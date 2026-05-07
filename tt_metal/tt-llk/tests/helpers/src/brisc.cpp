@@ -124,6 +124,11 @@ int main()
 #ifdef PERF_COUNTERS_COMPILED
                 // Configure + arm counters BEFORE releasing TRISCs, so counters
                 // are counting from the very first TRISC instruction.
+                // We deliberately do NOT clear the profiler buffer here — that
+                // would cause an L1 write burst right before TRISC release and
+                // slow down INIT-zone L1 access (~13 cyc on L1_TO_L1). Instead,
+                // monitor_zones_from_brisc() waits long enough for TRISC's own
+                // llk_profiler::reset() to zero the buffer before polling.
                 llk_perf::configure_and_arm_from_brisc();
 #endif
 
@@ -133,10 +138,10 @@ int main()
                 commit_store(brisc_bread0, counter);
 
 #ifdef PERF_COUNTERS_COMPILED
-                // Zone 0 (INIT): poll for done, freeze+read+re-arm
-                llk_perf::handle_zone_boundary_from_brisc(0);
-                // Zone 1 (TILE_LOOP): poll for done, freeze+read+deconfigure
-                llk_perf::handle_last_zone_from_brisc(1);
+                // Drive the full per-zone counter snapshot lifecycle by scanning
+                // each TRISC's profiler ring buffer. TRISCs do zero extra work
+                // (their ELF is bit-identical to NC).
+                llk_perf::monitor_zones_from_brisc();
 #endif
                 break;
 
