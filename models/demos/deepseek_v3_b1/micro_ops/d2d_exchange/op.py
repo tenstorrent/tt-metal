@@ -305,6 +305,13 @@ class SocketInterface:
                 self.downstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                 # Initialize downstream as sender socket
                 self.downstream_socket = self.downstream_socket_pair[0]
+                ds_recv_addr = int(self.downstream_socket_pair[1].get_config_buffer_address())
+                print(
+                    f"[SocketInterface] downstream_socket_pair created: "
+                    f"recv_core_coord={recv_core_coord} -> downstream_core_coord={downstream_core_coord} "
+                    f"downstream_receiver[1].config_addr={ds_recv_addr}",
+                    flush=True,
+                )
 
         self.page_size = page_size
         self.send_core_coord = send_core_coord

@@ -456,12 +456,8 @@ def test_bcast_moe_reduce_pipeline(
         _t0_total = _time.time()
         print(f"[TEST] stage{my_mesh_id}: creating PipelineBlock", flush=True)
         fabric_loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core))
-        entry_nodes = [
-            ttnn.MeshCoordinate(r, int(pipeline_config[my_mesh_id - 1].exit_node_coord[1]))
-            for r in range(int(mesh_rows))
-        ]
         logger.info(
-            f"[rank={my_mesh_id}] passive stage >=2: entry_device_coords={entry_nodes} "
+            f"[rank={my_mesh_id}] passive stage >=2: entry_device_coords={entry_column_coords} "
             f"(prev stage {my_mesh_id - 1} exit_node_coord={pipeline_config[my_mesh_id - 1].exit_node_coord}), "
             f"exit_device_coords={exit_column_coords} (this stage reduce_exit_column)"
         )
@@ -474,7 +470,7 @@ def test_bcast_moe_reduce_pipeline(
             downstream_d2d_socket_page_size=embedding_size_bytes,
             pipeline_device_coords=device_coords,
             pipeline_exit_core_coord=pipeline_core,
-            entry_device_coords=entry_nodes,
+            entry_device_coords=entry_column_coords,
             exit_device_coords=exit_column_coords,
             loopback=fabric_loopback,
         )
@@ -1253,10 +1249,6 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         _t0_total = _time.time()
         print(f"[TEST] stage{my_mesh_id}: creating PipelineBlock", flush=True)
         fabric_loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core))
-        logger.info(
-            f"[rank={my_mesh_id}] passive stage >=2 (multi_exit test): entry_device_coords=exit_device_coords="
-            f"{exit_column_coords} (symmetric columns per row)"
-        )
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -1266,7 +1258,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             downstream_d2d_socket_page_size=embedding_size_bytes,
             pipeline_device_coords=device_coords,
             pipeline_exit_core_coord=pipeline_core,
-            entry_device_coords=exit_column_coords,
+            entry_device_coords=entry_device_coords,
             exit_device_coords=exit_column_coords,
             loopback=fabric_loopback,
         )

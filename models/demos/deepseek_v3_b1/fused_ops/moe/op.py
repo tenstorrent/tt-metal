@@ -4685,6 +4685,16 @@ class MoeOp:
 
         is_entry_col = (self.exit_column is None) or (col == self.exit_column)
 
+        fwd_socket = ctx.forward_sockets[chip_id] if ctx.forward_sockets else None
+        fwd_addr = int(fwd_socket.get_config_buffer_address()) if fwd_socket is not None else 0
+        print(
+            f"[MoE _build_forward_per_device] chip_id={chip_id} row={row} col={col} "
+            f"exit_column={self.exit_column} is_entry_col={is_entry_col} "
+            f"forward_socket={'SET' if fwd_socket is not None else 'None'} "
+            f"fwd_config_addr={fwd_addr}",
+            flush=True,
+        )
+
         sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
 
         residual_per_device = ttnn.get_device_tensors(ctx.shared_residual_mcast_src_tensor)
@@ -4997,6 +5007,12 @@ class MoeOp:
         self.forward_sockets = forward_sockets
         self.exit_column = exit_column
         self.reduce_exit_column = reduce_exit_column if reduce_exit_column is not None else exit_column
+        print(
+            f"[MoeOp.__init__] exit_column={self.exit_column} reduce_exit_column={self.reduce_exit_column} "
+            f"forward_sockets={'provided' if forward_sockets is not None else 'None'} "
+            f"len={len(forward_sockets) if forward_sockets else 0}",
+            flush=True,
+        )
         self._forward_metadata_size_bytes = forward_metadata_size_bytes
         self._metadata_l1_addr = metadata_l1_addr
         if semaphores is None:
@@ -5531,6 +5547,17 @@ class MoeOp:
         # Create per-device programs (mesh loop)
         # ==================================================================
         ctx = moe.ctx
+        if ctx.enable_forward and ctx.forward_sockets:
+            print(
+                f"[MoeOp.op] forward_sockets state before mesh loop: "
+                f"exit_column={moe.exit_column} reduce_exit_column={moe.reduce_exit_column} "
+                f"len={len(ctx.forward_sockets)} "
+                + " ".join(
+                    f"[{i}]={'addr=' + str(int(s.get_config_buffer_address())) if s is not None else 'None'}"
+                    for i, s in enumerate(ctx.forward_sockets)
+                ),
+                flush=True,
+            )
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for row in range(ctx.mesh_rows):
             for col in range(ctx.mesh_cols):
@@ -5545,6 +5572,19 @@ class MoeOp:
                     row,
                     col,
                 )
+
+                if ctx.enable_forward:
+                    fwd_entry_ct = None
+                    for n, v in moe.brisc_args:
+                        if n == "forward_is_entry_column":
+                            fwd_entry_ct = v
+                            break
+                    print(
+                        f"[MoeOp.op] chip_id={chip_id} row={row} col={col} "
+                        f"brisc_common_rt_args[0:3]={moe.brisc_common_rt_args[:3]} "
+                        f"forward_is_entry_column(CT)={fwd_entry_ct}",
+                        flush=True,
+                    )
 
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",

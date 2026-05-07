@@ -262,6 +262,20 @@ class PipelineBlock:
 
         self.pipeline_config = pipeline_config
 
+        logger.info(
+            f"PipelineBlock.__init__ my_stage_idx={my_stage_idx} num_procs={self.num_procs} "
+            f"pipeline_config entries: "
+            + " | ".join(
+                f"[{i}] entry={pipeline_config[i].entry_node_coord} exit={pipeline_config[i].exit_node_coord}"
+                for i in range(min(len(pipeline_config), 4))
+            )
+            + (
+                f" ... [{len(pipeline_config)-1}] entry={pipeline_config[-1].entry_node_coord} exit={pipeline_config[-1].exit_node_coord}"
+                if len(pipeline_config) > 4
+                else ""
+            )
+        )
+
         self.is_pipeline_start = self.my_stage_idx == 0
         self.is_last_stage = self.my_stage_idx == self.num_procs - 1
         self.has_exit = not self.is_last_stage or self.initialize_loopback
@@ -803,6 +817,13 @@ class PipelineBlock:
                 receiver_mesh=MeshWrapper(mesh_device),
                 receiver_use_reader_config=entry_use_reader,
             )
+            ds_sock = entry_si.get_downstream_socket()
+            ds_addr = int(ds_sock.get_config_buffer_address()) if ds_sock is not None else 0
+            logger.info(
+                f"PipelineBlock ENTRY socket ch[{i}] stage={self.my_stage_idx}: "
+                f"downstream_socket config_addr={ds_addr} "
+                f"downstream_dc={downstream_dc} use_multi_upstream={use_multi_upstream}"
+            )
             self.entry_socket_interface.append(entry_si)
 
         assert len(actual_exit_coords) == len(actual_entry_coords), (
@@ -1075,7 +1096,11 @@ class PipelineBlock:
     def get_downstream_sockets(self):
         """Return list of downstream sockets (parallel mode)."""
         assert self.parallel_devices, "get_downstream_sockets() requires per-device parallel mode"
-        return [si.get_downstream_socket() for si in self.entry_socket_interface]
+        sockets = [si.get_downstream_socket() for si in self.entry_socket_interface]
+        for i, s in enumerate(sockets):
+            addr = int(s.get_config_buffer_address()) if s is not None else 0
+            logger.info(f"get_downstream_sockets() ch[{i}] stage={self.my_stage_idx}: " f"config_addr={addr}")
+        return sockets
 
     def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str) -> None:
         assert self.is_first_pipeline_stage(), "Host socket descriptors can only be exported from the first stage"
