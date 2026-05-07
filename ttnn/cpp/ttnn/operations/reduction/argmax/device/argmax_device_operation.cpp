@@ -162,7 +162,9 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(
             input_tensor_a.layout() == Layout::ROW_MAJOR,
-            "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}",
+            "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}. "
+            "(ROW_MAJOR tensors reduced along height are converted to TILE internally; use use_multicore=False for "
+            "that path.)",
             input_tensor_a.layout());
     }
 }

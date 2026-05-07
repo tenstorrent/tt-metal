@@ -216,11 +216,18 @@ Tensor argmax(
     // Register-based NC path for reductions along any non-HW dimension. This
     // uses DST accumulation (similar to fast_reduce_nc) for significantly
     // better performance than the scalar-loop readers and, unlike the legacy
-    // path, supports arbitrary non-last dims.
+    // path, supports arbitrary non-last dims. It does not take sub_core_grids;
+    // use_multicore is also not threaded through (prim::argmax cannot serve this
+    // ROW_MAJOR layout + dim combo either), so callers must omit sub_core_grids.
     if (should_use_nc_path(input_tensor, dim, output_memory_config)) {
+        TT_FATAL(
+            !sub_core_grids.has_value(),
+            "argmax along non-HW dimensions does not support sub_core_grids; only height/width (TILE) reductions "
+            "honor core grid overrides.");
         Tensor nc_result = run_argmax_nc(input_tensor, dim.value(), keepdim, output_memory_config);
         if (optional_output_tensor.has_value()) {
-            copy_to_device(nc_result, optional_output_tensor.value());
+            // nc_result is already on device; copy_to_device is host → device only.
+            ttnn::copy(nc_result, optional_output_tensor.value());
             return optional_output_tensor.value();
         }
         return nc_result;
@@ -228,13 +235,14 @@ Tensor argmax(
 
     if (should_row_major_h_via_tile(input_tensor, dim, output_memory_config)) {
         const Tensor tiled_input = ttnn::to_layout(input_tensor, Layout::TILE);
+        // Multicore prim::argmax is only valid for ROW_MAJOR inputs; this path uses TILE.
         return prim::argmax(
             tiled_input,
             DataType::UINT32,
             dim,
             keepdim,
             sub_core_grids,
-            use_multicore,
+            /*use_multicore=*/false,
             output_memory_config,
             std::move(optional_output_tensor));
     }

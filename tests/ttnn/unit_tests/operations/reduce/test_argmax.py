@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from itertools import chain
+
 import pytest
 
 pytestmark = pytest.mark.use_module_device
@@ -14,68 +16,115 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 TEST_PADDING_VALUE = -42
 
+RM = ttnn.ROW_MAJOR_LAYOUT
+TL = ttnn.TILE_LAYOUT
+
+
+def _ac(shape, layout, dim, keepdim, use_mc, dtype):
+    """Single argmax test case tuple (readable shorthand for parametrization)."""
+    return (shape, layout, dim, keepdim, use_mc, dtype)
+
+
+def _argmax_misc_and_rank_special():
+    return [
+        _ac([], RM, None, True, True, torch.bfloat16),
+        _ac([32], RM, -1, False, False, torch.float32),
+        _ac([32, 0], RM, 1, True, True, torch.bfloat16),
+        _ac([64], RM, -1, True, False, torch.bfloat16),
+        _ac([1, 512], RM, -1, True, True, torch.float32),
+        _ac([1, 1024], RM, -1, True, True, torch.int32),
+        _ac([1, 65], RM, -1, True, True, torch.uint8),
+        _ac([8, 10, 129], RM, 2, True, False, torch.bfloat16),
+        _ac([1, 8, 160], RM, -1, False, True, torch.bfloat16),
+        _ac([1, 256, 1024 * 8], RM, -1, False, True, torch.float32),
+        _ac([32, 32, 32, 1], RM, -1, True, True, torch.float32),
+        _ac([128], RM, -1, True, True, torch.float32),
+        _ac([256], RM, -1, False, False, torch.bfloat16),
+        _ac([128], TL, -1, True, False, torch.float32),
+        _ac([256], TL, -1, False, False, torch.bfloat16),
+    ]
+
+
+def _argmax_row_major_wide_reduce_last_dim():
+    return [
+        _ac([64, 128], RM, -1, True, True, torch.float32),
+        _ac([64, 128], RM, -1, False, True, torch.int32),
+        _ac([64, 128], RM, -1, True, False, torch.float32),
+        _ac([32, 64, 128], RM, -1, True, True, torch.float32),
+        _ac([32, 64, 128], RM, -1, True, False, torch.bfloat16),
+        _ac([32, 64, 128], TL, -1, False, False, torch.bfloat16),
+        _ac([16, 32, 64, 128], RM, -1, True, True, torch.bfloat16),
+        _ac([16, 32, 64, 128], RM, -1, True, False, torch.float32),
+        _ac([16, 32, 64, 128], RM, -1, True, True, torch.int32),
+        _ac([16, 32, 64, 128], TL, -1, True, False, torch.bfloat16),
+        _ac([16, 32, 64, 128], TL, -1, False, False, torch.float32),
+        _ac([16, 32, 70, 130], TL, -1, True, False, torch.bfloat16),
+        _ac([16, 32, 70, 130], TL, -1, False, False, torch.bfloat16),
+        _ac([8, 16, 32, 64], RM, -1, True, True, torch.float32),
+        _ac([8, 16, 32, 64], RM, -1, False, True, torch.bfloat16),
+        _ac([4, 8, 16, 32], RM, -1, False, False, torch.float32),
+        _ac([100, 200], RM, -1, True, True, torch.bfloat16),
+        _ac([100, 200], RM, -1, False, False, torch.float32),
+        _ac([50, 100, 200], RM, -1, True, True, torch.int32),
+        _ac([25, 50, 100], RM, -1, False, True, torch.uint8),
+        _ac([12, 24, 48, 96], RM, -1, True, False, torch.bfloat16),
+        _ac([1, 8, 20, 18], TL, -1, True, False, torch.bfloat16),
+    ]
+
+
+def _argmax_nc_hw_mixed_shapes():
+    """Non-last dims on TILE and ROW_MAJOR (padding / rank coverage)."""
+    return [
+        _ac([4, 32, 32], TL, 0, True, False, torch.bfloat16),
+        _ac([2, 64, 64], TL, -2, True, False, torch.bfloat16),
+        _ac([2, 64, 64], TL, 1, False, False, torch.bfloat16),
+        _ac([1, 70, 130], TL, -2, True, False, torch.bfloat16),
+        _ac([1, 2, 32, 32], TL, 2, True, False, torch.float32),
+        _ac([2, 64, 64], RM, 1, True, False, torch.bfloat16),
+        _ac([2, 64, 64], RM, -2, False, False, torch.bfloat16),
+        _ac([1, 48, 96], RM, -2, True, False, torch.float32),
+        _ac([4, 32, 32], TL, 0, False, False, torch.bfloat16),
+        _ac([4, 32, 32], RM, 0, True, False, torch.bfloat16),
+    ]
+
+
+def _argmax_nc_nd_rank4():
+    return [
+        _ac([2, 3, 64, 64], TL, 0, True, False, torch.float32),
+        _ac([2, 3, 64, 64], TL, 1, True, False, torch.float32),
+        _ac([2, 3, 64, 64], TL, 1, False, False, torch.float32),
+        _ac([2, 3, 64, 64], TL, -2 - 1, False, False, torch.bfloat16),
+        _ac([2, 3, 64, 64], RM, 1, True, False, torch.bfloat16),
+        _ac([2, 5, 70, 130], TL, 0, True, False, torch.bfloat16),
+        _ac([2, 5, 70, 130], TL, 1, False, False, torch.bfloat16),
+    ]
+
+
+def _argmax_nc_nd_rank5():
+    return [
+        _ac([2, 3, 4, 32, 32], TL, 0, True, False, torch.bfloat16),
+        _ac([2, 3, 4, 32, 32], TL, 1, False, False, torch.bfloat16),
+        _ac([2, 3, 4, 32, 32], TL, 2, True, False, torch.float32),
+    ]
+
+
+def argmax_torch_ttnn_cases():
+    """Yield all curated argmax vs torch cases (order matches the original monolithic list)."""
+    yield from chain(
+        _argmax_misc_and_rank_special(),
+        _argmax_row_major_wide_reduce_last_dim(),
+        _argmax_nc_hw_mixed_shapes(),
+        _argmax_nc_nd_rank4(),
+        _argmax_nc_nd_rank5(),
+    )
+
+
+ARGMAX_TORCH_TTNN_CASES = list(argmax_torch_ttnn_cases())
+
 
 @pytest.mark.parametrize(
     argnames="tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype",
-    argvalues=[
-        ([], ttnn.ROW_MAJOR_LAYOUT, None, True, True, torch.bfloat16),
-        ([32], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
-        ([32, 0], ttnn.ROW_MAJOR_LAYOUT, 1, True, True, torch.bfloat16),
-        ([64], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
-        ([1, 512], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([1, 1024], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
-        ([1, 65], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.uint8),
-        ([8, 10, 129], ttnn.ROW_MAJOR_LAYOUT, 2, True, False, torch.bfloat16),
-        ([1, 8, 160], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.bfloat16),
-        ([1, 256, 1024 * 8], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.float32),
-        ([32, 32, 32, 1], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([256], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.bfloat16),
-        ([128], ttnn.TILE_LAYOUT, -1, True, False, torch.float32),
-        ([256], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
-        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.int32),
-        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.float32),
-        ([32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
-        ([32, 64, 128], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
-        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.bfloat16),
-        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.float32),
-        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
-        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
-        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, False, False, torch.float32),
-        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
-        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
-        ([8, 16, 32, 64], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
-        ([8, 16, 32, 64], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.bfloat16),
-        ([4, 8, 16, 32], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
-        ([100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.bfloat16),
-        ([100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
-        ([50, 100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
-        ([25, 50, 100], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.uint8),
-        ([12, 24, 48, 96], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
-        ([1, 8, 20, 18], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
-        ([4, 32, 32], ttnn.TILE_LAYOUT, 0, True, False, torch.bfloat16),
-        ([2, 64, 64], ttnn.TILE_LAYOUT, -2, True, False, torch.bfloat16),
-        ([2, 64, 64], ttnn.TILE_LAYOUT, 1, False, False, torch.bfloat16),
-        ([1, 70, 130], ttnn.TILE_LAYOUT, -2, True, False, torch.bfloat16),
-        ([1, 2, 32, 32], ttnn.TILE_LAYOUT, 2, True, False, torch.float32),
-        ([2, 64, 64], ttnn.ROW_MAJOR_LAYOUT, 1, True, False, torch.bfloat16),
-        ([2, 64, 64], ttnn.ROW_MAJOR_LAYOUT, -2, False, False, torch.bfloat16),
-        ([1, 48, 96], ttnn.ROW_MAJOR_LAYOUT, -2, True, False, torch.float32),
-        ([4, 32, 32], ttnn.TILE_LAYOUT, 0, False, False, torch.bfloat16),
-        ([4, 32, 32], ttnn.ROW_MAJOR_LAYOUT, 0, True, False, torch.bfloat16),
-        ([2, 3, 64, 64], ttnn.TILE_LAYOUT, 0, True, False, torch.float32),
-        ([2, 3, 64, 64], ttnn.TILE_LAYOUT, 1, True, False, torch.float32),
-        ([2, 3, 64, 64], ttnn.TILE_LAYOUT, 1, False, False, torch.float32),
-        ([2, 3, 64, 64], ttnn.TILE_LAYOUT, -2 - 1, False, False, torch.bfloat16),
-        ([2, 3, 64, 64], ttnn.ROW_MAJOR_LAYOUT, 1, True, False, torch.bfloat16),
-        ([2, 5, 70, 130], ttnn.TILE_LAYOUT, 0, True, False, torch.bfloat16),
-        ([2, 5, 70, 130], ttnn.TILE_LAYOUT, 1, False, False, torch.bfloat16),
-        ([2, 3, 4, 32, 32], ttnn.TILE_LAYOUT, 0, True, False, torch.bfloat16),
-        ([2, 3, 4, 32, 32], ttnn.TILE_LAYOUT, 1, False, False, torch.bfloat16),
-        ([2, 3, 4, 32, 32], ttnn.TILE_LAYOUT, 2, True, False, torch.float32),
-    ],
+    argvalues=ARGMAX_TORCH_TTNN_CASES,
 )
 def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype):
     """
