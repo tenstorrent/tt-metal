@@ -568,7 +568,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     return decoder_layer
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric([(1, 1), (1, 8), (4, 8)])
 @parametrize_batch_seq(
     [
         (1, 1),  # decode
@@ -617,7 +617,8 @@ def test_decoder(
     mesh_shape = tuple(mesh_device.shape)
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
-            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+            f"Skipping batch size {batch_size} for mesh shape {tuple(mesh_device.shape)}. "
+            "Only batch size 1 is supported for mesh shape without row-sharding."
         )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
@@ -631,13 +632,11 @@ def test_decoder(
     config._attn_implementation = "eager"
 
     if batch_size > 32:
-        if mesh_shape[0] == 1:
-            pytest.skip(f"Batch size > 32 is not supported for mesh shape {mesh_shape}")
+        if mesh_device.shape[0] == 1:
+            pytest.skip(f"Batch size > 32 is not supported for mesh shape {tuple(mesh_device.shape)}")
         is_row_sharded = True
-        assert (
-            batch_size % setup["mesh_device"].shape[0] == 0
-        ), "Batch size must be evenly divisible by mesh device shape"
-        local_batch_size = batch_size // setup["mesh_device"].shape[0]
+        assert batch_size % mesh_device.shape[0] == 0, "Batch size must be evenly divisible by mesh device shape"
+        local_batch_size = batch_size // mesh_device.shape[0]
     else:
         is_row_sharded = False
         local_batch_size = batch_size
@@ -757,7 +756,7 @@ def test_decoder(
 
     if should_test("fused_experts"):
         if decoder_layer.mlp.use_throughput_experts and is_decode and is_row_sharded:
-            logger.info(f"Testing Fused Throughput Experts for mesh shape {mesh_shape}...")
+            logger.info(f"Testing Fused Throughput Experts for mesh shape {tuple(mesh_device.shape)}...")
             hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_fused_throughput_experts_component(
                 setup["mesh_device"],
@@ -772,7 +771,7 @@ def test_decoder(
 
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:
-            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
+            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {tuple(mesh_device.shape)}...")
             hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_throughput_experts_component(
                 setup["mesh_device"],
@@ -785,7 +784,7 @@ def test_decoder(
                 pcc_threshold=pcc_thresholds["experts"],
             )
         else:
-            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {mesh_shape}...")
+            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {tuple(mesh_device.shape)}...")
             run_experts_component(
                 setup["mesh_device"],
                 hidden_states.shape,
@@ -1022,7 +1021,7 @@ def run_model_forward_test(
     return passing, output
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric([(1, 1), (1, 8), (4, 8)])
 @pytest.mark.parametrize(
     "batch_size, seq_len, mode",
     [
@@ -1084,13 +1083,16 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
     config._attn_implementation = "eager"
 
     # Create mesh config
+    mesh_shape = tuple(mesh_device.shape)
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # When HF_MODEL is set, use real weights + the pre-built tensor cache (same as the demo).
-    # Otherwise fall back to randomly-initialised weights (fast, no checkpoint needed).
+    # Use real weights only when HF_MODEL points to an existing local directory
+    # (Galaxy runners with weights on disk).  When HF_MODEL is an HF Hub ID
+    # (pipeline_functional runners that only cache the config), fall through to
+    # dummy weights so no actual checkpoint download is triggered.
     hf_model_path = os.environ.get("HF_MODEL")
     tensor_cache_path = None
-    if hf_model_path:
+    if hf_model_path and os.path.isdir(hf_model_path):
         from models.demos.gpt_oss.tt.model_config import ModelArgs
 
         _model_args = ModelArgs(mesh_device)

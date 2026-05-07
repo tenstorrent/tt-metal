@@ -45,7 +45,10 @@ class TestFactory:
         ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
-        # state_dict = TestFactory._generate_dummy_state_dict(config)
+
+        # Only cache tensors to disk when using real weights; with dummy (random) weights
+        # there is nothing to persist and the model_path may not be a writable local directory.
+        tensor_cache_path = model_args.weight_cache_path(dtype) if use_real_weights else None
 
         return {
             "mesh_device": mesh_device,
@@ -53,9 +56,8 @@ class TestFactory:
             "mesh_config": mesh_config,
             "ccl_manager": ccl_manager,
             "config": config,
-            # "state_dict": state_dict,
             "dtype": dtype,
-            "tensor_cache_path": model_args.weight_cache_path(dtype),
+            "tensor_cache_path": tensor_cache_path,
         }
 
     @staticmethod

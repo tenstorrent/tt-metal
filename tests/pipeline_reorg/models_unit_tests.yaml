@@ -335,19 +335,21 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-# GPT-OSS 20B unit tests: disabled — segfaulting on CI
-# - name: GPT-OSS 20B unit tests (T3K)
-#   cmd: |
-#     uv pip install -r models/demos/gpt_oss/requirements.txt
-#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
-#     pytest models/demos/gpt_oss/tests/unit -k "1x8" --timeout 600
-#   model: gpt-oss-20b
-#   skus:
-#     wh_llmbox_perf:
-#       timeout: 15
-#       tier: 2
-#   owner_id: U08TJ70UFRT # Harry Andrews
-#   team: models
+# GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
+# picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
+# covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
+- name: GPT-OSS 20B unit tests
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=openai/gpt-oss-20b
+    pytest --timeout 600 models/demos/gpt_oss/tests/unit/
+  model: gpt-oss-20b
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
 
 - name: GPT-OSS 120B unit tests
   cmd: |
