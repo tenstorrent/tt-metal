@@ -231,6 +231,15 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
             validate_sharded_operand(tensor_args.preallocated_output.value(), "preallocated_output");
         }
     }
+    TT_FATAL(
+        is_row_broadcastable_mask(expert_logical_shape, input_logical_shape[-1]),
+        "Expert mask must be row-broadcastable with last dim == input_shape[-1]. Got rank={} and shape={} for "
+        "input_shape[-1]={}",
+        expert_logical_shape.rank(),
+        expert_logical_shape,
+        input_logical_shape[-1]);
+    TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be padded to 32, got {}", topk_shape[-2]);
+    TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be padded to 32, got {}", expert_shape[-2]);
 }
 
 TensorSpec MoeDeviceOperation::compute_output_specs(
