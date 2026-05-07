@@ -8,11 +8,11 @@
 unit upsample, self-attn + conv decoder stack; ``lm_head`` logits in the field HF names
 ``last_hidden_state``.
 
-**Implementation policy:** All math in this file runs through **ttnn** (no ``import torch`` / no NumPy /
-no Transformers helpers here). Host-side control flow uses Python ``int`` / ``Sequence[int]`` for repeat
-counts and sequence lengths. Discretised durations are read back via ``ttnn.to_torch`` (provided by the
-ttnn stack) only to obtain integer repeat counts for ``ttnn.repeat_interleave``, matching HF
-``torch.round(torch.expm1(...)).long()``. I/O tensors remain on device except that small readback.
+**Implementation policy:** All math in this file runs through **ttnn** (no ``torch`` / no ``numpy`` /
+no Transformers helpers). Host-side control flow uses Python ``int`` / ``Sequence[int]`` for repeat
+counts and sequence lengths. Small host readbacks use ``ttnn.from_device`` plus the host buffer API and
+stdlib ``struct`` (no torch/numpy) to unpack float32 values into integer repeat counts for
+``ttnn.repeat_interleave``, matching HF ``round(expm1(...))`` with clamp. I/O tensors stay on device except for that readback.
 
 **Whole-model compatibility:** Callers should pass ``char_count_per_id`` as a length-``enc_seq`` list of
 non-negative integers (batch size 1), matching HF ``char_count_per_id.sum(-1)`` semantics; build the
@@ -22,7 +22,8 @@ encoder 4D additive mask with the same helpers used for the text encoder PCC tes
 from __future__ import annotations
 
 import math
-from typing import Any, Optional, Sequence, Tuple, Union
+import struct
+from typing import Any, Optional, Sequence, Tuple
 
 import ttnn
 
@@ -30,6 +31,24 @@ from models.common.utility_functions import nearest_32
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
+
+
+def _host_tensor_shard_bytes(host_tensor: ttnn.Tensor) -> bytes:
+    """Single-shard host tensor payload as bytes (batch-1 / local mesh shard at ``(0, 0)``)."""
+    dbuf = host_tensor.host_buffer()
+    shard = dbuf.get_shard(ttnn.MeshCoordinate(0, 0))
+    if shard is None:
+        raise RuntimeError("Expected a local host buffer shard at MeshCoordinate(0, 0).")
+    return bytes(shard)
+
+
+def _row_major_host_f32_flat(host_tensor: ttnn.Tensor, *, num_floats: int) -> list[float]:
+    raw = _host_tensor_shard_bytes(host_tensor)
+    need = int(num_floats) * 4
+    if len(raw) < need:
+        raise RuntimeError(f"Host buffer is {len(raw)} bytes; need {need} for {num_floats} float32 values.")
+    # Little-endian float32 (device/host convention in this stack).
+    return list(struct.unpack(f"<{int(num_floats)}f", raw[:need]))
 
 
 def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
@@ -145,15 +164,18 @@ def _hard_upsample_nlc(
 
 
 def _discrete_duration_counts(log_dur_bf16: ttnn.Tensor, *, batch: int, seq: int) -> list[int]:
-    """Match HF ``torch.clamp(torch.round(torch.expm1(log_dur)), min=1).long()`` per position (host ints)."""
+    """Match HF ``clamp(round(expm1(log_dur)), min=1)`` per position (host ints, no torch/numpy)."""
     ld = ttnn.reshape(log_dur_bf16, (int(batch), int(seq)))
     ld = ttnn.typecast(ld, ttnn.float32)
     x = ttnn.expm1(ld, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.round(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.clamp(x, min=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x_h = ttnn.to_torch(ttnn.from_device(x_rm)).float().reshape(-1).tolist()
-    return [max(1, int(round(float(v)))) for v in x_h]
+    host_x = ttnn.from_device(x_rm)
+    ttnn.deallocate(x_rm)
+    ttnn.deallocate(x)
+    x_h = _row_major_host_f32_flat(host_x, num_floats=int(batch) * int(seq))
+    return [max(1, int(round(v))) for v in x_h]
 
 
 def _conv1d_same(
@@ -690,7 +712,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         inputs_embeds: ttnn.Tensor,
         encoder_attention_mask_4d: ttnn.Tensor,
         char_input_ids: ttnn.Tensor,
-        char_count_per_id: Union[Sequence[int], ttnn.Tensor],
+        char_count_per_id: Sequence[int],
         *,
         reference_discrete_durations: Optional[Sequence[int]] = None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -699,8 +721,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             inputs_embeds: ``[1, enc_seq, hidden]`` tile bf16 on device.
             encoder_attention_mask_4d: encoder self-attention additive mask ``[1, 1, enc_seq, enc_seq]``.
             char_input_ids: ``uint32`` ``[1, char_len]`` on device (padded).
-            char_count_per_id: length ``enc_seq`` sequence of ints (sum = ``char_len``), or a ``uint32``
-                ``[1, enc_seq]`` device tensor (batch 1).
+            char_count_per_id: length-``enc_seq`` sequence of non-negative ints (sum = ``char_len``), batch 1.
             reference_discrete_durations: optional per-character integer durations (length ``char_len``),
                 e.g. from [`hf_discrete_duration_counts_batch1`], to match HF unit length in PCC tests while
                 the TTNN duration predictor is converged. When ``None``, durations come from the TT predictor.
@@ -715,10 +736,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         if batch != 1:
             raise NotImplementedError("batch > 1 not supported for TT text-to-unit.")
 
-        if isinstance(char_count_per_id, ttnn.Tensor):
-            cc_list = ttnn.to_torch(ttnn.from_device(char_count_per_id)).int().reshape(-1).tolist()
-        else:
-            cc_list = [int(x) for x in char_count_per_id]
+        cc_list = [int(x) for x in char_count_per_id]
         if len(cc_list) != enc_seq:
             raise ValueError(f"char_count_per_id length {len(cc_list)} must equal enc_seq {enc_seq}.")
 
