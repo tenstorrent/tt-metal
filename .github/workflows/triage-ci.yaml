@@ -67,6 +67,23 @@ jobs:
           echo "Min runs threshold: $MIN_RUNS"
           echo ""
 
+          # --- Validate workflow exists ---
+          WORKFLOW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "${API_BASE}/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}")
+          if [[ "$WORKFLOW_STATUS" == "404" ]]; then
+            echo "ERROR: Workflow '$WORKFLOW_FILE' not found in $REPO"
+            echo ""
+            echo "Available workflows:"
+            curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "${API_BASE}/repos/${REPO}/actions/workflows?per_page=100" \
+              | jq -r '.workflows[] | "  " + (.path | split("/") | last)'
+            exit 1
+          fi
+
           # --- Helper: paginated GitHub API GET ---
           # Fetches all pages and concatenates the results from a given JSON array key.
           # Usage: gh_api_paginated "/repos/.../runs?per_page=100" ".workflow_runs"
@@ -149,7 +166,8 @@ jobs:
 
           # --- Step 1: Fetch all workflow runs in the lookback window ---
           echo "Fetching workflow runs..."
-          RUNS_URL="/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=${PER_PAGE}&created=>=${CUTOFF_DATE}&status=completed"
+          # Note: >= must be URL-encoded as %3E%3D for the GitHub API created filter
+          RUNS_URL="/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=${PER_PAGE}&created=%3E%3D${CUTOFF_DATE}&status=completed"
           ALL_RUNS=$(gh_api_paginated "$RUNS_URL" ".workflow_runs")
           TOTAL_RUNS=$(echo "$ALL_RUNS" | jq 'length')
           echo "Found $TOTAL_RUNS completed runs in the last $LOOKBACK_DAYS days"
