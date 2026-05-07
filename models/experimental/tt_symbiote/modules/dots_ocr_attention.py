@@ -128,12 +128,18 @@ class TTNNDotsOCRAttention(TTNNModule):
                 k_chunk_size=128,
                 exp_approx_mode=False,
             )
+            # Match the proven qwen_attention.py SDPA settings:
+            # fp32_dest_acc_en=False doubles dst_size from 4 to 8 tiles, ~halving
+            # the number of matmul passes inside the kernel. packer_l1_acc=False
+            # frees L1 pressure (no intermediate L1 accumulator buffer). HiFi4 is
+            # kept because softmax accuracy is more sensitive than the linear
+            # projections; with bfloat16 inputs HiFi4 here costs little.
             self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
             )
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None

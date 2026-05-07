@@ -331,7 +331,15 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
 
 
 class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
-    """Column-sharded linear with matmul + all-gather; weights in bfloat8_b (e.g. dots.ocr QKV / gate / up)."""
+    """Column-sharded linear with matmul + all-gather; weights in bfloat8_b (e.g. dots.ocr QKV / gate / up).
+
+    Compute kernel is tuned for bfloat8_b weights: HiFi2 matches the vision-tower
+    setting that runs at ~39% of peak FLOPs (perf.txt) and avoids the 2x cost of
+    HiFi4 phases with no precision benefit (input is already capped by BFP8).
+    fp32_dest_acc_en=False doubles the dst register size (4 -> 8 tiles), roughly
+    halving the number of matmul passes for these decode-bound projections —
+    matches the working pattern in qwen_attention.py / linear_intelligent.py.
+    """
 
     def move_weights_to_device_impl(self):
         if isinstance(self.tt_weight_host, torch.Tensor):
@@ -351,15 +359,19 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 
 
 class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
-    """Weight column-sharded linear with bfloat8_b weights (e.g. dots.ocr o_proj / down_proj)."""
+    """Weight column-sharded linear with bfloat8_b weights (e.g. dots.ocr o_proj / down_proj).
+
+    See TTNNLinearLLamaIColShardedWAllReduced for the compute-kernel rationale —
+    HiFi2 + fp32_dest_acc_en=False is the proven setting for bfloat8_b weights.
+    """
 
     def move_weights_to_device_impl(self):
         if isinstance(self.tt_weight_host, torch.Tensor):
@@ -379,9 +391,9 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 

@@ -421,24 +421,22 @@ class TTNNDotsVisionMLP(TTNNModule):
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
-        # Biases are 1D vectors (≤4608 elements ≈ 18 KB BF16) — pin them in L1 to skip a per-call DRAM hop.
-        bias_mem = ttnn.L1_MEMORY_CONFIG
 
-        def _to_dev(t, mc=mem):
+        def _to_dev(t):
             if t is None:
                 return None
-            return ttnn.to_device(t, self.device, memory_config=mc)
+            return ttnn.to_device(t, self.device, memory_config=mem)
 
         self.compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
         self.tt_fc1_weight = _to_dev(self.tt_fc1_weight)
-        self.tt_fc1_bias = _to_dev(self.tt_fc1_bias, bias_mem)
+        self.tt_fc1_bias = _to_dev(self.tt_fc1_bias)
         self.tt_fc2_weight = _to_dev(self.tt_fc2_weight)
-        self.tt_fc2_bias = _to_dev(self.tt_fc2_bias, bias_mem)
+        self.tt_fc2_bias = _to_dev(self.tt_fc2_bias)
         self.tt_fc3_weight = _to_dev(self.tt_fc3_weight)
-        self.tt_fc3_bias = _to_dev(self.tt_fc3_bias, bias_mem)
+        self.tt_fc3_bias = _to_dev(self.tt_fc3_bias)
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
@@ -561,17 +559,14 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
-        # patch-embed bias (1×1×1×1536, ~3 KB) and norm weight (1×1×48×32, ~3 KB) are tiny;
-        # pin them in L1 so the patch-embed proj/norm avoid a DRAM read for these scalars.
-        small_mem = ttnn.L1_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
         if self.tt_proj_weight is not None:
             self.tt_proj_weight = ttnn.to_device(self.tt_proj_weight, self.device, memory_config=mem)
         if self.tt_proj_bias is not None:
-            self.tt_proj_bias = ttnn.to_device(self.tt_proj_bias, self.device, memory_config=small_mem)
+            self.tt_proj_bias = ttnn.to_device(self.tt_proj_bias, self.device, memory_config=mem)
         if self.tt_norm_weight is not None:
-            self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=small_mem)
+            self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=mem)
 
         self.vision_matmul_compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
@@ -771,22 +766,20 @@ class TTNNDotsVisionAttention(TTNNModule):
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
-        # Biases are 1D vectors (≤4608 elements ≈ 18 KB BF16) — pin them in L1 to skip a per-call DRAM hop.
-        bias_mem = ttnn.L1_MEMORY_CONFIG
 
-        def _to_dev(t, mc=mem):
+        def _to_dev(t):
             if t is None:
                 return None
-            return ttnn.to_device(t, self.device, memory_config=mc)
+            return ttnn.to_device(t, self.device, memory_config=mem)
 
         self.compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
         self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
-        self.tt_qkv_bias = _to_dev(self.tt_qkv_bias, bias_mem)
+        self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
-        self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias, bias_mem)
+        self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
 
         self.sdpa_compute_kernel_config = _vision_device_compute_config(
             self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
@@ -807,6 +800,17 @@ class TTNNDotsVisionAttention(TTNNModule):
         )
 
     def _get_sdpa_program_config(self, seq_len: int):
+        """Chunked SDPA program config for the vision tower.
+
+        SDPA is the single biggest device-time consumer in the dots-OCR vision tower
+        (~39% of total per perf.txt). Notes:
+          - Short sequences (≤ 2048) keep TTNN auto-config — the kernel picks a
+            chunk equal to seq_len, which is faster than any sub-chunk.
+          - For long sequences use chunk=256. Larger (e.g. 512) blows past the
+            1.5 MB Wormhole L1 because the FP32 softmax intermediate alone is ~1 MB.
+          - ``exp_approx_mode`` is left at its TTNN default (fast path); turning it
+            off costs ~5% on SDPA per the perf11 vs perf comparison.
+        """
         if seq_len <= 2048:
             return None
         chunk_size = min(256, seq_len)
