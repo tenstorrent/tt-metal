@@ -43,6 +43,7 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
     const uint32_t n_heads = input.padded_shape()[1];
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
 
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
@@ -98,7 +99,8 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
     // when the shard grid is smaller than the device grid but still covers all active cores.
     const uint32_t num_active_cores_upper_bound = batch_parallel_factor * seq_parallel_factor;
     const bool cos_sin_sharded_reload =
-        cos_sin_sharded && (seq_per_core > 1 || num_active_cores_upper_bound > cos.shard_spec()->grid.num_cores());
+        cos_sin_sharded && (seq_per_core > 1 || num_active_cores_upper_bound > cos.shard_spec()->grid.num_cores() ||
+                            seq_len_t > cos_seq_len_t);
     if (cos_sin_sharded) {
         num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }
@@ -272,6 +274,7 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
         (std::uint32_t)freq_per_head,
         (std::uint32_t)trans_mat_use_global_cb,
         (std::uint32_t)cos_sin_sharded,
+        (std::uint32_t)cos_seq_len_t,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);

@@ -5,6 +5,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+FORCE_INLINE void zero_tile_at(uint32_t l1_write_addr, uint32_t tile_bytes) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
+    for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
+        ptr[i] = 0;
+    }
+}
+
 void kernel_main() {
     uint32_t argrt = 0;
     uint32_t src_addr = get_arg_val<uint32_t>(argrt++);
@@ -24,7 +31,8 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr bool freq_per_head = get_compile_time_arg_val(7) == 1;
-    constexpr auto input_args = TensorAccessorArgs<8>();
+    constexpr uint32_t cos_Ht = get_compile_time_arg_val(8);
+    constexpr auto input_args = TensorAccessorArgs<9>();
     constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
@@ -88,10 +96,11 @@ void kernel_main() {
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 uint32_t cos_sin_curr_idx;
                 if constexpr (freq_per_head) {
-                    cos_sin_curr_idx = head_num * Ht * Wt + seq_tile * Wt;
+                    cos_sin_curr_idx = head_num * cos_Ht * Wt + seq_tile * Wt;
                 } else {
                     cos_sin_curr_idx = seq_tile * Wt;
                 }
+                const bool read_cos_sin = seq_tile < cos_Ht;
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // Read input into CB
                     noc_async_read_tile(input_curr_idx, s0, input_l1_write_addr);
@@ -99,15 +108,16 @@ void kernel_main() {
                     input_l1_write_addr += input_tile_bytes;
 
                     if (!done_sin_cos) {
-                        // Read sin into CB
-                        noc_async_read_tile(cos_sin_curr_idx, s2, sin_l1_write_addr);
+                        if (read_cos_sin) {
+                            noc_async_read_tile(cos_sin_curr_idx, s2, sin_l1_write_addr);
+                            noc_async_read_tile(cos_sin_curr_idx, s1, cos_l1_write_addr);
+                            cos_sin_curr_idx++;
+                        } else {
+                            zero_tile_at(sin_l1_write_addr, sin_tile_bytes);
+                            zero_tile_at(cos_l1_write_addr, cos_tile_bytes);
+                        }
                         sin_l1_write_addr += sin_tile_bytes;
-
-                        // Read cos into CB
-                        noc_async_read_tile(cos_sin_curr_idx, s1, cos_l1_write_addr);
                         cos_l1_write_addr += cos_tile_bytes;
-
-                        cos_sin_curr_idx++;
                     }
                 }
 

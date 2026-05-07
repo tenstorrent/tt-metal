@@ -43,6 +43,7 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     const uint32_t n_heads = input.padded_shape()[1];
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
 
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
@@ -164,6 +165,7 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)seq_len_t,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)freq_per_head,
+        (std::uint32_t)cos_seq_len_t,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);

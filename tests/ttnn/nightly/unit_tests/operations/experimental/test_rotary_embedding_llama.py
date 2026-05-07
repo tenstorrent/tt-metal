@@ -607,6 +607,95 @@ def apply_rotary_emb_qk_real(
     return out
 
 
+def _host_first_from_torch(torch_tensor, device, **kwargs):
+    memory_config = kwargs.pop("memory_config", None)
+    host_tensor = ttnn.from_torch(torch_tensor, device=None, **kwargs)
+    if memory_config is None:
+        return ttnn.to_device(host_tensor, device=device)
+    return ttnn.to_device(host_tensor, device=device, memory_config=memory_config)
+
+
+def _direct_from_torch(torch_tensor, device, **kwargs):
+    return ttnn.from_torch(torch_tensor, device=device, **kwargs)
+
+
+def _shard_cos_sin(cos_tt, sin_tt, device, head_dim):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    num_cores = compute_grid_size.x * compute_grid_size.y
+    core_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, nearest_32(head_dim)),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.to_memory_config(cos_tt, memory_config), ttnn.to_memory_config(sin_tt, memory_config)
+
+
+def _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, rope_seq_len, cos_sin_sharded):
+    torch.manual_seed(0)
+    head_dim = 128
+    q = torch.randn((1, 64, q_seq_len, head_dim), dtype=torch.float32)
+    cos, sin = compute_gather_cos_sin(
+        dhead=head_dim,
+        end=2 * rope_seq_len,
+        position_ids=torch.arange(rope_seq_len),
+    )
+    trans_mat = get_rot_transformation_mat(dhead=head_dim)
+
+    tensor_kwargs = {
+        "dtype": ttnn.bfloat16,
+        "layout": ttnn.TILE_LAYOUT,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+    }
+
+    q_tt = _host_first_from_torch(q, device, **tensor_kwargs.copy())
+    sin_tt = _host_first_from_torch(sin, device, **tensor_kwargs.copy())
+    trans_mat_tt = _host_first_from_torch(trans_mat, device, **tensor_kwargs.copy())
+
+    host_cos_tt = _host_first_from_torch(cos, device, **tensor_kwargs.copy())
+    direct_cos_tt = _direct_from_torch(cos, device, **tensor_kwargs.copy())
+    direct_sin_tt = sin_tt
+    if cos_sin_sharded:
+        direct_cos_tt, direct_sin_tt = _shard_cos_sin(
+            direct_cos_tt, _direct_from_torch(sin, device, **tensor_kwargs.copy()), device, head_dim
+        )
+
+    host_out_tt = ttnn.experimental.rotary_embedding_llama(
+        q_tt, host_cos_tt, sin_tt, trans_mat_tt, is_decode_mode=False
+    )
+    direct_out_tt = ttnn.experimental.rotary_embedding_llama(
+        q_tt, direct_cos_tt, direct_sin_tt, trans_mat_tt, is_decode_mode=False
+    )
+
+    host_out = ttnn.to_torch(host_out_tt)
+    direct_out = ttnn.to_torch(direct_out_tt)
+
+    assert torch.isfinite(direct_out.float()).all()
+    assert direct_out.shape == host_out.shape
+    assert torch.equal(direct_out, host_out)
+
+
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@pytest.mark.parametrize(
+    "q_seq_len, rope_seq_len",
+    (
+        (33, 32),
+        (32, 1),
+        (33, 33),
+    ),
+    ids=("q33_rope32", "q32_rope1", "q33_rope33"),
+)
+@pytest.mark.parametrize("cos_sin_sharded", (False, True), ids=("interleaved_cos_sin", "sharded_cos_sin"))
+def test_rotary_embedding_llama_direct_cos_padding_tail(q_seq_len, rope_seq_len, cos_sin_sharded, device):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
+        pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
+
+    _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, rope_seq_len, cos_sin_sharded)
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "batch, seq_len",
