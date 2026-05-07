@@ -2,9 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import logging
 import os
 import time
+import urllib.request
+from pathlib import Path
 
 import pytest
 import soundfile as sf
@@ -242,6 +245,121 @@ def _register_code2wav_nn_to_ttnn(model) -> dict:
     m_hf = register_module_replacement_dict(code2wav, nn_to_ttnn2, model_config=None)
     m_prim = register_module_replacement_dict(code2wav, nn_to_ttnn, model_config=None)
     return {**m_hf, **m_prim}
+
+
+_QWEN_OMNI_MEDIA_CACHE_DIR = Path(
+    os.environ.get(
+        "TT_SYMBIOTE_QWEN_OMNI_MEDIA_CACHE_DIR",
+        str(Path.home() / ".cache" / "tt-symbiote" / "qwen-omni-media"),
+    )
+)
+
+
+def _cache_remote_media_file(url: str) -> str:
+    """Download URL once into the local cache and return the path. Sidesteps audioread's
+    ffmpeg URL-streaming path, which fails on this host with CommunicationError on the
+    upstream OSS bucket.
+    """
+    parsed = url.split("/")[-1] or "media"
+    suffix = ""
+    if "." in parsed:
+        suffix = "." + parsed.split(".")[-1]
+    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+    _QWEN_OMNI_MEDIA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    local_path = _QWEN_OMNI_MEDIA_CACHE_DIR / (digest + suffix)
+    if not local_path.exists() or local_path.stat().st_size == 0:
+        logger.info("[qwen-omni] caching %s -> %s", url, local_path)
+        with urllib.request.urlopen(url, timeout=60) as resp, open(local_path, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+    return str(local_path)
+
+
+def _localize_remote_media(conversation):
+    """Return a copy of conversation with every http(s) image/audio/video URL replaced by a
+    cached local path. Idempotent for already-local paths."""
+    out = []
+    for turn in conversation:
+        new_turn = dict(turn)
+        content = turn.get("content")
+        if isinstance(content, list):
+            new_content = []
+            for part in content:
+                if not isinstance(part, dict):
+                    new_content.append(part)
+                    continue
+                np = dict(part)
+                for key in ("image", "audio", "video"):
+                    val = np.get(key)
+                    if isinstance(val, str) and val.startswith(("http://", "https://")):
+                        np[key] = _cache_remote_media_file(val)
+                new_content.append(np)
+            new_turn["content"] = new_content
+        out.append(new_turn)
+    return out
+
+
+_QWEN_OMNI_TRACY_LAYER_LISTS = (
+    ("thinker", "model", "layers"),
+    ("thinker", "visual", "blocks"),
+    ("thinker", "audio_tower", "layers"),
+    ("talker", "model", "layers"),
+    ("talker", "code_predictor", "model", "layers"),
+    ("code2wav", "pre_transformer", "layers"),
+)
+
+
+def _resolve_attr_path(root, path):
+    obj = root
+    for name in path:
+        obj = getattr(obj, name, None)
+        if obj is None:
+            return None
+    return obj
+
+
+def _apply_tracy_layer_trim(model) -> None:
+    """When TT_SYMBIOTE_QWEN_OMNI_TRACY_LAYERS=N is set, slice every repeated decoder/visual/audio
+    block list down to N entries before TTNN replacement.
+
+    Per Suhail's profiling guidance: device time per block is enough; we don't need N copies.
+    Returns silently with no effect when the env var is unset or non-positive.
+    """
+    raw = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TRACY_LAYERS")
+    if not raw:
+        return
+    try:
+        n = int(raw)
+    except ValueError:
+        return
+    if n <= 0:
+        return
+    trimmed = []
+    for path in _QWEN_OMNI_TRACY_LAYER_LISTS:
+        layer_list = _resolve_attr_path(model, path)
+        if layer_list is None:
+            continue
+        try:
+            current = len(layer_list)
+        except TypeError:
+            continue
+        if current <= n:
+            continue
+        try:
+            del layer_list[n:]
+        except (TypeError, AttributeError):
+            parent = _resolve_attr_path(model, path[:-1])
+            if parent is None:
+                continue
+            setattr(parent, path[-1], layer_list[:n])
+        trimmed.append((".".join(path), current, n))
+    if trimmed:
+        logger.info("[tracy-trim] TT_SYMBIOTE_QWEN_OMNI_TRACY_LAYERS=%d sliced:", n)
+        for path_str, before, after in trimmed:
+            logger.info("  %s: %d -> %d", path_str, before, after)
 
 
 def _register_code_predictor_nn_to_ttnn(model) -> dict:
@@ -773,6 +891,10 @@ def test_qwen_omni(mesh_device):
     )
     model.to(dtype=torch.bfloat16)
 
+    # Tracy: trim repeated decoder / visual / audio / code2wav block lists before TTNN
+    # replacement so the trace contains one block per stack rather than N copies.
+    _apply_tracy_layer_trim(model)
+
     processor = Qwen3OmniMoeProcessor.from_pretrained(MODEL_PATH)
 
     # Multimodal: cough.wav is **input** audio (what the model should "hear"), not a defect in TTS output.
@@ -789,6 +911,9 @@ def test_qwen_omni(mesh_device):
             ],
         },
     ]
+
+    # Localize remote media so audio loading does not depend on a working ffmpeg URL streamer.
+    conversation = _localize_remote_media(conversation)
 
     # Set whether to use audio in video
     USE_AUDIO_IN_VIDEO = True
@@ -870,19 +995,63 @@ def test_qwen_omni(mesh_device):
     talker_top_p = 0.6
     talker_temperature = 0.5
     thinker_max_new_tokens = 32
-    t_start = time.perf_counter()
-    text_ids, audio = model.generate(
-        **inputs,
-        speaker=talker_speaker,
-        thinker_return_dict_in_generate=True,
-        max_new_tokens=thinker_max_new_tokens,
-        use_audio_in_video=USE_AUDIO_IN_VIDEO,
-        talker_do_sample=talker_do_sample,
-        talker_max_new_tokens=talker_max_new_tokens,
-        talker_top_k=talker_top_k,
-        talker_top_p=talker_top_p,
-        talker_temperature=talker_temperature,
+
+    # Tracy mode: bound decode so the trace doesn't drown in N decode-step compiles. Active only
+    # when TT_SYMBIOTE_QWEN_OMNI_TRACY_LAYERS is set; the un-trimmed run keeps the full caps.
+    if os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TRACY_LAYERS"):
+        thinker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_THINKER_MAX_NEW_TOKENS", "2"))
+        talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "2"))
+        logger.info(
+            "[tracy] reduced decode caps: thinker_max_new_tokens=%d, talker_max_new_tokens=%d",
+            thinker_max_new_tokens,
+            talker_max_new_tokens,
+        )
+
+    # Tracy thinker-only mode: skip the talker pipeline entirely so the on-device profiler buffer
+    # doesn't overflow on the autoregressive code-predictor stage. Required for capturing a clean
+    # ops_perf_results_*.csv on Qwen-Omni; talker/code2wav perf is captured separately.
+    thinker_only_tracy = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TRACY_THINKER_ONLY", "").lower() in (
+        "1",
+        "true",
+        "yes",
     )
+    if thinker_only_tracy:
+        logger.info("[tracy] thinker-only mode: return_audio=False, skipping talker sampling kwargs")
+
+    t_start = time.perf_counter()
+    if thinker_only_tracy:
+        # return_audio=False + thinker_max_new_tokens cap mirrors the TTFT probe pattern that we
+        # know caps the thinker at exactly N forward passes (top-level max_new_tokens does NOT
+        # cap the thinker on Qwen3-Omni's wrapper — it loops decode steps on its own).
+        gen_out = model.generate(
+            **inputs,
+            return_audio=False,
+            thinker_max_new_tokens=thinker_max_new_tokens,
+            use_audio_in_video=USE_AUDIO_IN_VIDEO,
+        )
+        # Defensive: handle both tensor and dict-like (sequences) return shapes.
+        if isinstance(gen_out, torch.Tensor):
+            text_ids = gen_out
+        elif hasattr(gen_out, "sequences"):
+            text_ids = gen_out.sequences
+        elif isinstance(gen_out, (tuple, list)) and len(gen_out) > 0:
+            text_ids = gen_out[0]
+        else:
+            text_ids = gen_out
+        audio = None
+    else:
+        text_ids, audio = model.generate(
+            **inputs,
+            speaker=talker_speaker,
+            thinker_return_dict_in_generate=True,
+            max_new_tokens=thinker_max_new_tokens,
+            use_audio_in_video=USE_AUDIO_IN_VIDEO,
+            talker_do_sample=talker_do_sample,
+            talker_max_new_tokens=talker_max_new_tokens,
+            talker_top_k=talker_top_k,
+            talker_top_p=talker_top_p,
+            talker_temperature=talker_temperature,
+        )
     ttnn.synchronize_device(mesh_device)
     total_time_s = time.perf_counter() - t_start
 
@@ -913,3 +1082,91 @@ def test_qwen_omni(mesh_device):
             samplerate=_QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ,
         )
         print("Audio output saved to output.wav")
+
+
+def test_qwen_omni_thinker_logits_pcc(mesh_device):
+    """Composed thinker logits PCC: HF reference vs the same model with TTNN module replacements.
+
+    Runs a single thinker forward pass on a tiny synthetic prompt (no audio / video / image), once
+    on a pure-HF model and once on a TTNN-swapped model. Compares the lm_head logits with the
+    project-standard ``comp_pcc``. This is the only end-to-end accuracy gate in this file; the
+    block-level PCC tests above only cover individual modules.
+
+    The test uses minimal sequence length (8 tokens) and trims thinker decoder layers to keep
+    runtime/memory tractable on T3K. Set TT_SYMBIOTE_QWEN_OMNI_PCC_LAYERS to override the trim
+    depth (default 2). Skipped on meshes smaller than 8 devices because the thinker MoE TTNN
+    path is T3K-shaped.
+    """
+    _force_t3k_runtime_guard_for_pcc(mesh_device)
+
+    apply_qwen3_omni_talker_prepare_inputs_fix()
+
+    omni_config = Qwen3OmniMoeConfig.from_pretrained(MODEL_NAME)
+    if getattr(omni_config, "initializer_range", None) is None:
+        omni_config.initializer_range = 0.02
+
+    pcc_layers = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_PCC_LAYERS", "2"))
+
+    def _trim_thinker_layers(m):
+        try:
+            del m.thinker.model.layers[pcc_layers:]
+        except (TypeError, AttributeError):
+            m.thinker.model.layers = m.thinker.model.layers[:pcc_layers]
+
+    logger.info("[pcc] loading HF reference model (thinker only, %d layers)", pcc_layers)
+    hf_model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+        MODEL_NAME,
+        config=omni_config,
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+    )
+    hf_model.to(dtype=torch.bfloat16)
+    _trim_thinker_layers(hf_model)
+    hf_model.eval()
+    torch.set_grad_enabled(False)
+
+    seq_len = 8
+    text_config = omni_config.thinker_config.text_config
+    vocab_size = int(text_config.vocab_size)
+    input_ids = torch.randint(low=0, high=vocab_size, size=(1, seq_len), dtype=torch.long)
+
+    logger.info("[pcc] HF thinker forward")
+    with torch.no_grad():
+        hf_logits = hf_model.thinker(input_ids=input_ids).logits
+
+    del hf_model
+
+    logger.info("[pcc] loading TTNN model and applying module replacements")
+    tt_model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+        MODEL_NAME,
+        config=omni_config,
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+    )
+    tt_model.to(dtype=torch.bfloat16)
+    _trim_thinker_layers(tt_model)
+
+    replace_thinker_lm_head_with_ttnn(tt_model.thinker)
+    register_module_replacement_dict(tt_model.thinker, nn_to_ttnn2, model_config=None)
+    register_module_replacement_dict(tt_model.thinker, nn_to_ttnn1, model_config=None)
+    _upgrade_audio_encoder_conv_out_linear(tt_model.thinker)
+    set_device(tt_model.thinker, mesh_device, device_init=QwenOmniDeviceInit)
+    _patch_thinker_talker_device_dtype(tt_model)
+    tt_model.eval()
+
+    logger.info("[pcc] TTNN thinker forward")
+    with torch.no_grad():
+        tt_logits = tt_model.thinker(input_ids=input_ids).logits
+
+    hf_t = _resolve_torch_tensor_for_pcc(hf_logits, mesh_device=None, tuple_first=False)
+    tt_t = _resolve_torch_tensor_for_pcc(tt_logits, mesh_device=mesh_device, tuple_first=False)
+    if hf_t.shape != tt_t.shape:
+        # TTNN concat may widen along last dim (replicated mesh shards); compare the matched slice.
+        last = min(hf_t.shape[-1], tt_t.shape[-1])
+        hf_t = hf_t[..., :last]
+        tt_t = tt_t[..., :last]
+
+    passing, pcc = comp_pcc(hf_t, tt_t)
+    logger.info("[pcc] thinker logits PCC=%s passing=%s", pcc, passing)
+    print(f"COMPOSED_THINKER_LOGITS_PCC={pcc}")
+    assert passing, f"Thinker composed logits PCC too low: {pcc}"

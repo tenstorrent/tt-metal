@@ -1833,8 +1833,10 @@ class TTNNQwen3OmniMoeVisionRotaryEmbedding(TTNNModule):
     def from_torch(cls, torch_layer):
         m = cls()
         m._fallback_torch_layer = torch_layer
-        m.dim = int(torch_layer.dim)
-        m.theta = float(torch_layer.theta)
+        # transformers >= 4.57: dim/theta moved to constructor-only locals on the rotary module;
+        # recover dim from inv_freq (len = dim // 2) and fall back to the standard theta.
+        m.dim = int(getattr(torch_layer, "dim", None) or torch_layer.inv_freq.shape[0] * 2)
+        m.theta = float(getattr(torch_layer, "theta", 10000.0))
         m._inv_freq_cpu = torch_layer.inv_freq.detach().float().contiguous().clone()
         return m
 
@@ -4364,9 +4366,11 @@ class TTNNQwen3OmniThinkerMoE(TTNNModule):
         module._fallback_torch_layer = thinker_mlp
         g = thinker_mlp.gate
         module._gate_w_torch = g.weight.data.clone()
-        module.top_k = int(g.top_k)
-        module.norm_topk_prob = bool(g.norm_topk_prob)
-        module.num_experts = int(g.num_experts)
+        # transformers >= 4.57: norm_topk_prob was dropped from the thinker router; default to False
+        # so the TTNN path keeps router_top_value as-is (matches HF's torch.topk(router_probs, k) flow).
+        module.top_k = int(getattr(g, "top_k", None) or getattr(thinker_mlp, "top_k", 8))
+        module.norm_topk_prob = bool(getattr(g, "norm_topk_prob", False))
+        module.num_experts = int(getattr(g, "num_experts", None) or getattr(thinker_mlp, "num_experts", 0))
         experts_for_tt = _thinker_experts_adapter(thinker_mlp)
         module.experts = TTNNExperts.from_torch(experts_for_tt)
         return module

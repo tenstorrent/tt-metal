@@ -1294,3 +1294,16 @@ def get_tensor_run_implementation():
             get_active_dispatcher() == cpu_dispatcher
         ), f"CPU dispatcher needs to be active to run {result.__name__} run mode. `export TT_SYMBIOTE_DISPATCHER=CPU`"
     return result
+
+
+# Backward-compat re-export: ``DistributedTensorConfig`` was relocated to
+# ``models.experimental.tt_symbiote.models.qwen_omni.distributed_config`` when the qwen-omni
+# modules were consolidated, but multiple consumers (``modules/embedding.py``,
+# ``modules/qwen_attention.py``, ``models/qwen_omni/qwen_omni_modules.py``,
+# ``utils/groot_utils.py``) still import it from ``core.run_config``. Re-export here so the
+# legacy import path keeps working without churning every call site.
+from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import (  # noqa: E402,F401
+    CCLManagerConfig,
+    DistributedConfig,
+    DistributedTensorConfig,
+)
