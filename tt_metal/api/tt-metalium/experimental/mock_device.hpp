@@ -51,8 +51,8 @@ std::optional<std::string> get_mock_cluster_desc();
 //         experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()));
 //
 // Supported configurations (see implementation for the authoritative list):
-//   WORMHOLE_B0: 1, 2, 4, 8
-//   BLACKHOLE:   1, 2
+//   WORMHOLE_B0: 1, 2, 4, 8, 32
+//   BLACKHOLE:   1, 2, 4, 8       (32-chip descriptor not yet checked in)
 //   QUASAR:      1
 std::optional<std::string> get_mock_cluster_desc_name(tt::ARCH arch, uint32_t num_chips);
 
