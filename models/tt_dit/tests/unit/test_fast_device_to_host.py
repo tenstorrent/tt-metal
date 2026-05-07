@@ -24,7 +24,14 @@ import torch
 import ttnn
 
 from ...parallel.manager import CCLManager
-from ...utils.tensor import _reassemble_2d, fast_device_to_host, float_to_uint8, typed_tensor_2dshard
+from ...utils.tensor import (
+    _get_default_reassemble_pool,
+    _reassemble_2d,
+    _to_torch_zero_copy,
+    fast_device_to_host,
+    float_to_uint8,
+    typed_tensor_2dshard,
+)
 from ...utils.test import line_params, ring_params
 
 # Wan 2.2 VAE output — BCTHW (H and W are parametrized per-test)
@@ -61,6 +68,130 @@ def _make_concat_dims() -> list[int | None]:
 
 def _make_ccl_manager(mesh_device: ttnn.MeshDevice, num_links: int, topology: ttnn.Topology) -> CCLManager | None:
     return CCLManager(mesh_device, num_links=num_links, topology=topology)
+
+
+# ---------------------------------------------------------------------------
+# YUV conversion helpers (BT.601, [-1, 1] bf16 -> uint8)
+# ---------------------------------------------------------------------------
+
+# These must match yuv_conversion.hpp::yuv_bt601_coefficients() and the values
+# in test_yuv_conversion.py.
+_YUV_Y_COEFF = (32.74, 64.28, 12.48, 125.5)
+_YUV_CB_COEFF = (-18.90, -37.10, 56.00, 128.0)
+_YUV_CR_COEFF = (56.00, -46.89, -9.11, 128.0)
+
+
+def _host_yuv_reference(rgb_chwt: torch.Tensor):
+    """Pure-PyTorch BT.601 reference: CHWT bf16 in [-1,1] -> (Y, Cb, Cr) uint8.
+
+    Y is full-res (H, W, T); Cb/Cr are 4:2:0 subsampled to (H/2, W/2, T) via
+    the mean of each non-overlapping 2x2 block in (H, W) before quantise.
+    """
+    R = rgb_chwt[0].float()
+    G = rgb_chwt[1].float()
+    B = rgb_chwt[2].float()
+
+    def _quantise(coeff):
+        w_r, w_g, w_b, off = coeff
+        return (w_r * R + w_g * G + w_b * B + off + 0.5).clamp(0, 255).to(torch.uint8)
+
+    Y = _quantise(_YUV_Y_COEFF)
+
+    def _subsample(coeff):
+        w_r, w_g, w_b, off = coeff
+        val = w_r * R + w_g * G + w_b * B + off  # (H, W, T) float
+        H_, W_, T_ = val.shape
+        val = val.view(H_ // 2, 2, W_ // 2, 2, T_).mean(dim=(1, 3))  # (H/2, W/2, T)
+        return (val + 0.5).clamp(0, 255).to(torch.uint8)
+
+    return Y, _subsample(_YUV_CB_COEFF), _subsample(_YUV_CR_COEFF)
+
+
+def _yuv_planar_d2h(
+    tt_Y: ttnn.Tensor,
+    tt_Cb: ttnn.Tensor,
+    tt_Cr: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    H: int,
+    W: int,
+    T_: int,
+) -> np.ndarray:
+    """Batched D2H of the YUV outputs into ffmpeg yuv420p planar uint8.
+
+    Caller is expected to have already permuted the kernel outputs from BHWT
+    to BCTHW on device (B=1) — that's much cheaper than reshuffling on host
+    because each per-shard scatter then reads a contiguous ``(T, h, w)``
+    source instead of a strided one.  Per-shard input shapes:
+
+      * tt_Y:        ``(1, T, h_per_y, w_per_y)``
+      * tt_Cb/tt_Cr: ``(1, T, h_per_uv, w_per_uv)``
+
+    Output: ``(T, H*W + 2*(H/2 * W/2))`` numpy uint8 — per-frame
+    ``[Y plane | Cb plane | Cr plane]`` in row-major.
+
+    Kicks off all three ``cpu(blocking=False)`` calls before a single
+    ``synchronize_device`` so the reads overlap, then dispatches the 96
+    per-shard scatters across the shared reassembly thread pool using
+    torch's strided-copy backend (the ``torch_threaded`` pattern that won
+    every host-concat benchmark).
+    """
+    Hu, Wu = H // 2, W // 2
+    hw = H * W
+    uv = Hu * Wu
+    row_stride = hw + 2 * uv
+
+    TP, SP = tuple(mesh_device.shape)
+    h_per_y, w_per_y = H // TP, W // SP
+    h_per_uv, w_per_uv = Hu // TP, Wu // SP
+
+    # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
+    host_Y = tt_Y.cpu(blocking=False)
+    host_Cb = tt_Cb.cpu(blocking=False)
+    host_Cr = tt_Cr.cpu(blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+    mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
+
+    def _extract(host_tensor):
+        host_shards = ttnn.get_device_tensors(host_tensor)
+        logical_shape = list(host_shards[0].shape)
+        trim = tuple(slice(0, d) for d in logical_shape)
+        return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+
+    Y_shards = _extract(host_Y)  # each (1, T, h_per_y, w_per_y) — post-permute CTHW
+    Cb_shards = _extract(host_Cb)  # each (1, T, h_per_uv, w_per_uv)
+    Cr_shards = _extract(host_Cr)
+
+    # Allocate the planar output and view each plane region as a (T, h, w)
+    # strided torch tensor (no copy, shares storage with `out`).
+    out = np.empty((T_, row_stride), dtype=np.uint8)
+    out_t = torch.from_numpy(out)
+    y_view = out_t.as_strided((T_, H, W), (row_stride, W, 1), 0)
+    u_view = out_t.as_strided((T_, Hu, Wu), (row_stride, Wu, 1), hw)
+    v_view = out_t.as_strided((T_, Hu, Wu), (row_stride, Wu, 1), hw + uv)
+
+    pool = _get_default_reassemble_pool()
+
+    def _write(view, shard, r, c, h_per, w_per):
+        # shard (1, T, h_per, w_per) -> squeeze(0) -> contiguous (T, h_per, w_per).
+        # No host-side permute: the CTHW layout was set up on device.
+        src = shard.squeeze(0)
+        view[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per].copy_(src)
+
+    futures = []
+    for coord, shard in zip(mesh_coords, Y_shards):
+        r, c = int(coord[0]), int(coord[1])
+        futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y))
+    for coord, shard in zip(mesh_coords, Cb_shards):
+        r, c = int(coord[0]), int(coord[1])
+        futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv))
+    for coord, shard in zip(mesh_coords, Cr_shards):
+        r, c = int(coord[0]), int(coord[1])
+        futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv))
+    for f in futures:
+        f.result()
+
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +349,276 @@ class TestFastDeviceToHost:
             print(f"  Iterations:    {n_iters}")
             print(f"  Average time:  {avg_s * 1000:.1f} ms")
             print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
+
+
+# ---------------------------------------------------------------------------
+# TestYUVConversionMesh — on-device YUV + D2H + planar concat on a 4x8 mesh
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mesh_device, num_links, device_params, topology",
+    [[(4, 8), 2, line_params, ttnn.Topology.Linear]],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+class TestYUVConversionMesh:
+    """End-to-end on-device YUV conversion + D2H + planar concat on 4x8, 720p.
+
+    Uses ``ttnn.experimental.yuv_conversion`` (see test_yuv_conversion.py for
+    the single-device kernel test).  Input is CHWT bf16 in [-1, 1]; outputs
+    are 3 uint8 tensors (Y full-res, Cb/Cr 4:2:0).  Sharding: H on TP axis 0,
+    W on SP axis 1 — per-shard CHWT is (3, 180, 160, 81).
+
+    Run with:
+        pytest models/tt_dit/tests/unit/test_fast_device_to_host.py::TestYUVConversionMesh -s
+    """
+
+    @staticmethod
+    def _shard_input(host_chwt: torch.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+        """Shard a CHWT (3, H, W, T) bf16 tensor: H on TP axis 0, W on SP axis 1."""
+        return typed_tensor_2dshard(
+            host_chwt,
+            mesh_device,
+            shard_mapping={TP_AXIS: 1, SP_AXIS: 2},  # mesh axis -> CHWT dim
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+
+    @staticmethod
+    def _coefficients():
+        return ttnn.experimental.YUVCoefficients(y=list(_YUV_Y_COEFF), cb=list(_YUV_CB_COEFF), cr=list(_YUV_CR_COEFF))
+
+    @staticmethod
+    def _yuv_to_cthw(tt_Y, tt_Cb, tt_Cr):
+        """Permute YUV outputs from BHWT (1, H, W, T) to BCTHW (1, T, H, W).
+
+        This is much cheaper than reshuffling on host: each device just permutes
+        its local shard, no cross-device communication.  The resulting per-shard
+        layout has T outermost in source memory, which makes the host scatter
+        a contiguous-source -> strided-dest copy (numpy/torch fast path) instead
+        of a fully-strided one.
+        """
+        return (
+            ttnn.permute(tt_Y, (0, 3, 1, 2)),
+            ttnn.permute(tt_Cb, (0, 3, 1, 2)),
+            ttnn.permute(tt_Cr, (0, 3, 1, 2)),
+        )
+
+    def test_correctness(self, mesh_device, num_links, device_params, topology):
+        """CHWT bf16 -> on-device YUV -> per-component D2H -> compare to host."""
+        H, W, T_ = 720, 1280, 81
+        Hu, Wu = H // 2, W // 2
+
+        gen = torch.Generator().manual_seed(42)
+        cpu_chwt = torch.rand(3, H, W, T_, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+        ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(cpu_chwt)
+
+        tt_in = self._shard_input(cpu_chwt, mesh_device)
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, self._coefficients())
+        # On-device permute BHWT -> BCTHW so the host scatter reads a contiguous
+        # (T, h, w) source.  See `_yuv_to_cthw` docstring.
+        tt_Y, tt_Cb, tt_Cr = self._yuv_to_cthw(tt_Y, tt_Cb, tt_Cr)
+
+        # After permute the kernel outputs are (1, T, H, W) and (1, T, H/2, W/2).
+        # Mesh axis 0 -> tensor dim 2 (H), mesh axis 1 -> tensor dim 3 (W).
+        concat_dims = [2, 3]
+        dev_Y = fast_device_to_host(tt_Y, mesh_device, concat_dims, ccl_manager=ccl_manager)
+        dev_Cb = fast_device_to_host(tt_Cb, mesh_device, concat_dims, ccl_manager=ccl_manager)
+        dev_Cr = fast_device_to_host(tt_Cr, mesh_device, concat_dims, ccl_manager=ccl_manager)
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank != 0:
+            return  # Non-root ranks: nothing to verify
+
+        assert dev_Y is not None and dev_Cb is not None and dev_Cr is not None
+        assert dev_Y.shape == torch.Size([1, T_, H, W]), f"Y shape {dev_Y.shape}"
+        assert dev_Cb.shape == torch.Size([1, T_, Hu, Wu]), f"Cb shape {dev_Cb.shape}"
+        assert dev_Cr.shape == torch.Size([1, T_, Hu, Wu]), f"Cr shape {dev_Cr.shape}"
+
+        # dev_* are (1, T, H, W) post-permute.  Squeeze B and bring back to
+        # HWT order so they line up with the host reference.
+        dev_Y_hwt = dev_Y.squeeze(0).permute(1, 2, 0).contiguous()  # (H, W, T)
+        dev_Cb_hwt = dev_Cb.squeeze(0).permute(1, 2, 0).contiguous()  # (H/2, W/2, T)
+        dev_Cr_hwt = dev_Cr.squeeze(0).permute(1, 2, 0).contiguous()
+
+        # Spot-check a few positions before the full diff so a failure points
+        # at the data flow rather than the comparison expression.
+        for h, w, t in [(0, 0, 0), (10, 20, 5), (H - 1, W - 1, T_ - 1), (H // 2, W // 3, T_ // 4)]:
+            print(f"  Y[{h:>3},{w:>4},{t:>2}]  dev={int(dev_Y_hwt[h, w, t])}  ref={int(ref_Y[h, w, t])}")
+
+        diff_Y = (dev_Y_hwt.int() - ref_Y.int()).abs()
+        diff_Cb = (dev_Cb_hwt.int() - ref_Cb.int()).abs()
+        diff_Cr = (dev_Cr_hwt.int() - ref_Cr.int()).abs()
+
+        max_Y, max_Cb, max_Cr = diff_Y.max().item(), diff_Cb.max().item(), diff_Cr.max().item()
+
+        print(f"\n--- YUV correctness 4x8 720p ---")
+        print(f"  Y : max err {max_Y}, mean err {diff_Y.float().mean().item():.4f}")
+        print(f"  Cb: max err {max_Cb}, mean err {diff_Cb.float().mean().item():.4f}")
+        print(f"  Cr: max err {max_Cr}, mean err {diff_Cr.float().mean().item():.4f}")
+
+        assert max_Y <= 1, f"Y max err {max_Y} > 1"
+        assert max_Cb <= 2, f"Cb max err {max_Cb} > 2"
+        assert max_Cr <= 2, f"Cr max err {max_Cr} > 2"
+
+    def test_performance(self, mesh_device, num_links, device_params, topology):
+        """Time on-device YUV + batched D2H + planar yuv420p concat."""
+        H, W, T_ = 720, 1280, 81
+        Hu, Wu = H // 2, W // 2
+        n_iters = 10
+
+        gen = torch.Generator().manual_seed(42)
+        cpu_chwt = torch.rand(3, H, W, T_, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+
+        tt_in = self._shard_input(cpu_chwt, mesh_device)
+        coefficients = self._coefficients()
+
+        def _convert_and_planar():
+            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
+            # On-device permute BHWT -> BCTHW: cheap on device, makes the host
+            # scatter a contiguous-source -> strided-dest copy.
+            tt_Y, tt_Cb, tt_Cr = self._yuv_to_cthw(tt_Y, tt_Cb, tt_Cr)
+            return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T_)
+
+        # Warmup (also forces JIT/program-cache population).
+        _convert_and_planar()
+        ttnn.synchronize_device(mesh_device)
+
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            planar = _convert_and_planar()
+        ttnn.synchronize_device(mesh_device)
+        end = time.perf_counter()
+
+        avg_s = (end - start) / n_iters
+        output_bytes = T_ * (H * W + 2 * Hu * Wu)
+        throughput_gbs = output_bytes / avg_s / 1e9
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            print(f"\n--- on-device YUV + D2H + planar concat (4x8, 720p, root=0) ---")
+            print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
+            print(f"  Output shape:  (T={T_}, plane_bytes={output_bytes // T_}) uint8 yuv420p")
+            print(f"  Output size:   {output_bytes / 1e6:.1f} MB")
+            print(f"  Iterations:    {n_iters}")
+            print(f"  Average time:  {avg_s * 1000:.1f} ms")
+            print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
+
+
+# ---------------------------------------------------------------------------
+# TestPermuteUint8Mesh — isolate ttnn.permute correctness on multi-device uint8
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mesh_device, num_links, device_params, topology",
+    [[(4, 8), 2, line_params, ttnn.Topology.Linear]],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "H, W, T_",
+    [
+        (8, 16, 4),  # tiny: per-shard (2, 2, 4) — easy to hand-verify
+        (180, 160, 81),  # per-shard (45, 20, 81)
+        (720, 1280, 81),  # actual YUV Y output (per-shard 180, 160, 81)
+    ],
+    ids=["tiny", "med", "yuv_y_720p"],
+)
+class TestPermuteUint8Mesh:
+    """Isolate ``ttnn.permute`` correctness on a row_major uint8 multi-device
+    sharded tensor — the exact pattern used after ``yuv_conversion``.
+
+    Two tests:
+      - ``test_no_permute_roundtrip`` is a baseline: shard + D2H without permute.
+        If this fails, the bug isn't permute at all.
+      - ``test_permute_bhwt_to_bcthw`` runs ``ttnn.permute(t, (0, 3, 1, 2))``
+        and compares against ``host.permute(0, 3, 1, 2)``.
+
+    Run with:
+        pytest models/tt_dit/tests/unit/test_fast_device_to_host.py::TestPermuteUint8Mesh -s
+    """
+
+    def test_no_permute_roundtrip(self, mesh_device, num_links, device_params, topology, H, W, T_):
+        """Baseline: shard a uint8 BHWT tensor, D2H, expect bit-exact match."""
+        if H % 4 != 0 or W % 8 != 0:
+            pytest.skip(f"H={H} or W={W} not divisible by mesh shape (4, 8)")
+
+        gen = torch.Generator().manual_seed(42)
+        host = torch.randint(0, 256, (1, H, W, T_), generator=gen, dtype=torch.uint8)
+
+        tt_in = typed_tensor_2dshard(
+            host,
+            mesh_device,
+            shard_mapping={TP_AXIS: 1, SP_AXIS: 2},  # H on axis 0, W on axis 1
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint8,
+        )
+
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+        dev_out = fast_device_to_host(tt_in, mesh_device, [1, 2], ccl_manager=ccl_manager)
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank != 0:
+            return
+
+        assert dev_out.shape == host.shape, f"shape: {dev_out.shape} vs {host.shape}"
+        diff = (dev_out.int() - host.int()).abs()
+        max_err = diff.max().item()
+        nz = (dev_out != 0).sum().item()
+        print(f"\n  no_permute  H={H} W={W} T={T_}: max err {max_err}, nonzero {nz}/{dev_out.numel()}")
+        assert max_err == 0, f"baseline roundtrip failed: max err {max_err}"
+
+    def test_permute_bhwt_to_bcthw(self, mesh_device, num_links, device_params, topology, H, W, T_):
+        """ttnn.permute(0, 3, 1, 2) on a sharded row_major uint8 tensor.
+
+        Same call site as TestYUVConversionMesh, but on a deterministic random
+        tensor instead of a kernel output — so a failure here is unambiguous.
+        """
+        if H % 4 != 0 or W % 8 != 0:
+            pytest.skip(f"H={H} or W={W} not divisible by mesh shape (4, 8)")
+
+        gen = torch.Generator().manual_seed(42)
+        host = torch.randint(0, 256, (1, H, W, T_), generator=gen, dtype=torch.uint8)
+        host_permuted = host.permute(0, 3, 1, 2).contiguous()  # (1, T, H, W)
+
+        tt_in = typed_tensor_2dshard(
+            host,
+            mesh_device,
+            shard_mapping={TP_AXIS: 1, SP_AXIS: 2},
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint8,
+        )
+
+        # On-device permute under test.
+        tt_out = ttnn.permute(tt_in, (0, 3, 1, 2))
+
+        # After permute: input dim 1 (H, sharded on axis 0) moved to output dim 2;
+        # input dim 2 (W, sharded on axis 1) moved to output dim 3.
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+        dev_out = fast_device_to_host(tt_out, mesh_device, [2, 3], ccl_manager=ccl_manager)
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank != 0:
+            return
+
+        print(f"\n  permute  H={H} W={W} T={T_} perm=(0,3,1,2):")
+        print(f"    expected shape: {tuple(host_permuted.shape)}, got: {tuple(dev_out.shape)}")
+
+        # Diagnostic: a few specific positions, plus nonzero count.
+        for b, t, h, w in [(0, 0, 0, 0), (0, T_ - 1, H - 1, W - 1), (0, T_ // 2, H // 2, W // 2)]:
+            print(f"    out[{b},{t},{h},{w}]  dev={int(dev_out[b, t, h, w])}  " f"ref={int(host_permuted[b, t, h, w])}")
+        nz = (dev_out != 0).sum().item()
+        print(f"    nonzero: {nz}/{dev_out.numel()}")
+
+        assert dev_out.shape == host_permuted.shape, f"shape mismatch: {dev_out.shape} vs {host_permuted.shape}"
+        diff = (dev_out.int() - host_permuted.int()).abs()
+        max_err = diff.max().item()
+        print(f"    max err: {max_err}")
+        assert max_err == 0, f"ttnn.permute broken on uint8 multi-device: max err {max_err}"
 
 
 # ---------------------------------------------------------------------------
