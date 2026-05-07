@@ -1048,12 +1048,26 @@ class TTNNTurboQuantCache:
 
         # ── Fused-hybrid fast path (Phase 3c, opt-in via TQ_FUSED_HYBRID=1) ──
         # Single fused kernel call replaces the dual-call + _combine_lse flow.
-        # Ring covers the most recent W positions in BFP8; TQ covers older
-        # positions in BFP4-quantized; the kernel runs one Flash Attention loop
-        # across both with disjoint coverage (no LSE-emphasis-blend math). Saves
-        # ~10-15 ms/tok by eliminating the second SDPA invocation and the
-        # on-device combine ops. Requires W rounded up to a multiple of 128
-        # (kernel chunk size) — host-side validation enforces this.
+        # Saves ~2x latency at long context. Requires W rounded up to a
+        # multiple of 128.
+        #
+        # ⚠️  KNOWN MATH DIFFERENCE — DO NOT FLIP DEFAULT-ON YET (2026-05-07):
+        # The fused kernel uses **disjoint coverage** (TQ over [0, cur_pos-W],
+        # ring over recent W; each position counted once) while the legacy
+        # dual-call uses the **LSE-emphasis-blend** math (TQ over [0, cur_pos]
+        # FULL range, ring over recent W; recent positions appear in both
+        # halves and get LSE-weighted). The two diverge by ~0.5% cos per
+        # call — synthetic single-call tests show cos = 0.9997 vs dual-call,
+        # but the per-layer error compounds across 32 layers in Llama-3.1-8B
+        # to 0% top-1 token accuracy on the eval set (vs 84.6% legacy).
+        #
+        # A future kernel update needs to switch to "Option A" semantics
+        # (TQ over ALL valid_k_chunks then ring over actual_W_chunks =
+        # valid_k_chunks + actual_W_chunks total chunks; recent positions
+        # double-counted to match LSE-blend). Until that lands, only enable
+        # this env-var on tests that don't go through the full transformer
+        # stack (the kernel is mathematically valid, just different from
+        # what downstream Llama weights expect).
         import os as _os
 
         _use_fused = bool(_os.environ.get("TQ_FUSED_HYBRID", "")) and (W % 128 == 0)
