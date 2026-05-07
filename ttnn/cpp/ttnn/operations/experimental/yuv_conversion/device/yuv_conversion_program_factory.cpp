@@ -9,13 +9,12 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <cstring>
+#include <fmt/format.h>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-static constexpr uint32_t TILE_HW = 32 * 32;
 
 // Convert a float to bf16 packed into the upper 16 bits of a uint32 (for generate_bcast_unary_scalar).
 static uint32_t f32_to_bf16_packed(float v) {
@@ -75,7 +74,7 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
     constexpr uint32_t cb_off = 9;
     constexpr uint32_t cb_sum = 10;
     constexpr uint32_t cb_out_rm = tt::CBIndex::c_16;
-    constexpr uint32_t cb_scratch = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out_bf16 = tt::CBIndex::c_17;
 
     // --- Circular buffers ----------------------------------------------------
     // Row-major channel input CBs (reader → compute): 4 pages for UV corners
@@ -96,17 +95,17 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
         CreateCircularBuffer(program, all_cores, cfg);
     }
 
-    // Output CB: bf16 row-major tiles from compute → writer (double-buffered)
+    // Intermediate bf16 row-major CB: untilize writes here, then typecast reads from it
     {
         auto cfg =
-            CircularBufferConfig(2 * bf16_rm_page, {{cb_out_rm, bf16_fmt}}).set_page_size(cb_out_rm, bf16_rm_page);
+            CircularBufferConfig(2 * bf16_rm_page, {{cb_out_bf16, bf16_fmt}}).set_page_size(cb_out_bf16, bf16_rm_page);
         CreateCircularBuffer(program, all_cores, cfg);
     }
 
-    // Writer scratch CB: uint8, 32 bytes (one stick for bf16→uint8 conversion)
+    // Output CB: uint8 row-major tiles from compute → writer (double-buffered)
     {
-        uint32_t scratch_size = tt::align(32u, y_buf->alignment());
-        auto cfg = CircularBufferConfig(scratch_size, {{cb_scratch, u8_fmt}}).set_page_size(cb_scratch, scratch_size);
+        uint32_t u8_rm_page = 32 * 32 * 1;
+        auto cfg = CircularBufferConfig(2 * u8_rm_page, {{cb_out_rm, u8_fmt}}).set_page_size(cb_out_rm, u8_rm_page);
         CreateCircularBuffer(program, all_cores, cfg);
     }
 
@@ -132,7 +131,6 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
 
     std::vector<uint32_t> writer_ct_args = {
         cb_out_rm,
-        cb_scratch,
         num_t_tiles,
         T,
     };
@@ -169,6 +167,7 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
             num_y_tiles,
             num_uv_tiles_per_plane,
             num_t_tiles,
+            cb_out_bf16,
         };
     };
 
@@ -176,6 +175,13 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
     uint32_t uv_count_g1 = groups_per_core_g1 * W2;
     uint32_t y_count_g2 = 2 * groups_per_core_g2 * W;
     uint32_t uv_count_g2 = groups_per_core_g2 * W2;
+
+    // --- Typecast defines for compute kernel -----------------------------------
+    std::map<std::string, std::string> compute_defines;
+    compute_defines["TYPECAST_LLK_INIT"] =
+        fmt::format("typecast_tile_init<{}u, {}u>", static_cast<uint32_t>(bf16_fmt), static_cast<uint32_t>(u8_fmt));
+    compute_defines["TYPECAST_LLK"] =
+        fmt::format("typecast_tile<{}u, {}u>", static_cast<uint32_t>(bf16_fmt), static_cast<uint32_t>(u8_fmt));
 
     // --- Kernel creation -----------------------------------------------------
     KernelHandle reader_id = CreateKernel(
@@ -191,11 +197,17 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
         WriterDataMovementConfig(writer_ct_args));
 
     // Compute kernel(s) — one per core group with different tile counts.
+    // fp32_dest_acc_en is required for the SFPU bf16→uint8 typecast: the SFPU
+    // stores its result as raw INT32 in DEST, and the packer must read full
+    // 32-bit values (not 19-bit Half) to interpret them correctly.
     KernelHandle compute_id_g1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/compute/yuv_compute.cpp",
         core_group_1,
-        ComputeConfig{.compile_args = make_compute_ct(y_count_g1, uv_count_g1)});
+        ComputeConfig{
+            .fp32_dest_acc_en = true,
+            .compile_args = make_compute_ct(y_count_g1, uv_count_g1),
+            .defines = compute_defines});
 
     KernelHandle compute_id_g2{};
     if (groups_per_core_g2 > 0) {
@@ -203,7 +215,10 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
             program,
             "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/compute/yuv_compute.cpp",
             core_group_2,
-            ComputeConfig{.compile_args = make_compute_ct(y_count_g2, uv_count_g2)});
+            ComputeConfig{
+                .fp32_dest_acc_en = true,
+                .compile_args = make_compute_ct(y_count_g2, uv_count_g2),
+                .defines = compute_defines});
     }
 
     // --- Per-core runtime args -----------------------------------------------
