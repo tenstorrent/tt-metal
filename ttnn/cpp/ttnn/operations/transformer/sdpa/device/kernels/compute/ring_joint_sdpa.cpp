@@ -55,10 +55,10 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
-    // K mcast padded-sync: when set, compute extends Q-loop to max_q_per_core and
-    // mirrors reader's padded-iter K push by issuing a matching cb_pop_front on K only.
-    // This restores the producer-side cb_reserve_back invariant on receivers without
-    // the older 2× reserve hack (see PADDED_ITER_RACE.md / PADDED_ITER_PERF_OPTIONS.md).
+    // K mcast padded-sync: when set, compute extends its Q-loop to max_q_per_core
+    // and pops K + V in lockstep with the reader's matching pushes on padded iters
+    // (real K mcast + no-op V slot). Restores the producer-side cb_reserve_back
+    // invariant on receivers without the older 2× reserve hack.
     constexpr bool k_mcast_padded_sync = get_compile_time_arg_val(40) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
