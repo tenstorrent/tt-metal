@@ -51,8 +51,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
         )
         if proc.returncode == 0:
             out["git_sha"] = proc.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.debug(f"Unable to read git SHA metadata from {root}: {exc}")
     try:
         proc = subprocess.run(
             ["git", "-C", str(root), "remote", "get-url", "origin"],
@@ -63,8 +63,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
         )
         if proc.returncode == 0:
             out["git_url"] = proc.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.debug(f"Unable to read git origin URL metadata from {root}: {exc}")
     return out
 
 
