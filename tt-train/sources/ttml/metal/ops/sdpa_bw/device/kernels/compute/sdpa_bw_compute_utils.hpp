@@ -17,8 +17,10 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/mask.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
+#include "api/compute/sfpu_binary_bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
@@ -99,19 +101,18 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 
 // Applies softmax statistics (exp(S - lse)) directly on DST registers.
 // Scores must already be in DST[scores_reg] from the matmul + mask/scale.
-// Loads lse from cb_intermediates via column-broadcast and computes in-place using SFPU.
+// Loads lse from cb_intermediates via copy_tile, then uses sfpu_sub_bcast_col
+// to subtract column 0 (lse values) broadcast across all columns — entirely in DST.
 // Scores stay in DST at full FP32 — no CB roundtrip, no TF32 truncation.
 // Must be called inside a tile_regs_acquire/commit block, after matmul + mask.
 void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
     const uint32_t lse_reg = scores_reg + 1U;
 
-    // Reconfigure only SrcB for the B2D broadcast (Float32 intermediates).
-    // SrcA is left as-is from the preceding matmul to preserve its format.
+    // TODO(vmelnykov): sfpu_sub_bcast_col appears to be a no-op here.
+    // Reported to LLK team — waiting for guidance on correct usage.
+    // For now, use the proven unary_bcast + sub_binary_tile path.
     reconfig_data_format_srcb(cb_intermediates);
 
-    // Lightweight MOP reinit for unary_bcast<COL> with B2D path.
-    // Only reprograms UNPACK and MATH MOPs — does NOT reset MATH-PACK sync or PACK dest,
-    // so it is safe inside an acquire block (unlike the full unary_bcast_init).
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_intermediates)));
     MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_intermediates)));
@@ -145,22 +146,19 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
 // Computes the per-row scalar u = sum(dO * O) needed for softmax backward.
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
-// The reduction is done via matmul with a column of ones (cb_mat_mul_reduction).
-// Computes u_scalar = rowsum(dO * O) and packs the result to cb_u_scalar_row.
-// When cb_u_scaler_output != 0, also packs a second copy to that CB (for DRAM flush
-// to the KV kernel). Both packs happen directly from DST at full FP32 precision,
-// avoiding a separate copy-pack cycle.
+// Uses sfpu_reduce<SUM, REDUCE_ROW> to reduce rows directly in DST at full FP32,
+// eliminating the previous matmul-with-ones CB roundtrip.
+// Output: row sums stored in column 0 of the tile (compatible with sfpu_sub_bcast_col).
 void compute_u_scalar_row(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
     /*output result*/ const uint32_t cb_u_scalar_row,
-    /*mutmul reduction*/ const uint32_t cb_mat_mul_reduction,
+    /*unused, kept for API compat*/ const uint32_t cb_mat_mul_reduction,
     const uint32_t tiles_per_row,
     const uint32_t scaler_bits,
     const uint32_t cb_u_scaler_output) {
     const uint32_t accum_register = 0;
-    // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
-    // accumulation to dest regs
+
     reconfig_data_format(cb_grad_output, cb_attn_output);
     binary_tiles_init<true, ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
     tile_regs_acquire();
@@ -172,31 +170,14 @@ void compute_u_scalar_row(
             /* tile_idx */ tile_idx,
             /* dst_reg_idx*/ accum_register);
     }
-    tile_regs_commit();
 
-    pack_reconfig_data_format(cb_u_scalar_row);
-    cb_reserve_back(cb_u_scalar_row, onetile);
-    tile_regs_wait();
-    pack_tile(accum_register, cb_u_scalar_row);
-    tile_regs_release();
-    cb_push_back(cb_u_scalar_row, onetile);
+    // Row reduction via SFPU: reduces all 32 columns to column 0 at full FP32.
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(accum_register);
 
-    cb_wait_front(cb_u_scalar_row, onetile);
-    tile_regs_acquire();
-    reconfig_data_format(cb_u_scalar_row, cb_mat_mul_reduction);
-
-    // This call is required to set up the matmul correctly
-    mm_init_short(cb_u_scalar_row, cb_mat_mul_reduction, /* transpose */ 0);
-    matmul_tiles(
-        cb_u_scalar_row,
-        cb_mat_mul_reduction,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        /* dst_reg_idx*/ accum_register);
     tile_regs_commit();
 
     tile_regs_wait();
-    cb_pop_front(cb_u_scalar_row, onetile);
     cb_reserve_back(cb_u_scalar_row, onetile);
     pack_reconfig_data_format(cb_u_scalar_row);
     pack_tile(accum_register, cb_u_scalar_row);
@@ -220,7 +201,6 @@ void compute_grad_attn_weights(
     const uint32_t cb_grad_attn_weights,
     const uint32_t scaler_bits) {
     reconfig_data_format(cb_grad_output, cb_value);
-    // This call is required to set up the matmul correctly
     mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
@@ -280,6 +260,78 @@ void compute_grad_scores(
     mul_unary_tile(grad_reg, scaler_bits);
 
     tile_regs_commit();
+
+    tile_regs_wait();
+    cb_reserve_back(cb_grad_scores, onetile);
+    pack_reconfig_data_format(cb_grad_scores);
+    pack_tile(grad_reg, cb_grad_scores);
+    tile_regs_release();
+    cb_push_back(cb_grad_scores, onetile);
+}
+
+// Fused: computes dP = dO @ V^T and then dS = P * (dP - u) * scale.
+// Eliminates the separate compute_grad_attn_weights call. Uses cb_grad_attn_weights
+// as an internal temporary (single L1 roundtrip within the compute kernel, no DRAM).
+// The subtraction uses the proven FPU sub_tiles_bcast_cols path.
+void compute_grad_scores_fused(
+    const uint32_t cb_grad_output,
+    const uint32_t cb_value,
+    const uint32_t tiles_per_row,
+    const uint32_t cb_attention_weights,
+    const uint32_t cb_u_scalar_row,
+    const uint32_t scaler_bits,
+    /* output */ const uint32_t cb_grad_scores) {
+    // Phase 1: matmul dO @ V^T → dP, pack to internal temp
+    reconfig_data_format(cb_grad_output, cb_value);
+    mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
+    tile_regs_acquire();
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+        matmul_tiles(
+            cb_grad_output,
+            cb_value,
+            /* tile_idx */ tile_idx,
+            /* tile_idx */ tile_idx,
+            /* dst_reg_idx*/ 0);
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_reserve_back(cb_grad_scores, onetile);
+    pack_reconfig_data_format(cb_grad_scores);
+    pack_tile(0, cb_grad_scores);
+    tile_regs_release();
+    cb_push_back(cb_grad_scores, onetile);
+
+    // Phase 2: dS = P * (dP - u) * scale
+    cb_wait_front(cb_grad_scores, onetile);
+    cb_wait_front(cb_u_scalar_row, onetile);
+    cb_wait_front(cb_attention_weights, onetile);
+
+    const uint32_t grad_reg = 0;
+    const uint32_t attn_weights_reg = 1U;
+
+    tile_regs_acquire();
+    reconfig_data_format(cb_grad_scores, cb_u_scalar_row);
+    sub_bcast_cols_init_short(cb_grad_scores, cb_u_scalar_row);
+    sub_tiles_bcast_cols(
+        cb_grad_scores,
+        cb_u_scalar_row,
+        /* tile_idx */ 0,
+        /* tile_idx */ 0,
+        grad_reg);
+
+    copy_tile_to_dst_init_short_with_dt(cb_grad_scores, cb_attention_weights, /*transpose=*/0);
+    copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
+
+    mul_binary_tile_init();
+    mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);
+
+    binop_with_scalar_tile_init();
+    mul_unary_tile(grad_reg, scaler_bits);
+
+    tile_regs_commit();
+
+    cb_pop_front(cb_grad_scores, onetile);
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_scores, onetile);
