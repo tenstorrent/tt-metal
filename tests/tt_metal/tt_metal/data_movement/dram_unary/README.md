@@ -31,7 +31,7 @@ The tests use the Mesh Device API with fast dispatch mode:
 | core_coord                    | CoreCoord             | Logical coordinates for the Tensix core. |
 | dram_channel                  | uint32_t              | Specifies which DRAM channel to use for the test. |
 | virtual_channel               | uint32_t              | Option to specify unicast VC for each transaction. |
-| use_2_0_api                   | bool                  | Determines if the test uses the device 2.0 API. |
+| use_2_0_api                   | bool                  | Determines if the test uses the device 2.0 API on both host and device. |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
