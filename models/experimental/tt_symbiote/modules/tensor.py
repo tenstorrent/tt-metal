@@ -31,7 +31,11 @@ class TTNNPermute(TTNNModule):
 
     def forward(self, input_tensor: ttnn.Tensor, perm) -> ttnn.Tensor:
         """Forward pass through Permute activation."""
-        tt_output = ttnn.permute(input_tensor, perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Preserve sharded layouts to avoid materializing a large interleaved buffer in DRAM.
+        memory_config = input_tensor.memory_config()
+        if memory_config is None or not memory_config.is_sharded():
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+        tt_output = ttnn.permute(input_tensor, perm, memory_config=memory_config)
         return tt_output
 
 
@@ -55,7 +59,11 @@ class TTNNReshape(TTNNModule):
 
     def forward(self, input_tensor: ttnn.Tensor, shape) -> ttnn.Tensor:
         """Forward pass through Reshape activation."""
-        tt_output = ttnn.reshape(input_tensor, shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Preserve sharded layouts to avoid materializing a large interleaved buffer in DRAM.
+        memory_config = input_tensor.memory_config()
+        if memory_config is None or not memory_config.is_sharded():
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+        tt_output = ttnn.reshape(input_tensor, shape, memory_config=memory_config)
         return tt_output
 
 
