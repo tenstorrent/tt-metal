@@ -222,7 +222,7 @@ def test_pipeline_performance(
     ]
 
     num_frames = 81
-    num_inference_steps = 4
+    num_inference_steps = 40
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -263,7 +263,7 @@ def test_pipeline_performance(
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
-    num_perf_runs = 5  # For now use 1 prompt to minimize test time.
+    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
 
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
