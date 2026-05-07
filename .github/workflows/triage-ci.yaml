@@ -18,7 +18,7 @@ on:
       issue-repo:
         description: "Repository containing the open auto-triage issues"
         required: false
-        default: "ebanerjeeTT/issue_dump"
+        default: "tenstorrent/tt-metal"
       target-repo:
         description: "Repository to check workflow run history against"
         required: false
