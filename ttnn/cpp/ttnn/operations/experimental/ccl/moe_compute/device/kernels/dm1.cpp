@@ -13,12 +13,14 @@ void kernel_main() {
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
 
     constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+
+    // Ring is templatized on num_cores: 12 on Wormhole, 8 on Blackhole. See moe_ring_common.h.
+    using config_t = moe_ring::ConfigType_t<has_bias, config_type, num_cores>;
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
@@ -103,7 +105,7 @@ void kernel_main() {
     // offset in tiles into the token width for this core
     const uint32_t width_tile_base = config_t::COMBINE_W_OFFSET_PER_CORE[ring_core_id];
     // number of compute cores that send data to each column of output shards (combine cores)
-    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
     const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
@@ -114,7 +116,7 @@ void kernel_main() {
     constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
 
     // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
+    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     // The number of tiles to send in each step
     // Tiles send per step, may include 1 tile of padding.
@@ -219,9 +221,17 @@ void kernel_main() {
             noc_async_write_one_packet_set_state</*posted=*/true>(
                 neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
-            // Set state for the semaphore write
+#if !defined(ARCH_BLACKHOLE)
+            // WH: keep original stateful path (BH does NOT support stateful inline-write to L1
+            // per dataflow_api.h:2140,2181 — handled in the per-iteration block below).
             noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
-                neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
+                neighbor_semaphore_noc_addr,
+                /*val=*/0,
+                /*be=*/0xF,
+                /*cmd_buf=*/write_at_cmd_buf,
+                /*noc=*/1,
+                vchannel);
+#endif
 
             // Wait for compute core to tell us that all mm01 data is ready
             cb_wait_front(cb_c2w_rdy, 1);
@@ -229,7 +239,8 @@ void kernel_main() {
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
-            // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
+            // We perform num_cores ring steps so the signal propagates around the entire ring
+            // (num_cores = 12 on Wormhole, 8 on Blackhole; templatized via the named CT arg).
             for (uint32_t i = 0; i < num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                     // Wait for current data to be ready in cb_s2c_in2
@@ -243,19 +254,30 @@ void kernel_main() {
                     // Write tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
                     const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
-                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == num_cores - 1) ? 0 : (step + 1)];
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
                     noc_async_write_one_packet_with_state</*posted=*/true>(
                         local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
-                    // Signal neighbor that data is ready (increment their semaphore value)
+                    // Signal neighbor that data is ready (increment their semaphore value).
+                    // Receiver waits via `while ((*my_semaphore_ptr) < semaphore_value)`; both
+                    // arches advance `semaphore_value` by 1 here, just by different mechanisms.
+#if defined(ARCH_BLACKHOLE)
+                    // BH-safe: noc_inline_dw_write_with_state to L1 hangs on BH
+                    // (dataflow_api.h:2140,2181). Use atomic-increment pattern instead;
+                    // receiver-side wait condition is value-equivalent.
+                    noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, vchannel);
+                    ++semaphore_value;
+#else
+                    // WH: original stateful path (byte-identical to M1).
                     noc_inline_dw_write_with_state<
                         /*update_addr_lo=*/false,
                         /*update_counter=*/true,
                         /*posted=*/true,
                         /*update_addr_hi=*/false,
                         /*update_val=*/true>(++semaphore_value);
+#endif
 
                     // Ensure writes have left the core before continuing
                     noc_async_posted_writes_flushed(1);

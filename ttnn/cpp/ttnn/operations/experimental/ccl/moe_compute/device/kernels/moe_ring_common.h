@@ -22,7 +22,9 @@ constexpr uint32_t div_up() {
 
 namespace moe_ring {
 
-constexpr uint32_t NUM_CORES = 12;  // Total number of cores in the ring
+// Ring core count is templatized via DeepSeekRingConfig<HasBias, N> / GptRingConfig<HasBias, N>.
+// The kernel reads N from the named CT arg "num_cores" and selects the appropriate
+// specialization at compile time (12 on Wormhole, 8 on Blackhole).
 
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
@@ -51,16 +53,21 @@ static constexpr uint32_t OUTPUT_HEIGHT_SHARD_DIM = 4;
 
 namespace detail {
 
+template <uint32_t N>
 constexpr uint32_t compute_a2a_iters(const uint32_t* arr) {
-    return (*std::max_element(arr, arr + NUM_CORES) + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
+    return (*std::max_element(arr, arr + N) + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
 };
 
-constexpr uint32_t compute_in2_tiles_per_step(const uint32_t* arr) { return *std::max_element(arr, arr + NUM_CORES); };
+template <uint32_t N>
+constexpr uint32_t compute_in2_tiles_per_step(const uint32_t* arr) {
+    return *std::max_element(arr, arr + N);
+};
 
-constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(const uint32_t* arr) {
-    std::array<uint32_t, NUM_CORES> out = {};
+template <uint32_t N>
+constexpr std::array<uint32_t, N> compute_combine_w_offset_per_core(const uint32_t* arr) {
+    std::array<uint32_t, N> out = {};
     uint32_t sum = 0;
-    for (uint32_t i = 0; i < NUM_CORES; ++i) {
+    for (uint32_t i = 0; i < N; ++i) {
         out[i] = sum;
         sum += arr[i];
     }
@@ -69,8 +76,16 @@ constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(cons
 
 }  // namespace detail
 
+// Forward declaration for the templatized DeepSeek ring config.
+// Specialized below for N=12 (Wormhole) and N=8 (Blackhole). See issue #41827.
+template <bool HasBias, uint32_t N>
+struct DeepSeekRingConfig;
+
+// Wormhole DeepSeek config (12 matmul cores). Byte-identical tile tables to the
+// pre-templatize M1 baseline.
 template <bool HasBias>
-struct DeepSeekRingConfig {
+struct DeepSeekRingConfig<HasBias, 12> {
+    static constexpr uint32_t NUM_CORES = 12;
     static constexpr uint32_t NUM_W0_W1_TILES_H = 224;     // Height of W0/W1 weight matrix in tiles (7168 / 32 = 224)
     static constexpr uint32_t NUM_W0_W1_DRAM_TILES_H =
         (HasBias) ? NUM_W0_W1_TILES_H + 1 : NUM_W0_W1_TILES_H;  // 225 or 224
@@ -126,7 +141,7 @@ struct DeepSeekRingConfig {
         19,
     };
 
-    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(
+    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters<NUM_CORES>(
         W2_TILES_PER_CORE);  // = max(18,19,19,18,19,19,18,19,19,18,19,19) / 4 = 19 / 4 = 5 (rounded up)
 
     static constexpr uint32_t W2_TILES_PER_EXPERT_W = W2_TILES_PER_A2A_ITER_W * NUM_A2A_ITERS;  // = 4 * 5 = 20
@@ -138,21 +153,72 @@ struct DeepSeekRingConfig {
         W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H /
         (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // = (20 * 70) / (2 * 14) = 1400 / 28 = 50
 
-    static constexpr auto IN2_TILES_PER_STEP =
-        detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);  // = max(6,5,5,6,5,5,6,5,5,6,5,5) = 6
+    static constexpr auto IN2_TILES_PER_STEP = detail::compute_in2_tiles_per_step<NUM_CORES>(
+        W0_W1_TILES_PER_CORE_PER_STEP[0]);  // = max(6,5,5,6,5,5,6,5,5,6,5,5) = 6
 
-    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(
+    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core<NUM_CORES>(
         W2_TILES_PER_CORE);  // Cumulative offsets: [0, 18, 37, 56, 74, 93, 112, 130, 149, 168, 186, 205]
 };
 
-// For GPT-OSS: K = N = 2880, so both W0/W1 and W2 have 90x90 tile dimensions
+// Blackhole DeepSeek config (8 matmul cores; BH has 8 DRAM banks vs WH's 12).
+// Workload is balanced: 64 tiles/step / 8 cores = 8 tiles each, 224 W2 tiles / 8 = 28 each.
 template <bool HasBias>
-struct GptRingConfig {
-    static constexpr uint32_t NUM_W0_W1_TILES_H = 90;  // Height of W0/W1 weight matrix in tiles (2880 / 32 = 90)
+struct DeepSeekRingConfig<HasBias, 8> {
+    static constexpr uint32_t NUM_CORES = 8;
+    static constexpr uint32_t NUM_W0_W1_TILES_H = 224;  // 7168 / 32 = 224
+    static constexpr uint32_t NUM_W0_W1_DRAM_TILES_H =
+        (HasBias) ? NUM_W0_W1_TILES_H + 1 : NUM_W0_W1_TILES_H;                                        // 225 or 224
+    static constexpr uint32_t NUM_W2_TILES_H = 64;                                                    // 2048 / 32 = 64
+    static constexpr uint32_t NUM_W2_DRAM_TILES_H = (HasBias) ? NUM_W2_TILES_H + 1 : NUM_W2_TILES_H;  // 65 or 64
+    static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 4;
+
+    // Evenly distributed: tiles[core_id][step]; 64/8 = 8 tiles per cell, perfectly balanced.
+    // Total per step across cores = 8 * 8 = 64, matches the 12-core WH baseline (12 * 5.33 ≈ 64).
+    static constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP[NUM_CORES][NUM_CORES] = {
+        {8, 8, 8, 8, 8, 8, 8, 8},
+        {8, 8, 8, 8, 8, 8, 8, 8},
+        {8, 8, 8, 8, 8, 8, 8, 8},
+        {8, 8, 8, 8, 8, 8, 8, 8},
+        {8, 8, 8, 8, 8, 8, 8, 8},
+        {8, 8, 8, 8, 8, 8, 8, 8},
+        {8, 8, 8, 8, 8, 8, 8, 8},
+        {8, 8, 8, 8, 8, 8, 8, 8},
+    };
+
+    // W2 tiles per core: 224 / 8 = 28 each, perfectly balanced. (Total = 8 * 28 = 224.)
+    static constexpr uint32_t W2_TILES_PER_CORE[NUM_CORES] = {28, 28, 28, 28, 28, 28, 28, 28};
+
+    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters<NUM_CORES>(W2_TILES_PER_CORE);  // = max(28) / 4 = 7
+
+    static constexpr uint32_t W2_TILES_PER_EXPERT_W = W2_TILES_PER_A2A_ITER_W * NUM_A2A_ITERS;  // = 4 * 7 = 28
+    static constexpr uint32_t W2_TILES_PER_EXPERT_H =
+        W2_TILES_PER_A2A_ITER_H *
+        ((NUM_W2_DRAM_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H);  // = 7 * ((64 + 6) / 7) = 70
+
+    static constexpr uint32_t W2_BLOCKS_PER_EXPERT = W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H /
+                                                     (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // = (28 * 70) / 28 = 70
+
+    static constexpr auto IN2_TILES_PER_STEP =
+        detail::compute_in2_tiles_per_step<NUM_CORES>(W0_W1_TILES_PER_CORE_PER_STEP[0]);  // = 8
+
+    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core<NUM_CORES>(
+        W2_TILES_PER_CORE);  // Cumulative offsets: [0, 28, 56, 84, 112, 140, 168, 196]
+};
+
+// Forward declaration for the templatized GPT-OSS ring config.
+template <bool HasBias, uint32_t N>
+struct GptRingConfig;
+
+// Wormhole GPT-OSS config (12 matmul cores). Byte-identical tile tables to the
+// pre-templatize M1 baseline. K = N = 2880 → both W0/W1 and W2 are 90x90 tiles.
+template <bool HasBias>
+struct GptRingConfig<HasBias, 12> {
+    static constexpr uint32_t NUM_CORES = 12;
+    static constexpr uint32_t NUM_W0_W1_TILES_H = 90;  // 2880 / 32 = 90
     static constexpr uint32_t NUM_W0_W1_DRAM_TILES_H =
         (HasBias) ? NUM_W0_W1_TILES_H + 1 : NUM_W0_W1_TILES_H;  // 91 or 90
 
-    static constexpr uint32_t NUM_W2_TILES_H = 90;     // Height of W2 weight matrix in tiles (2880 / 32 = 90)
+    static constexpr uint32_t NUM_W2_TILES_H = 90;                                                    // 2880 / 32 = 90
     static constexpr uint32_t NUM_W2_DRAM_TILES_H = (HasBias) ? NUM_W2_TILES_H + 1 : NUM_W2_TILES_H;  // 91 or 90
 
     static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 3;  // Number of data-parallel shards for output
@@ -193,10 +259,10 @@ struct GptRingConfig {
     static constexpr uint32_t W2_TILES_PER_CORE[NUM_CORES] = {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7};
 
     static constexpr auto IN2_TILES_PER_STEP =
-        detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);  // = max(8,7,7,8,...) = 8
+        detail::compute_in2_tiles_per_step<NUM_CORES>(W0_W1_TILES_PER_CORE_PER_STEP[0]);  // = max(8,7,7,8,...) = 8
 
     static constexpr auto NUM_A2A_ITERS =
-        detail::compute_a2a_iters(W2_TILES_PER_CORE);  // = max(8,8,7,7,8,8,7,7,8,8,7,7) / 4 = 8 / 4 = 2
+        detail::compute_a2a_iters<NUM_CORES>(W2_TILES_PER_CORE);  // = max(8,8,7,7,8,8,7,7,8,8,7,7) / 4 = 8 / 4 = 2
 
     static constexpr uint32_t W2_TILES_PER_EXPERT_W = NUM_A2A_ITERS * W2_TILES_PER_A2A_ITER_W;  // = 2 * 4 = 8
     static constexpr uint32_t W2_TILES_PER_EXPERT_H =
@@ -207,28 +273,90 @@ struct GptRingConfig {
         W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H /
         (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // = (8 * 91) / (2 * 14) = 728 / 28 = 26
 
-    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(
+    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core<NUM_CORES>(
         W2_TILES_PER_CORE);  // Cumulative offsets: [0, 8, 16, 23, 30, 38, 46, 53, 60, 68, 76, 83]
 };
 
-// Template trait for config type selection
-template <bool HasBias, ttnn::experimental::prim::detail::MoEConfigType ConfigType>
+// Blackhole GPT-OSS config (8 matmul cores). 90 tiles / 8 cores = 11.25 →
+// each step row sums to 90 = 2*12 + 6*11. Mirror the WH GPT rotation style:
+// rotate the two "12" positions by +1 each row so load-per-core averaged over
+// the 8-step cycle is balanced (each core gets a "12" exactly twice over 8 steps).
+template <bool HasBias>
+struct GptRingConfig<HasBias, 8> {
+    static constexpr uint32_t NUM_CORES = 8;
+    static constexpr uint32_t NUM_W0_W1_TILES_H = 90;  // 2880 / 32 = 90
+    static constexpr uint32_t NUM_W0_W1_DRAM_TILES_H =
+        (HasBias) ? NUM_W0_W1_TILES_H + 1 : NUM_W0_W1_TILES_H;  // 91 or 90
+
+    static constexpr uint32_t NUM_W2_TILES_H = 90;                                                    // 2880 / 32 = 90
+    static constexpr uint32_t NUM_W2_DRAM_TILES_H = (HasBias) ? NUM_W2_TILES_H + 1 : NUM_W2_TILES_H;  // 91 or 90
+
+    static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 2;  // BH: 90 width tiles split across 2 data-parallel shards
+
+    // tiles[core_id][step] - 90 tiles per step / 8 cores = 11.25
+    // Pattern: each row sums to 90 = 2*12 + 6*11. 2 cores get 12, 6 cores get 11.
+    // Rotate the "12" position by +4 each row so load-per-core averaged over steps is balanced
+    // (each core gets a "12" twice across the 8-step cycle).
+    static constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP[NUM_CORES][NUM_CORES] = {
+        // Core 0: 12s at positions {0, 4} -> 12+11+11+11+12+11+11+11 = 90
+        {12, 11, 11, 11, 12, 11, 11, 11},
+        // Core 1: 12s at positions {1, 5}
+        {11, 12, 11, 11, 11, 12, 11, 11},
+        // Core 2: 12s at positions {2, 6}
+        {11, 11, 12, 11, 11, 11, 12, 11},
+        // Core 3: 12s at positions {3, 7}
+        {11, 11, 11, 12, 11, 11, 11, 12},
+        // Core 4: 12s at positions {0, 4} (cycle repeats every 4 rows)
+        {12, 11, 11, 11, 12, 11, 11, 11},
+        // Core 5: 12s at positions {1, 5}
+        {11, 12, 11, 11, 11, 12, 11, 11},
+        // Core 6: 12s at positions {2, 6}
+        {11, 11, 12, 11, 11, 11, 12, 11},
+        // Core 7: 12s at positions {3, 7}
+        {11, 11, 11, 12, 11, 11, 11, 12},
+    };
+
+    // W2 tiles per core: 90 / 8 = 11.25 -> 2 cores get 12, 6 cores get 11. Total: 2*12 + 6*11 = 90.
+    // Pattern: [12, 11, 11, 11, 12, 11, 11, 11] mirrors the W0_W1 row-0 pattern for consistency.
+    static constexpr uint32_t W2_TILES_PER_CORE[NUM_CORES] = {12, 11, 11, 11, 12, 11, 11, 11};
+
+    static constexpr auto IN2_TILES_PER_STEP =
+        detail::compute_in2_tiles_per_step<NUM_CORES>(W0_W1_TILES_PER_CORE_PER_STEP[0]);  // = 12
+
+    static constexpr auto NUM_A2A_ITERS =
+        detail::compute_a2a_iters<NUM_CORES>(W2_TILES_PER_CORE);  // = max(12) / 4 = 3 (rounded up)
+
+    static constexpr uint32_t W2_TILES_PER_EXPERT_W = NUM_A2A_ITERS * W2_TILES_PER_A2A_ITER_W;  // = 3 * 4 = 12
+    static constexpr uint32_t W2_TILES_PER_EXPERT_H =
+        ((NUM_W2_DRAM_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) *
+        W2_TILES_PER_A2A_ITER_H;  // = ((90 + 7 - 1) / 7) * 7 = 13 * 7 = 91
+
+    static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
+        W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H /
+        (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // = (12 * 91) / (2 * 14) = 1092 / 28 = 39
+
+    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core<NUM_CORES>(
+        W2_TILES_PER_CORE);  // Cumulative offsets: [0, 12, 23, 34, 45, 57, 68, 79]
+};
+
+// Template trait for config type selection. ConfigType picks DeepSeek vs GPT, N picks ring size.
+template <bool HasBias, ttnn::experimental::prim::detail::MoEConfigType ConfigType, uint32_t N>
 struct ConfigTypeSelector;
 
 // Template specialization for DeepSeek
-template <bool HasBias>
-struct ConfigTypeSelector<HasBias, ttnn::experimental::prim::detail::MoEConfigType::DEEPSEEK> {
-    using type = DeepSeekRingConfig<HasBias>;
+template <bool HasBias, uint32_t N>
+struct ConfigTypeSelector<HasBias, ttnn::experimental::prim::detail::MoEConfigType::DEEPSEEK, N> {
+    using type = DeepSeekRingConfig<HasBias, N>;
 };
 
 // Template specialization for GPT
-template <bool HasBias>
-struct ConfigTypeSelector<HasBias, ttnn::experimental::prim::detail::MoEConfigType::GPT> {
-    using type = GptRingConfig<HasBias>;
+template <bool HasBias, uint32_t N>
+struct ConfigTypeSelector<HasBias, ttnn::experimental::prim::detail::MoEConfigType::GPT, N> {
+    using type = GptRingConfig<HasBias, N>;
 };
 
 // Helper alias template
-template <bool HasBias, ttnn::experimental::prim::detail::MoEConfigType ConfigType>
-using ConfigType_t = typename ConfigTypeSelector<HasBias, ConfigType>::type;
+template <bool HasBias, ttnn::experimental::prim::detail::MoEConfigType ConfigType, uint32_t N>
+using ConfigType_t = typename ConfigTypeSelector<HasBias, ConfigType, N>::type;
 
 }  // namespace moe_ring

@@ -11,6 +11,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 
+#include <umd/device/types/arch.hpp>
+
 namespace ttnn::experimental::prim {
 namespace detail {
 
@@ -319,12 +321,35 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
-    // Determine num_data_parallel_cores based on hidden size. Bias does not matter for these values
+    // Determine num_data_parallel_cores based on hidden size + ring core count (arch-dependent).
+    // The ring config is templatized on N (12 on Wormhole, 8 on Blackhole) — see moe_ring_common.h.
+    // Bias does not matter for OUTPUT_WIDTH_SHARD_DIM.
+    const auto arch = tilize_input_tensor.device()->arch();
     uint32_t num_data_parallel_cores = 0;
     if (hidden_size == 7168) {
-        num_data_parallel_cores = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::OUTPUT_WIDTH_SHARD_DIM;
+        switch (arch) {
+            case tt::ARCH::WORMHOLE_B0:
+                num_data_parallel_cores = moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
+                break;
+            case tt::ARCH::BLACKHOLE:
+                num_data_parallel_cores = moe_ring::DeepSeekRingConfig</*HasBias=*/false, 8>::OUTPUT_WIDTH_SHARD_DIM;
+                break;
+            case tt::ARCH::QUASAR:
+            case tt::ARCH::Invalid:
+                TT_THROW("moe_compute: no DeepSeek ring specialization for arch {}", static_cast<int>(arch));
+        }
     } else if (hidden_size == 2880) {
-        num_data_parallel_cores = moe_ring::GptRingConfig</*HasBias=*/false>::OUTPUT_WIDTH_SHARD_DIM;
+        switch (arch) {
+            case tt::ARCH::WORMHOLE_B0:
+                num_data_parallel_cores = moe_ring::GptRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
+                break;
+            case tt::ARCH::BLACKHOLE:
+                num_data_parallel_cores = moe_ring::GptRingConfig</*HasBias=*/false, 8>::OUTPUT_WIDTH_SHARD_DIM;
+                break;
+            case tt::ARCH::QUASAR:
+            case tt::ARCH::Invalid:
+                TT_THROW("moe_compute: no GPT ring specialization for arch {}", static_cast<int>(arch));
+        }
     } else {
         TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
     }

@@ -29,12 +29,14 @@ void kernel_main() {
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
 
     constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+
+    // Ring is templatized on num_cores: 12 on Wormhole, 8 on Blackhole. See moe_ring_common.h.
+    using config_t = moe_ring::ConfigType_t<has_bias, config_type, num_cores>;
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");

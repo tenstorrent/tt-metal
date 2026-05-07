@@ -70,11 +70,13 @@ void kernel_main() {
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
 
     constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+
+    // Ring is templatized on num_cores: 12 on Wormhole, 8 on Blackhole. See moe_ring_common.h.
+    using config_t = moe_ring::ConfigType_t<has_bias, config_type, num_cores>;
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -152,7 +154,7 @@ void kernel_main() {
     constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
 
     // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
+    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     // The number of tiles to send in each step
     constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
