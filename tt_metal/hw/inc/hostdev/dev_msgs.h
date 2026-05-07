@@ -257,10 +257,11 @@ enum debug_sanitize_noc_return_code_enum {
 };
 
 struct debug_assert_msg_t {
-    volatile uint16_t line_num;
+    volatile uint32_t msg_ptr;  // VMA of debug_assert_info_t in .debug_assert_msgs rodata
+                                // (repurposed as mepc for DebugAssertHwFault)
+    volatile uint16_t claim;
     volatile uint8_t tripped;
     volatile uint8_t which;
-    volatile uint32_t claim;
     volatile uint64_t hw_fault_info;
 };
 
@@ -339,6 +340,7 @@ struct dprint_buf_msg_t {
 
     static_assert(sizeof(data) == sizeof(shared_data));
 };
+
 #endif
 
 // NOC alignment max from BH
