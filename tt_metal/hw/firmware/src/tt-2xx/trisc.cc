@@ -77,23 +77,8 @@ thread_local uint32_t dest_offset_id __attribute__((used)) = 0;
 
 thread_local uint32_t op_info_offset __attribute__((used)) = 0;
 
-thread_local tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
-
-#if !defined(UCK_CHLKC_MATH)
-thread_local uint32_t tt_l1_ptr* cb_l1_base __attribute__((used));
-#endif
-
-#if defined(UCK_CHLKC_UNPACK)
-constexpr bool cb_init_read = true;
-#else
-constexpr bool cb_init_read = false;
-#endif
-#if defined(UCK_CHLKC_PACK)
-constexpr bool cb_init_write = true;
-#else
-constexpr bool cb_init_write = false;
-#endif
 
 using namespace ckernel;
 

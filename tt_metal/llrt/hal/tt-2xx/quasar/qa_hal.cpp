@@ -331,8 +331,14 @@ public:
                             params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
+                        if (params.processor_id % 4 == 2) {
+                            return fmt::format(
+                                "runtime/hw/toolchain/quasar/{}_trisc.ld", params.is_fw ? "firmware" : "kernel");
+                        }
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_trisc.ld", params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_trisc{}.ld",
+                            params.is_fw ? "firmware" : "kernel",
+                            params.is_fw ? "" : "_lgc");
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
