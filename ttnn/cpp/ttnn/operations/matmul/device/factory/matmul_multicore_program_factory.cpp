@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
+#include <map>
+#include <string>
+#include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -51,10 +54,7 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
-    (void)math_approx_mode;
-    (void)fp32_dest_acc_en;
     (void)packer_l1_acc;
-    (void)dst_full_sync_en;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b.buffer();
@@ -183,6 +183,13 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
 
+    const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    std::map<std::string, std::string> mm_kernel_defines;
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
     // Compute kernel(s) — one per core group with different tile counts
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity
@@ -195,7 +202,12 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     compute_desc_1.compile_time_args = compute_args_group_1;
     compute_desc_1.named_compile_time_args = {
         {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}};
-    compute_desc_1.config = ComputeConfigDescriptor{.math_fidelity = math_fidelity, .dst_full_sync_en = true};
+    compute_desc_1.defines = {mm_kernel_defines.begin(), mm_kernel_defines.end()};
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
     desc.kernels.push_back(std::move(compute_desc_1));
 
     if (!core_group_2.ranges().empty()) {
@@ -208,7 +220,12 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
         compute_desc_2.compile_time_args = compute_args_group_2;
         compute_desc_2.named_compile_time_args = {
             {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}};
-        compute_desc_2.config = ComputeConfigDescriptor{.math_fidelity = math_fidelity, .dst_full_sync_en = true};
+        compute_desc_2.defines = {mm_kernel_defines.begin(), mm_kernel_defines.end()};
+        compute_desc_2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode};
         desc.kernels.push_back(std::move(compute_desc_2));
     }
 
