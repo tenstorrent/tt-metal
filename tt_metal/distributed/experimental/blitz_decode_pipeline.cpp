@@ -690,4 +690,13 @@ std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initia
     return stages;
 }
 
+// Overload that takes MeshDevice (as declared in header) and forwards to the bool version.
+// The MeshDevice parameter is not currently used since the implementation gets mesh info
+// from MetalContext::instance().get_control_plane().get_mesh_graph().
+std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(
+    const ::tt::tt_metal::distributed::MeshDevice& /* mesh_device */) {
+    // Default to initialize_loopback=true for multi-mesh pipeline ring
+    return generate_blitz_decode_pipeline(true);
+}
+
 }  // namespace tt::tt_metal::experimental::blitz

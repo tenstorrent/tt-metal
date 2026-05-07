@@ -44,7 +44,8 @@ echo "========================================"
 echo "Running test on frankenquad (4x2 multi-mesh)"
 echo "========================================"
 if [ ${#ENV_VARS[@]} -gt 0 ]; then
-    echo "Environment: ${ENV_VARS[*]} FORCE_GALAXY_FABRIC_MODE=1"
+    echo "Warning: Environment variables passed on command line are ignored."
+    echo "         Add them to rank_bindings/4x2_multi_mesh.yaml global_env section."
 fi
 echo "Command: $TEST_PATH"
 echo "Hosts: $HOSTS"
@@ -56,12 +57,17 @@ fi
 echo "========================================"
 echo ""
 
+# Build command with proper quoting
+CMD="source ~/tt-metal/python_env/bin/activate && $TEST_PATH"
+for arg in "$@"; do
+  CMD="$CMD $(printf '%q' "$arg")"
+done
+
 tt-run \
   --tcp-interface $TCP_INTERFACE \
-  --hosts $HOSTS \
-  --mpi-args "--map-by rankfile:file=$RANKFILE" \
+  --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE" \
   --rank-binding $RANK_BINDING \
-  env "${ENV_VARS[@]}" FORCE_GALAXY_FABRIC_MODE=1 "$TEST_PATH" "$@" 2>&1 | tee $LOG_FILE
+  bash -c "$CMD" 2>&1 | tee $LOG_FILE
 
 EXIT_CODE=${PIPESTATUS[0]}
 

@@ -440,9 +440,10 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
 
     // Stub: For mock or emulated devices, synthesize a FabricNodeId for any unmapped ASIC ID
     // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    if (cluster.is_mock_or_emulated()) {
-        return FabricNodeId(MeshId{0}, static_cast<ChipId>(asic_id));
-    }
+    // Note: is_mock_or_emulated() doesn't exist in this UMD version, commenting out for now
+    // if (cluster.is_mock_or_emulated()) {
+    //     return FabricNodeId(MeshId{0}, static_cast<ChipId>(asic_id));
+    // }
 
     TT_FATAL(false, "FabricNodeId not found for ASIC ID {}", asic_id);
     return FabricNodeId(MeshId{0}, 0);
@@ -1255,9 +1256,10 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 
     // Stub: For mock or emulated devices, return a synthetic FabricNodeId for any unmapped chip
     // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    if (this->cluster_.get().is_mock_or_emulated()) {
-        return FabricNodeId(MeshId{0}, physical_chip_id);
-    }
+    // Note: is_mock_or_emulated() doesn't exist in this UMD version, commenting out for now
+    // if (this->cluster_.get().is_mock_or_emulated()) {
+    //     return FabricNodeId(MeshId{0}, physical_chip_id);
+    // }
 
     TT_FATAL(
         false,
