@@ -7,10 +7,11 @@
 #include <algorithm>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 namespace ttnn::prim {
 
