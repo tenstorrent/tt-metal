@@ -25,6 +25,7 @@ Or invoke pytest directly (no stats):
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sub_device_load_clear_timing.py -k "no_sd"
 """
 
+import os
 import pathlib
 import re
 import sys
@@ -101,7 +102,12 @@ def _two_ops_subdevice(mesh_device, x, w, sd_id, core_grid, ckc):
 @pytest.mark.parametrize("dispatch_sd_rows", [2])
 @pytest.mark.parametrize("with_sd", [False, True], ids=["no_sd", "with_sd"])
 @pytest.mark.parametrize("bench_iters", [_ITERS], ids=[f"iters_{_ITERS}"])
-def test_sub_device_load_clear_tracy(mesh_device, device_params, dispatch_sd_rows, with_sd, bench_iters):
+def test_sub_device_load_clear_tracy(
+    mesh_device, device_params, dispatch_sd_rows, with_sd, bench_iters, is_ci_env, is_ci_v2_env
+):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("Skip tracy benchmark in CI")
+
     mesh_device.enable_program_cache()
     torch.manual_seed(0)
 
@@ -203,7 +209,7 @@ def test_sub_device_load_clear_tracy(mesh_device, device_params, dispatch_sd_row
 # Script entrypoint: run tracy + pytest on this file, then parse CSV stats.
 # -------------------------------------------------------------------------
 
-TRACY_CSV = "/localdev/fbajraktari/tt-metal/generated/profiler/.logs/tracy_ops_data.csv"
+TRACY_CSV = os.path.join(os.environ.get("TT_METAL_HOME", ""), "generated/profiler/.logs/tracy_ops_data.csv")
 
 
 def _filter_outliers(values):
