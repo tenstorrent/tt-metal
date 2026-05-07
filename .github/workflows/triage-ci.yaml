@@ -277,16 +277,13 @@ jobs:
           # --- Step 6: Flag machines ---
           # Flagged when ALL true:
           #   - runs >= min_runs
-          #   - (rate >= 50 AND rate >= median + 20) OR rate >= 80
+          #   - rate >= fleet_median + 25pp
+          # Purely relative: a 100% fail rate on a suite where median is 90% is not a machine issue.
           FLAGGED_STATS=$(echo "$STATS" | jq --argjson min "$MIN_RUNS" --argjson median "$FLEET_MEDIAN" '
             map(. + {
               eligible: (.runs >= $min),
               flagged: (
-                (.runs >= $min) and (
-                  ((.rate >= 80))
-                  or
-                  ((.rate >= 50) and (.rate >= ($median + 20)))
-                )
+                (.runs >= $min) and (.rate >= ($median + 25))
               )
             })
           ')
