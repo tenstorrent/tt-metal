@@ -1,48 +1,298 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) CIV1 Machine Failure Detector"
 
 on:
   workflow_dispatch:
+    inputs:
+      workflow-file:
+        description: "Filename of the workflow to analyze (e.g. nightly-regressions.yaml)"
+        required: true
+        type: string
+      job-name:
+        description: "Exact name of the job within that workflow to analyze"
+        required: true
+        type: string
+      lookback-days:
+        description: "Number of days to look back (1-30)"
+        required: false
+        type: number
+        default: 7
+      min-runs:
+        description: "Minimum runs a machine must have to be included"
+        required: false
+        type: number
+        default: 3
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  cursor-cli-smoke-test:
+  detect-machine-failures:
+    name: Detect CIV1 machine failures
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Ensure CURSOR_API_KEY is configured
+      - name: Analyze machine failure rates
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_FILE: ${{ inputs.workflow-file }}
+          JOB_NAME: ${{ inputs.job-name }}
+          LOOKBACK_DAYS: ${{ inputs.lookback-days }}
+          MIN_RUNS: ${{ inputs.min-runs }}
+        shell: bash
         run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
+          set -euo pipefail
+
+          # --- Configuration ---
+          API_BASE="https://api.github.com"
+          PER_PAGE=100
+          LOOKBACK_DAYS="${LOOKBACK_DAYS:-7}"
+          MIN_RUNS="${MIN_RUNS:-3}"
+
+          # Validate inputs
+          if [[ "$LOOKBACK_DAYS" -lt 1 || "$LOOKBACK_DAYS" -gt 30 ]]; then
+            echo "ERROR: lookback-days must be between 1 and 30, got $LOOKBACK_DAYS"
+            exit 1
+          fi
+          if [[ "$MIN_RUNS" -lt 1 ]]; then
+            echo "ERROR: min-runs must be >= 1, got $MIN_RUNS"
             exit 1
           fi
 
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+          # Cutoff date in ISO 8601 format for the API filter
+          CUTOFF_DATE=$(date -u -d "$LOOKBACK_DAYS days ago" +"%Y-%m-%dT%H:%M:%SZ")
+          echo "Analyzing: $WORKFLOW_FILE / $JOB_NAME"
+          echo "Lookback: $LOOKBACK_DAYS days (since $CUTOFF_DATE)"
+          echo "Min runs threshold: $MIN_RUNS"
+          echo ""
 
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
+          # --- Helper: paginated GitHub API GET ---
+          # Fetches all pages and concatenates the results from a given JSON array key.
+          # Usage: gh_api_paginated "/repos/.../runs?per_page=100" ".workflow_runs"
+          gh_api_paginated() {
+            local url="$1"
+            local jq_key="$2"
+            local all_results="[]"
+            local page=1
+
+            # If URL doesn't start with http, prepend API base
+            if [[ "$url" != http* ]]; then
+              url="${API_BASE}${url}"
+            fi
+
+            # Append per_page if not already present
+            if [[ "$url" != *"per_page="* ]]; then
+              if [[ "$url" == *"?"* ]]; then
+                url="${url}&per_page=${PER_PAGE}"
+              else
+                url="${url}?per_page=${PER_PAGE}"
+              fi
+            fi
+
+            while true; do
+              local paged_url="$url"
+              if [[ "$paged_url" == *"?"* ]]; then
+                paged_url="${paged_url}&page=${page}"
+              else
+                paged_url="${paged_url}?page=${page}"
+              fi
+
+              # Fetch with headers saved to a temp file for Link header parsing
+              local header_file
+              header_file=$(mktemp)
+              local body
+              body=$(curl -s -f \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -D "$header_file" \
+                "$paged_url") || {
+                echo "ERROR: API request failed for $paged_url" >&2
+                rm -f "$header_file"
+                return 1
+              }
+
+              # Extract the array from the response
+              local page_items
+              page_items=$(echo "$body" | jq -c "$jq_key // []")
+              local count
+              count=$(echo "$page_items" | jq 'length')
+
+              # Merge into accumulated results
+              all_results=$(jq -c -s '.[0] + .[1]' <(echo "$all_results") <(echo "$page_items"))
+
+              # Check if there are more pages
+              if [[ "$count" -lt "$PER_PAGE" ]]; then
+                rm -f "$header_file"
+                break
+              fi
+
+              # Also check Link header for rel="next"
+              if ! grep -qi 'rel="next"' "$header_file" 2>/dev/null; then
+                rm -f "$header_file"
+                break
+              fi
+
+              rm -f "$header_file"
+              page=$((page + 1))
+
+              # Safety valve: max 50 pages (5000 items)
+              if [[ "$page" -gt 50 ]]; then
+                echo "WARNING: Hit pagination limit (50 pages), results may be incomplete" >&2
+                break
+              fi
+            done
+
+            echo "$all_results"
+          }
+
+          # --- Step 1: Fetch all workflow runs in the lookback window ---
+          echo "Fetching workflow runs..."
+          RUNS_URL="/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=${PER_PAGE}&created=>=${CUTOFF_DATE}&status=completed"
+          ALL_RUNS=$(gh_api_paginated "$RUNS_URL" ".workflow_runs")
+          TOTAL_RUNS=$(echo "$ALL_RUNS" | jq 'length')
+          echo "Found $TOTAL_RUNS completed runs in the last $LOOKBACK_DAYS days"
+
+          if [[ "$TOTAL_RUNS" -eq 0 ]]; then
+            echo ""
+            echo "No completed runs found for $WORKFLOW_FILE in the last $LOOKBACK_DAYS days."
+            echo "Nothing to analyze."
+            exit 0
+          fi
+
+          # Extract run IDs
+          RUN_IDS=$(echo "$ALL_RUNS" | jq -r '.[].id')
+
+          # --- Step 2: For each run, fetch jobs and find the matching job ---
+          # We collect: runner_name, conclusion
+          # Store as newline-delimited JSON for easy processing
+          RESULTS_FILE=$(mktemp)
+          RUN_COUNT=0
+
+          for RUN_ID in $RUN_IDS; do
+            RUN_COUNT=$((RUN_COUNT + 1))
+            if [[ $((RUN_COUNT % 20)) -eq 0 ]]; then
+              echo "  Processing run $RUN_COUNT / $TOTAL_RUNS..."
+            fi
+
+            # Fetch jobs for this run (paginated)
+            JOBS=$(gh_api_paginated "/repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=${PER_PAGE}" ".jobs")
+
+            # Find jobs matching the target job name, extract runner_name and conclusion
+            # Only include jobs with non-null conclusion (completed) and countable conclusions
+            echo "$JOBS" | jq -c --arg jn "$JOB_NAME" '
+              .[]
+              | select(.name == $jn)
+              | select(.conclusion != null)
+              | select(.conclusion == "success" or .conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required")
+              | {runner_name: .runner_name, conclusion: .conclusion}
+            ' >> "$RESULTS_FILE"
+          done
+
+          echo "Done fetching jobs."
+          echo ""
+
+          MATCHED_JOBS=$(wc -l < "$RESULTS_FILE")
+          if [[ "$MATCHED_JOBS" -eq 0 ]]; then
+            echo "No completed jobs named '$JOB_NAME' found in any run."
+            echo "Check that the job-name input matches the exact job name in the workflow."
+            rm -f "$RESULTS_FILE"
+            exit 0
+          fi
+
+          # --- Step 3: Filter to CIV1 machines only ---
+          CIV1_FILE=$(mktemp)
+          jq -c '
+            select(.runner_name != null and .runner_name != "")
+            | select(.runner_name | startswith("tt-ubuntu") | not)
+            | select(.runner_name | startswith("GitHub Actions") | not)
+          ' "$RESULTS_FILE" > "$CIV1_FILE"
+
+          CIV1_JOBS=$(wc -l < "$CIV1_FILE")
+          if [[ "$CIV1_JOBS" -eq 0 ]]; then
+            echo "No CIV1 machine jobs found (all jobs ran on CIV2 ephemeral or GitHub-hosted runners)."
+            rm -f "$RESULTS_FILE" "$CIV1_FILE"
+            exit 0
+          fi
+
+          # --- Step 4: Group by runner_name, compute failure rate ---
+          # Output: JSON array of {machine, runs, failures, rate}
+          STATS=$(jq -s '
+            group_by(.runner_name)
+            | map({
+                machine: .[0].runner_name,
+                runs: length,
+                failures: [.[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required")] | length
+              })
+            | map(. + {rate: ((.failures / .runs) * 100 | . * 10 | round / 10)})
+            | sort_by(-.rate, -.runs)
+          ' "$CIV1_FILE")
+
+          TOTAL_MACHINES=$(echo "$STATS" | jq 'length')
+
+          # --- Step 5: Compute fleet median failure rate (among machines with >= min_runs) ---
+          FLEET_MEDIAN=$(echo "$STATS" | jq --argjson min "$MIN_RUNS" '
+            [.[] | select(.runs >= $min) | .rate]
+            | sort
+            | if length == 0 then 0
+              elif length % 2 == 1 then .[length / 2 | floor]
+              else (.[length / 2 - 1] + .[length / 2]) / 2
+              end
+          ')
+
+          # --- Step 6: Flag machines ---
+          # Flagged when ALL true:
+          #   - runs >= min_runs
+          #   - (rate >= 50 AND rate >= median + 20) OR rate >= 80
+          FLAGGED_STATS=$(echo "$STATS" | jq --argjson min "$MIN_RUNS" --argjson median "$FLEET_MEDIAN" '
+            map(. + {
+              eligible: (.runs >= $min),
+              flagged: (
+                (.runs >= $min) and (
+                  ((.rate >= 80))
+                  or
+                  ((.rate >= 50) and (.rate >= ($median + 20)))
+                )
+              )
+            })
+          ')
+
+          FLAGGED_COUNT=$(echo "$FLAGGED_STATS" | jq '[.[] | select(.flagged)] | length')
+
+          # --- Step 7: Print results ---
+          echo "Machine Failure Rate Analysis: $WORKFLOW_FILE / $JOB_NAME (last ${LOOKBACK_DAYS}d)"
+          echo "Fleet: $TOTAL_MACHINES machines, $CIV1_JOBS total runs analyzed"
+          echo ""
+          printf "%-35s %5s %9s %7s   %s\n" "MACHINE" "RUNS" "FAILURES" "RATE" "STATUS"
+
+          echo "$FLAGGED_STATS" | jq -r --argjson min "$MIN_RUNS" '
+            .[]
+            | [
+                .machine,
+                (.runs | tostring),
+                (.failures | tostring),
+                ((.rate | tostring) + "%"),
+                (if .flagged then "⚠️  FLAGGED"
+                 elif .eligible then "✅  OK"
+                 else "➖  <" + ($min | tostring) + " runs"
+                 end)
+              ]
+            | @tsv
+          ' | while IFS=$'\t' read -r machine runs failures rate status; do
+            printf "%-35s %5s %9s %7s   %s\n" "$machine" "$runs" "$failures" "$rate" "$status"
+          done
+
+          echo ""
+          echo "Fleet median failure rate: ${FLEET_MEDIAN}%"
+          echo "Flagged machines: $FLAGGED_COUNT"
+
+          # Cleanup
+          rm -f "$RESULTS_FILE" "$CIV1_FILE"
+
+          # --- Exit code ---
+          if [[ "$FLAGGED_COUNT" -gt 0 ]]; then
+            echo ""
+            echo "::error::$FLAGGED_COUNT machine(s) flagged with abnormal failure rates"
             exit 1
           fi
