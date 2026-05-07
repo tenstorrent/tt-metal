@@ -643,6 +643,9 @@ def run_conv1d_replicate_pad(
         (1, 64, 32, 512, 3, 1, 2, 2, 1),
         # depthwise (groups == in_channels == out_channels) with replicate pad.
         (1, 32, 32, 512, 3, 1, 1, 1, 32),
+        # depthwise with kernel_width > 1 (Mamba-style d_conv = 4): exercises the 1d-depthwise
+        # path that was previously gated on kernel_width == 1. See PR #43783.
+        (1, 32, 32, 512, 4, 1, (1, 2), 1, 32),
     ),
 )
 def test_conv1d_replicate_pad(
