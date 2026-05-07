@@ -408,12 +408,17 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
-            dst_buffer = dst_buffer.transform(
-                [&tensor](const tt::tt_metal::HostBuffer& shard) {
-                    return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
-                },
-                tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        // Skipped at compile time for float8_e4m3: that path would require
+        // Tensor::to_vector<float8_e4m3>, which we don't instantiate (FP8 is row-major-only,
+        // so logical == physical always holds and this branch is never reached at runtime).
+        if constexpr (!std::is_same_v<T, float8_e4m3>) {
+            if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
+                dst_buffer = dst_buffer.transform(
+                    [&tensor](const tt::tt_metal::HostBuffer& shard) {
+                        return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
+                    },
+                    tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+            }
         }
 
         // Convert shards into a linear buffer of xtensor views.

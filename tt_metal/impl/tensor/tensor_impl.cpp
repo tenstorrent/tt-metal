@@ -347,7 +347,5 @@ template std::vector<uint16_t> decode_tensor_data<uint16_t>(
     ttsl::Span<const uint16_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> physical_data, const TensorSpec& tensor_spec);
-template std::vector<float8_e4m3> decode_tensor_data<float8_e4m3>(
-    ttsl::Span<const float8_e4m3> physical_data, const TensorSpec& tensor_spec);
 
 }  // namespace tt::tt_metal::tensor_impl

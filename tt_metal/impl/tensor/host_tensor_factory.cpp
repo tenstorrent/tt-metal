@@ -5,7 +5,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/float8.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
@@ -42,11 +41,6 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
-    } else if (spec.data_type() == DataType::FP8_E4M3) {
-        TT_FATAL(
-            spec.layout() == Layout::ROW_MAJOR,
-            "FP8_E4M3 is only supported in ROW_MAJOR layout");  // Currently made only for DeepSeek V3 Prefill combine
-                                                                // output
     }
 
     auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
@@ -94,11 +88,6 @@ HostTensor HostTensor::from_vector(std::vector<T>&& buffer, const TensorSpec& sp
 
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types only supported in TILE layout");
-    } else if (spec.data_type() == DataType::FP8_E4M3) {
-        TT_FATAL(
-            spec.layout() == Layout::ROW_MAJOR,
-            "FP8_E4M3 is only supported in ROW_MAJOR layout");  // Currently made only for DeepSeek V3 Prefill combine
-                                                                // output
     }
 
     auto buffer_dtype = convert_to_data_type<T>();
@@ -221,6 +210,5 @@ template std::vector<int32_t> HostTensor::to_vector() const;
 template std::vector<uint32_t> HostTensor::to_vector() const;
 template std::vector<uint16_t> HostTensor::to_vector() const;
 template std::vector<uint8_t> HostTensor::to_vector() const;
-template std::vector<float8_e4m3> HostTensor::to_vector() const;
 
 }  // namespace tt::tt_metal

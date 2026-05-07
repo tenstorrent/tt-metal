@@ -1005,8 +1005,6 @@ void validate_datatype(DataType dtype) {
         TT_FATAL(dtype == DataType::UINT16, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
         TT_FATAL(dtype == DataType::UINT8, "Incorrect data type {}", dtype);
-    } else if constexpr (std::is_same_v<BaseType, float8_e4m3>) {
-        TT_FATAL(dtype == DataType::FP8_E4M3, "Incorrect data type {}", dtype);
     } else {
         static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
     }
@@ -1066,7 +1064,6 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(float)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
-INSTANTIATE_HOST_BUFFER_FUNCTIONS(float8_e4m3)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 
