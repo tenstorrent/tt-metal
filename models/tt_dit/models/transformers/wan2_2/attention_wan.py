@@ -15,6 +15,7 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
+from ....utils.shape_trace import log_shape
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
@@ -252,6 +253,12 @@ class WanAttention(Module):
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid)
+            # Shape trace for fused allgather-matmul (to_out fused addcmul path)
+            log_shape(
+                "allgather_matmul",
+                {"input": x, "weight": weight},
+                extra={"layer": "WanAttention", "where": "WanAttention._to_out_fused_addcmul"},
+            )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
@@ -284,6 +291,12 @@ class WanAttention(Module):
             core_grid = self.mesh_device.compute_with_storage_grid_size()
             matmul_config = get_matmul_config(M, K, N_out, core_grid)
 
+            # Shape trace for matmul (to_out fused addcmul path, no AG)
+            log_shape(
+                "matmul",
+                {"input": x, "weight": weight},
+                extra={"layer": "WanAttention", "where": "WanAttention._to_out_fused_addcmul"},
+            )
             output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                 x,
                 weight,
@@ -410,6 +423,16 @@ class WanAttention(Module):
 
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:
+                    # Shape trace for ring attention (exp variant)
+                    log_shape(
+                        "ring_attention",
+                        {"q": q_BHNE, "k": k_BHNE, "v": v_BHNE},
+                        extra={
+                            "layer": "WanAttention",
+                            "where": "WanAttention.forward.exp_ring_joint",
+                            "N_logical": N,
+                        },
+                    )
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                         q_BHNE,
                         k_BHNE,
@@ -440,6 +463,16 @@ class WanAttention(Module):
                         num_buffers_per_channel=32,
                     )
                 else:
+                    # Shape trace for ring attention (standard variant)
+                    log_shape(
+                        "ring_attention",
+                        {"q": q_BHNE, "k": k_BHNE, "v": v_BHNE},
+                        extra={
+                            "layer": "WanAttention",
+                            "where": "WanAttention.forward.ring_joint",
+                            "N_logical": N,
+                        },
+                    )
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                         q_BHNE,
                         k_BHNE,

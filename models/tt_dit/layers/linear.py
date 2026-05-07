@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.tt_dit.utils.shape_trace import log_shape
 
 from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from .module import Module, Parameter
@@ -63,6 +64,12 @@ class Linear(Module):
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        # Shape trace for plain matmul
+        log_shape(
+            "matmul",
+            {"input": x, "weight": self.weight.data},
+            extra={"layer": "Linear", "where": "Linear.forward"},
+        )
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=self.weight.data,
@@ -204,6 +211,12 @@ class ColParallelLinear(Module):
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            # Shape trace for fused allgather-matmul
+            log_shape(
+                "allgather_matmul",
+                {"input": x, "weight": weight},
+                extra={"layer": "ColParallelLinear", "where": "ColParallelLinear.forward"},
+            )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
@@ -241,6 +254,12 @@ class ColParallelLinear(Module):
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
             if self.chunks is not None:
+                # Shape trace for split matmul
+                log_shape(
+                    "matmul",
+                    {"input": x, "weight": weight},
+                    extra={"layer": "ColParallelLinear", "where": "ColParallelLinear.forward.split"},
+                )
                 outputs = ttnn.experimental.minimal_matmul_split(
                     x,
                     weight,
@@ -254,6 +273,12 @@ class ColParallelLinear(Module):
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
+            # Shape trace for plain matmul
+            log_shape(
+                "matmul",
+                {"input": x, "weight": weight},
+                extra={"layer": "ColParallelLinear", "where": "ColParallelLinear.forward"},
+            )
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=weight,
@@ -359,6 +384,12 @@ class RowParallelLinear(Module):
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        # Shape trace for plain matmul
+        log_shape(
+            "matmul",
+            {"input": x, "weight": weight},
+            extra={"layer": "RowParallelLinear", "where": "RowParallelLinear.forward"},
+        )
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=weight,
@@ -411,6 +442,13 @@ class RowParallelLinear(Module):
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
+
+        # Shape trace for row-parallel fused matmul + reduce-scatter
+        log_shape(
+            "matmul",
+            {"input": x, "weight": weight},
+            extra={"layer": "RowParallelLinear", "where": "RowParallelLinear.forward_fused_addcmul"},
+        )
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
