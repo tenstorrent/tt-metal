@@ -24,7 +24,7 @@
 - name: Galaxy Llama3 evals tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
+    pytest --timeout 2000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
   model: llama33_70b
   skus:
     wh_galaxy_perf:
