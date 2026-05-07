@@ -1126,11 +1126,10 @@ TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
         dist_input_b,
         input_spec.data_type(),
         input_spec.tensor_layout().get_memory_config(),
-        std::optional<Tensor>{},  // explicit type — std::nullopt would be ambiguous for overload resolution
+        std::optional<Tensor>{},
         none,
         none,
-        none,
-        false);
+        none);
 
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
     EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
