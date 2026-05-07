@@ -905,7 +905,6 @@ void kernel_main() {
     // MTP Lambda
     // ====================================================================
     auto mtp = [&]() {
-
     // ====================================================================
     // [MTP] Token unicast from argmax_final_core to input_core on exit device
     // ====================================================================
@@ -1015,6 +1014,7 @@ void kernel_main() {
             } else {
                 token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
             }
+            DPRINT << "MTP: embedding lookup token_id=" << token_id << ENDL();
             cb_reserve_back(emb_cb, e_num_tiles);
             noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
             noc_async_read_barrier();
@@ -1187,19 +1187,21 @@ void kernel_main() {
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t sampling_socket_cb = get_named_compile_time_arg_val("sampling_socket_cb");
             constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
+            constexpr uint32_t eh_output_tile_size = get_named_compile_time_arg_val("gather_output_tile_size");
+            constexpr uint32_t metadata_num_tiles = deepseek_b1_ops::kMetadataTensorBytes / eh_output_tile_size;
 
             cb_reserve_back(eh_gather_dst_cb, eh_gather_num_pages);
             cb_push_back(eh_gather_dst_cb, eh_gather_num_pages);
 
             cb_wait_front(sampling_socket_cb, 1);
             uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(sampling_socket_cb));
-            cb_reserve_back(eh_gather_dst_cb, 1);
+            cb_reserve_back(eh_gather_dst_cb, metadata_num_tiles);
             write_token_metadata_to_socket_cb(
                 eh_gather_dst_cb, Core::mtp_level, token_id, metadata_output_l1_addr);
             volatile tt_l1_ptr uint32_t* page =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(eh_gather_dst_cb));
             page[offsetof(deepseek_b1_ops::DeepseekMetadata, position_id) / 4] = downstream_position_id;
-            cb_push_back(eh_gather_dst_cb, 1);
+            cb_push_back(eh_gather_dst_cb, metadata_num_tiles);
             cb_pop_front(sampling_socket_cb, 1);
         }
 #endif
@@ -1226,9 +1228,7 @@ void kernel_main() {
             volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
             invalidate_l1_cache();
-            // Upstream base/MTP stages each incremented position_id by 1, so
-            // position_id == original_input_P + Core::mtp_level.
-            // The host expects position_id == original_input_P + 1.
+
             uint32_t host_position_id = metadata_ptr->position_id - Core::mtp_level + 1;
             cb_pop_front(sampling_socket_cb, 1);
 
@@ -1249,6 +1249,7 @@ void kernel_main() {
     mcast.init(mcast_args);
 
     // Persistent loop
+    DPRINT << "LM_HEAD_SAMPLING: entering persistent loop" << ENDL();
     while (loop.next()) {
         // Base Stage: run LM head sampling and MTP ops
         if constexpr (Core::is_base_stage) {
@@ -1274,7 +1275,10 @@ void kernel_main() {
             if constexpr (Core::is_base_stage) {
                 if constexpr (Core::enable_mtp) {
                     constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
-                    constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
+                    constexpr uint32_t eh_output_tile_size_send = get_named_compile_time_arg_val("gather_output_tile_size");
+                    constexpr uint32_t eh_gather_num_pages =
+                        get_named_compile_time_arg_val("gather_dst_num_pages") +
+                        deepseek_b1_ops::kMetadataTensorBytes / eh_output_tile_size_send;
                     constexpr uint32_t eh_gather_total_bytes =
                         get_named_compile_time_arg_val("gather_send_total_bytes");
                     unified_kernels::socket_send_from_cb<SamplingCTArgs::socket_mode>(

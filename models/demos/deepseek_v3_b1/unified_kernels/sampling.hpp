@@ -1168,27 +1168,11 @@ struct TopKSampling {
 
                     noc_async_read_barrier();
 
-                    {
-                        auto* s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_src);
-                        auto* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_src);
-                        DPRINT << "P1 in top3: idx=" << idx[0] << " s=" << BF16(s[0]) << " idx=" << idx[1]
-                               << " s=" << BF16(s[1]) << " idx=" << idx[2] << " s=" << BF16(s[2]) << ENDL();
-                    }
-
                     cb_push_back(CTArgs::topk_in_scores_cb, num_input_tiles);
                     cb_push_back(CTArgs::topk_in_indices_cb, num_input_tiles);
 
                     cb_wait_front(CTArgs::topk_out_scores_cb, 1);
                     cb_wait_front(CTArgs::topk_out_indices_cb, 1);
-
-                    {
-                        auto* s =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::topk_out_scores_cb));
-                        auto* idx =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CTArgs::topk_out_indices_cb));
-                        DPRINT << "P1 top3: idx=" << idx[0] << " s=" << BF16(s[0]) << " idx=" << idx[1]
-                               << " s=" << BF16(s[1]) << " idx=" << idx[2] << " s=" << BF16(s[2]) << ENDL();
-                    }
 
                     phase1_send_topk_to_final(
                         get_read_ptr(CTArgs::topk_out_scores_cb),
@@ -1414,14 +1398,6 @@ struct TopKSampling {
                             tile_u32[FACE_U32 + i] = NEG_INF_BF16_PAIR;
                         }
 
-                        // auto tile_u16 =
-                        //     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::softmax_in_cb));
-                        // for (uint32_t i = 0; i < 16 && i < K; ++i) {
-                        //     tile_u16[i] = global_scores_addr[i];
-                        // }
-                        // for (uint32_t i = 0; i < 16 && (i + 16) < K; ++i) {
-                        //     tile_u16[FACE_ELEMS + i] = global_scores_addr[16 + i];
-                        // }
                         noc_async_read(
                             get_noc_addr(global_scores),
                             get_write_ptr(CTArgs::softmax_in_cb),

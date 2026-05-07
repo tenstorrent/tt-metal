@@ -1832,6 +1832,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, num_mtp_levels):
 
     iterations = 50
     run_golden = False
+    print(f"num_mtp_levels: {num_mtp_levels}", flush=True)
     config = create_spec_decode_pipeline_configuration(
         SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,

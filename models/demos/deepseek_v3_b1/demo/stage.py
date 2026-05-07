@@ -401,7 +401,6 @@ class SpecLMHeadStage(StageKind):
         my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
 
-        # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
         torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
@@ -893,6 +892,9 @@ class BaseLMHeadStage(StageKind):
 
         lmhead_input_socket = pipeline_block.get_downstream_socket() if pipeline_block.has_exit else None
         lmhead_output_socket = pipeline_block.get_upstream_socket()
+
+        logger.info(f"LMHead input socket: {lmhead_input_socket}")
+        logger.info(f"LMHead output socket: {lmhead_output_socket}")
 
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         worker_crs = ttnn.CoreRangeSet(

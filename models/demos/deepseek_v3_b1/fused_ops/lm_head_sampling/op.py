@@ -1530,6 +1530,7 @@ class LMHeadSampling:
                     ("gather_dst_cb", eh_gather_dst_cb if enable_mtp_on_device else 0),
                     ("gather_dst_num_pages", eh_gather_dst_num_pages),
                     ("gather_send_total_bytes", eh_gather_send_total_bytes),
+                    ("gather_output_tile_size", eh_output_tile_size if enable_mtp_on_device else 1),
                     ("metadata_output_l1_addr", metadata_output_l1_addr),
                     ("is_e_norm_device", 1 if is_e_norm_device else 0),
                     ("eh_norm_slice_offset_bytes", eh_norm_slice_offset_bytes),
@@ -1891,7 +1892,8 @@ class LMHeadSampling:
                     eh_gather_cb_descriptor.core_ranges = ttnn.CoreRangeSet(
                         [ttnn.CoreRange(argmax_final_core, argmax_final_core)]
                     )
-                    eh_gather_cb_descriptor.total_size = (eh_gather_dst_num_pages + 4) * eh_output_tile_size
+                    metadata_num_tiles = socket_page_size_bytes // eh_output_tile_size
+                    eh_gather_cb_descriptor.total_size = (eh_gather_dst_num_pages + metadata_num_tiles) * eh_output_tile_size
 
                     # CB 37: Sync CB for h_rmsnorm and lm head norm on TRISC
                     hnorm_ready_cb_format = ttnn.CBFormatDescriptor(
