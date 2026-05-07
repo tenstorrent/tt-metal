@@ -55,6 +55,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // [B, NKH, max_seq, DH]. Logical Skt comes from the page_table's per-batch
     // page count (paged) or from K_indices' seq dim (contiguous).
     const bool is_paged_attention = (k_idx.padded_shape()[0] != B);
+    const bool hybrid_mode = (attrs.recent_window > 0);
     const uint32_t block_size_t = is_paged_attention ? (k_idx.padded_shape()[2] / tt::constants::TILE_HEIGHT) : 0;
     const uint32_t Skt = is_paged_attention ? (page_table.padded_shape()[-1] * block_size_t)
                                             : (k_idx.padded_shape()[2] / tt::constants::TILE_HEIGHT);
@@ -268,16 +269,42 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // each worker NoC-writes to its own slot (offset = idx * tile_bytes). The
     // reducer compute then merges all K-1 peer slots via online-softmax
     // correction. Slot 0 is unused (reducer keeps its own state in alias_prev_*).
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_18, im_df}})
-            .set_page_size(CBIndex::c_18, im_tile_size));
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_19, im_df}})
-            .set_page_size(CBIndex::c_19, im_tile_size));
+    // c_18 / c_19 — dual role:
+    //   Tier-2A mode (num_cores_per_head > 1): cb_partial_max / cb_partial_sum.
+    //     Sized as 1 tile each; workers pack their final softmax state here
+    //     and the writer NoC-sends it to the reducer's cb_remote_*.
+    //   Hybrid mode (recent_window > 0, num_cores_per_head forced 1): repurposed
+    //     as the reader's ring K (c_18) and ring V (c_19) data CBs. Sized for
+    //     one chunk of the ring's tile format. The Tier-2A and hybrid modes are
+    //     mutually exclusive (validation enforces num_cores_per_head == 1 in
+    //     hybrid mode), so the reuse is safe.
+    if (hybrid_mode) {
+        const auto ring_k_df = datatype_to_dataformat_converter(args.k_ring->dtype());
+        const auto ring_v_df = datatype_to_dataformat_converter(args.v_ring->dtype());
+        const uint32_t ring_k_tile_size = tile_size(ring_k_df);
+        const uint32_t ring_v_tile_size = tile_size(ring_v_df);
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(k_chunk_tiles * ring_k_tile_size, {{CBIndex::c_18, ring_k_df}})
+                .set_page_size(CBIndex::c_18, ring_k_tile_size));
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(v_chunk_tiles * ring_v_tile_size, {{CBIndex::c_19, ring_v_df}})
+                .set_page_size(CBIndex::c_19, ring_v_tile_size));
+    } else {
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_18, im_df}})
+                .set_page_size(CBIndex::c_18, im_tile_size));
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_19, im_df}})
+                .set_page_size(CBIndex::c_19, im_tile_size));
+    }
     CreateCircularBuffer(
         program,
         all_cores,
@@ -436,7 +463,6 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // the TQ tensors as a placeholder when not in hybrid mode) so the kernel's
     // CT-arg layout is constant. ring_W_padded is the block-aligned ring
     // capacity; when recent_window=0 it's also 0.
-    const bool hybrid_mode = (attrs.recent_window > 0);
     const auto* k_ring_buffer = hybrid_mode ? args.k_ring->buffer() : k_idx.buffer();
     const auto* v_ring_buffer = hybrid_mode ? args.v_ring->buffer() : v_idx.buffer();
     const auto* ring_pt_buffer = hybrid_mode ? args.ring_page_table->buffer() : page_table.buffer();

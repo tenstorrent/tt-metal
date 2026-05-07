@@ -73,6 +73,10 @@ void SDPATQDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(attrs.num_cores_per_head == 1, "recent_window > 0 currently incompatible with num_cores_per_head > 1");
         TT_FATAL(
             !attrs.pre_rescaled, "recent_window > 0 currently incompatible with pre_rescaled (kernel chooses both)");
+        // Hybrid mode repurposes the unused Tier-2A CBs (c_18, c_19) as the
+        // reader's ring K / V data CBs. Forcing num_cores_per_head == 1 above
+        // guarantees the Tier-2A reducer / worker pack-and-skip paths are
+        // dormant and these CBs are free.
     }
 }
 
