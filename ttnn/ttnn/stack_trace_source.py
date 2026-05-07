@@ -105,6 +105,7 @@ def _allowed_stack_trace_source_roots(
         for d in site.getsitepackages():
             add(d)
     except (AttributeError, OSError):
+        # Best-effort only: this API may be unavailable or fail on some Python/runtime setups.
         pass
     try:
         add(site.getusersitepackages())
