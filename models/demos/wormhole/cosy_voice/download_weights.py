@@ -10,7 +10,7 @@ def main():
     snapshot_download(
         "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
         local_dir=target_dir,
-        ignore_patterns=["*.onnx", "*.pb"],  # we don't need ONNX models for TTNN bringup
+        ignore_patterns=["*.pb"],  # ONNX models are needed for frontend tokenization
     )
     print("Download complete.")
 
