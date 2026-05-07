@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from typing import Dict
 
 import pytest
@@ -44,7 +45,10 @@ class TestFactory:
         ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
-        # state_dict = TestFactory._generate_dummy_state_dict(config)
+
+        # Only cache tensors to disk when using real weights; with dummy (random) weights
+        # there is nothing to persist and the model_path may not be a writable local directory.
+        tensor_cache_path = model_args.weight_cache_path(dtype) if use_real_weights else None
 
         return {
             "mesh_device": mesh_device,
@@ -52,9 +56,8 @@ class TestFactory:
             "mesh_config": mesh_config,
             "ccl_manager": ccl_manager,
             "config": config,
-            # "state_dict": state_dict,
             "dtype": dtype,
-            "tensor_cache_path": model_args.weight_cache_path(dtype),
+            "tensor_cache_path": tensor_cache_path,
         }
 
     @staticmethod
@@ -108,27 +111,61 @@ class TestFactory:
         }
 
 
-def parametrize_mesh_with_fabric():
-    """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
-    # Always use 4x8 base mesh like original working tests
-    num_devices = ttnn.get_num_devices()
-    if num_devices == 8:
-        mesh_params = [pytest.param((1, 8))]
-    elif num_devices == 32:
-        mesh_params = [pytest.param((4, 8))]
-    else:
-        raise ValueError(f"Invalid number of devices: {num_devices}")
-    fabric_params = [
-        pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
-        ),
-    ]
+def parametrize_mesh_with_fabric(mesh_shapes=None):
+    """Mesh parametrization that works across all SKUs (N150, N300, T3K, Galaxy).
 
-    # Return a single decorator that combines both parametrizations
+    Opens the mesh *directly* at the requested shape — tests should not
+    create submeshes on top of this fixture. Pass the shapes the test
+    wants to exercise; default is every shape that fits on the system.
+
+    Pairs each shape with the appropriate fabric config:
+      (1, 1) → no fabric   (single device; fabric needs all system devices open)
+      (1, 8) → FABRIC_1D_RING
+      (4, 8) → FABRIC_1D_RING
+
+    In CI (CI=true env var) only the largest fitting shape is kept so that one
+    yaml entry runs correctly on every SKU without per-SKU ``-k`` filters.
+
+    Usage:
+        @parametrize_mesh_with_fabric()                  # default: all shapes that fit
+        @parametrize_mesh_with_fabric([(1, 1), (4, 8)])  # explicit shapes
+
+        pytest -k "1x8"   # T3K only           (manual / non-CI)
+    """
+    # Ordered largest → smallest; each entry is (mesh_shape, device_params_dict).
+    _all_configs = [
+        ((4, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}),
+        ((1, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}),
+        ((1, 1), {"fabric_config": None}),
+    ]
+    _config_by_shape = dict(_all_configs)
+
+    num_devices = ttnn.get_num_devices()
+    candidates = [s for s, _ in _all_configs] if mesh_shapes is None else list(mesh_shapes)
+    fitting = [s for s in candidates if s[0] * s[1] <= num_devices]
+
+    # CI: keep only the largest fitting shape so one yaml entry covers all SKUs.
+    if os.getenv("CI") == "true" and len(fitting) > 1:
+        fitting = [max(fitting, key=lambda s: s[0] * s[1])]
+
+    if not fitting:
+        # No fitting shape on this host — emit a single skipped entry so the
+        # test still collects (instead of pytest erroring on empty parametrize).
+        params = [
+            pytest.param(
+                (1, 1),
+                {"fabric_config": None},
+                id="1x1",
+                marks=pytest.mark.skip(reason="No requested mesh shape fits the available device count"),
+            )
+        ]
+    else:
+        params = [
+            pytest.param(s, _config_by_shape.get(s, {"fabric_config": None}), id=f"{s[0]}x{s[1]}") for s in fitting
+        ]
+
     def decorator(func):
-        func = pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)(func)
-        func = pytest.mark.parametrize("device_params", fabric_params, indirect=True)(func)
-        return func
+        return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)
 
     return decorator
 

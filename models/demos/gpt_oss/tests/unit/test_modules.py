@@ -568,7 +568,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     return decoder_layer
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric([(1, 1), (1, 8), (4, 8)])
 @parametrize_batch_seq(
     [
         (1, 1),  # decode
@@ -586,17 +586,6 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        (1, 8),
-        (4, 8),
-    ],
-    ids=[
-        "mesh_1x8",
-        "mesh_4x8",
-    ],
-)
-@pytest.mark.parametrize(
     # We want to test the first two layers so we capture both sliding and global attention layers
     "layer_idx",
     [0],
@@ -605,7 +594,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     ],
 )
 def test_decoder(
-    mesh_device, device_params, batch_size, seq_len, mesh_shape, layer_idx, test_modules, test_thresholds, reset_seeds
+    mesh_device, device_params, batch_size, seq_len, layer_idx, test_modules, test_thresholds, reset_seeds
 ):
     """
     Test decoder layer components.
@@ -625,13 +614,13 @@ def test_decoder(
         pytest test_modules.py --test-modules=attention
         pytest test_modules.py --test-modules=attention,mlp
     """
-    if mesh_shape[0] == 1 and batch_size > 1:
+    if mesh_device.shape[0] == 1 and batch_size > 1:
         pytest.skip(
-            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+            f"Skipping batch size {batch_size} for mesh shape {tuple(mesh_device.shape)}. "
+            "Only batch size 1 is supported for mesh shape without row-sharding."
         )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
     is_decode = seq_len == 1
     mode = "decode" if is_decode else "prefill"
 
@@ -642,13 +631,11 @@ def test_decoder(
     config._attn_implementation = "eager"
 
     if batch_size > 32:
-        if mesh_shape[0] == 1:
-            pytest.skip(f"Batch size > 32 is not supported for mesh shape {mesh_shape}")
+        if mesh_device.shape[0] == 1:
+            pytest.skip(f"Batch size > 32 is not supported for mesh shape {tuple(mesh_device.shape)}")
         is_row_sharded = True
-        assert (
-            batch_size % setup["mesh_device"].shape[0] == 0
-        ), "Batch size must be evenly divisible by mesh device shape"
-        local_batch_size = batch_size // setup["mesh_device"].shape[0]
+        assert batch_size % mesh_device.shape[0] == 0, "Batch size must be evenly divisible by mesh device shape"
+        local_batch_size = batch_size // mesh_device.shape[0]
     else:
         is_row_sharded = False
         local_batch_size = batch_size
@@ -768,7 +755,7 @@ def test_decoder(
 
     if should_test("fused_experts"):
         if decoder_layer.mlp.use_throughput_experts and is_decode and is_row_sharded:
-            logger.info(f"Testing Fused Throughput Experts for mesh shape {mesh_shape}...")
+            logger.info(f"Testing Fused Throughput Experts for mesh shape {tuple(mesh_device.shape)}...")
             hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_fused_throughput_experts_component(
                 setup["mesh_device"],
@@ -783,7 +770,7 @@ def test_decoder(
 
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:
-            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
+            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {tuple(mesh_device.shape)}...")
             hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_throughput_experts_component(
                 setup["mesh_device"],
@@ -796,7 +783,7 @@ def test_decoder(
                 pcc_threshold=pcc_thresholds["experts"],
             )
         else:
-            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {mesh_shape}...")
+            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {tuple(mesh_device.shape)}...")
             run_experts_component(
                 setup["mesh_device"],
                 hidden_states.shape,
@@ -1033,7 +1020,7 @@ def run_model_forward_test(
     return passing, output
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric([(1, 1), (1, 8), (4, 8)])
 @pytest.mark.parametrize(
     "batch_size, seq_len, mode",
     [
@@ -1046,22 +1033,11 @@ def run_model_forward_test(
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        (1, 8),
-        (4, 8),
-    ],
-    ids=[
-        "mesh_1x8",
-        "mesh_4x8",
-    ],
-)
-@pytest.mark.parametrize(
     "num_layers",
     [1],
     ids=["1_layer"],
 )
-def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
+def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers, reset_seeds):
     """
     Test full model forward pass comparing TT implementation to HuggingFace reference.
 
@@ -1085,15 +1061,13 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
 
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
-    if mesh_shape[0] == 1 and batch_size > 1:
+    if mesh_device.shape[0] == 1 and batch_size > 1:
         pytest.skip(
-            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+            f"Skipping batch size {batch_size} for mesh shape {tuple(mesh_device.shape)}. "
+            "Only batch size 1 is supported for mesh shape without row-sharding."
         )
 
     is_decode = mode == "decode"
-
-    # Create submesh with specified shape
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
@@ -1108,13 +1082,16 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     config._attn_implementation = "eager"
 
     # Create mesh config
+    mesh_shape = tuple(mesh_device.shape)
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # When HF_MODEL is set, use real weights + the pre-built tensor cache (same as the demo).
-    # Otherwise fall back to randomly-initialised weights (fast, no checkpoint needed).
+    # Use real weights only when HF_MODEL points to an existing local directory
+    # (Galaxy runners with weights on disk).  When HF_MODEL is an HF Hub ID
+    # (pipeline_functional runners that only cache the config), fall through to
+    # dummy weights so no actual checkpoint download is triggered.
     hf_model_path = os.environ.get("HF_MODEL")
     tensor_cache_path = None
-    if hf_model_path:
+    if hf_model_path and os.path.isdir(hf_model_path):
         from models.demos.gpt_oss.tt.model_config import ModelArgs
 
         _model_args = ModelArgs(mesh_device)
