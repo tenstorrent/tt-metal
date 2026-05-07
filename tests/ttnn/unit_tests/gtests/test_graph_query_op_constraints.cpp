@@ -1126,7 +1126,7 @@ TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
         dist_input_b,
         input_spec.data_type(),
         input_spec.tensor_layout().get_memory_config(),
-        std::nullopt,
+        std::optional<Tensor>{},  // explicit type — std::nullopt would be ambiguous for overload resolution
         none,
         none,
         none,
