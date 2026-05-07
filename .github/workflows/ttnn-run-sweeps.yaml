@@ -14,6 +14,11 @@ run-name: >-
     'ttnn - Run sweeps scheduled'
   }}
 
+permissions:
+  actions: write
+  contents: read
+  packages: write
+
 on:
   workflow_dispatch:
     inputs:
@@ -1362,3 +1367,12 @@ jobs:
           username: ml-kernel-op-test-writer
           hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
           path: ${{ github.workspace }}
+
+  auto-retry-on-failure:
+    if: failure()
+    needs:
+      - ttnn-run-single-sweep
+      - ttnn-sweeps-galaxy
+    uses: ./.github/workflows/_auto-retry-failed-jobs.yaml
+    secrets:
+      RETRY_WORKFLOW_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
