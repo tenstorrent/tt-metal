@@ -29,7 +29,10 @@ from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
 )
 from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTower
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
-from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWAllReduced
+from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinearIColShardedWAllReduced,
+    TTNNLinearLLamaIColShardedWAllReduced,
+)
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.utils.device_management import timed_call
 
@@ -173,7 +176,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         final_norm._unique_name = "model.norm"
 
         # AllReduced gives full vocab on each device for argmax
-        lm_head = TTNNLinearIColShardedWAllReduced.from_torch(hf_model.lm_head)
+        lm_head = TTNNLinearLLamaIColShardedWAllReduced.from_torch(hf_model.lm_head)
         lm_head._unique_name = "lm_head"
 
         # Paged KV cache

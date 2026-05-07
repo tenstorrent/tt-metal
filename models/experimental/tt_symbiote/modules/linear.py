@@ -374,6 +374,78 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
         )
 
 
+class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColShardedWAllReduced):
+    @classmethod
+    def from_two_torch(cls, gate_linear: nn.Linear, up_linear: nn.Linear):
+        in_features = gate_linear.in_features
+        intermediate = gate_linear.out_features
+        new_linear = cls(in_features=in_features, out_features=intermediate * 2)
+        new_linear._fallback_torch_layer = gate_linear
+        new_linear._gate_weight_torch = gate_linear.weight
+        new_linear._up_weight_torch = up_linear.weight
+        new_linear._gate_bias_torch = gate_linear.bias if gate_linear.bias is not None else None
+        new_linear._up_bias_torch = up_linear.bias if up_linear.bias is not None else None
+        new_linear.weight = None
+        new_linear.bias = None
+        return new_linear
+
+    def preprocess_weights_impl(self):
+        self.tt_weight_host = None
+        self.tt_bias_host = None
+
+    def move_weights_to_device_impl(self):
+        weight_mapper = ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim)
+        gate_w_host = preprocess_linear_weight(
+            self._gate_weight_torch,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            weights_mesh_mapper=weight_mapper,
+        )
+        up_w_host = preprocess_linear_weight(
+            self._up_weight_torch,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            weights_mesh_mapper=weight_mapper,
+        )
+        gate_w = ttnn.to_device(gate_w_host, self.device)
+        up_w = ttnn.to_device(up_w_host, self.device)
+        self.tt_weight = ttnn.concat([gate_w, up_w], dim=-1)
+        ttnn.deallocate(gate_w)
+        ttnn.deallocate(up_w)
+
+        has_bias = self._gate_bias_torch is not None or self._up_bias_torch is not None
+        if has_bias:
+            bias_mapper = ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim)
+            intermediate = self._gate_weight_torch.shape[0]
+            zeros_dtype = self._gate_weight_torch.dtype
+            g = (
+                self._gate_bias_torch
+                if self._gate_bias_torch is not None
+                else torch.zeros(intermediate, dtype=zeros_dtype)
+            )
+            u = self._up_bias_torch if self._up_bias_torch is not None else torch.zeros(intermediate, dtype=zeros_dtype)
+            gate_b_host = preprocess_linear_bias(
+                g, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=bias_mapper
+            )
+            up_b_host = preprocess_linear_bias(
+                u, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=bias_mapper
+            )
+            gate_b = ttnn.to_device(gate_b_host, self.device)
+            up_b = ttnn.to_device(up_b_host, self.device)
+            self.tt_bias = ttnn.concat([gate_b, up_b], dim=-1)
+            ttnn.deallocate(gate_b)
+            ttnn.deallocate(up_b)
+        else:
+            self.tt_bias = None
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+
 class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
     """Weight column-sharded linear with bfloat8_b weights (e.g. dots.ocr o_proj / down_proj).
 

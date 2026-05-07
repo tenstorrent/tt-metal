@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearLLamaIColShardedWAllReduced,
+    TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIReplicatedWColSharded,
 )
 
@@ -38,28 +37,10 @@ class TTNNDotsOCRMLP(TTNNModule):
 
         # Fuse gate_proj + up_proj into a single column-sharded all-reduced linear.
         tt_module.intermediate_size = torch_mlp.gate_proj.out_features
-        in_features = torch_mlp.gate_proj.in_features
 
-        gate_weight = torch_mlp.gate_proj.weight.data.clone()
-        up_weight = torch_mlp.up_proj.weight.data.clone()
-        fused_weight = torch.cat([gate_weight, up_weight], dim=0)
-
-        # Preserve bias if either has one (concat in same order as the weights).
-        gate_bias = getattr(torch_mlp.gate_proj, "bias", None)
-        up_bias = getattr(torch_mlp.up_proj, "bias", None)
-        has_bias = gate_bias is not None or up_bias is not None
-        if has_bias:
-            zeros_g = torch.zeros(tt_module.intermediate_size, dtype=fused_weight.dtype)
-            zeros_u = torch.zeros(tt_module.intermediate_size, dtype=fused_weight.dtype)
-            g = gate_bias.data.clone() if gate_bias is not None else zeros_g
-            u = up_bias.data.clone() if up_bias is not None else zeros_u
-            fused_bias = torch.cat([g, u], dim=0)
-        fused_linear = torch.nn.Linear(in_features, 2 * tt_module.intermediate_size, bias=has_bias)
-        fused_linear.weight.data = fused_weight
-        if has_bias:
-            fused_linear.bias.data = fused_bias
-
-        tt_module.fused_gate_up_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
+        tt_module.fused_gate_up_proj = TTNNLinearLLamaIColShardedWAllReducedFusedGateUp.from_two_torch(
+            torch_mlp.gate_proj, torch_mlp.up_proj
+        )
         # Keep individual proj refs for compatibility with anything that
         # introspects the module; they are no longer used in forward.
         tt_module.gate_proj = None

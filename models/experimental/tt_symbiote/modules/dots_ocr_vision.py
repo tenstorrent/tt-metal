@@ -412,12 +412,33 @@ class TTNNDotsVisionMLP(TTNNModule):
                 return None
             return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
-        self.tt_fc1_weight = pw(self._fc1_weight)
-        self.tt_fc1_bias = pb(self._fc1_bias)
+        if self._fc1_weight is not None and self._fc3_weight is not None:
+            fused_w = torch.cat([self._fc1_weight, self._fc3_weight], dim=0)
+            self._intermediate_size = self._fc1_weight.shape[0]
+            self.tt_fused_gate_up_weight = preprocess_linear_weight(
+                fused_w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            )
+            if self._fc1_bias is not None or self._fc3_bias is not None:
+                I = self._intermediate_size
+                g = self._fc1_bias if self._fc1_bias is not None else torch.zeros(I, dtype=fused_w.dtype)
+                u = self._fc3_bias if self._fc3_bias is not None else torch.zeros(I, dtype=fused_w.dtype)
+                fused_b = torch.cat([g, u], dim=0)
+                self.tt_fused_gate_up_bias = preprocess_linear_bias(
+                    fused_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+                )
+            else:
+                self.tt_fused_gate_up_bias = None
+        else:
+            self._intermediate_size = None
+            self.tt_fused_gate_up_weight = None
+            self.tt_fused_gate_up_bias = None
+            self.tt_fc1_weight = pw(self._fc1_weight)
+            self.tt_fc1_bias = pb(self._fc1_bias)
+            self.tt_fc3_weight = pw(self._fc3_weight)
+            self.tt_fc3_bias = pb(self._fc3_bias)
+
         self.tt_fc2_weight = pw(self._fc2_weight)
         self.tt_fc2_bias = pb(self._fc2_bias)
-        self.tt_fc3_weight = pw(self._fc3_weight)
-        self.tt_fc3_bias = pb(self._fc3_bias)
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -431,12 +452,14 @@ class TTNNDotsVisionMLP(TTNNModule):
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
-        self.tt_fc1_weight = _to_dev(self.tt_fc1_weight)
-        self.tt_fc1_bias = _to_dev(self.tt_fc1_bias)
+        self.tt_fused_gate_up_weight = _to_dev(getattr(self, "tt_fused_gate_up_weight", None))
+        self.tt_fused_gate_up_bias = _to_dev(getattr(self, "tt_fused_gate_up_bias", None))
+        self.tt_fc1_weight = _to_dev(getattr(self, "tt_fc1_weight", None))
+        self.tt_fc1_bias = _to_dev(getattr(self, "tt_fc1_bias", None))
         self.tt_fc2_weight = _to_dev(self.tt_fc2_weight)
         self.tt_fc2_bias = _to_dev(self.tt_fc2_bias)
-        self.tt_fc3_weight = _to_dev(self.tt_fc3_weight)
-        self.tt_fc3_bias = _to_dev(self.tt_fc3_bias)
+        self.tt_fc3_weight = _to_dev(getattr(self, "tt_fc3_weight", None))
+        self.tt_fc3_bias = _to_dev(getattr(self, "tt_fc3_bias", None))
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
@@ -444,35 +467,60 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
-        gate = ttnn.linear(
-            hidden_states,
-            self.tt_fc1_weight,
-            bias=self.tt_fc1_bias,
-            memory_config=mem,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        gate = ttnn.silu(gate, memory_config=mem)
+        if self.tt_fused_gate_up_weight is not None:
+            gate_up = ttnn.linear(
+                hidden_states,
+                self.tt_fused_gate_up_weight,
+                bias=self.tt_fused_gate_up_bias,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            in_shape = list(gate_up.shape)
+            I = self._intermediate_size
+            slice_lo_gate = [0] * len(in_shape)
+            slice_hi_gate = list(in_shape)
+            slice_hi_gate[-1] = I
+            slice_lo_up = [0] * len(in_shape)
+            slice_lo_up[-1] = I
+            slice_hi_up = list(in_shape)
+            slice_hi_up[-1] = 2 * I
+            gate = ttnn.slice(gate_up, slice_lo_gate, slice_hi_gate)
+            up = ttnn.slice(gate_up, slice_lo_up, slice_hi_up)
+            ttnn.deallocate(gate_up)
+            gate = ttnn.silu(gate, memory_config=mem)
+            gate_up_mul = ttnn.multiply(gate, up)
+            ttnn.deallocate(gate)
+            ttnn.deallocate(up)
+        else:
+            gate = ttnn.linear(
+                hidden_states,
+                self.tt_fc1_weight,
+                bias=self.tt_fc1_bias,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            gate = ttnn.silu(gate, memory_config=mem)
 
-        up = ttnn.linear(
-            hidden_states,
-            self.tt_fc3_weight,
-            bias=self.tt_fc3_bias,
-            memory_config=mem,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+            up = ttnn.linear(
+                hidden_states,
+                self.tt_fc3_weight,
+                bias=self.tt_fc3_bias,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel_config,
+            )
 
-        gate_up = ttnn.multiply(gate, up)
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
+            gate_up_mul = ttnn.multiply(gate, up)
+            ttnn.deallocate(gate)
+            ttnn.deallocate(up)
 
         output = ttnn.linear(
-            gate_up,
+            gate_up_mul,
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
         )
-        ttnn.deallocate(gate_up)
+        ttnn.deallocate(gate_up_mul)
 
         return output
 
@@ -800,27 +848,22 @@ class TTNNDotsVisionAttention(TTNNModule):
         )
 
     def _get_sdpa_program_config(self, seq_len: int):
-        """Chunked SDPA program config for the vision tower.
+        """Chunked SDPA program config for the vision tower."""
+        grid = self.device.compute_with_storage_grid_size()
+        grid_size = ttnn.CoreCoord(grid.x, grid.y)
 
-        SDPA is the single biggest device-time consumer in the dots-OCR vision tower
-        (~39% of total per perf.txt). Notes:
-          - Short sequences (≤ 2048) keep TTNN auto-config — the kernel picks a
-            chunk equal to seq_len, which is faster than any sub-chunk.
-          - For long sequences use chunk=256. Larger (e.g. 512) blows past the
-            1.5 MB Wormhole L1 because the FP32 softmax intermediate alone is ~1 MB.
-          - ``exp_approx_mode`` is left at its TTNN default (fast path); turning it
-            off costs ~5% on SDPA per the perf11 vs perf comparison.
-        """
-        if seq_len <= 2048:
-            return None
-        chunk_size = min(256, seq_len)
-        chunk_size = (chunk_size // 32) * 32
-        if chunk_size < 32:
-            chunk_size = 32
+        if seq_len <= 256:
+            q_chunk = k_chunk = max(32, ((seq_len + 31) // 32) * 32)
+        elif seq_len <= 1024:
+            q_chunk = k_chunk = 128
+        else:
+            q_chunk = k_chunk = 256
+
         return SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-            q_chunk_size=chunk_size,
-            k_chunk_size=chunk_size,
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=True,
         )
 
     def forward(
@@ -1226,10 +1269,10 @@ class TTNNDotsPatchMerger(TTNNModule):
             hidden_states,
             self.tt_w1,
             bias=self.tt_w1_bias,
+            activation="gelu",
             memory_config=mem,
             compute_kernel_config=compute_kc,
         )
-        hidden_states = ttnn.gelu(hidden_states)
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_w2,

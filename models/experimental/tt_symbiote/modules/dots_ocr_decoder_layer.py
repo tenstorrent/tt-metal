@@ -72,6 +72,8 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             attention_mask=None,
             past_key_values=past_key_value,
             cache_position=kwargs.get("cache_position"),
+            decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
+            decode_cos_sin=kwargs.get("decode_cos_sin"),
         )
 
         hs = ttnn.add(residual, attn_out)
@@ -109,10 +111,42 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
         self._shared_decode_cur_pos = shared_buf
 
     def forward(self, hidden_states, **kwargs):
+        seq_len = hidden_states.shape[-2]
+        if (
+            seq_len == 1
+            and getattr(self, "_shared_decode_cur_pos", None) is not None
+            and self.layers
+            and "decode_cos_sin" not in kwargs
+        ):
+            attn0 = getattr(self.layers[0], "self_attn", None)
+            rotary_setup = getattr(attn0, "_rotary_setup", None) if attn0 is not None else None
+            cache_position = kwargs.get("cache_position")
+            if rotary_setup is not None and cache_position is not None:
+                cur_pos_tt = self._materialize_shared_cur_pos(cache_position)
+                if cur_pos_tt is not None:
+                    kwargs["decode_cur_pos_tt"] = cur_pos_tt
+                    kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
+
         for layer in self.layers:
             layer_output = layer.forward(hidden_states, **kwargs)
             hidden_states = layer_output[0]
         return hidden_states
+
+    def _materialize_shared_cur_pos(self, cache_position):
+        cp = cache_position
+        if hasattr(cp, "ttnn_tensor") and cp.ttnn_tensor is not None:
+            cp = cp.ttnn_tensor
+        if not isinstance(cp, ttnn.Tensor):
+            return None
+        if len(cp.shape) > 1:
+            total_elems = 1
+            for d in cp.shape:
+                total_elems *= d
+            cp = ttnn.reshape(cp, (total_elems,))
+        if cp.shape[0] > 1:
+            cp = ttnn.slice(cp, [0], [1])
+        ttnn.copy(cp, self._shared_decode_cur_pos)
+        return self._shared_decode_cur_pos
 
     def pre_trace_execute(self, func_args, func_kwargs):
         cache_position = func_kwargs.get("cache_position")

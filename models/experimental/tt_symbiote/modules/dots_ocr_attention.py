@@ -128,6 +128,12 @@ class TTNNDotsOCRAttention(TTNNModule):
                 k_chunk_size=128,
                 exp_approx_mode=False,
             )
+            self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=128,
+                k_chunk_size=128,
+                exp_approx_mode=False,
+            )
             # Match the proven qwen_attention.py SDPA settings:
             # fp32_dest_acc_en=False doubles dst_size from 4 to 8 tiles, ~halving
             # the number of matmul passes inside the kernel. packer_l1_acc=False
@@ -301,10 +307,21 @@ class TTNNDotsOCRAttention(TTNNModule):
         attn_output = self.o_proj(attn_output)
         return attn_output, None
 
-    def _forward_decode_paged(self, hidden_states, attention_mask, past_key_values, cache_position):
+    def _forward_decode_paged(
+        self,
+        hidden_states,
+        attention_mask,
+        past_key_values,
+        cache_position,
+        decode_cur_pos_tt=None,
+        decode_cos_sin=None,
+    ):
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
-        cur_pos_tt = self._get_cur_pos_device_tensor(cache_position, batch_size)
+        if decode_cur_pos_tt is not None:
+            cur_pos_tt = decode_cur_pos_tt
+        else:
+            cur_pos_tt = self._get_cur_pos_device_tensor(cache_position, batch_size)
 
         qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length)
         query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
@@ -321,7 +338,10 @@ class TTNNDotsOCRAttention(TTNNModule):
         if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
             key_states = ttnn.typecast(key_states, ttnn.bfloat16)
 
-        cos, sin = self._rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
+        if decode_cos_sin is not None:
+            cos, sin = decode_cos_sin
+        else:
+            cos, sin = self._rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
         query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
         key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin)
 
@@ -360,7 +380,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             self.layer_idx,
             current_pos=cur_pos_tt,
             scale=self.scaling,
-            program_config=self.sdpa.program_config,
+            program_config=getattr(self.sdpa, "decode_program_config", self.sdpa.program_config),
             compute_kernel_config=self.sdpa.compute_kernel_config,
         )
 
@@ -384,6 +404,13 @@ class TTNNDotsOCRAttention(TTNNModule):
         use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
 
         if use_paged and seq_length == 1:
-            return self._forward_decode_paged(hidden_states, attention_mask, past_key_values, cache_position)
+            return self._forward_decode_paged(
+                hidden_states,
+                attention_mask,
+                past_key_values,
+                cache_position,
+                decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
+                decode_cos_sin=kwargs.get("decode_cos_sin"),
+            )
         else:
             return self._forward_prefill(hidden_states, attention_mask, past_key_values, cache_position)
