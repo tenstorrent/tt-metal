@@ -93,7 +93,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // _llk_unpack_A     sets both A and B valid
-            return _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            return;
         }
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
@@ -119,6 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -135,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
 
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
-        _llk_pack_init_<false, false>(formats.pack_dst);
+        _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }

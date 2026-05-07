@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import os
 import sys
 import time
 from pathlib import Path
@@ -16,43 +14,10 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from conftest import bh_2d_mesh_device_context
+from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
 from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
-from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
-
-
-def _fabric_config_for_num_procs(num_procs: int):
-    """Infer fabric config from process count: 4 → FABRIC_2D, 16 → FABRIC_2D_TORUS_Y."""
-    if num_procs == 4:
-        return ttnn.FabricConfig.FABRIC_2D
-    if num_procs == 16:
-        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    if num_procs == 64:
-        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
-
-
-@contextlib.contextmanager
-def open_mesh_device():
-    """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
-    if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
-        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
-    num_procs = int(ttnn.distributed_context_get_size())
-    device_params = {
-        "fabric_config": _fabric_config_for_num_procs(num_procs),
-        "fabric_router_config": create_fabric_router_config(15232),
-        "worker_l1_size": 1431568,
-    }
-    logger.info("Opening mesh device...")
-    with bh_2d_mesh_device_context(device_params) as mesh_device:
-        logger.info(
-            "Mesh device opened (id={}, shape={})",
-            mesh_device.get_system_mesh_id(),
-            mesh_device.shape,
-        )
-        yield mesh_device
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -80,14 +45,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--model-path",
         type=Path,
         default=None,
-        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights real/state_dict)",
     )
     parser.add_argument(
         "--weights",
         type=str,
         choices=("synthetic", "real", "state_dict"),
         default="real",
-        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
+        help="synthetic: random prepare path; real: TensorCache + HF safetensors; state_dict: HF safetensors + prepare path (no cache)",
     )
     parser.add_argument(
         "--fp32",
@@ -116,10 +81,40 @@ def create_parser() -> argparse.ArgumentParser:
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     parser.add_argument(
+        "--num-slots",
+        type=int,
+        default=64,
+        help="Number of users/slots (KV cache batch size) for the decoder stages",
+    )
+    parser.add_argument(
+        "--relaxed-acceptance-delta",
+        type=float,
+        default=0.6,
+        help="Relaxed acceptance delta for the MTP verification stage",
+    )
+    parser.add_argument(
         "--launch-only",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Only launch the pipeline, export H2D/D2H socket descriptors on mesh id 0, and keep the pipeline alive.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=1,
+        help="Top-k sampling for the LM head weights (only for real weights)",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=1.0,
+        help="Top-p sampling for the LM head weights (only for real weights)",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.6,
+        help="Temperature for softmax in probablistic sampling",
     )
     parser.add_argument(
         "--io-socket-descriptor-prefix",
@@ -128,7 +123,7 @@ def create_parser() -> argparse.ArgumentParser:
         help=(
             "If set, export H2D/D2H socket descriptors on mesh 0 after pipeline setup "
             "(files named <prefix>_h2d / <prefix>_d2h). When --launch-only is used and "
-            "this is omitted, defaults to deepseek_v3_b1."
+            "this is omitted, defaults to deepseek."
         ),
     )
     return parser
@@ -152,6 +147,11 @@ def run_demo(
     moe_layer_id_override: int | None = None,
     launch_only: bool = False,
     io_socket_descriptor_prefix: str | None = None,
+    num_slots: int = 64,
+    relaxed_acceptance_delta: float = 0.6,
+    top_k: int = 1,
+    top_p: float = 1.0,
+    temperature: float = 0.6,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -169,6 +169,11 @@ def run_demo(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+            num_slots=num_slots,
+            relaxed_acceptance_delta=relaxed_acceptance_delta,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -183,6 +188,10 @@ def run_demo(
             logger.debug("Prompt with chat template: {}", prompt)
 
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            think_open_id = tokenizer.encode("<think>", add_special_tokens=False)
+            think_close_id = tokenizer.encode("</think>", add_special_tokens=False)
+            if len(think_open_id) != 1 or len(think_close_id) != 1:
+                raise RuntimeError("Thinking token IDs must be single tokens")
             if not prompt_ids:
                 raise RuntimeError("Chat template produced an empty prompt")
             logger.debug(f"Encoded prompt: {prompt_ids}")
@@ -192,6 +201,7 @@ def run_demo(
                 prompt_token_ids=prompt_ids,
                 max_new_tokens=iterations,
                 eos_token_id=tokenizer.eos_token_id,
+                think_token_ids=[think_open_id[0], think_close_id[0]],
                 return_generated_tokens=True,
             )
             assert generated_tokens is not None
@@ -209,7 +219,9 @@ def run_demo(
                 logger.info("Shutting down launch-only pipeline after interrupt.")
 
         model_pipeline.barrier()
-        logger.info("Pod pipeline complete")
+
+        logger.info("Pod pipeline complete - terminating now...")
+        model_pipeline.terminate()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -217,18 +229,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
-    if args.weights == "real" and args.cache_path is None:
-        parser.error("--cache-path is required when --weights real")
-    if args.weights == "state_dict":
+    if args.weights == "real":
+        if args.cache_path is None:
+            parser.error("--cache-path is required when --weights real")
         if args.model_path is None:
-            parser.error("--model-path is required when --weights state_dict")
+            parser.error("--model-path is required when --weights real")
+    if args.weights in ("real", "state_dict"):
+        if args.model_path is None:
+            parser.error(f"--model-path is required when --weights {args.weights}")
         index_path = args.model_path / "model.safetensors.index.json"
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
-        io_socket_descriptor_prefix = "deepseek_v3_b1"
+        io_socket_descriptor_prefix = "deepseek"
 
     run_demo(
         prompt=args.prompt,
@@ -243,8 +258,13 @@ def main(argv: list[str] | None = None) -> int:
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+        num_slots=args.num_slots,
+        relaxed_acceptance_delta=args.relaxed_acceptance_delta,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        temperature=args.temperature,
     )
-    print(file=sys.stdout, flush=True)
+    print(end="", file=sys.stdout, flush=True)
     return 0
 
 

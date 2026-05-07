@@ -5,6 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -14,6 +15,16 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt_stl/span.hpp>
+
+// Verify that MeshCoordinateRange::Iterator satisfies the C++20 std::forward_iterator concept.
+// This catches missing type aliases (iterator_category, value_type, difference_type, etc.)
+// and ensures the iterator can be used with std::vector range construction and STL algorithms.
+static_assert(std::forward_iterator<tt::tt_metal::distributed::MeshCoordinateRange::Iterator>);
+
+// Note: MeshContainer::Iterator and ConstIterator are stashing proxy iterators (ValueProxy is
+// stored inside the iterator). std::indirectly_readable requires iter_reference_t<const I> ==
+// iter_reference_t<I>, which cannot be satisfied without changing proxy semantics. No standard
+// concept check is asserted for these iterators.
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -1197,6 +1208,17 @@ TEST(MeshCoordinateRangeTest, Wraparound4D_BasicIterationAndShape) {
 }
 
 // Add more detailed assertions as needed
+
+TEST(MeshCoordinateRangeTest, VectorConstructionFromIterators) {
+    // Verify that MeshCoordinateRange::Iterator satisfies the requirements for
+    // std::vector range construction (requires standard iterator type aliases).
+    MeshShape shape({2, 4});
+    auto coord_range = MeshCoordinateRange(shape);
+    std::vector<MeshCoordinate> coords(coord_range.begin(), coord_range.end());
+    EXPECT_EQ(coords.size(), 8u);
+    EXPECT_EQ(coords.front(), MeshCoordinate({0, 0}));
+    EXPECT_EQ(coords.back(), MeshCoordinate({1, 3}));
+}
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed

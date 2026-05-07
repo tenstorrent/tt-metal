@@ -10,10 +10,36 @@
 <br><br>
 **TT-LLK** is Tenstorrent's Low Level Kernel library.
 
+[![STATUS](https://img.shields.io/badge/status-frozen-red)](#)
+[![MOVED TO](https://img.shields.io/badge/moved%20to-tt--metal-blue)](https://github.com/tenstorrent/tt-metal)
+
 [![C++](https://img.shields.io/badge/C++-17-green.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.10-green.svg)](#)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tenstorrent/tt-llk)
 </div>
+
+---
+
+> 🚧 **Repository Status Update**
+>
+> This repository is now **frozen** and no longer accepts new pull requests.
+>
+> All ongoing development of **TT-LLK** has moved to the [`tt-metal`](https://github.com/tenstorrent/tt-metal) repository.
+>
+> 📘 [**Migration guide**](https://github.com/tenstorrent/tt-llk/blob/main/docs/migration_guide.md) - for existing branches and active pull requests
+>
+> 📁 The LLK source code is now located at:
+> ```
+> tt-metal/tt_metal/tt-llk
+> ```
+>
+> 🔒 The `main` branch in this repository is **locked**.
+>
+> 👉 **To contribute, please submit all new pull requests to `tt-metal`.**
+>
+> This repository will remain available for historical reference.
+
+---
 
 ## Overview ##
 
@@ -52,27 +78,15 @@ The following documentation is available to help you understand and use low-leve
 
 ## Contributing ##
 
-We welcome contributions to improve tt-llk! Please follow these steps to get started:
+⚠️ **Note:** This repository is **frozen** and does not accept new pull requests.
+
+We welcome contributions to TT-LLK in its new home! Please contribute via the [`tt-metal`](https://github.com/tenstorrent/tt-metal) repository instead.
+
+If you are looking for historical contribution guidelines, you can still refer to the documents below:
 
 1. **Read the Guidelines**
 
     Familiarize yourself with our [CONTRIBUTING](https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide and [CODE OF CONDUCT](https://github.com/tenstorrent/tt-llk/blob/main/CODE_OF_CONDUCT.md).
-
-2. **Create a Branch**
-
-    Create a new branch for your changes.
-
-3. **Make Changes**
-
-    Implement your changes and commit them with clear and descriptive messages.
-
-4. **Add Tests**
-
-    If applicable, add new tests to cover your changes and ensure all existing tests pass.
-
-5. **Submit a Pull Request**
-
-    Open a pull request (PR) to propose your changes for review.
 
 ## Tenstorrent Bounty Program Terms and Conditions ##
 
@@ -86,4 +100,4 @@ Old LLK repositories:
 - <https://github.com/tenstorrent/tt-llk-wh-b0>
 - <https://github.com/tenstorrent/tt-llk-bh>
 
-have been archived. All ongoing development continues in this repository.
+have been archived. This repository remains available for historical reference, and all ongoing development has moved to [`tt-metal`](https://github.com/tenstorrent/tt-metal).

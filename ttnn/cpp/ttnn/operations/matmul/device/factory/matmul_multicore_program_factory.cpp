@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
+#include <map>
+#include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -39,13 +43,20 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b.buffer();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
+
+    TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
+    // packer_l1_acc is not applicable, because the compute kernel doesn't have any
+    // intermediate accumulation. Silences compiler warnings.
+    (void)packer_l1_acc;
+
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -121,6 +132,15 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, {{"cb_out", output_cb_index}}));
 
+    const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    // Forward stagger / throttle settings to the bmm compute kernel via preprocessor defines.
+    // Both helpers are no-ops on small core grids, so it is safe to always call them.
+    std::map<std::string, std::string> mm_kernel_defines;
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
     std::vector<uint32_t> compute_args_group_1 = {
         1,                                 // B
         1,                                 // Mt
@@ -135,8 +155,11 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
-            .dst_full_sync_en = true,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
             .compile_args = compute_args_group_1,
+            .defines = mm_kernel_defines,
             .named_compile_args = {
                 {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}}});
 
@@ -155,8 +178,11 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
-                .dst_full_sync_en = true,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
                 .compile_args = compute_args_group_2,
+                .defines = mm_kernel_defines,
                 .named_compile_args = {
                     {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}}});
     }

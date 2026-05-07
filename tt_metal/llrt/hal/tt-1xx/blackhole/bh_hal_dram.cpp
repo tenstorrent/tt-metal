@@ -8,8 +8,10 @@
 #include "tt_align.hpp"
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::dram;
 
+#include <algorithm>
 #include <cstdint>
 
 #include "blackhole/bh_hal.hpp"
@@ -31,13 +33,19 @@ namespace dram_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
+namespace dram_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_dram_mem_map() {
     static_assert(sizeof(mailboxes_t) <= MEM_DRISC_MAILBOX_SIZE);
     static_assert(MEM_DRISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 
+    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = 0;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_DRISC_L1_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_DRISC_MAILBOX_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = GET_DRISC_MAILBOX_ADDRESS_HOST(launch);
@@ -45,7 +53,9 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] =
         GET_DRISC_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_DRISC_MAILBOX_ADDRESS_HOST(profiler);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DRISC_MAP_END;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DRISC_KERNEL_CONFIG_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
+        tt::align(MEM_DRISC_KERNEL_CONFIG_BASE + MEM_DRISC_KERNEL_CONFIG_SIZE, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_DRISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_DRISC_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
@@ -63,7 +73,9 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = 0;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DRISC_KERNEL_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
+        MEM_DRISC_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t) * go_message_num_entries;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
@@ -89,7 +101,7 @@ HalCoreInfoType create_dram_mem_map() {
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
         // DM
         {
-            {"DR0", "DRISC0"},
+            {"DR", "DRISC"},
         },
     };
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
@@ -107,7 +119,8 @@ HalCoreInfoType create_dram_mem_map() {
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         dram_dev_msgs::create_factory(),
-        dram_fabric_telemetry::create_factory()};
+        dram_fabric_telemetry::create_factory(),
+        dram_realtime_profiler_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

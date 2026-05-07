@@ -293,7 +293,7 @@ The importer matches `python_io` records to graph nodes by operation name, consu
 | `L1_SMALL` | 3 |
 | `TRACE` | 4 |
 
-The importer prioritizes the `exact_buffer_type` field from `buffer_allocate` nodes (which uses the precise C++ enum) over the generic `type` field.
+The importer reads the `buffer_type` integer field directly from graph nodes.
 
 ```bash
 python -m ttnn.graph_report my_report.json ./visualizer_db/
@@ -641,7 +641,7 @@ Memory allocation/deallocation events.
 
 **buffer_allocate params:**
 - `size`, `address`, `type`, `layout`, `device_id`
-- `exact_buffer_type`: Precise C++ buffer type enum (`"DRAM"`, `"L1"`, `"L1_SMALL"`, `"TRACE"`)
+- `buffer_type`: Integer BufferType enum (0=DRAM, 1=L1, 2=SYSTEM_MEMORY, 3=L1_SMALL, 4=TRACE)
 - `max_size_per_bank`: Pre-computed per-bank buffer size (from C++ allocator)
 
 ### circular_buffer_allocate / circular_buffer_deallocate_all

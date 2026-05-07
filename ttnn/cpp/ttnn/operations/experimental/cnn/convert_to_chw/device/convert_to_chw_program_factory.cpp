@@ -128,7 +128,7 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/convert_to_chw.cpp",
         input_core_grid,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});

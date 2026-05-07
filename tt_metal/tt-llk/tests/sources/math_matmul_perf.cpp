@@ -86,7 +86,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            return _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            return;
         }
         else
         {
@@ -147,7 +148,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        // Use tile dimensions from runtime params for tiny tiles support
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
 
@@ -161,7 +161,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            return _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -224,12 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_C_DIM,
             num_faces,
             PARTIAL_FACE_PACK);
-        _llk_pack_init_<false, false, false>(
-            formats.pack_dst,
-            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            TILE_C_DIM,
-            num_faces,
-            false /* partial_face parameter is unused on BH */);
+        _llk_pack_init_<false, false, false>(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 #else
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(

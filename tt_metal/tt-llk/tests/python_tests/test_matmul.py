@@ -58,6 +58,7 @@ def generate_format_aware_matmul_combinations(
 MATMUL_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32, DataFormat.Bfp8_b]
 )
+
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
     MATMUL_FORMATS, DEST_ACC_MODES
@@ -77,7 +78,6 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 def test_matmul(
     math_fidelity,
     format_dest_acc_and_dims,
-    workers_tensix_coordinates,
     boot_mode=BootMode.DEFAULT,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
@@ -147,7 +147,7 @@ def test_matmul(
         boot_mode=boot_mode,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

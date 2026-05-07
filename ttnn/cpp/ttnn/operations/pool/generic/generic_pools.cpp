@@ -13,12 +13,14 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::pool {
@@ -181,6 +183,24 @@ static std::vector<Tensor> pool2d_L1(
         .ceil_mode = ceil_mode,
     };
     auto output_shape = sliding_window_config.get_output_shape();
+    TT_FATAL(
+        output_shape[1] > 0 && output_shape[2] > 0,
+        "Pool2D: Computed output dimensions must be positive, got {}x{} "
+        "(input={}x{}, kernel={}x{}, stride={}x{}, dilation={}x{}, padding=[{},{},{},{}])",
+        output_shape[1],
+        output_shape[2],
+        input_h,
+        input_w,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        dilation_h,
+        dilation_w,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3]);
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor.memory_config();
@@ -226,14 +246,9 @@ static std::vector<Tensor> pool2d_L1(
 
         // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
         // have random values it would affect common exponent calculation
-
-        Tensor input_tensor_padded;
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
-
-            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
-        } else {
-            input_tensor_padded = input_tensor;
+            input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         }
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, in_memory_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
@@ -291,9 +306,17 @@ static std::vector<Tensor> pool2d_L1(
     };
 
     // call the halo uop
+    const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/input_tensor_sharded.dtype() == DataType::FLOAT32,
+        /*default_l1_acc=*/false);
     Tensor haloed_tensor = ttnn::halo(
         input_tensor_sharded,
         sliding_window_config,
+        resolved_compute_kernel_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,

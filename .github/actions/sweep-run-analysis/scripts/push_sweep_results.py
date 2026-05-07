@@ -73,6 +73,24 @@ def _normalize_run_type(run_type: str) -> str:
     return run_type.strip().replace(" ", "_")
 
 
+def _short_hardware_label(card_type: str) -> str:
+    """Extract a concise hardware label from card_type strings like 'wormhole_b0 (N300)'."""
+    if not card_type:
+        return "—"
+    ct = card_type.lower()
+    if "t3000" in ct or "t3k" in ct or "4c" in ct:
+        return "T3K"
+    if "n300" in ct or "2 device" in ct:
+        return "N300"
+    if "n150" in ct or "1 device" in ct:
+        return "N150"
+    if "blackhole" in ct or "p150b" in ct:
+        return "BH"
+    if "galaxy" in ct:
+        return "Galaxy"
+    return card_type
+
+
 def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) -> None:
     """Write a GitHub Actions Job Summary with sweep run results.
 
@@ -141,15 +159,16 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
         for module, module_tests in sorted_modules:
             lines.append(f"**{module}** ({len(module_tests)} failures)")
             lines.append("")
-            lines.append("| Test Name | Config Hash | Status |")
-            lines.append("|-----------|-------------|--------|")
+            lines.append("| Test Name | Config Hash | Status | Hardware |")
+            lines.append("|-----------|-------------|--------|----------|")
             for t in module_tests[:4]:
                 name = t.get("full_test_name", "unknown")
                 config_hash = t.get("input_hash", "—")
                 status = t.get("status", "fail")
-                lines.append(f"| `{name}` | `{config_hash}` | {status} |")
+                hardware = _short_hardware_label(t.get("card_type", ""))
+                lines.append(f"| `{name}` | `{config_hash}` | {status} | {hardware} |")
             if len(module_tests) > 4:
-                lines.append(f"| ... and {len(module_tests) - 4} more | | |")
+                lines.append(f"| ... and {len(module_tests) - 4} more | | | |")
             lines.append("")
 
         lines.append("</details>")
@@ -354,7 +373,10 @@ def main():
     # --summary-only mode: write GitHub Step Summary without DB push
     if len(sys.argv) >= 2 and sys.argv[1] == "--summary-only":
         if len(sys.argv) < 3:
-            print("Usage: push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+            print(
+                "Usage: push_sweep_results.py --summary-only <results_dir> [run_type]",
+                file=sys.stderr,
+            )
             sys.exit(1)
         results_dir = sys.argv[2]
         run_type = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -379,7 +401,10 @@ def main():
 
     if len(sys.argv) < 3:
         print("Usage: push_sweep_results.py <results_dir> <run_contents>", file=sys.stderr)
-        print("       push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+        print(
+            "       push_sweep_results.py --summary-only <results_dir> [run_type]",
+            file=sys.stderr,
+        )
         print("")
         print("  results_dir: Directory containing JSON result files")
         print("  run_contents: Type of run (e.g., 'lead models')")

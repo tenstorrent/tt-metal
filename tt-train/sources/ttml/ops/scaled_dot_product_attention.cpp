@@ -104,10 +104,11 @@ void validate_qkv_shapes(
         value->get_value().logical_shape().to_array_4D();
 
     if (batch_num != batch_num_key || batch_num != batch_num_value || seq_len_key != seq_len_value ||
-        embedding_dim != embedding_dim_key || embedding_dim != embedding_dim_value) {
+        embedding_dim != embedding_dim_key) {
         throw std::invalid_argument(fmt::format(
-            "Query, key, and value must have matching batch_num and embedding_dim. Key and value must have matching "
-            "seq_len. Got shapes: query={}, key={}, value={}",
+            "Query, key, and value must have matching batch_num. Query and key must have matching embedding_dim. "
+            "Key and value must have matching seq_len. Value embedding_dim can differ from query/key. "
+            "Got shapes: query={}, key={}, value={}",
             query->get_value().logical_shape(),
             key->get_value().logical_shape(),
             value->get_value().logical_shape()));
@@ -149,7 +150,7 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
     auto q_scaled =
-        ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+        ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
     auto key_tensor = key->get_value();
 
     // σQ @ K
@@ -159,24 +160,22 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
         auto mask_tensor = mask.value()->get_value();
         // ttnn::where when mask is not of the same shape as qk_scaled
         qk_scaled = ttnn::add(
-            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none),
             ttnn::multiply(
-                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                 1e9F,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 none,
                 none,
-                none,
-                false),
+                none),
             std::nullopt,
             std::nullopt,
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
     }
     // (B, H, S, S)
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
@@ -207,7 +206,7 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
             dL_dattention_weights.deallocate();
 
             dL_dscaled_dot = ttnn::multiply(
-                dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,H,S,S]
+                dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);  // [B,H,S,S]
 
             // dL_dQ = dL_dscaled_dot @ key
             ttnn::Tensor dL_dQ =
@@ -266,7 +265,7 @@ autograd::TensorPtr scaled_dot_product_attention(
         /*return_intermediates=*/true);  // Need intermediates for backward pass
 
     auto attn_output = fw_result[0].value();    // (B, H, S, D)
-    auto intermediates = fw_result[1].value();  // (B, H, S, 2 tiles) - stores [max_val, 1/sum_exp] per row for softmax
+    auto intermediates = fw_result[1].value();  // (B, H, S, 32) FP32 logsumexp per row for softmax
 
     auto out = ttml::autograd::create_tensor(attn_output);
 

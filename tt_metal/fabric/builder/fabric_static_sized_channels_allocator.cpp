@@ -358,14 +358,17 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             },
             // BLACKHOLE
             {
-                {8, 16, 0, 0, 0, 0},  // Option 1: VC0 only
-                {8, 8, 0, 0, 0, 0},   // Option 2: VC0 only
-                {4, 8, 0, 0, 0, 0},   // Option 3: VC0 only
-                {4, 4, 0, 0, 0, 0},   // Option 4: VC0 only, smaller
-                {2, 4, 0, 0, 0, 0},   // Option 5: VC0 only, smaller
-                {2, 2, 0, 0, 0, 0},   // Option 6: VC0 only, smaller
-                {1, 2, 0, 0, 0, 0},   // Option 7: VC0 only, smallest
-                {1, 1, 0, 0, 0, 0}    // Option 8: VC0 only, smallest
+                {32, 32, 0, 0, 0, 0},  // Option 1: VC0 only
+                {16, 32, 0, 0, 0, 0},  // Option 2: VC0 only
+                {16, 16, 0, 0, 0, 0},  // Option 3: VC0 only
+                {8, 16, 0, 0, 0, 0},   // Option 4: VC0 only
+                {8, 8, 0, 0, 0, 0},    // Option 5: VC0 only
+                {4, 8, 0, 0, 0, 0},    // Option 6: VC0 only
+                {4, 4, 0, 0, 0, 0},    // Option 7: VC0 only, smaller
+                {2, 4, 0, 0, 0, 0},    // Option 8: VC0 only, smaller
+                {2, 2, 0, 0, 0, 0},    // Option 9: VC0 only, smaller
+                {1, 2, 0, 0, 0, 0},    // Option 10: VC0 only, smallest
+                {1, 1, 0, 0, 0, 0}     // Option 11: VC0 only, smallest
             }};
 
         // VC0+VC1 mesh options: vc1 slots > 0, vc2 slots = 0

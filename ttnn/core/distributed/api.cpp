@@ -78,8 +78,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         std::vector<ttnn::Tensor> tensors;
         tensors.reserve(device_storage.get_coords().size());
         for (const auto& coord : device_storage.get_coords()) {
-            DeviceStorage shard_storage(device_storage, {coord});
-            tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
+            tensors.push_back(Tensor(DeviceStorage(device_storage, {coord})));
         }
         return tensors;
     }
@@ -132,10 +131,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
         device_storages.push_back(std::cref(shard.device_storage()));
     }
 
-    auto combined_storage = DeviceStorage::combine_device_storages(device_storages);
-    TensorTopology topology =
-        TensorTopology::create_sharded_tensor_topology(MeshShape(tensor_shards.size()), shard_dim);
-    return Tensor(std::move(combined_storage), reference_shard.tensor_spec(), std::move(topology));
+    return Tensor(DeviceStorage::combine_device_storages(device_storages, shard_dim));
 }
 
 }  // namespace ttnn::distributed

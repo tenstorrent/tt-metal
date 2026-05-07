@@ -91,13 +91,14 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(parent_mesh->shape())) {
         coords.push_back(coord);
     }
-    tt::tt_metal::DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
 
-    return Tensor(
-        std::move(device_storage),
-        reference_spec,
-        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
-            tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0));
+    auto topology = tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
+        tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0);
+
+    MeshTensor mesh_tensor(mesh_buffer, reference_spec, topology);
+
+    auto result = Tensor(tt::tt_metal::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+    return result;
 }
 
 std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tensor) {
@@ -137,13 +138,13 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
 
-        DeviceStorage device_storage(mesh_buffer);
+        Tensor unit_tensor(tt::tt_metal::MeshTensor(mesh_buffer, reference_spec, TensorTopology{}));
         TT_FATAL(
-            device_storage.get_coords().size() == 1 &&
-                device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),
+            unit_tensor.device_storage().get_coords().size() == 1 &&
+                unit_tensor.device_storage().get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),
             "mesh_buffer is not on a unit submesh");
 
-        result.push_back(Tensor(std::move(device_storage), reference_spec, TensorTopology{}));
+        result.push_back(std::move(unit_tensor));
     }
 
     return result;

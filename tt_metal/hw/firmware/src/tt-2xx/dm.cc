@@ -54,8 +54,8 @@ thread_local uint32_t crta_count __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
@@ -104,6 +104,7 @@ void deassert_trisc() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+volatile KernelBarrier g_kernel_barrier __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -136,6 +137,7 @@ inline void run_triscs(uint32_t enables) {
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
     DEVICE_PRINT("DM-FW: running TRISCs {}\n", enables);
+    invalidate_trisc_instruction_cache();
     if (enables &
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
@@ -212,6 +214,7 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_INITIALIZE_LOCK();
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        thread_sync_init();
 
         deassert_trisc();
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();

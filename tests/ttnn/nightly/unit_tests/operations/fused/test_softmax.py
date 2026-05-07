@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("shape", [[2, 10, 512, 8192]])
@@ -25,10 +25,24 @@ def test_ttnn_softmax_sdxl_attention(device, shape):
     torch_output = F.softmax(torch_input, dim=-1, dtype=torch.bfloat16)
     tt_output = ttnn.softmax(tt_input, dim=-1, numeric_stable=True)
     tt_output_torch = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output_torch, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output,
+        tt_output_torch,
+        pcc_threshold=0.999,
+        rtol=0.136,
+        atol=0.001,
+        frobenius_threshold=0.068,
+    )
 
     # test program cache
     torch_output2 = F.softmax(torch_output, dim=-1, dtype=torch.bfloat16)
     tt_output2 = ttnn.softmax(tt_output, dim=-1, numeric_stable=True)
     tt_output_torch2 = ttnn.to_torch(tt_output2)
-    assert_with_pcc(torch_output2, tt_output_torch2, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output2,
+        tt_output_torch2,
+        pcc_threshold=0.999,
+        rtol=0.136,
+        atol=0.001,
+        frobenius_threshold=0.068,
+    )

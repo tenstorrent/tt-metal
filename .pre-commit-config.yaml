@@ -143,14 +143,6 @@ repos:
       name: pylint (llk)
       args: [--disable=all, --enable=wildcard-import]
       files: ^tt_metal/tt-llk/
-- repo: local
-  hooks:
-    - id: llk-validate-copyright-headers
-      name: "llk: validate copyright headers"
-      entry: python3 tt_metal/tt-llk/infra/validate_copyright.py
-      language: system
-      args: ["--quiet", "--fix"]
-      files: ^tt_metal/tt-llk/.*\.(cpp|cc|h|hpp|py|ld)$
 - repo: https://github.com/codespell-project/codespell
   rev: v2.4.1
   hooks:

@@ -35,7 +35,6 @@ jobs:
       random_order: false
       timeout_minutes: 360
       coverage: true
-      use_durations: false
 
   nightly-test-blackhole:
     name: "🕳️ Nightly Tests (Blackhole)"
@@ -50,7 +49,6 @@ jobs:
       random_order: false
       timeout_minutes: 360
       coverage: true
-      use_durations: false
 
   nightly-summary:
     name: "📊 Nightly Summary"
@@ -79,6 +77,6 @@ jobs:
         uses: ./.github/actions/report-failure
         with:
           test_name: "Nightly Tests"
-          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          slack_channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
           status: ${{ needs.nightly-summary.result }}

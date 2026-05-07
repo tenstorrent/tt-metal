@@ -33,7 +33,7 @@ ttnn::Tensor dit_rms_norm_unary_fused(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // fp32_dest_acc_en will be True for FLOAT32 inputs (set below), so use HiFi3 as default on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_fidelity = (is_wormhole && is_fp32_input) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    const auto default_fidelity = (is_wormhole && is_fp32_input) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     auto kernel_config_val = compute_kernel_config.value_or(
         init_device_compute_kernel_config(arch, std::nullopt, default_fidelity, approx_mode, fp32_acc));
 

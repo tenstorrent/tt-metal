@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "lltt.h"
@@ -24,7 +25,8 @@ namespace sfpu
  * @tparam format The data format that determines which implementation to use.
  *                Supported formats:
  *                - DataFormat::Int32: Use integer implementation with INT32 instruction mode
- *                - DataFormat::UInt32: Use integer implementation with INT32_2S_COMP instruction mode
+ *                - DataFormat::UInt32: Use integer implementation with INT32 instruction mode
+ *                  (UInt32 is stored as raw unsigned bits — no sign-magnitude conversion needed)
  *                - DataFormat::Float32: Uses floating-point implementation with FP32 instruction mode
  * @param tile_idx_0 The index of the first tile in the Dest register to operate on.
  * @param tile_idx_1 The index of the second tile in the Dest register to operate on.
@@ -37,10 +39,11 @@ inline void _calculate_add_top_row_(const std::uint32_t tile_idx_0 = 0, const st
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::Float32");
 
-    // Determine instruction mode and replay buffer parameters based on format
-    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32)    ? InstrModLoadStore::INT32
-                                                   : (format == DataFormat::UInt32) ? InstrModLoadStore::INT32_2S_COMP
-                                                                                    : InstrModLoadStore::FP32;
+    // Integer load/store mode selection:
+    // UInt32 is stored as raw unsigned bits — use INT32 (no conversion).
+    // Int32 stimuli are non-negative, so sign-magnitude == two's complement — use INT32 (no conversion).
+    // On Blackhole, INT32_2S_COMP load/store has no effect (RTL bug), so both integer formats use INT32.
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::INT32;
 
     constexpr std::uint32_t REPLAY_BUFFER_INDEX = (format == DataFormat::Float32) ? 4 : 0;
     constexpr std::uint32_t REPLAY_BUFFER_COUNT = 4;

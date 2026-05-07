@@ -97,7 +97,7 @@ void kernel_main() {
     erisc::datamover::eth_setup_handshake(remote_eth_l1_dst_addr, false);
 
     constexpr auto dst_args = TensorAccessorArgs<5>();
-    const auto dest_address_generator = TensorAccessor(dst_args, dest_addr, page_size);
+    const auto dest_address_generator = TensorAccessor(dst_args, dest_addr);
 
     erisc::datamover::QueueIndexPointer<uint8_t> noc_writer_buffer_ackptr(MAX_NUM_CHANNELS);
     erisc::datamover::QueueIndexPointer<uint8_t> noc_writer_buffer_wrptr(MAX_NUM_CHANNELS);

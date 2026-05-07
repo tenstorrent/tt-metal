@@ -20,7 +20,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_tilize.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure unpack for tilize operation (row-major input -> tiled format)
     // This handles both A and B inputs which need to be tilized before binary ops
@@ -46,7 +46,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS /*params*/)
 {
     // Initialize datacopy operation (copy src A to dest)
 #ifdef ARCH_BLACKHOLE
@@ -86,7 +86,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure packer hardware for standard pack (no untilize)
     const bool UNTILIZE = false;
@@ -94,7 +94,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false, TILIZE>(formats.pack_dst);
+    _llk_pack_init_<UNTILIZE, false, TILIZE>();
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);

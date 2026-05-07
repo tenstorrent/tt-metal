@@ -59,14 +59,14 @@ ALWI void process_tile(
         copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         fill_tile_init();
-        fill_tile_int<DataFormat::Int32>(3, scalar_arg);
+        fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
 
-        mul_int_tile_init<DataFormat::Int32>();
-        mul_int_tile<DataFormat::Int32>(3, 1, 3);
-        mul_int_tile<DataFormat::Int32>(3, 2, 2);
+        mul_int_tile_init<ADDCMUL_DATA_FORMAT>();
+        mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 1, 3);
+        mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 2, 2);
 
         add_int_tile_init();
-        add_int_tile<DataFormat::Int32>(0, 2, 0);
+        add_int_tile<ADDCMUL_DATA_FORMAT>(0, 2, 0);
 
         tile_regs_commit();
         tile_regs_wait();

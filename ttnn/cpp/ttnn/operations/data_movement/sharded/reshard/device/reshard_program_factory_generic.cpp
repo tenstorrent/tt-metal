@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -633,13 +634,12 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
-    auto all_cores = output_shard_spec.grid;
     auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
                                                                   : device->compute_with_storage_grid_size();
     auto input_core_type = input.buffer()->core_type();
     uint32_t dst_cb_index = 16;
-    auto cores =
-        corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto cores = get_optimal_worker_cores_for_sharded_tensor(output);
+    auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
 
     uint32_t total_size, page_size, unit_size;
     auto output_shard_shape = output_shard_spec.shape;

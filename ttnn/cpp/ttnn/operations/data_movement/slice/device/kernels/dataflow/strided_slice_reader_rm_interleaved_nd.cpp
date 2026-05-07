@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr uint32_t dims = get_compile_time_arg_val(1);
     constexpr uint32_t element_size = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
@@ -32,11 +32,16 @@ void kernel_main() {
     }
     prod[dims - 1] = 1;  // Not used, but set to 1 for completeness
 
-    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;
-    uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
+
+    // Create experimental CircularBuffers for Device 2.0 API
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+
+    uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
     volatile tt_l1_ptr uint8_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_buffer_l1_addr);
 
     uint32_t index[dims];  // To hold current index in each of the first dims-1 dimensions
@@ -60,12 +65,12 @@ void kernel_main() {
         // Perform the read operation
         noc_async_read_page(base_linear_index, s0, src_buffer_l1_addr);
         // Reserve space in the output buffer
-        cb_reserve_back(cb_id_out0, 1);
+        cb_out0.reserve_back(1);
         noc_async_read_barrier();
         for (uint32_t l = starts[dims - 1]; l < ends[dims - 1]; l += strides[dims - 1]) {
             // Write the element into the output buffer
             volatile tt_l1_ptr uint8_t* out_stick =
-                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id_out0));
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_out0.get_write_ptr());
             uint32_t src_offset = l * element_size;
             uint32_t dst_offset = out_stick_id * element_size;
             for (uint32_t byte = 0; byte < element_size; byte++) {
@@ -73,7 +78,7 @@ void kernel_main() {
             }
             out_stick_id++;
         }
-        cb_push_back(cb_id_out0, 1);
+        cb_out0.push_back(1);
         if constexpr (dims == 1) {
             break;  // If there's only one dimension, we're done
         } else {

@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {

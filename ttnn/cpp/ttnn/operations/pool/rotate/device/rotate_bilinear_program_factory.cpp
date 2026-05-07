@@ -241,7 +241,7 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
             cores,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_compile_time_args,

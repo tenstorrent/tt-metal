@@ -153,7 +153,6 @@ class Attention(LightweightModule):
         # Select rotary embedding implementation for decode
         if self.use_hf_rope and self.use_qk_fused:
             raise NotImplementedError("Fused QK is not implemented for HF-style rope")
-            # self.rotary_embedding_decode = self._hf_rope_decode
         if self.use_hf_rope:
             self.rotary_embedding_decode = self._hf_rope_decode
         elif self.use_qk_fused:
@@ -325,7 +324,14 @@ class Attention(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
-        self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
+        def get_wo_mesh_mapper():
+            if self.use_fused_all_gather_matmul or self.TG:
+                return ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(2, 3),
+                    mesh_shape=configuration.cluster_shape,
+                )
+            return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
 
         if self.prefetcher is not None:
             self.wo_sharded_ring = ttnn.as_tensor(
@@ -334,11 +340,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.args.get_sharded_wo_ring_mem_config(),
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=self.shard_wo_dims,
-                    mesh_shape=configuration.cluster_shape,
-                ),
+                mesh_mapper=get_wo_mesh_mapper(),
                 cache_file_name=(cache_name("wo_sharded_ring")),
             )
 
@@ -354,11 +356,7 @@ class Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=get_wo_memory_config(),
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=self.shard_wo_dims,
-                mesh_shape=configuration.cluster_shape,
-            ),
+            mesh_mapper=get_wo_mesh_mapper(),
             cache_file_name=(
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
@@ -521,37 +519,23 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
-        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
+        if q_heads_pre_rot_1BQD.dtype != ttnn.bfloat16:
+            q_heads_pre_rot_1BQD = ttnn.typecast(q_heads_pre_rot_1BQD, dtype=ttnn.bfloat16)
+        if k_heads_pre_rot_1BKD.dtype != ttnn.bfloat16:
+            k_heads_pre_rot_1BKD = ttnn.typecast(k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16)
 
-        q_heads_1BQD = ttnn.experimental.rotary_embedding(
+        q_heads_1BQD = ttnn.experimental.rotary_embedding_hf(
             q_heads_pre_rot_1BQD,
             rot_mats[0],
             rot_mats[1],
-            int_current_pos,
+            is_decode_mode=True,
         )
-
-        k_heads_1BKD = ttnn.experimental.rotary_embedding(
+        k_heads_1BKD = ttnn.experimental.rotary_embedding_hf(
             k_heads_pre_rot_1BKD,
             rot_mats[0],
             rot_mats[1],
-            int_current_pos,
+            is_decode_mode=True,
         )
-        # This is done because rotary_embedding outputs are padded in the num_heads dimension both steps
-        # reshape (indicating the padding size) as the slicing are required for attention to work properly
-        q_heads_1BQD = ttnn.reshape(
-            q_heads_1BQD,
-            (1, self.batch_size_per_device_group, self.n_local_heads, self.head_dim),
-            (1, self.batch_size_per_device_group, 32, self.head_dim),
-        )
-        k_heads_1BKD = ttnn.reshape(
-            k_heads_1BKD,
-            (1, self.batch_size_per_device_group, self.n_local_kv_heads, self.head_dim),
-            (1, self.batch_size_per_device_group, 32, self.head_dim),
-        )
-
-        q_heads_1BQD = q_heads_1BQD[:, :, : self.n_local_heads]
-        k_heads_1BKD = k_heads_1BKD[:, :, : self.n_local_kv_heads]
-
         return q_heads_1BQD, k_heads_1BKD
 
     def _mllama_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
@@ -574,24 +558,24 @@ class Attention(LightweightModule):
         return q_heads_1QSD, k_heads_1KSD
 
     def _hf_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
-        # Q Rotary Embeddings - HF-style (no transformation matrix)
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        q_heads_1QSD = ttnn.experimental.rotary_embedding(
+        q_heads_1QSD = ttnn.experimental.rotary_embedding_hf(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
+            is_decode_mode=False,
         )
 
-        # K Rotary Embeddings - HF-style (no transformation matrix)
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
-        k_heads_1KSD = ttnn.experimental.rotary_embedding(
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_hf(
             k_heads_1KSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
+            is_decode_mode=False,
         )
 
         return q_heads_1QSD, k_heads_1KSD

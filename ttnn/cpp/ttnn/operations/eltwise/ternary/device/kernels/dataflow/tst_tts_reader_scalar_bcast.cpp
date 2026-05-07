@@ -49,11 +49,11 @@ void kernel_main() {
 
     // #if !SRC_SHARDED_A
     const uint32_t src_tile_bytes = get_tile_size(predicate_cb);
-    const auto src = TensorAccessor(src_args, src0_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src0_addr);
     // #endif
     // #if !SRC_SHARDED_B
     const uint32_t src_tile_bytes_b = get_tile_size(src_b_cb);
-    const auto src_b = TensorAccessor(src_b_args, src1_addr, src_tile_bytes_b);
+    const auto src_b = TensorAccessor(src_b_args, src1_addr);
     // #endif
 
     constexpr uint32_t onetile = 1;

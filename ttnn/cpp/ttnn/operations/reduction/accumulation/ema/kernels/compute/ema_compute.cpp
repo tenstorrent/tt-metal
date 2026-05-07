@@ -58,7 +58,7 @@ inline void ema_sfpi_tile(
     float alpha,
     float beta,
     bool first_sample) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(
+    MATH(_llk_math_eltwise_binary_sfpu_params_(
         ema_sfpi_face, inp_dst_index, prv_dst_index, out_dst_index,
         VectorMode::RC, alpha, beta, first_sample));
 }

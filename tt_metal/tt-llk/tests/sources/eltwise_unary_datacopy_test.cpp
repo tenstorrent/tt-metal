@@ -48,15 +48,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
         _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
 
-        std::uint32_t read_offset = 0;
-
         for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
         {
+            const std::uint32_t read_offset = i * BLOCK_CT_DIM;
             for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
             {
                 _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, formats.unpack_A_dst, 0, FACE_R_DIM, 4, false);
             }
-            read_offset += BLOCK_CT_DIM;
         }
     }
 }
@@ -127,7 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, tilize_en>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_<false, false, tilize_en>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_<false, false, tilize_en>(FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, params.num_faces);

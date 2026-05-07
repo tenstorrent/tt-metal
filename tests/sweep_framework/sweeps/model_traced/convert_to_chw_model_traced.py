@@ -9,10 +9,12 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -46,32 +48,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -93,7 +74,7 @@ def run(
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
     output_memory_config = kwargs.get("output_memory_config", None)
-    op_kwargs = build_op_kwargs(kwargs, exclude={"dtype"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # V2 format provides input_a_shape
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -133,14 +114,17 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Use output_dtype if provided, otherwise default to bfloat16
-    if output_dtype is None:
-        output_dtype = ttnn.bfloat16
-    output_tensor = ttnn.experimental.convert_to_chw(input_tensor_a, dtype=output_dtype, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    # dtype flows through op_kwargs from traced config; fall back to output_dtype or bfloat16
+    if "dtype" not in op_kwargs:
+        op_kwargs["dtype"] = output_dtype if output_dtype is not None else ttnn.bfloat16
+    output_tensor = ttnn.experimental.convert_to_chw(input_tensor_a, **op_kwargs)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

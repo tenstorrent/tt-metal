@@ -38,6 +38,7 @@
 #include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
@@ -63,10 +64,15 @@
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
-#include "ttnn/operations/experimental/generic/patchable_generic_op_nanobind.hpp"
+#include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -95,6 +101,7 @@ void py_module(nb::module_& mod) {
     transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
     transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_rotary_embedding(mod);
+    transformer::bind_rotary_embedding_hf(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
     transformer::bind_rotate_half(mod);
@@ -125,6 +132,8 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_group_attn_matmul(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
+    deepseek_prefill::detail::bind_post_combine_reduce(mod);
+    deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
@@ -152,10 +161,12 @@ void py_module(nb::module_& mod) {
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
+    deepseek_prefill::detail::bind_routed_expert_ffn(mod);
+    deepseek_prefill::detail::bind_extract(mod);
+    deepseek_prefill::detail::bind_insert(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
-    // Fused generic op with source-descriptor-based override
-    generic::detail::bind_patchable_generic_op(mod);
+    fusion::detail::bind_fusion_dispatch_op(mod);
 }
 
 }  // namespace ttnn::operations::experimental

@@ -17,7 +17,7 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat out = val;
     v_if(val != 0.0f) {
         // Fast inverse square-root seed + two Newton-Raphson refinements.
-        sfpi::vUInt magic = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(sfpi::s2vFloat16b(0x5f37)));
+        sfpi::vUInt magic = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(sfpi::sFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::reinterpret<sfpi::vFloat>(magic - (sfpi::reinterpret<sfpi::vUInt>(val) >> 1));
         sfpi::vFloat neg_half_val = val * -0.5f;
         approx = ((approx * approx) * neg_half_val + 1.5f) * approx;

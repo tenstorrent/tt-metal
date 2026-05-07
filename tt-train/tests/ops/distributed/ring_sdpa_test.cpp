@@ -11,16 +11,17 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -292,30 +293,13 @@ static void TestRingAttention(
     auto& rng = autograd::ctx().get_generator();
 
     // Create full Q, K, V tensors
-    std::vector<float> query_data(batch * num_heads * seq_len * head_dim);
-    std::vector<float> key_data(batch * num_heads * seq_len * head_dim);
-    std::vector<float> value_data(batch * num_heads * seq_len * head_dim);
-
-    auto seed = rng();
-    core::parallel_generate(
-        std::span{query_data.data(), query_data.size()},
-        []() { return std::uniform_real_distribution<float>{0, 2.F}; },
-        seed);
-    seed = rng();
-    core::parallel_generate(
-        std::span{key_data.data(), key_data.size()},
-        []() { return std::uniform_real_distribution<float>{0, 2.F}; },
-        seed);
-    seed = rng();
-    core::parallel_generate(
-        std::span{value_data.data(), value_data.size()},
-        []() { return std::uniform_real_distribution<float>{0, 2.F}; },
-        seed);
-
-    // Convert to xtensor for reference computation
-    xt::xarray<float> query_xt = xt::adapt(query_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
-    xt::xarray<float> key_xt = xt::adapt(key_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
-    xt::xarray<float> value_xt = xt::adapt(value_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
+    const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const auto query_seed = rng();
+    const auto key_seed = rng();
+    const auto value_seed = rng();
+    xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, query_seed);
+    xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, key_seed);
+    xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, value_seed);
 
     // Create reference mask (full causal)
     std::optional<xt::xarray<float>> ref_mask_xt;
@@ -379,15 +363,9 @@ static void TestRingAttention(
         << "Ring attention output does not match reference SDPA output";
 
     if (test_backward) {
-        std::vector<float> grad_output_data(batch * num_heads * seq_len * head_dim);
-        seed = rng();
-        core::parallel_generate(
-            std::span{grad_output_data.data(), grad_output_data.size()},
-            []() { return std::uniform_real_distribution<float>{0.F, 2.F}; },
-            seed);
-
+        const auto grad_seed = rng();
         xt::xarray<float> grad_output_xt =
-            xt::adapt(grad_output_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
+            ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, grad_seed);
 
         auto ref_grads = reference_sdpa_backward(
             query_xt, key_xt, value_xt, ref_result.attention_weights, grad_output_xt, ref_result.scale);

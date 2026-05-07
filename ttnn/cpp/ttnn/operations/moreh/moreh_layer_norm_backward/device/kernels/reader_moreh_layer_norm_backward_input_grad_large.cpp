@@ -114,11 +114,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_gamma = 6;
     constexpr uint32_t cb_id_mask_h_w = 7;
 
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-
     constexpr bool gamma_has_value = get_compile_time_arg_val(0) == 1;
     constexpr bool do_mask_h = get_compile_time_arg_val(1) == 1;
     constexpr bool do_mask_w = get_compile_time_arg_val(2) == 1;
@@ -128,13 +123,12 @@ void kernel_main() {
     constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<rstd_args.next_compile_time_args_offset()>();
 
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr);
 
     union {
         float f;

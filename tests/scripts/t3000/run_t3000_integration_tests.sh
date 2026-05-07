@@ -291,27 +291,6 @@ run_t3000_trace_stress_tests() {
   fi
 }
 
-run_t3000_falcon40b_tests() {
-  fail=0
-  # Record the start time
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_falcon40b_tests"
-
-  pytest models/demos/t3000/falcon40b/tests/test_falcon_mlp.py ; fail+=$?
-  pytest models/demos/t3000/falcon40b/tests/test_falcon_attention.py --timeout=480 ; fail+=$?
-  pytest models/demos/t3000/falcon40b/tests/test_falcon_decoder.py --timeout=480 ; fail+=$?
-  pytest models/demos/t3000/falcon40b/tests/test_falcon_causallm.py --timeout=600 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_falcon40b_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_resnet_tests() {
   fail=0
   # Record the start time
@@ -389,7 +368,7 @@ run_t3000_wan22_tests() {
   pytest models/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
   pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4sp0tp1"; fail+=$?
   pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 and not yes_load_cache and not model_caching" --timeout 600; fail+=$?
-  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_encoder or test_wan_decoder) and 2x4 and real_weights and check_output and _1f and not no_cache_full_T"; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "((test_wan_encoder or test_wan_decoder) and 2x4 and real_weights and check_output and _1f and chunk_1) or (test_wan_decoder_chunked_consistency and 2x4 and bf16 and 5f and 480p)"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -408,7 +387,7 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 1link-load_dit-small_latent or conv3d_1x1x1 or -1link-l768" --timeout=1500; fail+=$?
+  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and 1x8 and load_dit and small_latent) or conv3d_1x1x1 or (1x8 and l768 and bf16)" --timeout=1500; fail+=$?
   pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
   pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 
@@ -430,9 +409,6 @@ run_t3000_tests() {
 
   # Run trace tests
   run_t3000_trace_stress_tests
-
-  # Run falcon40b tests
-  run_t3000_falcon40b_tests
 
   # Run llama3 small (1B, 3B, 8B, 11B) tests
   run_t3000_llama3_tests

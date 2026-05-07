@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
@@ -39,21 +39,23 @@ void kernel_main() {
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(8);
     constexpr uint32_t block_w = get_compile_time_arg_val(9);
 
-    constexpr uint32_t size = get_compile_time_arg_val(10);
+    // compile_time_arg 10: size (unused here)
+    constexpr uint32_t reduce_factor_w = get_compile_time_arg_val(11);
+    constexpr uint32_t reduce_factor_c = get_compile_time_arg_val(12);
 
-    constexpr auto gamma_args = TensorAccessorArgs<11>();
+    constexpr auto gamma_args = TensorAccessorArgs<13>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(4);
-    const uint32_t input_mask_addr = get_arg_val<uint32_t>(5);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(2);
+    const uint32_t input_mask_addr = get_arg_val<uint32_t>(3);
 
     // Used only if negative mask is passed in kernel, i.e. if define FUSE_NEGATIVE_MASK is defined
-    const uint32_t input_negative_mask_addr = get_arg_val<uint32_t>(6);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(7);
-    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(8);
-    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(9);
+    const uint32_t input_negative_mask_addr = get_arg_val<uint32_t>(4);
+    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(5);
+    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
+    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
@@ -69,7 +71,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma_id);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
 
-    const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
+    const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
 #if defined(FUSE_NEGATIVE_MASK)
     constexpr uint32_t cb_input_negative_mask_id = tt::CBIndex::c_14;
@@ -78,8 +80,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_input_negative_mask(cb_input_negative_mask_id);
 
     constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
-    const auto negative_mask_tensor_accessor =
-        TensorAccessor(negative_mask_args, input_negative_mask_addr, input_negative_mask_single_tile_size_bytes);
+    const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);
 
 #endif
 
@@ -123,25 +124,31 @@ void kernel_main() {
 
             if (i == 0 and b == 0) {
                 constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-                const uint32_t scalar_w = get_arg_val<uint32_t>(1);
-                generate_reduce_scaler(cb_in_2, scalar_w);
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                    cb_in_2,
+                    ckernel::PoolType::AVG,
+                    ckernel::ReduceDim::REDUCE_SCALAR,
+                    reduce_factor_w>();
 
                 constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
                 generate_tile_with_packed_bfloat16_values(cb_ones_id, ones);
 
                 if constexpr (is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
-                    const uint32_t scalar_c = get_arg_val<uint32_t>(0);
-                    generate_reduce_scaler(cb_in_4, scalar_c);
+                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                        cb_in_4,
+                        ckernel::PoolType::AVG,
+                        ckernel::ReduceDim::REDUCE_SCALAR,
+                        reduce_factor_c>();
                 }
 
                 constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
-                const uint32_t eps = get_arg_val<uint32_t>(2);
+                const uint32_t eps = get_arg_val<uint32_t>(0);
                 generate_bcast_col_scalar(eps_cb_id, eps);
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
-                    const auto gamma = TensorAccessor(gamma_args, gamma_addr, size);
+                    const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     cb_gamma.reserve_back(num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = cb_gamma.get_write_ptr();
@@ -184,7 +191,7 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
-                    const auto beta = TensorAccessor(beta_args, beta_addr, size);
+                    const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     uint32_t l1_write_addr_beta = cb_beta.get_write_ptr();
                     cb_beta.reserve_back(num_cols_tile_gamma_beta);

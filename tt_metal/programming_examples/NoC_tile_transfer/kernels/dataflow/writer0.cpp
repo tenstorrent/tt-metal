@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 
 void kernel_main() {
     // Runtime args
@@ -26,7 +26,7 @@ void kernel_main() {
 
     // Wait for data to be available in src0 CB
     cb_wait_front(src0_cb_index, one_tile);
-    DPRINT << "3. WRITER 0: Data available in src0 CB" << ENDL();
+    DEVICE_PRINT("3. WRITER 0: Data available in src0 CB\n");
 
     // Wait for core 1 to be ready
     noc_semaphore_wait(sem_ptr, 1);
@@ -46,5 +46,5 @@ void kernel_main() {
     noc_semaphore_set(sem_ptr, 0);  // Reset semaphore
 
     cb_pop_front(src0_cb_index, one_tile);  // Remove data from local buffer
-    DPRINT << "4. WRITER 0: Data sent to core 1 from core 0" << ENDL();
+    DEVICE_PRINT("4. WRITER 0: Data sent to core 1 from core 0\n");
 }

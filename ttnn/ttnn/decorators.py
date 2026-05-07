@@ -290,6 +290,8 @@ TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
 
 
 def preprocess_global_golden_function_inputs(function_args, function_kwargs):
+    if ttnn.CONFIG.report_path is None:
+        return None
     input_index = 0
 
     def recursive_preprocess_golden_function_inputs(object_value):
@@ -876,6 +878,14 @@ def create_module_if_not_exists(module_name):
         parent_module = create_module_if_not_exists(parent_module_name)
     else:
         parent_module = None
+
+    # Check if parent already has this as a package attribute
+    if parent_module and hasattr(parent_module, child_module_name):
+        existing_attr = getattr(parent_module, child_module_name)
+        if hasattr(existing_attr, "__path__"):
+            # It's a package, register it and return
+            sys.modules[module_name] = existing_attr
+            return existing_attr
 
     # Create the module
     new_module = module_from_spec(ModuleSpec(module_name, None))

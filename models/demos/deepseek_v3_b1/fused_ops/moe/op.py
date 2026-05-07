@@ -61,7 +61,7 @@ class MoeSem:
     EXPERT_SCALE_MCAST_RECEIVER = 9
     INDEX_MCAST_RECEIVER = 10
     DOWN_PROJ_MCAST_RECEIVER = 11
-    REDUCE_WORKER_FABRIC_BASE = 12  # 12, 13, 14, 15 per worker slot
+    REDUCE_WORKER_FABRIC_BASE = 12  # Shared worker->fabric ready semaphore (legacy name retained)
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
@@ -1252,7 +1252,7 @@ class MoeRoutedExpertOp:
             )
 
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
-            reduce_packet_header_size = 96
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # Worker cores = gate_proj cores (DRAM bank cores)
@@ -1547,14 +1547,7 @@ class MoeRoutedExpertOp:
             ("gate_input_cb", ctx.gate_params["input_cb"] if ctx.enable_routing else 0),
             ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
             ("gate_input_indices_cb", ctx.gate_params["indices_cb"] if ctx.enable_routing else 0),
-            # Index mcast receiver (routing only)
-            ("index_mcast_receiver_semaphore_addr", ctx.index_mcast_receiver_semaphore_addr),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
-            ("index_mcast_num_pages", ctx.index_mcast_num_pages),
-            # Expert scale mcast receiver (routing only)
-            ("expert_scale_mcast_receiver_semaphore_addr", ctx.expert_scale_mcast_receiver_semaphore_addr),
-            ("mul_cb_scalar_src", ctx.mul_cb_scalar_src),
-            ("expert_scale_mcast_num_pages", ctx.expert_scale_mcast_num_pages),
             # Mul reader (setup mul_in1 buffer)
             ("mul_cb_in1", ctx.mul_cb_in1),
             ("mul_num_tiles", ctx.mul_num_tiles),
@@ -1571,10 +1564,6 @@ class MoeRoutedExpertOp:
             ),
             ("down_proj_gather_dst_cb", ctx.down_proj_gather_params["dst_cb"]),
             ("down_proj_gather_dst_num_pages", ctx.down_proj_gather_params["dst_num_pages"]),
-            # down_proj mcast receiver
-            ("down_proj_mcast_receiver_semaphore_addr", ctx.down_proj_mcast_params["receiver_semaphore_addr"]),
-            ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
-            ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
             # Eltwise add
             ("add_cb_in0", ctx.add_cb_in0),
             ("add_cb_in1", ctx.add_cb_in1),
@@ -1716,6 +1705,8 @@ class MoeRoutedExpertOp:
             ("down_proj_mcast_src_cb", ctx.down_proj_mcast_params["src_cb"]),
             ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
             ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
+            # down_proj mcast receiver
+            ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
             # CB reset addresses for DRAM matmul working buffers
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
@@ -2622,9 +2613,6 @@ class MoeSharedExpertOp:
             ("shared_og_noc1_receiver_semaphore_addr", shared_ctx.output_gather_params["noc1_receiver_semaphore_addr"]),
             ("shared_og_dst_cb", shared_ctx.output_gather_params["dst_cb"]),
             ("shared_og_dst_num_pages", shared_ctx.output_gather_params["dst_num_pages"]),
-            # Output mcast receiver (DRAM cores receive into add_cb_in1) — separate semaphore
-            ("shared_output_mcast_data_receiver_semaphore_addr", shared_ctx.output_mcast_receiver_semaphore_addr),
-            ("shared_output_mcast_dst_num_pages", shared_ctx.output_mcast_params["dst_num_pages"]),
         ]
         brisc_args = [
             # Gate gather (A) sender (MoeGather: sender on BRISC)
@@ -2664,6 +2652,8 @@ class MoeSharedExpertOp:
             ("shared_output_mcast_data_size_bytes", shared_ctx.output_mcast_params["data_size_bytes"]),
             ("shared_output_mcast_src_cb", shared_ctx.output_gather_params["dst_cb"]),  # read from output gather dst
             ("shared_output_mcast_src_num_pages", shared_ctx.output_mcast_params["src_num_pages"]),
+            # Output mcast receiver
+            ("shared_output_mcast_dst_num_pages", shared_ctx.output_mcast_params["dst_num_pages"]),
         ]
         trisc_args = [
             # Gate/Up matmul
@@ -3188,7 +3178,6 @@ class MoeOp:
           - False: dense MLP mode (single expert 0 with unit scale)
           - list[int]: hardcoded expert indices; weights come from gate scores for those experts
         """
-        print("MoEOp golden")
         import torch
 
         def _as_2d(t: torch.Tensor) -> torch.Tensor:
@@ -3249,7 +3238,6 @@ class MoeOp:
         else:
             logits = norm_x @ routing_weights_tensor.to(norm_x.dtype)
             scores = torch.sigmoid(logits)
-            print("golden all scores", scores)
             scores_flat = scores.reshape(1, -1)
             bias_flat = bias_tensor.reshape(1, -1).to(scores_flat.dtype)
             # Hardware gate produces top-k slots; both expert-index selection and
@@ -3260,8 +3248,6 @@ class MoeOp:
             topk_scores, topk_indices = gate_topk_scores, gate_topk_indices
             selected_experts = [int(i) for i in topk_indices[0].tolist()]
             selected_scales = [topk_scores[0, i] for i in range(len(selected_experts))]
-            print("golden selected experts", selected_experts)
-            print("golden selected scales", selected_scales)
 
         routed_sum = torch.zeros_like(shared_output)
         for expert_idx, expert_scale in zip(selected_experts, selected_scales, strict=True):
@@ -4034,10 +4020,11 @@ class MoeOp:
                 ("reduce_output_core_noc_x", output_core_phys.x),
                 ("reduce_output_core_noc_y", output_core_phys.y),
                 ("reduce_num_workers", reduce_params["num_workers_per_column"]),
-                ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
                 ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
+                ("reduce_forward_metadata_size_bytes", self._forward_metadata_size_bytes),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
+                ("reduce_enable_downstream_socket", 1 if self.downstream_sockets else 0),
             ]
         )
         self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
@@ -4081,11 +4068,8 @@ class MoeOp:
             ]
         )
 
-        # Fabric semaphore addresses (worker→fabric signaling on fabric cores)
-        # Global semaphores at indices REDUCE_WORKER_FABRIC_BASE + 0..3
-        reduce_worker_fabric_sem_addrs = [
-            self.sem_addrs[MoeSem.REDUCE_WORKER_FABRIC_BASE + i] for i in range(reduce_params["num_workers_per_column"])
-        ]
+        # Shared worker→fabric ready semaphore consumed by the ready-mask drain loop.
+        reduce_worker_fabric_ready_sem_addr = self.sem_addrs[MoeSem.REDUCE_WORKER_FABRIC_BASE]
 
         # Per-core runtime args for reduce worker and fabric cores
         # Persistent-signal sync: first worker (shard_idx==0) coordinates persistent signaling
@@ -4146,6 +4130,7 @@ class MoeOp:
             worker_agg_sem_addr = 0
             worker_agg_noc_x = 0
             worker_agg_noc_y = 0
+            worker_metadata_addr = 0
 
             if device_role == MESH_ROOT1:
                 worker_agg_sem_addr = agg_sem_addr
@@ -4153,6 +4138,8 @@ class MoeOp:
                 worker_agg_noc_y = persistent_core_noc_y
                 if self.downstream_sockets is not None:
                     socket_config_addr = self.downstream_sockets[shard_idx].get_config_buffer_address()
+                if self._metadata_l1_addr != 0:
+                    worker_metadata_addr = self._metadata_l1_addr
 
             is_persistent_agg = persistent_enable_root1 and shard_idx == 0
 
@@ -4163,12 +4150,13 @@ class MoeOp:
                         fabric_core_phys.x,
                         fabric_core_phys.y,
                         slot_idx,
-                        reduce_worker_fabric_sem_addrs[slot_idx],
+                        reduce_worker_fabric_ready_sem_addr,
                         dst_l1_addr,
                         dst_sem_addr,
                         out_tensor.buffer_address(),
                         shard_idx,
                         socket_config_addr,
+                        worker_metadata_addr,
                         worker_agg_sem_addr,
                         worker_agg_noc_x,
                         worker_agg_noc_y,
@@ -4182,9 +4170,9 @@ class MoeOp:
                 )
             )
 
-        # Fabric core per-core args (worker sem addrs first, then persistent args if applicable)
+        # Fabric core per-core args start with the shared ready semaphore address.
         for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
-            fc_args = list(reduce_worker_fabric_sem_addrs)
+            fc_args = [reduce_worker_fabric_ready_sem_addr]
             if persistent_enable_root1 and fc_idx == 0:
                 fc_args.extend(
                     [
@@ -4399,12 +4387,13 @@ class MoeOp:
                     bcast_writer_rt_args_ref = kernel.runtime_args[bcast_worker_core.x][bcast_worker_core.y]
                     payload = []
                     for dst_node in self.bcast_dst_nodes:
-                        payload.append(int(dst_node.mesh_id))
-                        payload.append(int(dst_node.chip_id))
                         setup_args = ttnn.setup_fabric_connection(
                             self.bcast_fabric_node_id, dst_node, 0, program, bcast_worker_core
                         )
                         payload.extend(setup_args)
+                    for dst_node in self.bcast_dst_nodes:
+                        payload.append(int(dst_node.mesh_id))
+                        payload.append(int(dst_node.chip_id))
                     bcast_writer_rt_args_ref.extend([len(payload)] + payload)
                     break
 
@@ -4453,11 +4442,16 @@ class MoeOp:
         downstream_sockets=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        termination_semaphore=None,
+        forward_metadata_size_bytes=0,
+        metadata_l1_addr=0,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
         self.downstream_sockets = downstream_sockets
+        self._forward_metadata_size_bytes = forward_metadata_size_bytes
+        self._metadata_l1_addr = metadata_l1_addr
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
@@ -4467,6 +4461,9 @@ class MoeOp:
             int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
             if persistent_next_iter_semaphore is not None
             else 0
+        )
+        self.termination_sem_addr = (
+            int(ttnn.get_global_semaphore_address(termination_semaphore)) if termination_semaphore is not None else 0
         )
 
         if cb_id_context is None:
@@ -4686,6 +4683,9 @@ class MoeOp:
         ncrisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
         brisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
         trisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
+        ncrisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
+        brisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
+        trisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
 
     def _build_semaphore_descriptors(self):
         """Build semaphore descriptors — empty, global semaphores are used instead."""
@@ -4704,7 +4704,12 @@ class MoeOp:
                 ctx.gate_output_scores_tensor,
                 ctx.gate_output_indices_tensor,
             ]
-        io_tensors += [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]
+        for wt in [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]:
+            backing = getattr(wt, "data", None)
+            if backing is not None:
+                io_tensors += [backing, wt.assignment]
+            else:
+                io_tensors += [wt]
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [
@@ -4835,6 +4840,7 @@ class MoeOp:
         num_iterations=1,
         persistent_mode=False,
         persistent_next_iter_semaphore=None,
+        termination_semaphore=None,
         # ReduceToOne parameters
         reduce_intermediate_tensors: Optional[list] = None,
         reduce_output_tensor: Optional[ttnn.Tensor] = None,
@@ -4934,6 +4940,7 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            termination_semaphore=termination_semaphore,
         )
 
         # ==================================================================

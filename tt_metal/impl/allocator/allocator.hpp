@@ -32,6 +32,12 @@ public:
 
     DeviceAddr allocate_buffer(Buffer* buffer);
 
+    // Set/clear device allocators for HYBRID mode mesh-level lockstep allocation.
+    // When set, allocate_buffer() queries these allocators' per-bank ranges
+    // so the lockstep allocator avoids regions occupied on any device.
+    void set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators);
+    void clear_hybrid_device_allocators();
+
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
@@ -92,6 +98,16 @@ public:
     // Overrides the current state with the given state, deallocating all of existing buffers.
     void override_state(const AllocatorState& state);
 
+    // Get allocated ranges from this allocator's L1 per-bank sub-allocator.
+    // Used at mesh-level allocation time to query device per-bank state.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_l1_allocated_ranges(
+        BankManager::AllocatorDependencies::AllocatorID allocator_id) const;
+
+    // Mirror a lockstep allocation (from the mesh-level allocator) into this allocator's lockstep sub-allocator.
+    // This marks the region as occupied so per-bank allocators avoid it.
+    void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
+    void unmirror_lockstep_allocation(DeviceAddr address);
+
     // We likely won't need to perform heap allocation just to expose the user side of Allocator,
     // this is to ease transition so we keep the pointer-to-allocator semantics.
     const std::unique_ptr<Allocator>& view() const;
@@ -122,6 +138,9 @@ private:
     std::unordered_map<std::uint32_t, CoreCoord> bank_id_to_logical_core_;
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<std::uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
+
+    // HYBRID mode: device allocators to query per-bank ranges during lockstep allocation.
+    std::vector<AllocatorImpl*> hybrid_device_allocators_;
 
     // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //

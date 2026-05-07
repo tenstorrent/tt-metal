@@ -4,12 +4,14 @@
 
 import ttnn
 
-router_config_wan2_2 = ttnn._ttnn.fabric.FabricRouterConfig()
-router_config_wan2_2.max_packet_payload_size_bytes = 8192
+
+def create_fabric_router_config():
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = 8192
+    return config
+
 
 line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
-ring_params_bh_wan2_2 = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-    "fabric_router_config": router_config_wan2_2,
-}
+line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_config()}
+ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}

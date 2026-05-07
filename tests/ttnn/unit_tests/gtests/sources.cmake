@@ -6,7 +6,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
-    test_conv2d.cpp
+    conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
 )
@@ -17,6 +17,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp
     test_gelu_bw_ulp.cpp
+    test_gelu_bw_main_ulp.cpp
     test_generic_op.cpp
     test_graph_add.cpp
     test_graph_basic.cpp
@@ -26,10 +27,16 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
+    test_matmul.cpp
+    test_matmul_multicore.cpp
+    test_matmul_sweep.cpp
+    test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
     test_sub_int.cpp
     test_gelu_fw_ulp.cpp
+    test_tanh_bw_ulp.cpp
+    test_tanh_fw_ulp.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
@@ -63,6 +70,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_create_tensor_multi_device.cpp
     tensor/test_create_tensor_with_layout.cpp
     tensor/test_device_storage_ownership.cpp
+    tensor/test_tensor_deallocation.cpp
     tensor/test_distributed_tensor.cpp
     tensor/test_tensor_topology.cpp
     tensor/test_mesh_tensor.cpp
@@ -73,6 +81,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_unit_mesh_utils.cpp
     tensor/test_vector_conversion.cpp
     tensor/test_xtensor_adapter.cpp
+    tensor/test_unchecked_reinterpret_layout.cpp
     tensor/test_xtensor_conversion.cpp
 )
 

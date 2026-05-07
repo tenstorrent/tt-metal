@@ -37,6 +37,7 @@ from __future__ import annotations
 import math
 from typing import Literal
 
+import numpy as np
 import ttnn
 import ttml
 
@@ -149,8 +150,9 @@ def calculate_gain(nonlinearity: _NonlinearityType, param: int | float | None = 
 def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
-    def uniform_init(shape):
-        return ttml.ops.rand(shape, a, b)
+    def uniform_init(shape, mapper=None):
+        data = np.random.uniform(low=a, high=b, size=tuple(shape)).astype(np.float32)
+        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return uniform_init
 
@@ -158,8 +160,9 @@ def uniform(a: float = 0.0, b: float = 1.0):
 def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
-    def normal_init(shape):
-        return ttml.ops.randn(shape, mean, std)
+    def normal_init(shape, mapper=None):
+        data = np.random.normal(loc=mean, scale=std, size=tuple(shape)).astype(np.float32)
+        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return normal_init
 
@@ -167,7 +170,10 @@ def normal(mean: float = 0.0, std: float = 1.0):
 def constant(val: float):
     """All elements set to val."""
 
-    def constant_init(shape):
+    def constant_init(shape, mapper=None):
+        if mapper is not None:
+            data = np.full(shape, val, dtype=np.float32)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         device = _get_device()
         t = ttnn.full(
             shape,
@@ -184,7 +190,10 @@ def constant(val: float):
 def zeros():
     """All zeros."""
 
-    def zeros_init(shape):
+    def zeros_init(shape, mapper=None):
+        if mapper is not None:
+            data = np.zeros(shape, dtype=np.float32)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         device = _get_device()
         t = ttnn.zeros(
             shape,
@@ -200,7 +209,10 @@ def zeros():
 def ones():
     """All ones."""
 
-    def ones_init(shape):
+    def ones_init(shape, mapper=None):
+        if mapper is not None:
+            data = np.ones(shape, dtype=np.float32)
+            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
         device = _get_device()
         t = ttnn.ones(
             shape,

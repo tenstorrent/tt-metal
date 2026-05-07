@@ -164,7 +164,6 @@ def test_eltwise_binary(
     math_op,
     input_dimensions,
     tile_dimensions,
-    workers_tensix_coordinates,
 ):
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
@@ -320,7 +319,7 @@ def test_eltwise_binary(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -374,7 +373,6 @@ def test_eltwise_binary_bfp4_b(
     math_op,
     input_dimensions,
     tile_dimensions,
-    workers_tensix_coordinates,
 ):
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
@@ -521,7 +519,7 @@ def test_eltwise_binary_bfp4_b(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -559,7 +557,6 @@ def test_eltwise_binary_dest_reuse(
     input_dimensions,
     output_dimensions,
     tile_dimensions,
-    workers_tensix_coordinates,
 ):
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -715,7 +712,7 @@ def test_eltwise_binary_dest_reuse(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -751,7 +748,6 @@ def test_eltwise_binary_int8_format(
     math_op,
     input_dimensions,
     tile_dimensions,
-    workers_tensix_coordinates,
 ):
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -872,7 +868,7 @@ def test_eltwise_binary_int8_format(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

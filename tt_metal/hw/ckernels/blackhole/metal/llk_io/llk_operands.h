@@ -4,7 +4,6 @@
 
 #pragma once
 #include <cstdint>
-#include <vector>
 
 #include "tensor_shape.h"
 

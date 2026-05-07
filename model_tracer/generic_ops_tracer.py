@@ -24,19 +24,21 @@ Examples (Standalone Python):
     python generic_ops_tracer.py /path/to/script.py --output-dir ./my_traces
 """
 
-import sys
-import os
-import subprocess
-import json
+import argparse
 import copy
 import hashlib
+import json
+import logging
+import math
+import os
 import re
+import subprocess
+import sys
 import uuid
-from tqdm import tqdm
-import argparse
 from datetime import datetime
 from pathlib import Path
-import logging
+
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,18 @@ def get_base_dir():
 
 
 BASE_DIR = get_base_dir()
+
+
+def get_python_cmd():
+    """Return the preferred Python interpreter for tt-metal tooling."""
+    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
+    if os.path.exists(python_env_path):
+        return python_env_path
+
+    if sys.executable:
+        return sys.executable
+    # Docker and CI jobs rely on the container's default Python.
+    return "python3"
 
 
 def _infer_board_type_from_arch(arch_str):
@@ -419,12 +433,18 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # from argument values so they don't pollute deduplication or storage
         _sanitize_object_addresses(arguments)
 
-        return {
+        result = {
             "operation": operation_name,
             "arguments": arguments,
             "source": test_source,
             "machine_info": enhanced_machine_info,
         }
+
+        sweep_source_hash = data.get("sweep_source_hash")
+        if sweep_source_hash:
+            result["sweep_source_hash"] = sweep_source_hash
+
+        return result
     except Exception as e:
         print(f"⚠️ Error processing {json_file}: {e}")
         return None
@@ -531,6 +551,37 @@ def _extract_hardware_and_mesh(machine_info):
     return hardware, mesh_config
 
 
+def _canonicalize_for_storage(obj):
+    """Convert non-finite floats (inf/-inf/nan) to canonical string forms in-place.
+
+    Python's json.dumps writes float('inf') as the literal `Infinity` (not valid JSON),
+    which `fix_infinity_in_json_file` later regex-rewrites on disk to "inf"/"-inf"/"nan".
+    That post-write rewrite mutates stored args after the config_hash is fixed, causing
+    hash <-> stored-data divergence on any config containing a non-finite float.
+
+    Canonicalize once at the point of capture so the hash input, in-memory args,
+    file storage, and DB representation all agree on the same string form.
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, float):
+                if math.isinf(v):
+                    obj[k] = "inf" if v > 0 else "-inf"
+                elif math.isnan(v):
+                    obj[k] = "nan"
+            else:
+                _canonicalize_for_storage(v)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            if isinstance(v, float):
+                if math.isinf(v):
+                    obj[i] = "inf" if v > 0 else "-inf"
+                elif math.isnan(v):
+                    obj[i] = "nan"
+            else:
+                _canonicalize_for_storage(v)
+
+
 def _compute_config_hash(op_name, op_args, machine_info):
     """Compute the stable config hash used for fresh traces and recomputation."""
     hardware, mesh_config = _extract_hardware_and_mesh(machine_info)
@@ -540,8 +591,13 @@ def _compute_config_hash(op_name, op_args, machine_info):
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
 
-def update_master_file(master_file_path, operations, test_source, trace_uid=None):
-    """Update master JSON file with operations"""
+def update_master_file(master_file_path, operations, test_source, trace_uid=None, pytest_args=None):
+    """Update master JSON file with operations.
+
+    pytest_args is recorded per execution alongside trace_uid so the loader
+    can persist it on trace_run.pytest_args. Passing None preserves existing
+    behaviour (older traces simply have pytest_args absent in the JSON).
+    """
     import hashlib
 
     # Load existing master data
@@ -575,6 +631,13 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
 
         op_name = operation.get("operation", "unknown")
         op_args = operation.get("arguments", [])
+
+        # Canonicalize non-finite floats (inf/-inf/nan -> string forms) BEFORE the
+        # hash is computed and BEFORE storage. This keeps the in-memory args, the
+        # written file, the DB representation, and the hash input on a single
+        # canonical form — eliminating the order-of-ops bug that
+        # fix_infinity_in_json_file's post-write regex used to mask.
+        _canonicalize_for_storage(op_args)
 
         # Initialize operation entry if not exists
         if op_name not in master_data["operations"]:
@@ -610,9 +673,14 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                         "machine_info": machine_info,
                         "count": operation.get("execution_count", 1),
                         "trace_uid": trace_uid or operation.get("trace_uid"),
+                        "pytest_args": pytest_args,
                     }
                 ],
             }
+
+            sweep_source_hash = operation.get("sweep_source_hash")
+            if sweep_source_hash:
+                config_entry["sweep_source_hash"] = sweep_source_hash
 
             master_data["operations"][op_name]["configurations"].append(config_entry)
             new_configs_added += 1
@@ -669,7 +737,13 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                     matching_config.pop("machine_info", None)
                     matching_config.pop("execution_count", None)
 
-                # Check if this (source, machine_info) pair already exists
+                # Dedup key is (source, machine_info, trace_uid). Including
+                # trace_uid keeps separate pytest invocations as separate
+                # execution entries even when they share source + hardware
+                # (e.g. flux1 dev and schnell on the same Galaxy). Without
+                # trace_uid here, the second variant would overwrite the
+                # first's pytest_args/trace_uid in the master JSON and the
+                # loader would never see both runs.
                 new_source = test_source
                 new_machine_info = operation.get("machine_info")
                 new_count = operation.get("execution_count", 1)
@@ -677,34 +751,38 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
 
                 found_execution = None
                 for execution in matching_config["executions"]:
-                    if execution["source"] == new_source:
-                        # Check if machine_info matches
-                        exec_machine = execution.get("machine_info")
-                        if exec_machine is None and new_machine_info is None:
+                    if execution["source"] != new_source:
+                        continue
+                    if execution.get("trace_uid") != new_trace_uid:
+                        continue
+                    exec_machine = execution.get("machine_info")
+                    if exec_machine is None and new_machine_info is None:
+                        found_execution = execution
+                        break
+                    if exec_machine and new_machine_info:
+                        # Deep compare machine_info (all fields must match)
+                        exec_machine_str = json.dumps(exec_machine, sort_keys=True, default=str)
+                        new_machine_str = json.dumps(new_machine_info, sort_keys=True, default=str)
+                        if exec_machine_str == new_machine_str:
                             found_execution = execution
                             break
-                        elif exec_machine and new_machine_info:
-                            # Compare complete machine_info (all fields must match)
-                            # Convert to JSON strings for deep comparison
-                            exec_machine_str = json.dumps(exec_machine, sort_keys=True, default=str)
-                            new_machine_str = json.dumps(new_machine_info, sort_keys=True, default=str)
-                            if exec_machine_str == new_machine_str:
-                                found_execution = execution
-                                break
 
                 if found_execution:
-                    # Update existing execution - take max count
+                    # Same (source, machine_info, trace_uid) — same invocation.
+                    # Take max count; pytest_args is constant for a trace_uid.
                     found_execution["count"] = max(found_execution.get("count", 1), new_count)
-                    if new_trace_uid:
-                        found_execution["trace_uid"] = new_trace_uid
+                    if pytest_args is not None:
+                        found_execution["pytest_args"] = pytest_args
                 else:
-                    # Add new execution entry
+                    # New (trace_uid, source, machine_info) tuple — append
+                    # so each invocation's provenance survives in the JSON.
                     matching_config["executions"].append(
                         {
                             "source": new_source,
                             "machine_info": new_machine_info,
                             "count": new_count,
                             "trace_uid": new_trace_uid,
+                            "pytest_args": pytest_args,
                         }
                     )
 
@@ -729,7 +807,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
     # Save master file
     try:
         with open(master_file_path, "w") as f:
-            json.dump(master_data, f, indent=2, default=str)
+            json.dump(master_data, f, indent=2, sort_keys=True, default=str)
     except Exception as e:
         print(f"❌ Error saving master file: {e}")
 
@@ -739,7 +817,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
 def detect_pytest_tests(test_path):
     """Detect if a file/path contains pytest test cases"""
     try:
-        python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
+        python_cmd = get_python_cmd()
         result = subprocess.run(
             [python_cmd, "-m", "pytest", test_path, "--collect-only", "-q"],
             cwd=BASE_DIR,
@@ -769,14 +847,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     if debug_mode:
         print(f"⚠️  Note: --debug flag is deprecated (live output is now always enabled)")
 
-    # Use python executable from tt-metal environment
-    # Try to find python_env, fall back to system python3 if not found (e.g., in Docker/CI)
-    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
-    if os.path.exists(python_env_path):
-        python_cmd = python_env_path
-    else:
-        # Fallback to system python3 (used in Docker containers)
-        python_cmd = "python3"
+    # Use python executable from tt-metal environment when available.
+    python_cmd = get_python_cmd()
 
     # Create a unique subdirectory for this run based on source name and timestamp
     # This prevents conflicts with previous runs
@@ -798,7 +870,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
 
-        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params"] + extra_args
+        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--timeout=0", "--trace-params"] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
         cmd = [python_cmd, test_path, "--trace-params"] + extra_args
@@ -814,8 +886,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
 
     # Run the command with custom environment (always show live output now)
     # Use a custom command wrapper with tee to capture output while showing it live
-    import tempfile
     import re
+    import tempfile
 
     # Create a temp file to capture output
     tmp_output_fd, tmp_output_path = tempfile.mkstemp(suffix=".log", text=True)
@@ -825,10 +897,11 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         # Build command with tee to show output live AND save to file
         # Convert cmd list to properly quoted string for shell
         cmd_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
-        tee_cmd = f"{cmd_str} 2>&1 | tee {tmp_output_path}"
+        tee_cmd = f"set -o pipefail; {cmd_str} 2>&1 | tee {tmp_output_path}"
 
-        # Run with shell=True to use tee
-        result = subprocess.run(tee_cmd, shell=True, cwd=BASE_DIR, text=True, env=env)
+        # Run with shell=True to use tee; use bash for pipefail support so we
+        # get the pytest exit code instead of tee's (always-zero) exit code.
+        result = subprocess.run(tee_cmd, shell=True, executable="/bin/bash", cwd=BASE_DIR, text=True, env=env)
 
         # Read the captured output to parse test statistics
         with open(tmp_output_path, "r") as f:
@@ -875,6 +948,10 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         "trace_uid": str(uuid.uuid4()),
         "machine_info": get_machine_info(),
         "trace_count": len(json_files),
+        # Capture the pytest CLI args (everything after `--`) so the loader
+        # can persist them on trace_run.pytest_args. This is what lets users
+        # answer "did I trace model X with these args on this hardware?".
+        "pytest_args": " ".join(extra_args) if extra_args else None,
     }
 
     # Check for HF_MODEL and LLAMA_DIR environment variables
@@ -891,12 +968,35 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     with open(metadata_file, "w") as f:
         json.dump(metadata, f, indent=2)
 
+    # Persist test results as a sidecar JSON so CI can surface them in
+    # the GitHub job summary even when the trace step itself fails.
+    test_results_dir = os.path.dirname(output_dir) if output_dir.endswith(".json") else output_dir
+    test_results_dir = test_results_dir or "."
+    test_results_file = os.path.join(test_results_dir, "_test_results.json")
+    os.makedirs(test_results_dir, exist_ok=True)
+    try:
+        with open(test_results_file, "w") as f:
+            json.dump(
+                {
+                    "test_path": test_path,
+                    "exit_code": result.returncode,
+                    "passed": test_stats["passed"],
+                    "failed": test_stats["failed"],
+                    "total": test_stats["total"],
+                },
+                f,
+                indent=2,
+            )
+    except Exception as exc:
+        logger.warning("Failed to write test results sidecar: %s", exc, exc_info=True)
+
     return {
         "success": result.returncode == 0,
         "exit_code": result.returncode,
         "trace_files": json_files,
         "trace_dir": trace_dir,
         "trace_uid": metadata["trace_uid"],
+        "pytest_args": metadata.get("pytest_args"),
         "keep_traces": keep_traces,
         "output_dir": output_dir,
         "test_stats": test_stats,
@@ -1079,7 +1179,7 @@ def fix_memory_config_in_json(json_file):
 
         # Write back the fixed JSON
         with open(json_file, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, sort_keys=True)
 
         print(f"✅ Fixed {fixed_count_ref[0]} shard_spec entries")
         return fixed_count_ref[0]
@@ -1120,7 +1220,7 @@ def recompute_config_hashes(json_file):
                 updated += 1
 
     with open(json_file, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, indent=2, sort_keys=True)
 
     print(f"✅ Recomputed hashes: {updated} changed")
     return updated
@@ -1238,12 +1338,23 @@ Examples (Import existing traces):
 
         print(f"📊 Collected {len(result['trace_files'])} operation trace files")
 
+        if not args.load and not result["trace_files"]:
+            if result["success"]:
+                print("❌ Error: Test run completed but produced no operation trace files")
+            else:
+                print(
+                    f"❌ Error: Test execution failed with exit code {result['exit_code']} "
+                    "before any operation trace files were generated"
+                )
+            return 1
+
         if result["trace_files"]:
             # Load valid operations and excluded operations
             valid_operations = load_valid_operations()
             excluded_operations = get_excluded_operations()
             machine_info = get_machine_info()
             trace_uid = result.get("trace_uid")
+            pytest_args = result.get("pytest_args")
 
             # Extract test source name and possibly override machine_info from metadata
             if args.load:
@@ -1274,10 +1385,13 @@ Examples (Import existing traces):
                         if "machine_info" in metadata:
                             machine_info = metadata["machine_info"]
                             trace_uid = metadata.get("trace_uid", trace_uid)
+                            pytest_args = metadata.get("pytest_args", pytest_args)
                             print(f"📋 Loaded metadata from trace directory")
                             print(f"   Original source: {metadata.get('test_source')}")
                             if metadata.get("trace_uid"):
                                 print(f"   Trace UID: {metadata.get('trace_uid')}")
+                            if metadata.get("pytest_args"):
+                                print(f"   Pytest args: {metadata.get('pytest_args')}")
                             if "machine_info" in metadata and metadata["machine_info"]:
                                 machine_desc = (
                                     metadata["machine_info"][0]
@@ -1383,10 +1497,13 @@ Examples (Import existing traces):
             else:
                 os.makedirs(args.output_dir, exist_ok=True)
                 master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
-            if trace_uid:
-                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source, trace_uid)
-            else:
-                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
+            new_configs_added = update_master_file(
+                master_file,
+                filtered_operations_unique,
+                test_source,
+                trace_uid=trace_uid,
+                pytest_args=pytest_args,
+            )
 
             print(f"📝 Added {new_configs_added} new unique configurations to {master_file}")
             print(f"   Source: {test_source}")
@@ -1433,8 +1550,17 @@ Examples (Import existing traces):
             # Fix memory config shard_spec entries in the master JSON
             fix_memory_config_in_json(master_file)
 
-        # Always return 0 (success) as long as we processed traces
-        # Test failures don't affect tracer success
+        # Fail the pipeline if the underlying test run had any failures.
+        # This ensures CI catches pytest failures instead of silently
+        # succeeding just because traces were collected.
+        if not args.load and not result.get("success", True):
+            stats = result.get("test_stats", {})
+            if stats.get("failed", 0) > 0:
+                print(f"\n❌ Failing because {stats['failed']} test(s) failed")
+            else:
+                print(f"\n❌ Failing because test process exited with code {result.get('exit_code', 1)}")
+            return 1
+
         return 0
 
     except Exception as e:

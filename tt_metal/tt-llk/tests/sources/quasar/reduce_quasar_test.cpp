@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_reduce_(i);
     }
-    _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 
 #endif

@@ -166,7 +166,7 @@ inline void packer_addr_counter_init()
 /**
  * \brief Returns true if `out_l1` is a valid output of the FP32 late-conversion column.
  */
-__attribute__((noinline)) bool is_packer_fp32_late_column_output(const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_fp32_late_column_output(const DataFormat out_l1)
 {
     switch (out_l1)
     {
@@ -203,7 +203,7 @@ __attribute__((noinline)) bool is_packer_combined_late_column_output(const DataF
  * Validates supported dst-register to intermediate-format pairs for Blackhole's early conversion
  * stage. For this API, `out_l1` is interpreted as the requested intermediate format code.
  */
-__attribute__((noinline)) bool is_packer_to_L1_early_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_to_L1_early_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
 {
     switch (in_reg)
     {
@@ -250,7 +250,7 @@ __attribute__((noinline)) bool is_packer_to_L1_early_conversion_supported(const 
  * Validates supported intermediate (LateFromFormat) to L1 pairs for Blackhole's late conversion
  * stage.
  */
-__attribute__((noinline)) bool is_packer_to_L1_late_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_packer_to_L1_late_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
 {
     switch (in_reg)
     {
@@ -479,7 +479,7 @@ inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    [[maybe_unused]] const std::uint32_t face_r_dim,
+    const std::uint32_t face_r_dim,
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
     const bool partial_face)
@@ -570,15 +570,13 @@ inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t tile_c_dim          = TILE_C_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t relu_config         = 0)
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t tile_c_dim  = TILE_C_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool partial_face         = false,
+    const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),
         "Unsupported packer to L1 conversion.");
@@ -825,16 +823,17 @@ enum class PackerProgramType
 };
 
 /**
- * Checks whether all packers' config and counters match the expected formats and face dimension.
+ * Validates that all packers' config and counters match the expected formats and face dimension.
+ * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_api.h.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers
- * @param face_r_dim       Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
- * @param nop_count        Number of nop operations to ensure configuration writes complete (default 10)
- * @return true if all packer configurations match the expected values, false otherwise
+ * @param face_r_dim        Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
+ * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
  */
 template <PackerProgramType program_type = PackerProgramType::ProgramByTile>
-__attribute__((noinline)) bool are_packers_configured_correctly(
+__attribute__((noinline)) void are_packers_configured_correctly(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t nop_count = 10)
 {
     // Ensure configuration writes complete before subsequent operations
@@ -855,10 +854,38 @@ __attribute__((noinline)) bool are_packers_configured_correctly(
     const std::uint32_t pack_hw_src_format =
         ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? to_underlying(DataFormat::Float16) : pack_output_src_format;
 
-    const bool isDataFormatCorrect = (config.in_data_format == pack_hw_src_format) && (config.out_data_format == pack_output_dst_format);
+    if (config.in_data_format != pack_hw_src_format)
+    {
+        // DEVICE_PRINT("#1101 are_packers_configured_correctly: pack_src_format mismatch. expected: {}, actual: {}\n", pack_hw_src_format,
+        // config.in_data_format);
+        LLK_ASSERT(
+            (config.in_data_format == pack_hw_src_format),
+            "are_packers_configured_correctly: pack_src_format mismatch. Uncomment DEVICE_PRINT #1101 to inspect "
+            "expected/actual.");
+    }
+    if (config.out_data_format != pack_output_dst_format)
+    {
+        // DEVICE_PRINT("#1102 are_packers_configured_correctly: pack_dst_format mismatch. expected: {}, actual: {}\n", pack_output_dst_format,
+        // config.out_data_format);
+        LLK_ASSERT(
+            (config.out_data_format == pack_output_dst_format),
+            "are_packers_configured_correctly: pack_dst_format mismatch. Uncomment DEVICE_PRINT #1102 to inspect "
+            "expected/actual.");
+    }
 
-    const bool isFaceRDimCorrect = (program_type == PackerProgramType::ProgramByTile) ? true : (counters.pack_reads_per_xy_plane == face_r_dim);
-    return isDataFormatCorrect && isFaceRDimCorrect;
+    if constexpr (program_type == PackerProgramType::ProgramByFace)
+    {
+        if (counters.pack_reads_per_xy_plane != face_r_dim)
+        {
+            // DEVICE_PRINT(
+            // "#1103 are_packers_configured_correctly: pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n", face_r_dim,
+            // counters.pack_reads_per_xy_plane);
+            LLK_ASSERT(
+                (counters.pack_reads_per_xy_plane == face_r_dim),
+                "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Uncomment "
+                "DEVICE_PRINT #1103 to inspect expected/actual.");
+        }
+    }
 }
 
 } // namespace ckernel::packer

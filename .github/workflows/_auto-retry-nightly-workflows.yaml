@@ -15,15 +15,13 @@ on:
     workflows:
       - "(Single-card) Frequent model and ttnn tests"
       - "Package and release"
+      - "(Release) Model Status for Console Deployment"
     types:
       - completed
-    branches:
-      - main
-      - stable
 
 jobs:
   auto-retry:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'stable' || startsWith(github.event.workflow_run.head_branch, 'v')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,20 +57,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          MAX_ATTEMPTS=2
+          MAX_ATTEMPTS=3
           CURRENT_HOUR=$(date +"%H")
-          read original_trigger conclusion <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion')
+
+          # Fetch workflow run details
+          run_details=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }} 2>&1)
+          if [ $? -ne 0 ]; then
+            echo "::error title=api-error::Failed to fetch workflow run details: $run_details"
+            echo "should-continue=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          read original_trigger conclusion head_branch <<< $(echo "$run_details" | jq -r '.event + " " + .conclusion + " " + .head_branch')
+
+          echo "Target workflow details: trigger=$original_trigger, conclusion=$conclusion, branch=$head_branch, attempt=${{ steps.get-run-id-and-attempt.outputs.attempt-number }}"
+
+          # Check if head_branch is allowed (main, stable, or v* tag)
+          is_allowed_ref=false
+          if [[ "$head_branch" == "main" || "$head_branch" == "stable" || "$head_branch" =~ ^v.* ]]; then
+            is_allowed_ref=true
+          fi
+
           if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" -ge "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
-          elif [[ "$original_trigger" == "workflow_dispatch" ]]; then
-            echo "::notice title=no-continue-is-on-branch::This workflow was a workflow dispatched on a branch, not main. Not re-trying"
+          elif [[ "$original_trigger" == "workflow_dispatch" && "$is_allowed_ref" != "true" ]]; then
+            echo "::notice title=no-continue-is-on-branch::This workflow was dispatched on branch '$head_branch' which is not in the allowlist (main, stable, v*). Not re-trying"
             should_continue=false
           elif [[ "$conclusion" != "failure" ]]; then
             echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
             should_continue=false
-          elif [[ "$CURRENT_HOUR" -lt 8 || "$CURRENT_HOUR" -ge 20 ]]; then
-            echo "::notice title=no-continue-outside-hours::This workflow is outside of the hours of 8am-8pm PT. Not re-trying"
+          elif [[ "$CURRENT_HOUR" -lt 6 || "$CURRENT_HOUR" -ge 23 ]]; then
+            echo "::notice title=no-continue-outside-hours::This workflow is outside of the hours of 6am-10pm PT. Not re-trying"
             should_continue=false
           else
             should_continue=true

@@ -22,11 +22,11 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
     constexpr auto output_args = TensorAccessorArgs<2>();
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_RMS
     constexpr auto rms_output_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    const auto rms_output_addr_generator = TensorAccessor(rms_output_args, rms_output_addr, tile_bytes);
+    const auto rms_output_addr_generator = TensorAccessor(rms_output_args, rms_output_addr);
 #endif
 
     uint32_t end_row = start_row + num_rows_to_process;

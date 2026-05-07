@@ -62,7 +62,7 @@ std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
     std::map<std::string, std::string> defines;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: defines["REDUCE_OP"] = "PoolType::MAX"; break;
-        case Pool2DType::AVG_POOL2D: defines["REDUCE_OP"] = "PoolType::SUM"; break;
+        case Pool2DType::AVG_POOL2D: defines["REDUCE_OP"] = "PoolType::AVG"; break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
@@ -222,7 +222,9 @@ PoolCBSizes calculate_pool_cb_sizes(
     const Layout& output_layout,
     const DataType& output_dtype,
     const std::array<uint32_t, 2>& output_shard_shape,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    std::optional<uint32_t> reader_indices_actual_page_size,
+    std::optional<uint32_t> scalar_config_actual_page_size) {
     PoolCBSizes sizes;
     const bool is_output_tiled = output_layout == Layout::TILE;
 
@@ -295,13 +297,16 @@ PoolCBSizes calculate_pool_cb_sizes(
     }
 
     // Config tensor L1 CB (for DRAM-based config tensors)
+    // When the factory has the real DRAM buffers it can pass their actual page sizes so that the
+    // predicted CB footprint matches the CB the factory creates. For auto-shard estimation we fall
+    // back to the worst case (3 uint16 indices per output element + 2-byte segment count).
     sizes.config_tensor_l1_size = 0;
     if (config_tensor_in_dram) {
-        sizes.config_tensor_l1_size =
-            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
+        const uint32_t reader_indices_worst_case = (output_shard_shape[0] * 3 * sizeof(uint16_t)) + 2;
+        sizes.config_tensor_l1_size += reader_indices_actual_page_size.value_or(reader_indices_worst_case);
         if (!one_scalar_per_core) {
-            sizes.config_tensor_l1_size +=
-                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
+            const uint32_t scalar_config_worst_case = output_shard_shape[0] * 3 * sizeof(uint16_t);
+            sizes.config_tensor_l1_size += scalar_config_actual_page_size.value_or(scalar_config_worst_case);
         }
     }
 
@@ -540,7 +545,9 @@ void validate_input_params(
         dilation_h,
         dilation_w);
 
-    // check that padding is not excessive (should not be more than half the kernel size)
+    // Check that padding is not excessive (should not be more than half the kernel size).
+    // pad_right is intentionally excluded: DRAM slicing with TILE output can inflate it
+    // via width rounding in Pool2dSliceAttr::get_input_slice_and_padding.
     TT_FATAL(
         pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2,
         "Pool2D: Padding ({}, {}, {}) should not exceed half of kernel size ({}, {})",
@@ -716,8 +723,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         sliding_window_config.input_hw.first,
         sliding_window_config.input_hw.second,
         sliding_window_config.channels,
-        slice_padding[0],  // pad_h (top)
-        slice_padding[2],  // pad_w (left)
+        slice_padding[0] + slice_padding[1],  // pad_h (top + bottom)
+        slice_padding[2] + slice_padding[3],  // pad_w (left + right)
         slice_ceil_pad[0],
         slice_ceil_pad[1],
         sliding_window_config.ceil_mode,

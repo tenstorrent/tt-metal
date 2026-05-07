@@ -88,7 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         int remaining_tiles = params.INPUT_TILE_CNT;
-        while (remaining_tiles)
+        while (remaining_tiles != 0)
         {
             int tiles_to_dest = std::min(remaining_tiles, static_cast<int>(params.NUM_TILES_IN_BLOCK));
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -131,14 +131,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, false /* narrow_tile */);
+        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */>(
         formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
+    _llk_pack_init_<false /* untilize */, false /* zero_output */>(tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
 #else
     _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif
@@ -152,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     int remaining_tiles = params.OUTPUT_TILE_CNT;
-    while (remaining_tiles)
+    while (remaining_tiles != 0)
     {
         int tiles_from_dest = std::min(remaining_tiles, static_cast<int>(params.NUM_TILES_IN_BLOCK));
         _llk_packer_wait_for_math_done_();

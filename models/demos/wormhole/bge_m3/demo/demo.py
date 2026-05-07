@@ -65,6 +65,13 @@ def _mean_embedding_alignment(reference: torch.Tensor, candidate: torch.Tensor) 
     return float(np.diag(cross_similarity).mean())
 
 
+def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    mask = attention_mask.unsqueeze(-1).to(last_hidden_state.dtype)
+    summed = (last_hidden_state * mask).sum(dim=1)
+    counts = mask.sum(dim=1).clamp(min=1)
+    return summed / counts
+
+
 def _crop_hidden_states(last_hidden_state: torch.Tensor, seq_len: int) -> torch.Tensor:
     return last_hidden_state[:, :seq_len, :]
 
@@ -126,6 +133,31 @@ def _log_embedding_comparison(
     return tt_sentence_embeddings
 
 
+def _log_pooled_embedding_comparison(
+    reference_sentence_embeddings: torch.Tensor,
+    tt_sentence_embeddings: torch.Tensor,
+    *,
+    path_name: str,
+):
+    reference_mean_similarity = _mean_pairwise_cosine_similarity(reference_sentence_embeddings)
+    tt_mean_similarity = _mean_pairwise_cosine_similarity(tt_sentence_embeddings)
+    embedding_alignment = _mean_embedding_alignment(reference_sentence_embeddings, tt_sentence_embeddings)
+
+    logger.info(f"{path_name} pooled embedding shape: {tuple(tt_sentence_embeddings.shape)}")
+    logger.info(f"{path_name} mean cosine similarity (PyTorch): {reference_mean_similarity:.4f}")
+    logger.info(f"{path_name} mean cosine similarity (TTNN): {tt_mean_similarity:.4f}")
+    logger.info(f"{path_name} mean embedding alignment: {embedding_alignment:.4f}")
+
+    similarity_diff = abs(reference_mean_similarity - tt_mean_similarity)
+    tolerance = 0.02
+    assert (
+        similarity_diff < tolerance
+    ), f"{path_name} cosine similarities differ by {similarity_diff:.4f}, exceeding tolerance {tolerance}"
+    logger.info(f"{path_name} cosine similarities are close (difference: {similarity_diff:.4f})")
+
+    return tt_sentence_embeddings
+
+
 def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_location_generator):
     _require_single_device(device)
     resolved_model_name = _resolve_model_name(model_name, model_location_generator)
@@ -166,7 +198,7 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
         reference_hidden_states,
         tt_hidden_states,
         attention_mask,
-        pool_fn=BgeM3ForEmbedding._pool_embeddings,
+        pool_fn=_mean_pool,
         path_name="create_tt_model",
     )
 
@@ -180,6 +212,7 @@ def run_bge_vllm_demo(device, inputs, model_name, sequence_length, model_locatio
         max_seq_len=sequence_length,
         dtype=DEFAULT_TT_DTYPE,
         model_name=resolved_model_name,
+        sentence_pooling_method="mean",
     )
     generator_model._initialize_model()
     model_args = generator_model.model_args
@@ -197,20 +230,19 @@ def run_bge_vllm_demo(device, inputs, model_name, sequence_length, model_locatio
         attention_mask=attention_mask,
         token_type_ids=token_type_ids,
     )
+    reference_sentence_embeddings = _mean_pool(reference_hidden_states, attention_mask)
 
-    tt_hidden_states = generator_model.forward(
+    outputs = generator_model.forward(
         input_ids=input_ids,
         attention_mask=attention_mask,
         token_type_ids=token_type_ids,
         position_ids=None,
     )
-    tt_hidden_states = _crop_hidden_states(tt_hidden_states, seq_len).to(torch.float32)
+    tt_sentence_embeddings = outputs["dense_vecs"][: len(inputs)].to(torch.float32)
 
-    return _log_embedding_comparison(
-        reference_hidden_states,
-        tt_hidden_states,
-        attention_mask,
-        pool_fn=generator_model._pool_embeddings,
+    return _log_pooled_embedding_comparison(
+        reference_sentence_embeddings,
+        tt_sentence_embeddings,
         path_name="vllm_generator",
     )
 

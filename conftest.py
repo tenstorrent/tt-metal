@@ -73,10 +73,11 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    return (
-        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
-    )
+    return ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.GALAXY,
+        ttnn.cluster.ClusterType.TG,
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    ]
 
 
 # TODO: Remove this when TG clusters are deprecated.
@@ -781,6 +782,13 @@ def check_requires_grid_size(request):
     pytest.skip(
         "requires_grid_size mark requires one of: device, bh_2d_mesh_device, mesh_device (none requested by test)"
     )
+
+
+requires_hybrid_allocator = pytest.mark.skipif(
+    os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1",
+    reason="Test requires TT_METAL_ALLOCATOR_MODE_HYBRID=1 for per-core L1 allocation; "
+    "the env var must be exported before pytest starts so ttnn.open_device() sees it.",
+)
 
 
 @pytest.fixture()

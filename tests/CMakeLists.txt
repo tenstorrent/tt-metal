@@ -29,3 +29,7 @@ if(TTNN_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_eager) # this should go away and be replaced with link to ttnn
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn)
 endif(TTNN_BUILD_TESTS)
+
+if(TT_METAL_USE_EMULE)
+    add_subdirectory(emule)
+endif()

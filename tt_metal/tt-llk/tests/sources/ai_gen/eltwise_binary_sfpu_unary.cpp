@@ -23,7 +23,7 @@ using namespace ckernel;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint32_t face_r_dim = DEFAULT_TENSOR_SHAPE.face_r_dim;
     const std::uint32_t num_faces  = DEFAULT_TENSOR_SHAPE.total_num_faces();
@@ -51,7 +51,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS /*params*/)
 {
     // Initialize math operations
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -80,11 +80,12 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure packer hardware
 #ifdef ARCH_BLACKHOLE
@@ -93,7 +94,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
-    _llk_pack_init_<false, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();

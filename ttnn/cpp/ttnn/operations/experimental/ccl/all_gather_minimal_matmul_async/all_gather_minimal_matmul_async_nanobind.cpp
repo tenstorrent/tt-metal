@@ -111,7 +111,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
 
         compute_kernel_config : Optional[ttnn.operations.core.compute_kernel.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If omitted, defaults are selected via `init_device_compute_kernel_config`
-            (e.g., MathFidelity::HiFi2, fp32 accumulation enabled, packer accumulation enabled).
+            (e.g., tt::tt_metal::MathFidelity::HiFi2, fp32 accumulation enabled, packer accumulation enabled).
 
         persistent_output_buffer : Optional[ttnn.Tensor], default: None
             This is used to store the output of the all gather portion of the op.  This should have the dimensions of

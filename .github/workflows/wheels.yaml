@@ -72,8 +72,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: ${{ (startsWith(inputs.ref || github.ref, 'refs/tags/')) && 1 || 500 }}
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: ${{ (startsWith(inputs.ref, 'refs/tags/') || startsWith(github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
 
       - name: 📦 Restore CPM source cache
@@ -138,7 +138,7 @@ jobs:
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
       - name: ☁️ Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ steps.set_artifact_name.outputs.artifact_name }}

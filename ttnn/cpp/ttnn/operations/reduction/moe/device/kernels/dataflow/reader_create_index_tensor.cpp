@@ -59,15 +59,15 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes_input = get_tile_size(cb_id_in0);
 
-    const auto s0 = TensorAccessor(s0_args, src_addr, tile_bytes_input);
+    const auto s0 = TensorAccessor(s0_args, src_addr);
 
     constexpr uint32_t tile_bytes_topk = get_tile_size(cb_topk_mask);
 
-    const auto s1 = TensorAccessor(s1_args, topk_addr, tile_bytes_topk);
+    const auto s1 = TensorAccessor(s1_args, topk_addr);
 
     constexpr uint32_t tile_bytes_expert = get_tile_size(cb_expert_mask);
 
-    const auto s2 = TensorAccessor(s2_args, expert_addr, tile_bytes_expert);
+    const auto s2 = TensorAccessor(s2_args, expert_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);
@@ -79,30 +79,10 @@ void kernel_main() {
     // require substantially more memory (we would be double buffering four Wt sized CBs)
 
     uint32_t tile_id = 0;
-    uint32_t tile_id_topk = 0;
     uint32_t tile_id_expert = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // input
-        cb_in0.reserve_back(Wt);
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = j * tile_bytes_input});
-            tile_id++;
-            generate_index_tile(cb_intermed_index, j);
-        }
-        noc.async_read_barrier();
-        cb_in0.push_back(Wt);
-
-        // topk mask
-        cb_topk.reserve_back(Kt);
-        for (uint32_t j = 0; j < Kt; ++j) {
-            noc.async_read(
-                s1, cb_topk, tile_bytes_topk, {.page_id = tile_id_topk}, {.offset_bytes = j * tile_bytes_topk});
-            tile_id_topk++;
-        }
-        noc.async_read_barrier();
-        cb_topk.push_back(Kt);
-
-        // expert mask
+        // Expert mask is not consumed by the compute kernel. Enable back once support is added to the compute kernel.
+        /*
         cb_expert.reserve_back(Wt);
         for (uint32_t j = 0; j < Wt; ++j) {
             noc.async_read(
@@ -111,5 +91,30 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         cb_expert.push_back(Wt);
+        */
+
+        // input: stream two tiles at a time (Wt is guaranteed to be a multiple of 2 for this kernel).
+        for (uint32_t j = 0; j < Wt; j += 2) {
+            cb_in0.reserve_back(2);
+            noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
+            tile_id++;
+            generate_index_tile(cb_intermed_index, j);
+            noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = tile_bytes_input});
+            tile_id++;
+            generate_index_tile(cb_intermed_index, j + 1);
+            noc.async_read_barrier();
+            cb_in0.push_back(2);
+        }
     }
+
+    // Topk mask: load a single row of Kt tiles. The compute kernel applies it via
+    // add_block_bcast_rows_inplace(), which row-broadcasts this row across all Ht rows.
+    uint32_t tile_id_topk = 0;
+    cb_topk.reserve_back(Kt);
+    for (uint32_t j = 0; j < Kt; ++j) {
+        noc.async_read(s1, cb_topk, tile_bytes_topk, {.page_id = tile_id_topk}, {.offset_bytes = j * tile_bytes_topk});
+        tile_id_topk++;
+    }
+    noc.async_read_barrier();
+    cb_topk.push_back(Kt);
 }

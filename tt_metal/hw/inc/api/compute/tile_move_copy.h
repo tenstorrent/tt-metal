@@ -6,6 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -37,9 +38,10 @@ ALWI void copy_tile_to_dst_init_short(
     state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 #else
-    // TODO: Once runtime asserts are added for Quasar, assert that transpose and transpose_within_16x16_face are unused
+    LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
+    LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");
     UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(cbid)));
 #endif
@@ -67,7 +69,7 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, new_cbid)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cbid, new_cbid)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, new_cbid)));
     copy_tile_to_dst_init_short(new_cbid, transpose);
 #endif  // TODO: AM; add Quasar implementation
@@ -98,7 +100,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 #else
     UNPACK((llk_unpack_A(in_cb_id, in_tile_index)));
@@ -111,7 +113,7 @@ ALWI void copy_block_matmul_partials(
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
-    MATH((llk_math_eltwise_unary_datacopy_block<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
 #else
     UNPACK((llk_unpack_A_block(in_cb_id, start_in_tile_index, ntiles)));

@@ -31,14 +31,13 @@ void kernel_main() {
     uint32_t stick_id = 0;
 
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t num_tiles_block_c =
         FLOAT32_DTYPE ? block_row_size / 128
                       : block_row_size / 64;  // Assuming 4 / 2 bytes per datum, there are 128 / 64 bytes per tile row
 
-    const auto s = TensorAccessor(dst_args, dst_addr, unpadded_X_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
@@ -52,7 +51,7 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(curr_stick_id, s) + offset;
+            uint64_t dst_noc_addr = s.get_noc_addr(curr_stick_id) + offset;
 
             // Write out tmp buffer
             noc_async_write(l1_read_addr, dst_noc_addr, block_size);

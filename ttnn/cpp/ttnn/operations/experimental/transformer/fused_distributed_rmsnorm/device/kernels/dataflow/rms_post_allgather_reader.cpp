@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include <tt-metalium/constants.hpp>
@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(8);
     constexpr uint32_t block_size = get_compile_time_arg_val(9);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(10);
-    constexpr uint32_t scalar_value = get_compile_time_arg_val(11);
+    constexpr uint32_t reduce_factor = get_compile_time_arg_val(11);
     constexpr uint32_t epsilon_value = get_compile_time_arg_val(12);
     constexpr uint32_t has_weight = get_compile_time_arg_val(13);
     constexpr uint32_t fuse_rope = get_compile_time_arg_val(14);
@@ -51,17 +51,15 @@ void kernel_main() {
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
     const uint32_t stats_tile_bytes = get_tile_size(stats_cb);
     const uint32_t weight_tile_bytes = get_tile_size(weight_cb);
-    const uint32_t transformation_mat_tile_bytes = get_tile_size(transformation_mat_cb);
     const uint32_t rope_cos_tile_bytes = get_tile_size(rope_cos_cb);
     const uint32_t rope_sin_tile_bytes = get_tile_size(rope_sin_cb);
 
-    const auto input_accessor = TensorAccessor(input_args, input_addr, input_tile_bytes);
-    const auto stats_accessor = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
-    const auto weight_accessor = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
-    const auto transformation_mat_accessor =
-        TensorAccessor(transformation_mat_args, transformation_mat_addr, transformation_mat_tile_bytes);
-    const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr, rope_cos_tile_bytes);
-    const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr, rope_sin_tile_bytes);
+    const auto input_accessor = TensorAccessor(input_args, input_addr);
+    const auto stats_accessor = TensorAccessor(stats_args, stats_addr);
+    const auto weight_accessor = TensorAccessor(weight_args, weight_addr);
+    const auto transformation_mat_accessor = TensorAccessor(transformation_mat_args, transformation_mat_addr);
+    const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr);
+    const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr);
 
     /**
      * Op asserts that weight input is bf16.
@@ -72,7 +70,11 @@ void kernel_main() {
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
     // Generate constant tiles for layernorm compute
-    generate_reduce_scaler(reduce_scalar_cb, scalar_value);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        reduce_scalar_cb,
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_ROW,
+        reduce_factor>();
     generate_bcast_col_scalar(epsilon_cb, epsilon_value);
 
     if constexpr (fuse_rope) {

@@ -79,7 +79,6 @@ def test_perf_eltwise_binary_sfpu_float(
     loop_factor,
     iterations,
     input_dimensions,
-    workers_tensix_coordinates,
 ):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
@@ -125,7 +124,7 @@ def test_perf_eltwise_binary_sfpu_float(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)
 
 
 @pytest.mark.perf
@@ -164,7 +163,6 @@ def test_perf_eltwise_binary_sfpu_int(
     loop_factor,
     iterations,
     input_dimensions,
-    workers_tensix_coordinates,
 ):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
@@ -210,7 +208,7 @@ def test_perf_eltwise_binary_sfpu_int(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)
 
 
 @pytest.mark.perf
@@ -250,7 +248,6 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     loop_factor,
     iterations,
     input_dimensions,
-    workers_tensix_coordinates,
 ):
     chip_arch = get_chip_architecture()
 
@@ -304,4 +301,4 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

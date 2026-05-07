@@ -322,8 +322,9 @@ void create_worker_kernel(
 }
 
 int main(int argc, char** argv) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     const std::string default_log_file_path =
-        std::string(std::getenv("TT_METAL_HOME")) + "/generated/fabric_mux_bandwidth_temp.txt";
+        (tt_metal_home ? std::string(tt_metal_home) : std::string(".")) + "/generated/fabric_mux_bandwidth_temp.txt";
     const size_t default_num_full_size_channels = 8;
     const size_t default_num_header_only_channels = 0;
     const size_t default_num_buffers_full_size_channel = 8;

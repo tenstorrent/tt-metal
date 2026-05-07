@@ -111,6 +111,7 @@ def run_all_gather_impl(
     use_semaphore_free_all_gather_impl=False,
     sub_core_grids=None,
     use_broadcast=False,
+    use_explicit_subdevice_id=True,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -223,38 +224,40 @@ def run_all_gather_impl(
     def run_op(i):  # absolutely disgusting if-else condition because changing every call site is a humongous PITA
         if use_semaphore_free_all_gather_impl and all_gather_function == ttnn.experimental.all_gather_async:
             logger.info(f"Using new all-gather")
-            tt_all_gather_out_tensor = ttnn.all_gather(
-                input_tensor_mesh_list[i],
-                dim=dim,
-                cluster_axis=cluster_axis,
-                num_links=num_links,
-                memory_config=mem_config_ag,
-                topology=all_gather_topology,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-                subdevice_id=worker_sub_device_id,
-                sub_core_grids=sub_core_grids,
-            )
+            all_gather_kwargs = {
+                "dim": dim,
+                "cluster_axis": cluster_axis,
+                "num_links": num_links,
+                "memory_config": mem_config_ag,
+                "topology": all_gather_topology,
+                "chunks_per_sync": chunks_per_sync,
+                "num_workers_per_link": num_workers_per_link,
+                "num_buffers_per_channel": num_buffers_per_channel,
+                "sub_core_grids": sub_core_grids,
+            }
+            if use_explicit_subdevice_id:
+                all_gather_kwargs["subdevice_id"] = worker_sub_device_id
+            tt_all_gather_out_tensor = ttnn.all_gather(input_tensor_mesh_list[i], **all_gather_kwargs)
         else:
             logger.info(f"Using experimental all-gather")
-            tt_all_gather_out_tensor = all_gather_function(
-                input_tensor_mesh_list[i],
-                persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
-                dim=dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                memory_config=mem_config_ag,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-                cluster_axis=cluster_axis,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-                sub_core_grids=sub_core_grids,
-                use_broadcast=use_broadcast,
-            )
+            all_gather_async_kwargs = {
+                "persistent_output_buffer": persistent_output_buffers[i] if use_persistent_buffers else None,
+                "dim": dim,
+                "multi_device_global_semaphore": ccl_semaphore_handles[i],
+                "num_links": num_links,
+                "memory_config": mem_config_ag,
+                "topology": all_gather_topology,
+                "barrier_semaphore": barrier_semaphore_handles[i] if use_barrier else None,
+                "cluster_axis": cluster_axis,
+                "chunks_per_sync": chunks_per_sync,
+                "num_workers_per_link": num_workers_per_link,
+                "num_buffers_per_channel": num_buffers_per_channel,
+                "sub_core_grids": sub_core_grids,
+                "use_broadcast": use_broadcast,
+            }
+            if use_explicit_subdevice_id:
+                all_gather_async_kwargs["subdevice_id"] = worker_sub_device_id
+            tt_all_gather_out_tensor = all_gather_function(input_tensor_mesh_list[i], **all_gather_async_kwargs)
 
         return tt_all_gather_out_tensor
 

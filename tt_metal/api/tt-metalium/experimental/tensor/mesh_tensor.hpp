@@ -21,6 +21,7 @@ namespace tt::tt_metal {
 
 // Implementation details for MeshTensor
 class MeshTensorImpl;
+struct DeviceStorage;
 
 namespace distributed {
 class MeshDevice;
@@ -43,8 +44,7 @@ class MeshDevice;
  *
  * Invariants of MeshTensor:
  * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
- *   move construction will be UB. This exists to allow for default constructed MeshTensor. Incompatible member function
- *   call to this state is checked by TT_ASSERT (enabled at debug build) in accessors. This is mirrors HostTensor.
+ *   move construction will be UB. This exists to allow for default constructed MeshTensor. This mirrors HostTensor.
  * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
  *   pointers to the underlying storage and associated MeshDevice. Please note that this invariant isn't guaranteed
  *   currently, see: #38375
@@ -60,15 +60,14 @@ public:
      */
     MeshTensor();
 
+    /**
+     * Allocate a MeshTensor on the given device with the given spec and topology.
+     */
+    static MeshTensor allocate_on_device(
+        distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
+
     // Internal Constructor for transition.
     explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
-
-    /**
-     * Move constructor with new spec and topology.
-     * Moves the buffer from other and uses the provided spec/topology.
-     * This is meant for transition as TTNN-Tensor current has a two-step construction for MeshTensor.
-     */
-    MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology);
 
     /**
      * Release ownership of the underlying device memory.
@@ -110,18 +109,7 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    distributed::MeshBuffer& mesh_buffer() const;
-
-    /**
-     * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
-     *
-     * Note: Prefer mesh_buffer() wherever possible, as it breaks unique ownership semantics easily.
-     * A core invariant of MeshTensor is that it is the sole owner of the underlying MeshBuffer,
-     * one can get the underlying shared_ptr of the MeshBuffer and break the invariant.
-     *
-     * See: #38691, #38375
-     */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
+    const distributed::MeshBuffer& mesh_buffer() const;
 
     /**
      * Get the device the allocated device memory is on.
@@ -131,6 +119,11 @@ public:
     distributed::MeshDevice& device() const;
 
     // Getters:
+
+    /**
+     * Returns true if MeshTensor owns device memory (not default-constructed or moved-from).
+     */
+    bool is_initialized() const;
 
     const TensorSpec& tensor_spec() const;
 
@@ -176,11 +169,38 @@ public:
     // Is a MeshTensor with a new tensor topology fundamentally different?
     void update_tensor_topology(TensorTopology tensor_topology);
 
+    /**
+     * Access to the implementation.
+     *
+     * pre-condition: The MeshTensor must not be in a default constructed state.
+     */
+    MeshTensorImpl& impl();
+    const MeshTensorImpl& impl() const;
+
 private:
-    // impl could be a nullptr if MeshTensor is in a default constructed state.
-    // Avoid using impl pointer directly, use the accessors instead.
+    // TODO(#43693): Remove once DeviceStorage no longer keeps a shared_ptr<MeshBuffer>
+    // in its DeallocatedTombStone state.
+    // DeviceStorage is the sole caller — it uses mesh_buffer_invariant_breaking() to
+    // populate the tombstone when a tensor is deallocated, so the device pointer
+    // remains accessible on aliased tensors (e.g. after a zero-copy reshape).
+    // This breaks MeshTensor's core invariant: that it is the sole owner of the
+    // underlying MeshBuffer. Shared ownership leaks out, allowing the MeshBuffer to
+    // outlive the MeshTensor.
+    friend struct DeviceStorage;
+
+    /**
+     * Returns shared ownership of the underlying MeshBuffer.
+     *
+     * WARNING: Breaks MeshTensor's sole-ownership invariant. The caller becomes a
+     * shared owner of the MeshBuffer, which can outlive the MeshTensor.
+     * Only accessible to DeviceStorage. See #43693 for removal plan.
+     */
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
+
+    // impl_ could be a nullptr if MeshTensor is in a default constructed state.
+    // Avoid using impl_ pointer directly, use the accessors instead.
     // Otherwise, please add manual TT_ASSERT checks for nullptr.
-    std::unique_ptr<MeshTensorImpl> impl;
+    std::unique_ptr<MeshTensorImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

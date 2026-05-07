@@ -349,9 +349,31 @@ std::string override_addcmul_compute_kernel(KernelName kernel_name) {
     }
 }
 
+std::map<std::string, std::string> get_addcmul_int_kernel_defines(DataType dtype) {
+    TT_FATAL(
+        dtype == DataType::INT32 || dtype == DataType::UINT32,
+        "get_addcmul_int_kernel_defines: expected INT32 or UINT32, got {}",
+        dtype);
+    std::string fmt = (dtype == DataType::UINT32) ? "DataFormat::UInt32" : "DataFormat::Int32";
+    return {{"ADDCMUL_DATA_FORMAT", fmt}};
+}
+
 inline uint32_t pack_scalar_runtime_arg_float(const float scalar, const DataType dtype) {
     if (dtype == DataType::INT32) {
+        // float → int32 (truncate towards zero) → reinterpret bits as uint32.
+        // bit_cast preserves the two's complement bit-pattern without any value conversion.
+        //   6.0f  → static_cast<int32_t> →  6         → bit_cast → 0x00000006
+        //  -6.0f  → static_cast<int32_t> → -6         → bit_cast → 0xFFFFFFFA
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    if (dtype == DataType::UINT32) {
+        // float → int64 → uint32 (mod 2^32).
+        // A direct float → uint32 cast is UB in C++ for negative values, so we route
+        // through int64 (which can represent all float values in the int32 range) and
+        // then narrow to uint32 (C++ guarantees this is mod 2^32, always well-defined).
+        //   6.0f  → static_cast<int64_t> →  6LL → static_cast<uint32_t> → 0x00000006
+        //  -6.0f  → static_cast<int64_t> → -6LL → static_cast<uint32_t> → 0xFFFFFFFA
+        return static_cast<uint32_t>(static_cast<int64_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);
 }
@@ -757,11 +779,11 @@ ttnn::Shape compute_broadcasted_output_ternary(
             dim_b,
             dim_c);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 dim_a == dim_b && dim_b == dim_c,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}, dim c: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}, dim c: {}",
                 i,
                 largest_rank,
                 dim_a,

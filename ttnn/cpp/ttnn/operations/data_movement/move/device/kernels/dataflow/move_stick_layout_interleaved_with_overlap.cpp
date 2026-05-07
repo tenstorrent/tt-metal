@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -38,8 +39,10 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    const auto src_addrgen = TensorAccessor(src_args, src_addr, page_size);
-    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr, page_size);
+    experimental::CircularBuffer cb(cb_id);
+
+    const auto src_addrgen = TensorAccessor(src_args, src_addr);
+    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
@@ -47,15 +50,15 @@ void kernel_main() {
     volatile uint32_t* semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(semaphore_addr);
 
     // read a ublock of tiles from src to CB
-    cb_reserve_back(cb_id, num_pages);
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
+    cb.reserve_back(num_pages);
+    uint32_t l1_write_addr = cb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
         uint64_t src_noc_addr = src_addrgen.get_noc_addr(i);
         noc_async_read(src_noc_addr, l1_write_addr, page_size);
         noc_async_read_barrier();
         l1_write_addr += aligned_page_size;
     }
-    cb_push_back(cb_id, num_pages);
+    cb.push_back(num_pages);
 
     if (is_controller) {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
@@ -80,13 +83,13 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
     }
 
-    cb_wait_front(cb_id, num_pages);
-    uint32_t l1_read_addr = get_read_ptr(cb_id);
+    cb.wait_front(num_pages);
+    uint32_t l1_read_addr = cb.get_read_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
         uint64_t dst_noc_addr = dst_addrgen.get_noc_addr(i);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         noc_async_write_barrier();
         l1_read_addr += aligned_page_size;
     }
-    cb_pop_front(cb_id, num_pages);
+    cb.pop_front(num_pages);
 }

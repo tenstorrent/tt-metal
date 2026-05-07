@@ -32,10 +32,11 @@ void kernel_main() {
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
     (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
-    (defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM))
+    (defined(UCK_CHLKC_ISOLATE_SFPU) and defined(TRISC3)) or \
+    (defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC) or defined(COMPILE_FOR_DM))
     WATCHER_RING_BUFFER_PUSH(a);
     WATCHER_RING_BUFFER_PUSH(b);
-#if defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM)
+#if defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC) or defined(COMPILE_FOR_DM)
     //For Erisc do a dummy increment since there is no worker kernel that would increment dispatch message addr to signal compute kernel completion.
     if (a == b) {
         //We will assert later. This kernel will hang.
@@ -45,9 +46,9 @@ void kernel_main() {
         volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
 
         // Signal completion to dispatcher before assert hangs the kernel
-        // SD signaling: IDLE_ERISC (all archs) and Quasar DM require RUN_MSG_DONE
+        // SD signaling: IDLE_ERISC, DRISC (SD only), and Quasar DM require RUN_MSG_DONE
         // TODO: Remove COMPILE_FOR_DM once FD is enabled on Quasar
-#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM)
+#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC) or defined(COMPILE_FOR_DM)
         go_message_in->signal = RUN_MSG_DONE;
 #else
         // FD: ACTIVE_ETH, BRISC, NCRISC notify dispatcher via NOC
@@ -57,8 +58,14 @@ void kernel_main() {
     }
 #else
 #if defined(COMPILE_FOR_TRISC)
+#if defined(ARCH_QUASAR)
+    uint32_t hw_idx = internal_::get_hw_thread_idx();
+    volatile tt_l1_ptr uint8_t* const trisc_run =
+        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hw_idx];
+#else
     volatile tt_l1_ptr uint8_t * const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
         ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
+#endif
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif

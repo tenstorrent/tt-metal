@@ -37,6 +37,7 @@ set(SOURCES
     optimizers/adamw_test.cpp
     optimizers/muon_composite_test.cpp
     ops/newton_schulz_op_test.cpp
+    ops/frobenius_normalize_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -46,7 +47,7 @@ set(SOURCES
     serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
-    ops/layer_norm_composite_test.cpp
+    ops/layernorm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
@@ -169,6 +170,7 @@ if(TARGET benchmark::benchmark)
         benchmark/matmuls_benchmark.cpp
         benchmark/from_vector_benchmark.cpp
         benchmark/adamw_benchmark.cpp
+        benchmark/frobenius_normalize_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})

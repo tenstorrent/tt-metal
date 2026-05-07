@@ -4,10 +4,13 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/add_int_sfpu.h"
+#include "api/compute/mul_int_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
-
 #define APPROX false
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -15,77 +18,91 @@
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
+    const uint32_t default_acc_value = get_compile_time_arg_val(0);
+
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
-    const AccumulationOp accumulation_op = static_cast<AccumulationOp>(get_arg_val<uint32_t>(2));
 
-    experimental::CircularBuffer cb_start_obj(cb_start);
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_acc_obj(cb_acc);
+    experimental::CircularBuffer cb_in_obj(CB_IN);
+    experimental::CircularBuffer cb_out_obj(CB_OUT);
+    experimental::CircularBuffer cb_acc_obj(CB_ACC);  // note: only used in compute kernel
 
-    cb_start_obj.wait_front(ONE_TILE);
+    unary_op_init_common(CB_IN, CB_OUT);
+
+    BINARY_OP_INIT();
+
+    constexpr uint32_t DST_IN = 0;
+    constexpr uint32_t DST_ACC = 1;
+
+    cb_acc_obj.reserve_back(ONE_TILE);
+    cb_acc_obj.push_back(ONE_TILE);
 
     for (uint32_t i = 0; i < num_rows; i++) {
-        bool enable_reload = false;
+        // Synchronize unpacker-packer between iterations
+        // This is necessary to avoid data-races on cb_acc
+        cb_acc_obj.wait_front(ONE_TILE);
+        cb_acc_obj.pop_front(ONE_TILE);
+
+        tile_regs_acquire();
+        reconfig_data_format(CB_ACC, CB_ACC);
+
+        fill_tile_init();
+        FILL_TILE(DST_ACC, default_acc_value);
+
+        tile_regs_commit();
+
+        tile_regs_wait();
+
+        // out_of_order_output to keep packing to cb_acc at the same location
+        cb_acc_obj.reserve_back(ONE_TILE);
+
+        pack_reconfig_data_format(CB_ACC);
+        pack_tile(DST_ACC, CB_ACC);
+        tile_regs_release();
+
+        cb_acc_obj.push_back(ONE_TILE);
 
         for (uint32_t j = 0; j < tiles_per_row; j++) {
+            // Synchronize unpacker-packer between iterations
+            cb_acc_obj.wait_front(ONE_TILE);
+
             tile_regs_acquire();
-            const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
             cb_in_obj.wait_front(ONE_TILE);
 
-            binary_op_init_common(cb_in, cb_op, cb_out);
+            reconfig_data_format(CB_IN, CB_IN);
+            copy_tile_to_dst_init_short(CB_IN);
+            copy_tile(CB_IN, 0, DST_IN);
 
-#ifdef CUMSUM_USE_INT32
-            copy_tile_to_dst_init_short(cb_in);
-            copy_tile(cb_in, FIRST_TILE, INT32_TILE_DEST);
+            reconfig_data_format(CB_ACC, CB_ACC);
+            copy_tile_to_dst_init_short(CB_ACC);
+            copy_tile(CB_ACC, 0, DST_ACC);
 
-            copy_tile_to_dst_init_short(cb_op);
-            copy_tile(cb_op, FIRST_TILE, INT32_TILE_ACC);
-#endif  // CUMSUM_USE_INT32
-
-            // cumulating tiles along the first dimension,
-            // data is not dependent on itself within tiles
-            if (accumulation_op == AccumulationOp::CUMPROD) {
-                mul_tiles_init(cb_in, cb_op);
-                mul_tiles(cb_in, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
-            } else if (accumulation_op == AccumulationOp::CUMSUM) {
-#ifdef CUMSUM_USE_INT32
-                add_int_tile_init();
-                add_int_tile<DataFormat::Int32>(INT32_TILE_DEST, INT32_TILE_ACC, INT32_TILE_DEST);
-#else
-                add_tiles_init(cb_in, cb_op);
-                add_tiles(cb_in, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
-#endif  // CUMSUM_USE_INT32
-            }
+            BINARY_OP(DST_IN, DST_ACC, DST_ACC);
+            cb_acc_obj.pop_front(ONE_TILE);
 
             cb_in_obj.pop_front(ONE_TILE);
-            if (enable_reload) {
-                cb_acc_obj.pop_front(ONE_TILE);
-            }
 
             tile_regs_commit();
+
             tile_regs_wait();
 
-            cb_acc_obj.reserve_back(ONE_TILE);
-            pack_tile(WORKING_REG, cb_acc);
-            cb_acc_obj.push_back(ONE_TILE);
-
-            cb_acc_obj.wait_front(ONE_TILE);
-            copy_tile_to_dst_init_short(cb_acc);
-            copy_tile(cb_acc, FIRST_TILE, WORKING_REG);
-
             cb_out_obj.reserve_back(ONE_TILE);
-            pack_tile(WORKING_REG, cb_out);
+            pack_reconfig_data_format(CB_ACC, CB_OUT);  // Needed for fp32_acc_to_dest=True
+            pack_tile(DST_ACC, CB_OUT);
             cb_out_obj.push_back(ONE_TILE);
+
+            cb_acc_obj.reserve_back(ONE_TILE);
+
+            pack_reconfig_data_format(CB_OUT, CB_ACC);  // Needed for fp32_acc_to_dest=True
+            pack_tile(DST_ACC, CB_ACC);
 
             tile_regs_release();
 
-            enable_reload = true;
+            cb_acc_obj.push_back(ONE_TILE);
         }
-
-        cb_acc_obj.pop_front(ONE_TILE);
     }
 
-    cb_start_obj.pop_front(ONE_TILE);
+    // Clean-up and empty CB
+    cb_acc_obj.wait_front(ONE_TILE);
+    cb_acc_obj.pop_front(ONE_TILE);
 }

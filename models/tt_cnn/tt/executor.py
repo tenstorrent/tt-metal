@@ -33,6 +33,13 @@ class Executor(ABC):
         (shape, dtype, layout) tuple.
         """
 
+    def signal_read_complete(self):
+        """
+        Called by Pipeline after each D2H transfer is enqueued on the read CQ.
+        Base implementation is a no-op; executors that require cross-CQ ordering
+        (e.g. MultiCQTracedModelPipelinedIOExecutor) must override this.
+        """
+
 
 class ModelExecutor(Executor):
     def __init__(self, model: Callable, device, l1_input_memory_config, cq_id=0):
@@ -725,9 +732,16 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
     def _read_output_from_device(self):
         """Reads output tensor from device DRAM using I/O queue."""
         ttnn.wait_for_event(self.CQ_IO, self.last_op_event)
-        output = self.dram_output_tensor
+        return self.dram_output_tensor
+
+    def signal_read_complete(self):
+        """
+        Records read_event on CQ_IO *after* the D2H transfer has been enqueued by Pipeline.
+        This satisfies the four-event cross-CQ contract: CQ_OPS must not overwrite
+        dram_output_tensor until the D2H transfer is complete, so read_event must be
+        recorded after .cpu() / copy_to_host is enqueued, not before.
+        """
         self.read_event = ttnn.record_event(self.device, self.CQ_IO)
-        return output
 
     def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
         """

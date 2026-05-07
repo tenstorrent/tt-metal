@@ -4,6 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -23,25 +26,28 @@ void kernel_main() {
     // single-tile ublocks
     const uint32_t stick_size_bytes = H_size_bytes;
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(9);
     constexpr auto dst_args = TensorAccessorArgs<10>();
-    const auto s = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_out0);
 
     uint32_t i_stick = start_id;
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t w = 0; w < Wt; ++w) {
-            cb_wait_front(cb_out0, Ht);
-            uint32_t l1_read_addr = get_read_ptr(cb_out0);
+            cb.wait_front(Ht);
+            uint32_t l1_read_offset = 0;
             uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
             for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
-                tt::data_movement::common::noc_async_write_sharded(l1_read_addr, s, i_stick, 0, stick_size_bytes);
+                noc.async_write(
+                    cb, s, stick_size_bytes, {.offset_bytes = l1_read_offset}, {.page_id = i_stick, .offset_bytes = 0});
 
-                l1_read_addr += l1_read_offset_bytes;
+                l1_read_offset += l1_read_offset_bytes;
                 i_stick += 1;
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_out0, Ht);
+            noc.async_write_barrier();
+            cb.pop_front(Ht);
         }
     }
 }

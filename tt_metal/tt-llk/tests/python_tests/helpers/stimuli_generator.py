@@ -8,7 +8,9 @@ import torch
 from .bfp_format_utils import bfp4b_to_float16b
 from .format_config import (
     MXFP8_E4M3_MAX_NORMAL,
+    MXFP8_E4M3_MIN_MAGNITUDE,
     MXFP8_E5M2_MAX_NORMAL,
+    MXFP8_E5M2_MIN_MAGNITUDE,
     DataFormat,
 )
 from .llk_params import format_dict
@@ -61,6 +63,7 @@ def generate_random_face(
     sfpu=True,
     face_r_dim=MAX_FACE_R_DIM,
     negative_values=False,
+    full_2sc_int_range=False,
 ):
     size = face_r_dim * FACE_C_DIM  # face_r_dim rows × FACE_C_DIM columns
 
@@ -74,13 +77,31 @@ def generate_random_face(
                     torch.ones(size, dtype=format_dict[stimuli_format]) * const_value
                 )
             else:
-                max_value = 127 if stimuli_format == DataFormat.Int8 else 255
-                min_value = -(max_value + 1) if negative_values else 0
+                dtype = format_dict[stimuli_format]
+                # Determine representable range for this integer format.
+                # Signed formats use sign+magnitude in hardware, so INT_MIN is not
+                # representable (sign+magnitude -0 is reserved). Exclude it by
+                # clamping the lower bound to iinfo.min + 1.
+                # UInt32 is stored as torch.int64; use the actual uint32 range.
+                if stimuli_format == DataFormat.UInt32:
+                    type_min, type_max = 0, 2**32 - 1
+                elif full_2sc_int_range:
+                    iinfo = torch.iinfo(dtype)
+                    type_min = iinfo.min
+                    type_max = iinfo.max
+                else:
+                    iinfo = torch.iinfo(dtype)
+                    is_signed = iinfo.min < 0
+                    # Use half the representable range so that binary operations
+                    # (e.g. addition) on two values cannot overflow.
+                    type_max = iinfo.max // 2
+                    type_min = (-type_max) if is_signed else 0
+                min_value = type_min if negative_values else 0
                 srcA_face = torch.randint(
                     low=min_value,
-                    high=max_value,
+                    high=type_max,
                     size=(size,),
-                    dtype=format_dict[stimuli_format],
+                    dtype=dtype,
                 )
         else:
             if const_face:
@@ -325,6 +346,7 @@ def _generate_source_tensor(
     sfpu: bool,
     negative_values: bool,
     sequential: bool,
+    full_2sc_int_range: bool = False,
 ) -> torch.Tensor:
     """
     Generate a source tensor with random or sequential values.
@@ -363,6 +385,7 @@ def _generate_source_tensor(
             sfpu=sfpu,
             face_r_dim=face_r_dim,
             negative_values=negative_values,
+            full_2sc_int_range=full_2sc_int_range,
         )
         src.extend(face.tolist())
 
@@ -446,6 +469,7 @@ def generate_stimuli(
     output_format=None,
     sequential_A=False,
     sequential_B=False,
+    full_2sc_int_range=False,
 ):
     """
     Generate stimuli data for testing - ORIGINAL backward-compatible version.
@@ -469,6 +493,7 @@ def generate_stimuli(
         output_format: Optional output format for MX range constraints
         sequential_A: If True, generate sequential values for src_A
         sequential_B: If True, generate sequential values for src_B
+        full_2sc_int_range: If True, use the full two's complement range for integer formats
 
     Returns:
         tuple: (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B)
@@ -491,6 +516,7 @@ def generate_stimuli(
         sfpu=sfpu,
         negative_values=negative_values,
         sequential=sequential_A,
+        full_2sc_int_range=full_2sc_int_range,
     )
 
     srcB_tensor = _generate_source_tensor(
@@ -504,6 +530,7 @@ def generate_stimuli(
         sfpu=sfpu,
         negative_values=negative_values,
         sequential=sequential_B,
+        full_2sc_int_range=full_2sc_int_range,
     )
 
     srcA_tensor, srcB_tensor = _clamp_mx_tensors(
@@ -606,6 +633,135 @@ def generate_stimuli_w_tile_dimensions(
     )
 
     return srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B
+
+
+def format_elem_max(data_format: DataFormat) -> float:
+    """
+    Return the maximum representable element magnitude for `data_format`.
+
+    Falls back to `torch.finfo(format_dict[data_format]).max` for non-MX formats.
+    """
+    if data_format == DataFormat.MxFp8R:
+        return MXFP8_E5M2_MAX_NORMAL
+    if data_format == DataFormat.MxFp8P:
+        return MXFP8_E4M3_MAX_NORMAL
+    return float(torch.finfo(format_dict[data_format]).max)
+
+
+def _format_elem_min_magnitude(data_format: DataFormat) -> float:
+    """
+    Return the minimum stimulus magnitude that avoids denormals / sub-range values
+    in `data_format`.
+
+    For MX formats uses the element type's documented minimum magnitude; for other
+    formats returns `max(1e-6, finfo(torch_dtype).tiny * 100)`.
+    """
+    if data_format == DataFormat.MxFp8P:
+        return MXFP8_E4M3_MIN_MAGNITUDE
+    if data_format == DataFormat.MxFp8R:
+        return MXFP8_E5M2_MIN_MAGNITUDE
+    return max(1e-6, float(torch.finfo(format_dict[data_format]).tiny) * 100)
+
+
+def compute_safe_input_magnitude_range(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    *,
+    input_magnitude_cap: float,
+    output_magnitude_cap: float,
+    bfloat16_precision_cap: float = 1e4,
+) -> tuple[float, float]:
+    """
+    Combine caller-supplied caps with format-aware rules to produce a
+    (min_magnitude, max_magnitude) range for stimuli feeding a tensix op.
+
+    The caller pre-computes both caps from the op's magnitude relation:
+      - `input_magnitude_cap`:  max |x| implied by the input format's range
+      - `output_magnitude_cap`: max |x| implied by the output format's range
+        (e.g. `sqrt(output_format_max)` for a squaring op, `output_format_max / 2`
+        for summing two operands, etc.)
+
+    The returned max magnitude is `min(input_magnitude_cap, output_magnitude_cap)`,
+    further clamped to `bfloat16_precision_cap` for non-MX bfloat16 inputs to keep
+    precision reasonable. Set `bfloat16_precision_cap=math.inf` to disable this.
+
+    The returned min magnitude respects MX minimum magnitudes when either input or
+    output is an MX format.
+    """
+    max_magnitude = min(input_magnitude_cap, output_magnitude_cap)
+
+    input_torch_format = format_dict[input_format]
+    if input_torch_format == torch.bfloat16 and not input_format.is_mx_format():
+        max_magnitude = min(max_magnitude, bfloat16_precision_cap)
+
+    min_magnitude = _format_elem_min_magnitude(input_format)
+    if output_format.is_mx_format():
+        min_magnitude = max(min_magnitude, _format_elem_min_magnitude(output_format))
+
+    return min_magnitude, max_magnitude
+
+
+def apply_log_uniform_magnitudes(
+    magnitude_source: torch.Tensor,
+    *,
+    min_magnitude: float,
+    max_magnitude: float,
+    cast_to_format: DataFormat,
+    sign_source: torch.Tensor = None,
+    alternate_sign_every_n: int = None,
+) -> torch.Tensor:
+    """
+    Remap the values in `magnitude_source` to log-uniform magnitudes in
+    [min_magnitude, max_magnitude] and apply signs, returning a tensor cast to
+    `format_dict[cast_to_format]`.
+
+    Sign selection (mutually exclusive):
+      - `sign_source` provided: normalized to [0, 1]; values < 0.5 map to -1, else +1
+      - `alternate_sign_every_n=n`: element i gets -1 when (i % n == 0), else +1
+      - neither provided: all +1
+
+    The output is clamped to [-max_magnitude, max_magnitude] before casting.
+    """
+    if sign_source is not None and alternate_sign_every_n is not None:
+        raise ValueError(
+            "Provide either sign_source or alternate_sign_every_n, not both"
+        )
+
+    src_float = magnitude_source.to(torch.float32)
+    src_min = src_float.min()
+    src_max = src_float.max()
+    normalized = (
+        (src_float - src_min) / (src_max - src_min)
+        if src_max > src_min
+        else torch.zeros_like(src_float)
+    )
+
+    log_min = torch.log(torch.tensor(min_magnitude, dtype=torch.float32))
+    log_max = torch.log(torch.tensor(max_magnitude, dtype=torch.float32))
+    magnitudes = torch.exp(log_min + normalized * (log_max - log_min))
+
+    if sign_source is not None:
+        sign_float = sign_source.to(torch.float32)
+        sign_min = sign_float.min()
+        sign_max = sign_float.max()
+        sign_normalized = (
+            (sign_float - sign_min) / (sign_max - sign_min)
+            if sign_max > sign_min
+            else torch.zeros_like(sign_float)
+        )
+        signs = torch.where(sign_normalized < 0.5, -1.0, 1.0)
+    elif alternate_sign_every_n is not None:
+        signs = torch.where(
+            torch.arange(magnitude_source.numel()) % alternate_sign_every_n == 0,
+            torch.tensor(-1.0),
+            torch.tensor(1.0),
+        )
+    else:
+        signs = torch.ones_like(magnitudes)
+
+    values = signs * magnitudes
+    values = torch.clamp(values, -max_magnitude, max_magnitude)
+    return values.to(format_dict[cast_to_format])
 
 
 def convert_to_l1_view(

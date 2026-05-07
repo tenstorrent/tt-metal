@@ -24,7 +24,7 @@ ttnn::Tensor layer_norm_post_all_gather(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
         return ttnn::prim::layer_norm(
             input_tensor,

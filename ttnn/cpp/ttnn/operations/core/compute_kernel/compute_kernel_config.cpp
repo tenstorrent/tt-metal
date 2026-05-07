@@ -18,16 +18,14 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
-    tt::ARCH arch,
+    tt::ARCH,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
-    const MathFidelity default_fidelity,
+    const tt::tt_metal::MathFidelity default_fidelity,
     bool default_approx_mode,
     bool default_fp32_acc,
     bool default_l1_acc,
     bool default_dst_full_sync_en,
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level) {
-    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
-
     if (device_kernel_config.has_value()) {
         return device_kernel_config.value();
     }
@@ -52,7 +50,7 @@ void verify_numerical_configuration(
         return;
     }
     const auto& cfg = user_compute_kernel_config.value();
-    if (!cfg.fp32_dest_acc_en || cfg.math_fidelity != MathFidelity::HiFi4) {
+    if (!cfg.fp32_dest_acc_en || cfg.math_fidelity != tt::tt_metal::MathFidelity::HiFi4) {
         return;
     }
     // Only print warning once per process
@@ -82,9 +80,9 @@ bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& comput
     return compute_kernel_config.value().dst_full_sync_en;
 }
 
-MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+tt::tt_metal::MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (not compute_kernel_config.has_value()) {
-        return MathFidelity::Invalid;
+        return tt::tt_metal::MathFidelity::Invalid;
     }
     return compute_kernel_config.value().math_fidelity;
 }
@@ -97,9 +95,8 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     return compute_kernel_config.value().throttle_level;
 }
 
-std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
-    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
+std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
+    tt::ARCH, const DeviceComputeKernelConfig compute_kernel_config) {
     return std::make_tuple(
         compute_kernel_config.math_fidelity,
         compute_kernel_config.math_approx_mode,

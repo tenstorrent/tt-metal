@@ -97,7 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, params.DST_INDEX + i);
     }
-    _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 
 #endif

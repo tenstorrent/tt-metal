@@ -139,6 +139,10 @@ public:
 
     void wait_for_programs_with_progress();
 
+    bool did_last_test_hang() const { return last_test_hung_; }
+
+    void record_hung_test(const std::string& test_name) { hung_tests_.push_back(test_name); }
+
     // Accessors for progress monitor
     const std::unordered_map<MeshCoordinate, TestDevice>& get_test_devices() const { return test_devices_; }
 
@@ -273,7 +277,9 @@ private:
     std::filesystem::path raw_telemetry_csv_path_;
 
     std::vector<std::string> all_failed_bandwidth_tests_;  // Accumulates failed bandwidth tests
-    bool has_test_failures_ = false;  // Track if any tests failed validation
+    std::vector<std::string> hung_tests_;
+    bool has_test_failures_ = false;
+    bool last_test_hung_ = false;
 
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;

@@ -36,7 +36,9 @@ from helpers.utils import passed_test
     ],
 )
 def test_matmul_pack_untilize(
-    formats, dest_acc, math_fidelity, workers_tensix_coordinates
+    formats,
+    dest_acc,
+    math_fidelity,
 ):
     if formats.output == DataFormat.Bfp8_b:
         pytest.skip("Pack untilize does not support Bfp8_b")
@@ -84,7 +86,7 @@ def test_matmul_pack_untilize(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"

@@ -27,8 +27,9 @@
 #include <vector>
 
 #include "tt_memory.h"
-#include "hal/generated/dev_msgs.hpp"          // IWYU pragma: export
-#include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
+#include "hal/generated/dev_msgs.hpp"                // IWYU pragma: export
+#include "hal/generated/fabric_telemetry.hpp"        // IWYU pragma: export
+#include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -154,6 +155,7 @@ private:
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
     tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
+    realtime_profiler_msgs::Factory realtime_profiler_msgs_factory_;
 
 public:
     HalCoreInfoType(
@@ -169,7 +171,8 @@ public:
         bool supports_dfbs,
         bool supports_receiving_multicast_cmds,
         dev_msgs::Factory dev_msgs_factory,
-        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
+        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory,
+        realtime_profiler_msgs::Factory realtime_profiler_msgs_factory) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -182,7 +185,8 @@ public:
         supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
         dev_msgs_factory_(dev_msgs_factory),
-        fabric_telemetry_factory_(fabric_telemetry_factory) {}
+        fabric_telemetry_factory_(fabric_telemetry_factory),
+        realtime_profiler_msgs_factory_(realtime_profiler_msgs_factory) {}
 
     DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
@@ -195,6 +199,7 @@ public:
     uint32_t get_processor_class_num_fw_binaries(uint32_t processor_class_idx) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
     const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
+    const realtime_profiler_msgs::Factory& get_realtime_profiler_msgs_factory() const;
 };
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
@@ -229,6 +234,10 @@ inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { 
 
 inline const tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
     return this->fabric_telemetry_factory_;
+}
+
+inline const realtime_profiler_msgs::Factory& HalCoreInfoType::get_realtime_profiler_msgs_factory() const {
+    return this->realtime_profiler_msgs_factory_;
 }
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
@@ -329,6 +338,20 @@ private:
     size_t total_pinned_memory_size_{};
     bool has_tile_counter_registers_{};
     bool supports_implicit_dfb_sync_{};
+    uint32_t num_tile_counters_{};
+
+    uint32_t neo_tile_counters_base_addr_{};
+    uint32_t neo_tile_counters_stride_{};
+    uint32_t neo_tile_counters_size_{};
+    uint32_t neo_tile_counters_tiles_available_offset_{};
+    uint32_t neo_tile_counters_buffer_capacity_offset_{};
+
+    bool has_remapper_{};
+    uint32_t remapper_global_control_addr_{};
+    uint32_t remapper_client_l_config_base_addr_{};
+    uint32_t remapper_client_r_config_base_addr_{};
+    uint32_t remapper_pair_stride_{};
+    uint32_t remapper_num_pairs_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -401,6 +424,20 @@ public:
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
+    uint32_t get_num_tile_counters() const { return num_tile_counters_; }
+
+    uint32_t get_neo_tile_counters_base_addr() const { return neo_tile_counters_base_addr_; }
+    uint32_t get_neo_tile_counters_stride() const { return neo_tile_counters_stride_; }
+    uint32_t get_neo_tile_counters_size() const { return neo_tile_counters_size_; }
+    uint32_t get_neo_tile_counters_tiles_available_offset() const { return neo_tile_counters_tiles_available_offset_; }
+    uint32_t get_neo_tile_counters_buffer_capacity_offset() const { return neo_tile_counters_buffer_capacity_offset_; }
+
+    bool has_remapper() const { return has_remapper_; }
+    uint32_t get_remapper_global_control_addr() const { return remapper_global_control_addr_; }
+    uint32_t get_remapper_client_l_config_base_addr() const { return remapper_client_l_config_base_addr_; }
+    uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }
+    uint32_t get_remapper_pair_stride() const { return remapper_pair_stride_; }
+    uint32_t get_remapper_num_pairs() const { return remapper_num_pairs_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }
@@ -540,6 +577,13 @@ public:
         TT_ASSERT(programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH);
         auto index = get_programmable_core_type_index(programmable_core_type);
         return this->core_info_[index].get_fabric_telemetry_factory();
+    }
+
+    const realtime_profiler_msgs::Factory& get_realtime_profiler_msgs_factory(
+        HalProgrammableCoreType programmable_core_type) const {
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_realtime_profiler_msgs_factory();
     }
 
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.

@@ -201,7 +201,8 @@ all_gather_minimal_matmul_async_factory_helper(
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
-    bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
+    // Derive from scalar presence, matching validate (which guarantees tensors are also present).
+    bool use_fused_ternary = fused_ternary_scalar.has_value();
 
     /**
      * Determine dataformats, compute kernel config
@@ -846,6 +847,60 @@ all_gather_minimal_matmul_async_factory_helper(
         }
     }
 
+    // Set common runtime args (same for all cores, updated in override_runtime_arguments)
+    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary_a, ternary_b],
+    // output_addrs...]
+    {
+        std::vector<uint32_t> in0_common_args = {
+            in0_addr,
+            in2_addr,
+            in3_addr,
+            semaphore.at(0).address(),
+            semaphore.at(1).address(),
+        };
+        if (use_fused_ternary) {
+            in0_common_args.push_back(fused_ternary_input_a.value().buffer()->address());
+            in0_common_args.push_back(fused_ternary_input_b.value().buffer()->address());
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            in0_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+        }
+        for (const auto& mm_output_tensor : mm_output_tensors) {
+            in0_common_args.push_back(mm_output_tensor.buffer()->address());
+        }
+        tt::tt_metal::SetCommonRuntimeArgs(program, in0_sender_kernels_id, in0_common_args);
+        tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_fabric_kernels_id, in0_common_args);
+        tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, in0_common_args);
+    }
+
+    // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
+    {
+        std::vector<uint32_t> in1_common_args = {
+            in1_addr,
+            in2_addr,
+        };
+        if (use_fused_ternary) {
+            in1_common_args.push_back(fused_ternary_input_a.value().buffer()->address());
+            in1_common_args.push_back(fused_ternary_input_b.value().buffer()->address());
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            in1_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+        }
+        for (const auto& mm_output_tensor : mm_output_tensors) {
+            in1_common_args.push_back(mm_output_tensor.buffer()->address());
+        }
+        tt::tt_metal::SetCommonRuntimeArgs(program, in1_sender_kernels_id, in1_common_args);
+        tt::tt_metal::SetCommonRuntimeArgs(program, in1_receiver_kernels_id, in1_common_args);
+    }
+
+    // compute common args: [scalar, broadcast_ternary_b] (only if fused ternary)
+    if (use_fused_ternary) {
+        uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+        std::vector<uint32_t> compute_common_args = {
+            *reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()),
+            ternary_b_M_tiles == 1 ? 1u : 0u,  // broadcast_ternary_b
+        };
+        tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernels_id, compute_common_args);
+    }
+
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
         CoreCoord virtual_core = device->worker_core_from_logical_core(core);
@@ -892,9 +947,6 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
-        // log_info(tt::LogOp, "core_id: {}, M_start_tile: {}, M_end_tile: {}, N_start_tile: {}, N_end_tile: {}",
-        // core_id, M_start_tile, M_end_tile, N_start_tile, N_end_tile);
-
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
@@ -904,10 +956,8 @@ all_gather_minimal_matmul_async_factory_helper(
         bool is_in1_sink = core == in1_core_order.back();
 
         auto in0_injector_virtual_core = device->worker_core_from_logical_core(in0_core_order.front());
+        // Per-core args only (common values set via SetCommonRuntimeArgs above)
         std::vector<uint32_t> in0_args = {
-            in0_addr,
-            in2_addr,
-            in3_addr,
             is_in0_sink,
             (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
             (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
@@ -925,19 +975,8 @@ all_gather_minimal_matmul_async_factory_helper(
             virtual_core.y,
             in0_injector_virtual_core.x,
             in0_injector_virtual_core.y,
-            semaphore.at(0).address(),
-            semaphore.at(1).address(),
             in0_core_order_index,
             in0_core_order.size()};
-        // Add ternary addresses if present
-        if (use_fused_ternary) {
-            in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
-            in0_args.push_back(fused_ternary_input_b.value().buffer()->address());
-        }
-        // Add output addresses at the end (unified layout for both regular and split)
-        for (const auto& mm_output_tensor : mm_output_tensors) {
-            in0_args.push_back(mm_output_tensor.buffer()->address());
-        }
         if (in0_core_order_index > (in0_core_order.size() - 3)) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();
@@ -1004,9 +1043,8 @@ all_gather_minimal_matmul_async_factory_helper(
             SetRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, core, in0_args);
         }
 
+        // Per-core args only (common values set via SetCommonRuntimeArgs above)
         std::vector<uint32_t> in1_args = {
-            in1_addr,
-            in2_addr,
             is_in1_sink,
             (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
             (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
@@ -1021,15 +1059,6 @@ all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
             defer_write_k_block,
         };
-        // Add ternary addresses if present
-        if (use_fused_ternary) {
-            in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
-            in1_args.push_back(fused_ternary_input_b.value().buffer()->address());
-        }
-        // Add output addresses at the end (unified layout for both regular and split)
-        for (const auto& mm_output_tensor : mm_output_tensors) {
-            in1_args.push_back(mm_output_tensor.buffer()->address());
-        }
         if (in1_core_order_index == 0) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
@@ -1038,15 +1067,13 @@ all_gather_minimal_matmul_async_factory_helper(
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_args);
         }
 
+        // Per-core compute args (scalar is in common args)
         std::vector<uint32_t> compute_runtime_args = {
             M_start_tile,
             M_end_tile,
             N_start_tile,
             N_end_tile,
         };
-        if (use_fused_ternary) {
-            compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
-        }
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
 
@@ -1088,130 +1115,85 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const AllGatherMinimalMatmulAsyncParams& attributes,
     const AllGatherMinimalMatmulAsyncInputs& tensor_args,
     std::vector<ttnn::Tensor>& output_tensor) {
-    const auto& out_ready_semaphore_backward = attributes.semaphore.at(0);
-    const auto& out_ready_semaphore_forward = attributes.semaphore.at(1);
+    // Derive has_fused_ternary from scalar presence, matching validate and create_at.
+    // validate guarantees that scalar and tensors are always provided together.
+    bool has_fused_ternary = attributes.fused_ternary_scalar.has_value();
+
+    // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary], output_addrs...]
+    std::vector<uint32_t> in0_common = {
+        output_tensor.at(0).buffer()->address(),
+        tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0,
+        tensor_args.input_tensor.buffer()->address(),
+        attributes.semaphore.at(0).address(),
+        attributes.semaphore.at(1).address(),
+    };
+    if (has_fused_ternary) {
+        in0_common.push_back(tensor_args.fused_ternary_input_a.value().buffer()->address());
+        in0_common.push_back(tensor_args.fused_ternary_input_b.value().buffer()->address());
+        uint32_t ternary_b_M_tiles =
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+        in0_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+    }
+    for (size_t i = 1; i < output_tensor.size(); ++i) {
+        in0_common.push_back(output_tensor[i].buffer()->address());
+    }
+
+    // Build in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
+    std::vector<uint32_t> in1_common = {
+        tensor_args.weight_tensor.buffer()->address(),
+        tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0,
+    };
+    if (has_fused_ternary) {
+        in1_common.push_back(tensor_args.fused_ternary_input_a.value().buffer()->address());
+        in1_common.push_back(tensor_args.fused_ternary_input_b.value().buffer()->address());
+        uint32_t ternary_b_M_tiles =
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+        in1_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+    }
+    for (size_t i = 1; i < output_tensor.size(); ++i) {
+        in1_common.push_back(output_tensor[i].buffer()->address());
+    }
+
+    // Build compute common args: [scalar, broadcast_ternary_b] (only if fused ternary)
+    uint32_t scalar_as_uint = 0;
+    uint32_t broadcast_ternary_b_uint = 1;  // default broadcast
+    if (has_fused_ternary) {
+        float scalar = attributes.fused_ternary_scalar.value();
+        scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);
+        uint32_t ternary_b_M_tiles =
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+        broadcast_ternary_b_uint = ternary_b_M_tiles == 1 ? 1u : 0u;
+    }
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        auto in0_addr = output_tensor.at(0).buffer()->address();
-        auto in1_addr = tensor_args.weight_tensor.buffer()->address();
-        auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-        auto in3_addr = tensor_args.input_tensor.buffer()->address();
+        // Update in0 common args (no per-core loop needed)
+        auto& in0_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_sender_kernels_id);
+        auto& in0_receiver_fabric_common =
+            tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_receiver_fabric_kernels_id);
+        auto& in0_receiver_no_fabric_common =
+            tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_receiver_no_fabric_kernels_id);
+        for (size_t i = 0; i < in0_common.size(); ++i) {
+            in0_sender_common[i] = in0_common[i];
+            in0_receiver_fabric_common[i] = in0_common[i];
+            in0_receiver_no_fabric_common[i] = in0_common[i];
+        }
 
-        auto& in0_sender_runtime_args = GetRuntimeArgs(program, shared_variables.in0_sender_kernels_id);
-        auto& in0_receiver_no_fabric_runtime_args =
-            GetRuntimeArgs(program, shared_variables.in0_receiver_no_fabric_kernels_id);
-        auto& in0_receiver_fabric_runtime_args =
-            GetRuntimeArgs(program, shared_variables.in0_receiver_fabric_kernels_id);
-        auto& in1_sender_runtime_args = GetRuntimeArgs(program, shared_variables.in1_sender_kernels_id);
-        auto& in1_receiver_runtime_args = GetRuntimeArgs(program, shared_variables.in1_receiver_kernels_id);
-        auto in1_size = shared_variables.in1_size;
-        auto& compute_runtime_args = GetRuntimeArgs(program, shared_variables.compute_kernels_id);
+        // Update in1 common args
+        auto& in1_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in1_sender_kernels_id);
+        auto& in1_receiver_common =
+            tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in1_receiver_kernels_id);
+        for (size_t i = 0; i < in1_common.size(); ++i) {
+            in1_sender_common[i] = in1_common[i];
+            in1_receiver_common[i] = in1_common[i];
+        }
 
-        // Check if ternary addresses are present
-        bool has_fused_ternary =
-            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-
-        for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
-            CoreCoord core = shared_variables.cores.at(i);
-            uint32_t in0_idx = shared_variables.transpose_core_grid ? core.x : core.y;
-            uint32_t in1_idx = shared_variables.transpose_core_grid ? core.y : core.x;
-            if (in1_idx == 0) {
-                auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
-                in0_sender_args[0] = in0_addr;
-                in0_sender_args[1] = in2_addr;
-                in0_sender_args[2] = in3_addr;
-                in0_sender_args[20] = out_ready_semaphore_backward.address();
-                in0_sender_args[21] = out_ready_semaphore_forward.address();
-
-                uint32_t output_offset = 24;
-                if (has_fused_ternary) {
-                    in0_sender_args[24] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in0_sender_args[25] = tensor_args.fused_ternary_input_b.value().buffer()->address();
-                    output_offset = 26;
-                }
-                // Update N output addresses at the end
-                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
-                    in0_sender_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
-                }
-            } else if (in1_idx > (in1_size - 3)) {
-                auto& in0_receiver_args = in0_receiver_fabric_runtime_args[core.x][core.y];
-                in0_receiver_args[0] = in0_addr;
-                in0_receiver_args[1] = in2_addr;
-                in0_receiver_args[2] = in3_addr;
-                in0_receiver_args[20] = out_ready_semaphore_backward.address();
-                in0_receiver_args[21] = out_ready_semaphore_forward.address();
-
-                uint32_t output_offset = 24;
-                if (has_fused_ternary) {
-                    in0_receiver_args[24] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in0_receiver_args[25] = tensor_args.fused_ternary_input_b.value().buffer()->address();
-                    output_offset = 26;
-                }
-                // Update N output addresses at the end
-                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
-                    in0_receiver_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
-                }
-            } else {
-                auto& in0_receiver_args = in0_receiver_no_fabric_runtime_args[core.x][core.y];
-                in0_receiver_args[0] = in0_addr;
-                in0_receiver_args[1] = in2_addr;
-                in0_receiver_args[2] = in3_addr;
-                in0_receiver_args[20] = out_ready_semaphore_backward.address();
-                in0_receiver_args[21] = out_ready_semaphore_forward.address();
-
-                uint32_t output_offset = 24;
-                if (has_fused_ternary) {
-                    in0_receiver_args[24] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in0_receiver_args[25] = tensor_args.fused_ternary_input_b.value().buffer()->address();
-                    output_offset = 26;
-                }
-                // Update N output addresses at the end
-                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
-                    in0_receiver_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
-                }
-            }
-            if (in0_idx == 0) {
-                auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-                in1_sender_args[0] = in1_addr;
-                in1_sender_args[1] = in2_addr;
-
-                uint32_t output_offset = 15;
-                if (has_fused_ternary) {
-                    in1_sender_args[15] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in1_sender_args[16] = tensor_args.fused_ternary_input_b.value().buffer()->address();
-                    output_offset = 17;
-                }
-                // Update N output addresses at the end
-                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
-                    in1_sender_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
-                }
-            } else {
-                auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-                in1_receiver_args[1] = in2_addr;
-
-                uint32_t output_offset = 15;
-                if (has_fused_ternary) {
-                    in1_receiver_args[15] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in1_receiver_args[16] = tensor_args.fused_ternary_input_b.value().buffer()->address();
-                    output_offset = 17;
-                }
-                // Update N output addresses at the end
-                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
-                    in1_receiver_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
-                }
-            }
-
-            auto& compute_args = compute_runtime_args[core.x][core.y];
-
-            // Compute RT args: [M_start, M_end, N_start, N_end, [optional: scalar]]
-            // If ternary is present and scalar arg exists, update it at index 4
-            if (has_fused_ternary && attributes.fused_ternary_scalar.has_value()) {
-                float scalar = attributes.fused_ternary_scalar.value();
-                uint32_t scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);
-                compute_args[4] = scalar_as_uint;
-            }
+        // Update compute common args
+        if (has_fused_ternary) {
+            auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.compute_kernels_id);
+            compute_common[0] = scalar_as_uint;
+            compute_common[1] = broadcast_ternary_b_uint;
         }
     }
 }

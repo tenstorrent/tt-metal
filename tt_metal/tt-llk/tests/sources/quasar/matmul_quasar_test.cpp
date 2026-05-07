@@ -95,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_matmul_block_(CT_DIM, RT_DIM);
     }
-    _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 
 #endif

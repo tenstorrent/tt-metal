@@ -336,7 +336,7 @@ def _build_lm_head_inputs(
     weight_config = get_test_weight_config(
         LMHead1D, hf_config, (lm_head_state_dict,), cache_path, mesh_device, force_recalculate_weight_config
     )
-    model_config = get_model_config(LMHead1D, mode, mesh_device)
+    model_config = get_model_config(LMHead1D, mode, hf_config, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, None)  # CCL not needed for linear only
     run_config = create_run_config(model_config, weight_config, model_state)
 
