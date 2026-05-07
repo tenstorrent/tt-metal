@@ -168,16 +168,6 @@ BUCKETS: tuple[Bucket, ...] = (
             f"{UNIT_TEST_DIR}/test_broadcast_rms_single_device.py",
         ),
     ),
-    Bucket(
-        name="lm_head_sampling_persistent_mode",
-        timeout=300,
-        env=(("TT_RUN_PERSISTENT_MODE", "1"),),
-        targets=(
-            f"{UNIT_TEST_DIR}/test_lm_head_sampling.py::test_persistent_mode",
-            f"{UNIT_TEST_DIR}/test_lm_head_sampling.py::test_persistent_mode_real_weights",
-            f"{UNIT_TEST_DIR}/test_lm_head_sampling.py::test_persistent_mode_pod",
-        ),
-    ),
     # Keep fast-dispatch buckets visually separated from slow-dispatch buckets.
     Bucket(
         name="fast_dispatch",

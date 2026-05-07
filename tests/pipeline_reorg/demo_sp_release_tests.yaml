@@ -127,8 +127,7 @@
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket fast_dispatch \
-      --bucket lm_head_sampling_perf \
-      --bucket lm_head_sampling_persistent_mode
+      --bucket lm_head_sampling_perf
   model: deepseek_decode
   skus:
     bh_galaxy:

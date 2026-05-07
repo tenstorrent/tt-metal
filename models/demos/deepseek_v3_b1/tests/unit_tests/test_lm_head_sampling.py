@@ -23,7 +23,10 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
-from models.demos.deepseek_v3_b1.demo.pipeline import create_single_galaxy_spec_decode_pipeline_configuration
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    create_single_galaxy_spec_decode_pipeline_configuration,
+    create_single_pod_spec_decode_no_decoder_pipeline_configuration,
+)
 from models.demos.deepseek_v3_b1.demo.stage import TOKEN_META_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider, _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
