@@ -16,6 +16,26 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3MLP
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstarl2_small.tt.tt_ministralmlp import TtMinistralMLP
+from transformers.integrations.finegrained_fp8 import Fp8Dequantize
+
+
+_ORIGINAL_FP8_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
+
+
+def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
+    if scales.ndim == 0:
+        fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
+        if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
+            quantized_fp32 = self._unpack_fp4(quantized)
+        else:
+            quantized_fp32 = quantized.to(torch.float32)
+        out_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
+        scale = scales.to(torch.float32)
+        return (quantized_fp32 * scale).to(out_dtype)
+    return _ORIGINAL_FP8_DEQUANTIZE_ONE(self, quantized, scales)
+
+
+Fp8Dequantize._dequantize_one = _dequantize_one_compat
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -140,7 +160,7 @@ def test_ministral3_mlp_pcc_devstral_weights(
     )
     tt_torch = tt_torch[:, :1, :, :]
 
-    pcc_required = 0.94
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_out, tt_torch, pcc_required)
     logger.info(comp_allclose(ref_out, tt_torch))
     logger.info(f"PCC: {pcc_message}")
