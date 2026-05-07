@@ -117,7 +117,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) 
 
     // Copying the storage increments the use-count — tensor is no longer sole owner.
     {
-        DeviceStorage copy = tensor.device_storage();
+        DeviceStorage copy = tensor.device_storage();  // NOLINT(performance-unnecessary-copy-initialization)
         EXPECT_FALSE(tensor.device_storage().is_sole_owner_of_device_memory());
     }
     // Copy destroyed — sole ownership restored.
@@ -130,7 +130,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) 
     {
         DeviceStorage temp = tensor.device_storage();  // copy: use_count = 2
         DeviceStorage moved_into(std::move(temp));     // move: use_count stays 2, temp deallocated
-        EXPECT_FALSE(temp.is_allocated());
+        EXPECT_FALSE(temp.is_allocated());  // NOLINT(bugprone-use-after-move)
     }
     // temp and moved_into both gone — sole ownership restored.
     EXPECT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
