@@ -54,6 +54,23 @@ inline metal2_reduce_helpers::m2::DataflowBufferSpec MakeDFB(
     return dfb;
 }
 
+// Variant of MakeDFB for "intra-tensix" DFBs — DFBs whose producer and consumer
+// kernels are the same kernel (e.g., the negate-path acc/ineg scratch buffers
+// produced and consumed by the compute kernel, or welford W's var/scaled
+// scratch buffers). The Metal 2.0 framework asserts `!enable_implicit_sync` for
+// intra-tensix DFBs in `dataflow_buffer.cpp` (ISR-based credit flow only makes
+// sense across distinct producer/consumer kernels), so we must disable it.
+inline metal2_reduce_helpers::m2::DataflowBufferSpec MakeIntraDFB(
+    const std::string& name,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    tt::DataFormat data_format,
+    const tt::tt_metal::Tile& tile) {
+    auto dfb = MakeDFB(name, entry_size, num_entries, data_format, tile);
+    dfb.disable_implicit_sync = true;
+    return dfb;
+}
+
 inline void BindDFB(
     metal2_reduce_helpers::m2::KernelSpec& kernel,
     const std::string& dfb_name,

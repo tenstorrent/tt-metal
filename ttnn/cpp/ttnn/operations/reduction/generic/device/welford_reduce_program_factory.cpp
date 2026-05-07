@@ -371,8 +371,8 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         const tt::DataFormat var_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t var_single_tile_size = tile_size(var_data_format);
         dataflow_buffers.push_back(
-            MakeDFB(VAR_DFB, var_single_tile_size, kNumScratchEntries, var_data_format, a.tensor_spec().tile()));
-        dataflow_buffers.push_back(MakeDFB(
+            MakeIntraDFB(VAR_DFB, var_single_tile_size, kNumScratchEntries, var_data_format, a.tensor_spec().tile()));
+        dataflow_buffers.push_back(MakeIntraDFB(
             SCALED_DFB, input_single_tile_size, kNumScratchEntries, input_cb_data_format, a.tensor_spec().tile()));
     }
     if (reduce_hw) {

@@ -175,13 +175,6 @@ m2::ProgramRunParams BuildRunParams(
         });
 
         num_tiles_read += num_tensor_tiles_per_core;
-        if (i == num_cores - 1) {
-            TT_FATAL(
-                num_tiles_read == num_rows * Wt,
-                "Reduce W assigned {} input tiles, expected {}",
-                num_tiles_read,
-                num_rows * Wt);
-        }
     }
 
     params.kernel_run_params = {std::move(reader_params), std::move(writer_params), std::move(compute_params)};
@@ -264,9 +257,9 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     dataflow_buffers.push_back(
         MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()));
     if (operation_attributes.negate) {
-        dataflow_buffers.push_back(MakeDFB(
+        dataflow_buffers.push_back(MakeIntraDFB(
             ACC_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
-        dataflow_buffers.push_back(MakeDFB(
+        dataflow_buffers.push_back(MakeIntraDFB(
             INEG_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
     }
 

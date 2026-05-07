@@ -310,9 +310,9 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             negate_cb_tiles);
         const uint32_t negate_entries = static_cast<uint32_t>(negate_cb_tiles);
 
-        dataflow_buffers.push_back(MakeDFB(
+        dataflow_buffers.push_back(MakeIntraDFB(
             ACC_DFB, dst_single_tile_size, negate_entries, dst_cb_data_format, output.tensor_spec().tile()));
-        dataflow_buffers.push_back(MakeDFB(
+        dataflow_buffers.push_back(MakeIntraDFB(
             INEG_DFB, dst_single_tile_size, negate_entries, dst_cb_data_format, output.tensor_spec().tile()));
     }
 

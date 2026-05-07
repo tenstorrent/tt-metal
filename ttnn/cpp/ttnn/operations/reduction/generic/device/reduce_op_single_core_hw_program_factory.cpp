@@ -216,9 +216,9 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     dataflow_buffers.push_back(
         MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()));
     if (operation_attributes.negate) {
-        dataflow_buffers.push_back(MakeDFB(
+        dataflow_buffers.push_back(MakeIntraDFB(
             ACC_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
-        dataflow_buffers.push_back(MakeDFB(
+        dataflow_buffers.push_back(MakeIntraDFB(
             INEG_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
     }
 
