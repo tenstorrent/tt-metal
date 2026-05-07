@@ -53,6 +53,14 @@ void kernel_main() {
     // matmul<->combine semaphore wait/inc (no consumer to coordinate with).
     constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
 
+    // Posted writes for matmul→combine output: in production, the matmul<->combine semaphore
+    // handshake (noc_async_write barrier of `combine_semaphore_inc`) provides receiver-side
+    // ordering, so posted writes are safe + faster. In compute_only there is no consumer to
+    // coordinate with, and on Blackhole the host can read matmul_output_tensor before posted
+    // writes have committed in destination L1 → uninitialized bf16 → NaN/Inf in PCC.
+    // Use non-posted writes + ACK barrier in compute_only to guarantee destination commit.
+    constexpr bool kPostedWrite = !compute_only;
+
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
     constexpr auto w0_w1_args = TensorAccessorArgs<0>();
@@ -341,7 +349,7 @@ void kernel_main() {
                         output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
 
                     const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
-                    noc_async_write_one_packet_set_state</*posted=*/true>(
+                    noc_async_write_one_packet_set_state</*posted=*/kPostedWrite>(
                         dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
 
                     const uint32_t dest_l1_addr = output_base_l1_addr + output_buffer_offset_bytes +
@@ -350,7 +358,7 @@ void kernel_main() {
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
 
-                    noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
+                    noc_async_write_one_packet_with_state</*posted=*/kPostedWrite>(source_l1_addr, dest_l1_addr);
 
                     if (++shard_row == ((dest_height_shard < tokens_per_height_shard_rem)
                                             ? tokens_per_height_shard_chunk + 1
@@ -387,5 +395,14 @@ void kernel_main() {
     if constexpr (!compute_only) {
         noc_semaphore_set(combine_semaphore_ptr, 0);
     }
-    noc_async_posted_writes_flushed(/*noc=*/1);
+    if constexpr (compute_only) {
+        // Non-posted matmul→combine writes need ACK-barrier (not just issuer-queue flush)
+        // so destination L1 is committed before host reads matmul_output_tensor.
+        // (See kPostedWrite comment near top of kernel for context.)
+        noc_async_write_barrier(/*noc=*/1);
+    } else {
+        // Production posted writes: issuer-queue flush; receiver-side semaphore handshake
+        // guarantees destination commit (combine kernels wait on the sem before reading).
+        noc_async_posted_writes_flushed(/*noc=*/1);
+    }
 }
