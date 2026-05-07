@@ -43,7 +43,6 @@ on:
         required: false
         type: string
         default: "in-service"
-        description: "Runner pool tag (with topology-6u, arch-wormhole_b0, pipeline-perf)"
 
 jobs:
   build-artifact:
