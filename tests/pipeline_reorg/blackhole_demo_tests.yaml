@@ -56,8 +56,9 @@
 - name: llama3-8b e2e tests
   cmd: |
     set -e
-    export HF_MODEL=models/tt_transformers/model_params/Meta-Llama-3-8B
-    export TT_CACHE_PATH=models/tt_transformers/model_params/Meta-Llama-3-8B
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=meta-llama/Meta-Llama-3-8B
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Meta-Llama-3-8B
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
   skus:
     bh_deskbox:
@@ -92,8 +93,9 @@
 - name: qwen2.5-32b-instruct e2e tests
   cmd: |
     set -e
-    export HF_MODEL=models/tt_transformers/model_params/Qwen2.5-32B-Instruct
-    export TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-32B-Instruct
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=Qwen/Qwen2.5-32B-Instruct
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-32B-Instruct
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
   skus:
     bh_loudbox:
@@ -124,8 +126,9 @@
 - name: qwen2.5-72b-instruct e2e tests
   cmd: |
     set -e
-    export HF_MODEL=models/tt_transformers/model_params/Qwen2.5-72B-Instruct
-    export TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-72B-Instruct
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=Qwen/Qwen2.5-72B-Instruct
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-72B-Instruct
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
   skus:
     bh_loudbox:
@@ -227,8 +230,9 @@
 - name: qwen3-vl-32b e2e tests
   cmd: |
     set -e
-    export HF_MODEL=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct
-    export TT_CACHE_PATH=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-VL-32B-Instruct
     pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py -v
   skus:
     bh_loudbox:
@@ -259,8 +263,9 @@
 - name: mistral-small-3.1-24b e2e tests
   cmd: |
     set -e
-    export HF_MODEL=models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503
-    export TT_CACHE_PATH=models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
     export MESH_DEVICE=T3K
     pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
   skus:
