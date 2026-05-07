@@ -8,7 +8,8 @@ include(sources.cmake)
 # Use target_sources to gather the necessary sources
 target_sources(unit_tests_api_lib PRIVATE 
     ${UNIT_TESTS_API_SOURCES}
-    emule_test.cpp    
+    test_alignment_writes.cpp
+    test_cb_pages.cpp
 )
 
 target_include_directories(
