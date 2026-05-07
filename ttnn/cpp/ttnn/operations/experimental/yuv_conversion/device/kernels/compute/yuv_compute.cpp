@@ -31,23 +31,18 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/eltwise_unary/clamp.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+
+namespace tc = compute_kernel_lib::tilize_config;
+namespace uc = compute_kernel_lib::untilize_config;
 
 static constexpr uint32_t BF16_ZERO_BITS = 0x00000000u;  // 0.0f
 static constexpr uint32_t BF16_255_BITS = 0x437F0000u;   // 255.0f
 
-// Tilize one row-major bf16 CB page, multiply by scalar tile, pack result.
-FORCE_INLINE void tilize_and_mul_scalar(uint32_t cb_rm, uint32_t cb_tilized, uint32_t cb_scalar, uint32_t cb_dst) {
-    tilize_init(cb_rm, 1, cb_tilized);
-    cb_wait_front(cb_rm, 1);
-    cb_reserve_back(cb_tilized, 1);
-    tilize_block(cb_rm, 1, cb_tilized);
-    cb_push_back(cb_tilized, 1);
-    cb_pop_front(cb_rm, 1);
-    tilize_uninit(cb_rm, cb_tilized);
-
+// Multiply a tilized tile CB by a scalar tile, pack result to dst CB.
+FORCE_INLINE void mul_scalar_pack(uint32_t cb_tilized, uint32_t cb_scalar, uint32_t cb_dst) {
     tile_regs_acquire();
     cb_wait_front(cb_tilized, 1);
     mul_tiles_bcast_scalar_init_short(cb_tilized, cb_scalar);
@@ -78,8 +73,8 @@ FORCE_INLINE void add_and_pack(uint32_t cb_a, uint32_t cb_b, uint32_t cb_dst) {
     cb_pop_front(cb_b, 1);
 }
 
-// Add scalar offset, clamp [0,255], pack to tile CB, untilize to row-major.
-FORCE_INLINE void offset_clamp_untilize(uint32_t cb_in, uint32_t cb_off, uint32_t cb_sum, uint32_t cb_out_rm) {
+// Add scalar offset, clamp [0,255], pack to tile CB.
+FORCE_INLINE void offset_clamp_pack(uint32_t cb_in, uint32_t cb_off, uint32_t cb_sum) {
     tile_regs_acquire();
     cb_wait_front(cb_in, 1);
     add_bcast_scalar_init_short(cb_in, cb_off);
@@ -93,14 +88,6 @@ FORCE_INLINE void offset_clamp_untilize(uint32_t cb_in, uint32_t cb_off, uint32_
     cb_push_back(cb_sum, 1);
     tile_regs_release();
     cb_pop_front(cb_in, 1);
-
-    untilize_init(cb_sum);
-    cb_wait_front(cb_sum, 1);
-    cb_reserve_back(cb_out_rm, 1);
-    untilize_block(cb_sum, 1, cb_out_rm);
-    cb_push_back(cb_out_rm, 1);
-    cb_pop_front(cb_sum, 1);
-    untilize_uninit(cb_sum);
 }
 
 void kernel_main() {
@@ -123,20 +110,53 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_R_rm, cb_tilized);
 
     // ---- Phase 1: Y pass ----
-    // Scalar tiles already pushed by reader.
     cb_wait_front(cb_wr, 1);
     cb_wait_front(cb_wg, 1);
     cb_wait_front(cb_wb, 1);
     cb_wait_front(cb_off, 1);
 
     for (uint32_t t = 0; t < num_y_tiles; t++) {
-        // Y = wr*R + wg*G + wb*B + offset, clamped [0,255]
-        tilize_and_mul_scalar(cb_R_rm, cb_tilized, cb_wr, cb_partial);
-        tilize_and_mul_scalar(cb_G_rm, cb_tilized, cb_wg, cb_temp);
+        // R: tilize → mul by wr → cb_partial
+        compute_kernel_lib::tilize<
+            1,
+            cb_R_rm,
+            cb_tilized,
+            tc::InitUninitMode::InitAndUninit,
+            tc::WaitMode::WaitBlock,
+            tc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        mul_scalar_pack(cb_tilized, cb_wr, cb_partial);
+
+        // G: tilize → mul by wg → cb_temp → add to cb_partial
+        compute_kernel_lib::tilize<
+            1,
+            cb_G_rm,
+            cb_tilized,
+            tc::InitUninitMode::InitAndUninit,
+            tc::WaitMode::WaitBlock,
+            tc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        mul_scalar_pack(cb_tilized, cb_wg, cb_temp);
         add_and_pack(cb_partial, cb_temp, cb_partial);
-        tilize_and_mul_scalar(cb_B_rm, cb_tilized, cb_wb, cb_temp);
+
+        // B: tilize → mul by wb → cb_temp → add to cb_partial
+        compute_kernel_lib::tilize<
+            1,
+            cb_B_rm,
+            cb_tilized,
+            tc::InitUninitMode::InitAndUninit,
+            tc::WaitMode::WaitBlock,
+            tc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        mul_scalar_pack(cb_tilized, cb_wb, cb_temp);
         add_and_pack(cb_partial, cb_temp, cb_partial);
-        offset_clamp_untilize(cb_partial, cb_off, cb_sum, cb_out_rm);
+
+        // + offset, clamp, pack → cb_sum, then untilize → cb_out_rm
+        offset_clamp_pack(cb_partial, cb_off, cb_sum);
+        compute_kernel_lib::untilize<
+            1,
+            cb_sum,
+            cb_out_rm,
+            uc::InitUninitMode::InitAndUninit,
+            uc::WaitMode::WaitBlock,
+            uc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
     }
 
     // Pop Y scalars so reader can push Cb/Cr scalars.
@@ -147,43 +167,70 @@ void kernel_main() {
 
     // ---- Phases 2 & 3: Cb and Cr passes ----
     for (uint32_t plane = 0; plane < 2; plane++) {
-        // Wait for new scalar tiles from reader.
         cb_wait_front(cb_wr, 1);
         cb_wait_front(cb_wg, 1);
         cb_wait_front(cb_wb, 1);
         cb_wait_front(cb_off, 1);
 
         for (uint32_t t = 0; t < num_uv_tiles_per_plane; t++) {
-            // UV = sum_corners(wr_scaled * R) + sum_corners(wg_scaled * G)
-            //    + sum_corners(wb_scaled * B) + offset
-            // Where wr_scaled = wr * 0.25 (reader pre-scales the scalar).
-            //
-            // Reader sends 4 R corners, then 4 G corners, then 4 B corners.
-            // For each corner page: tilize → multiply by channel weight → add to accumulator.
-            // This avoids needing extra CBs for corner accumulation.
-
             // R corner 0 → cb_partial
-            tilize_and_mul_scalar(cb_R_rm, cb_tilized, cb_wr, cb_partial);
+            compute_kernel_lib::tilize<
+                1,
+                cb_R_rm,
+                cb_tilized,
+                tc::InitUninitMode::InitAndUninit,
+                tc::WaitMode::WaitBlock,
+                tc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+            mul_scalar_pack(cb_tilized, cb_wr, cb_partial);
+
             // R corners 1-3
             for (uint32_t c = 1; c < 4; c++) {
-                tilize_and_mul_scalar(cb_R_rm, cb_tilized, cb_wr, cb_temp);
+                compute_kernel_lib::tilize<
+                    1,
+                    cb_R_rm,
+                    cb_tilized,
+                    tc::InitUninitMode::InitAndUninit,
+                    tc::WaitMode::WaitBlock,
+                    tc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+                mul_scalar_pack(cb_tilized, cb_wr, cb_temp);
                 add_and_pack(cb_partial, cb_temp, cb_partial);
             }
 
-            // G corners 0-3: multiply by wg, add to accumulator
+            // G corners 0-3
             for (uint32_t c = 0; c < 4; c++) {
-                tilize_and_mul_scalar(cb_G_rm, cb_tilized, cb_wg, cb_temp);
+                compute_kernel_lib::tilize<
+                    1,
+                    cb_G_rm,
+                    cb_tilized,
+                    tc::InitUninitMode::InitAndUninit,
+                    tc::WaitMode::WaitBlock,
+                    tc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+                mul_scalar_pack(cb_tilized, cb_wg, cb_temp);
                 add_and_pack(cb_partial, cb_temp, cb_partial);
             }
 
-            // B corners 0-3: multiply by wb, add to accumulator
+            // B corners 0-3
             for (uint32_t c = 0; c < 4; c++) {
-                tilize_and_mul_scalar(cb_B_rm, cb_tilized, cb_wb, cb_temp);
+                compute_kernel_lib::tilize<
+                    1,
+                    cb_B_rm,
+                    cb_tilized,
+                    tc::InitUninitMode::InitAndUninit,
+                    tc::WaitMode::WaitBlock,
+                    tc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+                mul_scalar_pack(cb_tilized, cb_wb, cb_temp);
                 add_and_pack(cb_partial, cb_temp, cb_partial);
             }
 
-            // + offset, clamp, untilize → cb_out_rm
-            offset_clamp_untilize(cb_partial, cb_off, cb_sum, cb_out_rm);
+            // + offset, clamp, pack → cb_sum, then untilize → cb_out_rm
+            offset_clamp_pack(cb_partial, cb_off, cb_sum);
+            compute_kernel_lib::untilize<
+                1,
+                cb_sum,
+                cb_out_rm,
+                uc::InitUninitMode::InitAndUninit,
+                uc::WaitMode::WaitBlock,
+                uc::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
         }
 
         cb_pop_front(cb_wr, 1);
