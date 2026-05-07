@@ -116,10 +116,12 @@ def main():
             device=device,
         )
 
-        # The fast path expects q in [B, NQH, 1, DH] but pre_rotate_query returns
-        # [1, B, NQH, DH]. Permute.
-        q_bqhd = ttnn.permute(q_rot, (1, 2, 0, 3))
-        ttnn.deallocate(q_rot)
+        # pre_rotate_query is a plain matmul (Q @ rotation) and preserves Q's
+        # original shape — q_raw was constructed as [B, NQH, 1, DH], so q_rot
+        # is already in the layout hybrid_sdpa_decode expects. (Earlier
+        # versions of pre_rotate_query may have returned [1, B, NQH, DH] and
+        # required the permute below; that's no longer the case.)
+        q_bqhd = q_rot
 
         out = tq.hybrid_sdpa_decode(
             q_bqhd,
