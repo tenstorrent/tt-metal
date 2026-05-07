@@ -67,7 +67,7 @@ static ttnn::Tensor to_tt_bf16(const xt::xarray<bfloat16>& x) {
 // NOTE: ttml::core::from_xtensor() performs fp32 -> bf16 conversion, that's why this function exists
 static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
     auto* device = &ttml::autograd::ctx().get_device();
-    auto shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(x);
+    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(x);
     auto buffer_span = ttml::core::xtensor_to_span(x);
 
     ttnn::MemoryConfig output_mem_config{};

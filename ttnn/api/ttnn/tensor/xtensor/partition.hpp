@@ -10,7 +10,7 @@
 #include <xtensor/views/xstrided_view.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal::experimental::xtensor {
+namespace ttnn::experimental::xtensor {
 namespace detail {
 
 // Helper to compute the type of an unowned strided view over an `xt::xexpression`.
@@ -59,4 +59,4 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
 // Deprecated: Use high-level APIs defined in distributed_tensor.hpp
 ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim = 0);
 
-}  // namespace tt::tt_metal::experimental::xtensor
+}  // namespace ttnn::experimental::xtensor
