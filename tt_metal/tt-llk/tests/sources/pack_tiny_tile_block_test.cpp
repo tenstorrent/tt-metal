@@ -62,8 +62,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
 
 using namespace ckernel;

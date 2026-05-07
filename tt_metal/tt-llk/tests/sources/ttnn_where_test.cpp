@@ -58,9 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu.h"
 #include "ckernel_sfpu_where.h"
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_common.h"
 #include "llk_math_eltwise_ternary_sfpu.h"
-#include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 
@@ -92,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS)
     }
 
     // copy srca to dest
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4, MATH_FMT);
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4 /* num_faces */, MATH_FMT);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -123,7 +121,6 @@ void run_kernel(RUNTIME_PARAMETERS)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -150,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4 /* tile_size */);
 
     _llk_pack_init_wrapper_<false, false>(PACK_FMT);
 

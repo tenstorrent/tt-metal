@@ -114,9 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "experimental/llk_math_matmul_custom_no_mop.h"
-#include "experimental/llk_math_reduce_custom.h"
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -204,7 +202,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "perf.h"
 
@@ -214,8 +211,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand buffer_Res0(0x1b000, 2048);
     const std::uint32_t pack_src_format0 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format0 = ckernel::to_underlying(DataFormat::Float16_b);
-    _llk_pack_hw_configure_wrapper_<false, false, false>(pack_src_format0, pack_dst_format0, 128);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(pack_src_format0, pack_dst_format0, 16, TILE_C_DIM, 4, false, false, 1);
+    _llk_pack_hw_configure_wrapper_<false, false, false>(pack_src_format0, pack_dst_format0, 128 /* tile_size */);
+    _llk_pack_init_with_src_wrapper_<false, false, false>(
+        pack_src_format0, pack_dst_format0, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
@@ -234,7 +232,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format1, pack_dst_format1, 128);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(pack_src_format1, pack_dst_format1, 16, TILE_C_DIM, 4, false, false, 1);
+    _llk_pack_init_with_src_wrapper_<false, false, false>(
+        pack_src_format1, pack_dst_format1, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
     _llk_pack_reduce_mask_config_<false, ckernel::ReduceDim::REDUCE_ROW>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
@@ -255,7 +254,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format2, pack_dst_format2, 128);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(pack_src_format2, pack_dst_format2, 16, TILE_C_DIM, 4, false, false, 1);
+    _llk_pack_init_with_src_wrapper_<false, false, false>(
+        pack_src_format2, pack_dst_format2, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
@@ -274,7 +274,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format3, pack_dst_format3, 128);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(pack_src_format3, pack_dst_format3, 16, TILE_C_DIM, 4, false, false, 1);
+    _llk_pack_init_with_src_wrapper_<false, false, false>(
+        pack_src_format3, pack_dst_format3, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {

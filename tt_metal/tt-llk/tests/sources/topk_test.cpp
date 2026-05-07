@@ -221,9 +221,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_transpose_dest.h"
 
 using namespace ckernel;
 
@@ -385,7 +382,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -437,7 +433,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             false>( // tilize
                             pack_src_format,
                             pack_dst_format,
-                            16 * 16 * 4);
+                            16 * 16 * 4 /* tile_size */);
                     }
                     else
                     {
@@ -446,7 +442,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
                             pack_src_format,
                             pack_dst_format,
-                            16 * 16 * 4,
+                            16 * 16 * 4 /* tile_size */,
                             FACE_R_DIM,
                             TILE_C_DIM,
                             4 /* num_faces */,

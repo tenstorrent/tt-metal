@@ -58,8 +58,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -103,7 +101,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -118,7 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool TILIZE         = true;
     const bool is_8bit_format = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, false /* tilize */>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, num_faces);
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
     _llk_pack_init_with_src_wrapper_<UNTILIZE, false, TILIZE>(
         formats.pack_src,
         formats.pack_dst,
