@@ -239,6 +239,13 @@ def create_text_encoder_parameters(encoder, *, device: ttnn.Device) -> dict:
     return make_parameter_dict(out)
 
 
+def _conv_padding_int(conv: torch.nn.Module) -> int:
+    p = conv.padding
+    if isinstance(p, int):
+        return int(p)
+    return int(p[0])
+
+
 def _conv1d_like_padding_int(conv: torch.nn.Module) -> int:
     """
     TTNN paths need an integral symmetric padding. HF may use ``padding='same'`` on
@@ -259,6 +266,189 @@ def _conv1d_like_padding_int(conv: torch.nn.Module) -> int:
     if isinstance(p, (tuple, list)):
         return int(p[0])
     return int(p)
+
+
+def _conformer_feed_forward_params(ffn: torch.nn.Module, *, device: ttnn.Device) -> dict:
+    return make_parameter_dict(
+        {
+            "intermediate_dense": _linear_pair(ffn.intermediate_dense, device=device),
+            "output_dense": _linear_pair(ffn.output_dense, device=device),
+        }
+    )
+
+
+def _conformer_conv_module_params(conv_module: torch.nn.Module, *, device: ttnn.Device) -> dict:
+    return make_parameter_dict(
+        {
+            "layer_norm": {
+                "weight": _ln_to_device(conv_module.layer_norm.weight, device=device),
+                "bias": _ln_to_device(conv_module.layer_norm.bias, device=device),
+                "eps": float(conv_module.layer_norm.eps),
+            },
+            "pointwise_conv1": {
+                "weight": _conv1d_weight(conv_module.pointwise_conv1, device=device),
+                "bias": _conv1d_bias(conv_module.pointwise_conv1, device=device),
+                "in_channels": conv_module.pointwise_conv1.in_channels,
+                "out_channels": conv_module.pointwise_conv1.out_channels,
+                "kernel_size": int(conv_module.pointwise_conv1.kernel_size[0]),
+                "padding": _conv_padding_int(conv_module.pointwise_conv1),
+                "stride": int(conv_module.pointwise_conv1.stride[0]),
+                "groups": conv_module.pointwise_conv1.groups,
+            },
+            "depthwise_conv": {
+                "weight": _conv1d_weight(conv_module.depthwise_conv, device=device),
+                "bias": _conv1d_bias(conv_module.depthwise_conv, device=device),
+                "in_channels": conv_module.depthwise_conv.in_channels,
+                "out_channels": conv_module.depthwise_conv.out_channels,
+                "kernel_size": int(conv_module.depthwise_conv.kernel_size[0]),
+                "padding": _conv_padding_int(conv_module.depthwise_conv),
+                "stride": int(conv_module.depthwise_conv.stride[0]),
+                "groups": conv_module.depthwise_conv.groups,
+                "left_pad": int(conv_module.depthwise_conv.kernel_size[0]) - 1,
+            },
+            "depthwise_layer_norm": {
+                "weight": _ln_to_device(conv_module.depthwise_layer_norm.weight, device=device),
+                "bias": _ln_to_device(conv_module.depthwise_layer_norm.bias, device=device),
+                "eps": float(conv_module.depthwise_layer_norm.eps),
+            },
+            "pointwise_conv2": {
+                "weight": _conv1d_weight(conv_module.pointwise_conv2, device=device),
+                "bias": _conv1d_bias(conv_module.pointwise_conv2, device=device),
+                "in_channels": conv_module.pointwise_conv2.in_channels,
+                "out_channels": conv_module.pointwise_conv2.out_channels,
+                "kernel_size": int(conv_module.pointwise_conv2.kernel_size[0]),
+                "padding": _conv_padding_int(conv_module.pointwise_conv2),
+                "stride": int(conv_module.pointwise_conv2.stride[0]),
+                "groups": conv_module.pointwise_conv2.groups,
+            },
+        }
+    )
+
+
+def _conformer_self_attn_params(attn: torch.nn.Module, *, device: ttnn.Device, with_relative: bool) -> dict:
+    out = {
+        "linear_q": _linear_pair(attn.linear_q, device=device),
+        "linear_k": _linear_pair(attn.linear_k, device=device),
+        "linear_v": _linear_pair(attn.linear_v, device=device),
+        "linear_out": _linear_pair(attn.linear_out, device=device),
+    }
+    if with_relative and getattr(attn, "distance_embedding", None) is not None:
+        out["distance_embedding"] = make_parameter_dict(
+            {"weight": _embedding_weight(attn.distance_embedding, device=device)}
+        )
+        out["left_max_position_embeddings"] = int(attn.left_max_position_embeddings)
+        out["right_max_position_embeddings"] = int(attn.right_max_position_embeddings)
+    return make_parameter_dict(out)
+
+
+def _conformer_encoder_layer_params(layer: torch.nn.Module, *, device: ttnn.Device) -> dict:
+    return make_parameter_dict(
+        {
+            "ffn1_layer_norm": {
+                "weight": _ln_to_device(layer.ffn1_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.ffn1_layer_norm.bias, device=device),
+            },
+            "ffn1": _conformer_feed_forward_params(layer.ffn1, device=device),
+            "self_attn_layer_norm": {
+                "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
+            },
+            "self_attn": _conformer_self_attn_params(layer.self_attn, device=device, with_relative=True),
+            "conv_module": _conformer_conv_module_params(layer.conv_module, device=device),
+            "ffn2_layer_norm": {
+                "weight": _ln_to_device(layer.ffn2_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.ffn2_layer_norm.bias, device=device),
+            },
+            "ffn2": _conformer_feed_forward_params(layer.ffn2, device=device),
+            "final_layer_norm": {
+                "weight": _ln_to_device(layer.final_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.final_layer_norm.bias, device=device),
+            },
+        }
+    )
+
+
+def _speech_adapter_layer_params(layer: torch.nn.Module, *, device: ttnn.Device) -> dict:
+    return make_parameter_dict(
+        {
+            "kernel_size": int(layer.kernel_size),
+            "stride": int(layer.stride),
+            "residual_layer_norm": {
+                "weight": _ln_to_device(layer.residual_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.residual_layer_norm.bias, device=device),
+            },
+            "residual_conv": {
+                "weight": _conv1d_weight(layer.residual_conv, device=device),
+                "bias": _conv1d_bias(layer.residual_conv, device=device),
+                "in_channels": layer.residual_conv.in_channels,
+                "out_channels": layer.residual_conv.out_channels,
+                "kernel_size": int(layer.residual_conv.kernel_size[0]),
+                "padding": _conv1d_like_padding_int(layer.residual_conv),
+                "stride": int(layer.residual_conv.stride[0]),
+                "groups": layer.residual_conv.groups,
+            },
+            "self_attn_layer_norm": {
+                "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
+            },
+            "self_attn_conv": {
+                "weight": _conv1d_weight(layer.self_attn_conv, device=device),
+                "bias": _conv1d_bias(layer.self_attn_conv, device=device),
+                "in_channels": layer.self_attn_conv.in_channels,
+                "out_channels": layer.self_attn_conv.out_channels,
+                "kernel_size": int(layer.self_attn_conv.kernel_size[0]),
+                "padding": _conv1d_like_padding_int(layer.self_attn_conv),
+                "stride": int(layer.self_attn_conv.stride[0]),
+                "groups": layer.self_attn_conv.groups,
+            },
+            "self_attn": _conformer_self_attn_params(layer.self_attn, device=device, with_relative=False),
+            "ffn_layer_norm": {
+                "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
+                "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
+            },
+            "ffn": _conformer_feed_forward_params(layer.ffn, device=device),
+        }
+    )
+
+
+def create_speech_encoder_parameters(speech_encoder, *, device: ttnn.Device) -> dict:
+    """
+    Convert [`SeamlessM4Tv2SpeechEncoder`] weights to TTNN tensors for [`TTSeamlessM4Tv2SpeechEncoder`].
+    """
+    fp = speech_encoder.feature_projection
+    feature_projection = {
+        "layer_norm": {
+            "weight": _ln_to_device(fp.layer_norm.weight, device=device),
+            "bias": _ln_to_device(fp.layer_norm.bias, device=device),
+            "eps": float(fp.layer_norm.eps),
+        },
+        "projection": _linear_pair(fp.projection, device=device),
+    }
+    enc = speech_encoder.encoder
+    enc_layers = [_conformer_encoder_layer_params(layer, device=device) for layer in enc.layers]
+    encoder = {
+        "layers": enc_layers,
+        "layer_norm": {
+            "weight": _ln_to_device(enc.layer_norm.weight, device=device),
+            "bias": _ln_to_device(enc.layer_norm.bias, device=device),
+        },
+    }
+    im = speech_encoder.intermediate_ffn
+    intermediate_ffn = _conformer_feed_forward_params(im, device=device)
+    inner_layer_norm = {
+        "weight": _ln_to_device(speech_encoder.inner_layer_norm.weight, device=device),
+        "bias": _ln_to_device(speech_encoder.inner_layer_norm.bias, device=device),
+    }
+    out = {
+        "feature_projection": make_parameter_dict(feature_projection),
+        "encoder": make_parameter_dict(encoder),
+        "intermediate_ffn": intermediate_ffn,
+        "inner_layer_norm": make_parameter_dict(inner_layer_norm),
+    }
+    if speech_encoder.adapter is not None:
+        adapter_layers = [_speech_adapter_layer_params(layer, device=device) for layer in speech_encoder.adapter.layers]
+        out["adapter"] = make_parameter_dict({"layers": adapter_layers})
+    return make_parameter_dict(out)
 
 
 def create_text_to_unit_parameters(encoder, *, device: ttnn.Device) -> dict:
