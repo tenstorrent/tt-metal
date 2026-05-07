@@ -406,9 +406,8 @@ For now:
    legacy YAML.
 
 After merge, the next scheduled cron run on `main` will include your
-model. Use the `/tier-ci-status` skill (or
-`tools/model_pipeline_ci_status.py`) to confirm the model appears in
-the report and is green on the next nightly cycle.
+model. Check the run from the Actions tab to confirm the model appears
+and is green on the next nightly cycle.
 
 ---
 
