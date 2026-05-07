@@ -1020,7 +1020,7 @@ class TestLoadDataWithMockedDB:
     def test_emit_id_file_writes_new_trace_run_id(self, mock_get_trace_run, mock_drafts, mock_pg, tmp_path):
         """--emit-id-file writes the new trace_run_id so CI can pin validation."""
 
-        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, schema=None):
+        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None):
             cache[trace_uid] = 77
             return 77
 
@@ -1046,7 +1046,7 @@ class TestLoadDataWithMockedDB:
     def test_emit_id_file_not_written_on_dry_run(self, mock_get_trace_run, mock_pg, tmp_path):
         """Dry run must never produce an ID file — the trace_run doesn't exist."""
 
-        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, schema=None):
+        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None):
             cache[trace_uid] = 77
             return 77
 
@@ -1324,7 +1324,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, ""),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                     (
@@ -1395,7 +1395,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, ""),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                     (2, "path/llama.py", "meta-llama/Llama-3.2-1B", "llama-3.2-1b"),
@@ -1428,7 +1428,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, ""),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                 ],
@@ -1445,7 +1445,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (35, "Wormhole", "tt-galaxy-wh", 32, "sha", "2026-03-21", 323, ""),
+                "tr_meta": (35, "Wormhole", "tt-galaxy-wh", 32, "sha", "2026-03-21", 323, "", None),
                 "trace_models": [
                     (1, "models/demos/deepseek_v3/demo/demo.py", None, "deepseek_v3"),
                 ],

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <optional>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -210,6 +212,136 @@ inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, b
         std::swap(shape[-2], shape[-1]);
     }
     return shape;
+}
+
+inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType opType) {
+    using ttnn::operations::unary::UnaryOpType;
+    switch (opType) {
+        case UnaryOpType::GELU: return KernelActivation::GELU;
+        case UnaryOpType::TANH: return KernelActivation::TANH;
+        case UnaryOpType::SILU: return KernelActivation::SILU;
+        case UnaryOpType::RELU6: return KernelActivation::RELU6;
+        case UnaryOpType::SIGMOID: return KernelActivation::SIGMOID;
+        case UnaryOpType::HARDSIGMOID: return KernelActivation::HARDSIGMOID;
+        case UnaryOpType::HARDTANH: return KernelActivation::HARDTANH;
+        case UnaryOpType::SELU: return KernelActivation::SELU;
+        case UnaryOpType::SOFTPLUS: return KernelActivation::SOFTPLUS;
+        default: TT_THROW("Unsupported UnaryOpType for fused activation: {}", opType);
+    };
+}
+
+/**
+ * @brief Consolidated activation parameters structure
+ *
+ * Contains the activation type and its associated parameters in a single struct
+ * These values are passed as compile time arguments to the kernel
+ */
+struct ActivationParams {
+    KernelActivation type = KernelActivation::NONE;
+    uint32_t param0 = 0;
+    uint32_t param1 = 0;
+    uint32_t param2 = 0;
+};
+
+/**
+ * @brief Extract activation parameters
+ *
+ * Extracts the activation type and both parameters. Prepares parameter values for the kernel.
+ *
+ * @param activation The UnaryWithParam containing the activation operation and parameters
+ * @return ActivationParams struct with type and activation specific param0, param1, param2
+ */
+inline ActivationParams get_activation_params(const ttnn::operations::unary::UnaryWithParam& activation) {
+    using ttnn::operations::unary::UnaryOpType;
+
+    // Activation parameters provided by the ttnn op.
+    std::span<const float> params = activation.get_params();
+    TT_FATAL(
+        params.size() <= 2, "Invalid number of activation parameters: {}. Expected no more than 2.", params.size());
+    const bool has_first = !params.empty();
+    const bool has_second = params.size() > 1;
+
+    // Activation parameters to be given to the kernel
+    ActivationParams result;
+
+    switch (activation.op_type) {
+        case UnaryOpType::GELU:
+            result.type = KernelActivation::GELU;
+            // param0 is vector mode (0=RC, 1=R, 2=C) or fast mode
+            result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            break;
+
+        case UnaryOpType::TANH:
+            result.type = KernelActivation::TANH;
+            // param0 is vector mode or fast mode
+            result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            break;
+
+        case UnaryOpType::SILU:
+            result.type = KernelActivation::SILU;
+            // No parameters currently
+            break;
+
+        case UnaryOpType::RELU6:
+            result.type = KernelActivation::RELU6;
+            // param0 is max value (default 6.0)
+            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x40c00000u;
+            break;
+        case UnaryOpType::SIGMOID: {
+            result.type = KernelActivation::SIGMOID;
+            const uint32_t param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            TT_FATAL(param0 <= 4, "Invalid Vector mode value: {}", param0);
+            result.param0 = param0;
+            // param1 is fast_approximate flag
+            result.param1 = has_second ? static_cast<uint32_t>(params[1]) : 0;
+            break;
+        }
+
+        case UnaryOpType::HARDSIGMOID:
+            result.type = KernelActivation::HARDSIGMOID;
+            // param0 could support approximation mode
+            result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            break;
+
+        case UnaryOpType::HARDTANH:
+            result.type = KernelActivation::HARDTANH;
+            // param0 is min value (default -1.0)
+            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0xbf800000u;
+            // param1 is max value (default 1.0)
+            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3f800000u;
+            break;
+
+        case UnaryOpType::SELU:
+            result.type = KernelActivation::SELU;
+            // param0 is alpha (default 1.67326)
+            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3fd637bdu;
+            // param1 is lambda (default 1.05070)
+            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3f8674f5u;
+            break;
+
+        case UnaryOpType::SOFTPLUS:
+            result.type = KernelActivation::SOFTPLUS;
+            // param0 is beta (default 1.0)
+            // param1 is threshold (default 20.0)
+            // we also prepare beta reciprocal as a kernel compile arg,
+            // which is passed as param2
+            if (has_first) {
+                float beta = params[0];
+                TT_FATAL(beta != 0, "SOFTPLUS activation beta parameter cannot be zero");
+                float beta_reciprocal = 1.0f / params[0];
+                result.param0 = std::bit_cast<uint32_t>(beta);
+                result.param2 = std::bit_cast<uint32_t>(beta_reciprocal);
+            } else {
+                result.param0 = 0x3f800000u;
+                result.param2 = 0x3f800000u;
+            }
+            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x41a00000u;
+            break;
+
+        default: TT_THROW("Unsupported UnaryOpType for fused activation: {}", activation.op_type);
+    }
+
+    return result;
 }
 
 }  // namespace ttnn::operations::matmul::utilities
