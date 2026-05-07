@@ -246,17 +246,29 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
                 pass
             elif c == tgt_rows and r == tgt_cols:
                 arr = arr.T
-            elif r <= tgt_rows and c <= tgt_cols:
-                arr = _pad_to_tile(arr, tgt_rows, tgt_cols)
             else:
-                raise RuntimeError(f"shape mismatch for {hf_name}: HF ({r}x{c}) vs ttml ({tgt_rows}x{tgt_cols})")
+                # ``_pad_to_tile`` pads with zeros and crops via min(...) when
+                # HF is larger than ttml. Cropping silently drops data, so warn
+                # so users notice obvious config mismatches (e.g. ``Qwen3Config.
+                # vocab_size`` smaller than the HF checkpoint's vocab).
+                if r > tgt_rows or c > tgt_cols:
+                    print(
+                        f"  Warning: cropping {hf_name} from ({r}x{c}) to fit ttml ({tgt_rows}x{tgt_cols}); "
+                        f"check that Qwen3Config matches the HF checkpoint."
+                    )
+                arr = _pad_to_tile(arr, tgt_rows, tgt_cols)
         elif arr.ndim == 1:
             tgt_dim = shape[-1]
-            if arr.shape[0] > tgt_dim:
-                raise RuntimeError(f"shape mismatch for {hf_name}: HF ({arr.shape[0]},) vs ttml ({tgt_dim},)")
-            if arr.shape[0] != tgt_dim:
+            src_dim = arr.shape[0]
+            if src_dim > tgt_dim:
+                print(
+                    f"  Warning: cropping {hf_name} from ({src_dim},) to fit ttml ({tgt_dim},); "
+                    f"check that Qwen3Config matches the HF checkpoint."
+                )
+                arr = arr[:tgt_dim]
+            elif src_dim < tgt_dim:
                 padded = np.zeros((tgt_dim,), dtype=arr.dtype)
-                padded[: arr.shape[0]] = arr
+                padded[:src_dim] = arr
                 arr = padded
 
         _assign(param, _to_bf16_4d(arr))
