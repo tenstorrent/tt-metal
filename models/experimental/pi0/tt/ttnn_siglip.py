@@ -312,7 +312,7 @@ class SigLIPAttentionTTNN:
         wk_padded = pad_head_dim_weight_ttnn(weights["self_attn.k_proj.weight"])
         wv_padded = pad_head_dim_weight_ttnn(weights["self_attn.v_proj.weight"])
 
-        # Concatenate Q, K, V weights on device: [hidden, 3 * num_heads * padded_head_dim]
+        # Concatenate Q, K, V weights on device
         wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         wk_ttnn = ttnn.from_torch(wk_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         wv_ttnn = ttnn.from_torch(wv_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
