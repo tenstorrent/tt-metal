@@ -46,8 +46,7 @@ infrastructure already hosts **sweep** and **device-perf** pipelines.
 These exist on `main` and follow the **same registry-driven approach**
 as e2e / unit, but are **not yet on a daily cron** — they're only
 runnable via `workflow_dispatch`. **You can register tests in them
-today**; once the schedule is enabled the entries will start running
-automatically with no further changes required.
+today** following the same steps as the `e2e` and `unit` pipelines. Automated schedule can be enabled once we have tests in these.
 
 | Pipeline | Workflow | Registry |
 |---|---|---|
@@ -60,54 +59,58 @@ Entry shape, env conventions, naming, owner_id rules, and the
 e2e / unit — see the rest of this guide. The only difference is the
 registry filename and the corresponding workflow file you edit.
 
-### What "tier" means
+### Which tier should I assign to my model?
 
-| Tier | Intent | When tests run |
-|---|---|---|
-| **1** | Strategic / flagship models. Failures gate release confidence. | Daily, plus typically watched closely on PRs. |
-| **2** | Important models with active investment. | Daily. |
-| **3** | Models we keep working but are not the primary focus. | Daily. |
-
-Tier assignment is a **product/leadership decision**, not a technical
-one. It is set by the **model lead** (typically the model owner or
-their team's tech lead). If you are unsure, ask before merging — the
-tier dictates how loud failures get and how much CI time is allocated.
+Confirm with model owner / leadership on the tier prioritization. See [`models/model_ci_tiers.md`](./model_ci_tiers.md) for tier definition.
 
 ---
 
 ## Step-by-step checklist
 
-When porting model `<your-model>`:
+When porting `<your-model>`:
 
-- [ ] **1. Get a tier assignment** from the model lead (1, 2, or 3).
-- [ ] **2. Add the model to `models/model_ci_tiers.md`** under the
+- **1. Get a tier assignment** from the model lead (1, 2, or 3).
+- **2. Add the model to `models/model_ci_tiers.md`** under the
   appropriate tier table, with the SKUs it runs on.
-- [ ] **3. Migrate tests** off the old single-card / T3000 / Galaxy
+- **3. Migrate existent tests** off the old single-card / T3000 / Galaxy
   pipelines (`t3k_*_tests.yaml`, `galaxy_*_tests.yaml`,
   blackhole-specific demo files, etc.) into the matching tiered
   registry:
   - `tests/pipeline_reorg/models_e2e_tests.yaml` for end-to-end demos.
-  - `tests/pipeline_reorg/models_unit_tests.yaml` for module / op-level
+  - `tests/pipeline_reorg/models_unit_tests.yaml` for module
     correctness tests.
   - `tests/pipeline_reorg/models_sweep_tests.yaml` for sweep tests
     (Tier 1 / 2 — manual-only today, scheduled later).
   - `tests/pipeline_reorg/models_device_perf_tests.yaml` for
     device-perf tests (Tier 1 — manual-only today, scheduled later).
-- [ ] **4. Use the standard cache + weights paths** (see
+- **4. Use the standard cache + weights paths** (see
   [Standard env conventions](#standard-env-conventions)).
-- [ ] **5. Use the HuggingFace name** for `HF_MODEL` and the model
+- **5. Use the HuggingFace name** for `HF_MODEL` and the model
   identifier for the registry's `model:` and the workflow filter
   enum (see [Naming](#naming)).
-- [ ] **6. Add the model to the workflow's `workflow_dispatch.inputs.model`
+- **6. Add the model to the workflow's `workflow_dispatch.inputs.model`
   enum** for both e2e and unit (whichever you registered).
-- [ ] **7. Verify the time-budget table** in
+  Example: Tier 2 e2e -> `.github/workflows/models-t2-e2e-tests.yaml`.
+  This enables model filtering.
+- **7. Update test timeouts** in the configuration yamls.
+  Make sure that these are small (around measured test time + 10% buffer)
+  to avoid CI overhead
+- **8. Verify the time-budget table** in
   `.github/time_budget.yaml` covers the SKUs your tests need.
-- [ ] **8. Set a valid Slack `owner_id` and `team`** on every entry.
-- [ ] **9. (Future)** Once the centralized targets YAML exists, add
+  This typically means you'll have to remove budget from the previous test
+  place to the new one.
+- **9. Set a valid Slack `owner_id` and `team`** on every entry.
+- **10. (Future)** Once the centralized targets YAML exists, add
   the model's accuracy and performance targets there. See
   [Performance / accuracy targets](#performance--accuracy-targets).
-- [ ] **10. Run the pipeline manually** (`workflow_dispatch`) end-to-end
+- **11. Run the pipeline manually** (`workflow_dispatch`) end-to-end
   before merging. Schedule will pick it up automatically afterwards.
+  The easiest way to do a one-off run for your model is via the
+  [`all-model-tests`](https://github.com/tenstorrent/tt-metal/actions/workflows/all-model-tests.yaml)
+  pipeline — pick the `tier` (1/2/3) and `type` (e2e/unit/sweep/device-perf)
+  and filter by the new `model:` identifier you registered. This dispatches
+  only your model's job rather than the whole tier matrix, so iteration
+  on a flaky test is much cheaper.
 
 ---
 
