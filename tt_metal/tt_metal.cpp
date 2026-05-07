@@ -870,9 +870,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     hal.get_programmable_core_type(programmable_core_type_index);
                 for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                     auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                    auto runtime_id = program.get_runtime_id();
-                    kg->launch_msg.view().kernel_config().host_assigned_id() =
-                        runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
+                    // Raw runtime id matches Tracy / fast dispatch; profiler ingest encodes with device_id once.
+                    kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
                     auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     not_done_cores.insert(physical_core);

@@ -220,6 +220,34 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     using ConfigSpec = std::variant<DataMovementConfiguration, ComputeConfiguration>;
     ConfigSpec config_spec;
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options / niche use cases
+    //////////////////////////////////////////////////////////////////////////////
+
+    // Niche use case: Self-loop DFBs on compute kernels only
+    // This applies only to compute kernels that bind BOTH the producer and consumer
+    // endpoints of the same DFB (self-loop).
+    //
+    // The compute kernel threads can communicate via the DFB in two topologies:
+    //
+    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
+    //         (no cross-thread communication). This is the common case.
+    //   INTER (inter-thread): Within the kernel, some threads produce data for other
+    //          threads to consume.
+    //
+    // Only the INTRA case is currently supported. INTER will trigger a validation error.
+    // There are currently no known use cases for an INTER-thread self-loop. This option
+    // is present in the API for completeness, to surface any use cases that may arise.
+    //
+    struct DFBComputeSelfLoopScope {
+        DFBSpecName dfb_spec_name;
+        enum class Scope { INTRA, INTER };
+        Scope scope = Scope::INTRA;
+        // If the INTER case were enabled, we would need an additional field to describe
+        // the inter-thread communication pattern here.
+    };
+    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

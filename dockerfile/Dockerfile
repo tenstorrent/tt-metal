@@ -185,6 +185,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
     gdb \
+    gh \
     less \
     libmpfr-dev \
     nano \
