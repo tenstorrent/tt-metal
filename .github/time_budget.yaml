@@ -174,23 +174,10 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_deskbox: 250
     bh_llmbox: 1200
-    # STAGE 1 ONLY (revert before merging): per-host LLMBox SKUs used for
-    # cache regen on local-disk runners.
-    bh_llmbox_qbgh02: 400
-    bh_llmbox_qbgh03: 400
-    bh_llmbox_qbgh04: 400
     bh_loudbox: 1200
 
     bh_p300: 800
-    # STAGE 1 ONLY (revert to 280 before merging): bh_quietbox_2 budget bumped
-    # so the bumped GHA timeouts on local-disk llama/qwen entries fit.
-    bh_quietbox_2: 420
-    # STAGE 1 ONLY (revert before merging): per-host SKUs for cache regen.
-    bh_quietbox_2_qbge01: 600
-    bh_quietbox_2_qbge03: 600
-    bh_p150_perf_bhgh04: 30
-    bh_p150_perf_bhgh05: 30
-    bh_p150_perf_bhgh06: 30
+    bh_quietbox_2: 280
   sweep:
     wh_n150: 10
     wh_llmbox_perf: 30
