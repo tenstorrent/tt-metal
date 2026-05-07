@@ -116,7 +116,7 @@ jobs:
                   region_name=os.environ["AWS_DEFAULT_REGION"],
                   config=botocore.config.Config(s3={"addressing_style": "path"}),
               )
-              s3.head_bucket(Bucket="ctcache")
+              s3.list_objects_v2(Bucket="ctcache", MaxKeys=1)
               print("ctcache Garage S3 connection OK")
           except Exception as e:
               print(f"::warning::ctcache Garage S3 unreachable ({e}) — analysis will run without caching")
