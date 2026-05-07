@@ -36,7 +36,6 @@ operations:
     packer: "Packer"
     pack_relu: "NO_RELU"
     block_size: [32, 32]
-
   # Stage 2: ZERO_RELU — Elwsub(A, B).
   # A - B ∈ [-1.1, 1.1], mix of pos/neg. ZERO_RELU zeros negatives.
   - output: "out_zero_relu"
@@ -50,7 +49,6 @@ operations:
     packer: "Packer"
     pack_relu: "ZERO_RELU"
     block_size: [32, 32]
-
   # Stage 3: MIN_THRESHOLD_RELU — Datacopy A.
   # A ∈ [0.0, 1.1]. Values ≤ 0.5 zeroed, values > 0.5 kept.
   - output: "out_min_thresh"
@@ -65,7 +63,6 @@ operations:
     pack_relu: "MIN_THRESHOLD_RELU"
     relu_threshold: 0.5
     block_size: [32, 32]
-
   # Stage 4: MAX_THRESHOLD_RELU — Elwmul(A, B).
   # A * B ∈ [0, 1.21]. Clamped to [0, 0.5] by max threshold=0.5.
   - output: "out_max_thresh"
