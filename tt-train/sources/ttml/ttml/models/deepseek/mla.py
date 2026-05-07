@@ -16,22 +16,27 @@ Key features:
 from __future__ import annotations
 
 import ttml
+from ttml.common.profiler_utils import profiler_marker
 from ttml.modules import AbstractModuleBase, LinearLayer
 
 from .transformer import RMSNormLayer
-from .autograd_ops import autograd_slice, autograd_concat, split_heads
+from .autograd_ops import autograd_slice, rope_partial
 
 
 class MultiHeadLatentAttention(AbstractModuleBase):
-    """Multi-head Latent Attention (MLA) layer.
+    """Multi-head Latent Attention (MLA) layer for DeepSeek-V3.
 
-    Follows the DeepSeek-V3 naive-mode attention:
-      Q (q_lora_rank > 0): x -> wq_a -> norm -> wq_b -> split_heads
-      Q (q_lora_rank == 0): x -> wq -> split_heads   (direct, no LoRA bottleneck)
-      Both: -> [q_nope, q_pe] -> RoPE(q_pe) -> cat
-      KV: x -> wkv_a -> [kv_latent, k_pe] -> norm(kv_latent) -> wkv_b -> split_heads
-          -> [k_nope, v] + RoPE(k_pe) broadcast -> cat(k_nope, k_pe)
-      Attention: composite_SDPA(Q, K, V, mask) -> fuse_heads -> wo
+    Naive-mode flow (no KV-cache absorption):
+      Q   : x -> [wq | wq_a -> q_norm -> wq_b]                       # [B, 1, S, H*qk_head]
+      KV  : x -> wkv_a -> [kv_latent, k_pe]                          # split low-rank latent + rope-half
+            kv_latent -> kv_norm -> wkv_b                            # [B, 1, S, H*(qk_nope+v_dim)]
+            k_pe      -> RoPE                                        # [B, 1, S, qk_rope]
+      QKV : (q_pre, kv_up, k_pe) -> mla.qkv_assemble                 # head-split + broadcast k_pe + demux v
+                                  -> q  [B, H, S, qk_head]           (not yet RoPE'd)
+                                  -> k  [B, H, S, qk_head]           (k_nope | broadcast k_pe)
+                                  -> v  [B, H, S, v_dim]
+            q   -> rope_partial(rotate trailing qk_rope cols)
+      Attn: composite_SDPA(q, k, v, mask) -> heads_fusion -> wo
     """
 
     def __init__(self, config, rope_params) -> None:
@@ -75,47 +80,64 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         n_heads = self.n_heads
         qk_nope = self.qk_nope_head_dim
         qk_rope = self.qk_rope_head_dim
-        qk_head = self.qk_head_dim
         v_dim = self.v_head_dim
-
-        # ── Q path ──
-        if self.q_lora_rank == 0:
-            q = self.wq(x)  # [B, 1, S, n_heads * qk_head]
-        else:
-            q = self.wq_b(self.q_norm(self.wq_a(x)))  # [B, 1, S, n_heads * qk_head]
-        q = split_heads(q, n_heads)  # [B, n_heads, S, qk_head]
-
-        q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-        q_pe = autograd_slice(q, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
-        q_pe = ttml.ops.rope.rope(q_pe, self.rope_params)
-
-        # ── KV path ──
-        kv_full = self.wkv_a(x)  # [B, 1, S, kv_lora_rank + qk_rope]
         kv_lora = self.kv_lora_rank
 
+        x_in = profiler_marker(x, "[START] [MLA]")
+
+        # ── Q projection (head-split is deferred to the fused QKV-assemble below) ──
+        x_q = profiler_marker(x_in, "[START] [MLA] Q-Proj")
+        if self.q_lora_rank == 0:
+            assert self.wq is not None, "Q projection without LoRA requires wq"
+            q_pre = self.wq(x_q)
+        else:
+            assert self.wq_a is not None, "Q projection with LoRA requires wq_a"
+            assert self.q_norm is not None, "Q projection with LoRA requires q_norm"
+            assert self.wq_b is not None, "Q projection with LoRA requires wq_b"
+            q_pre = self.wq_b(self.q_norm(self.wq_a(x_q)))
+        # q_pre : [B, 1, S, n_heads * qk_head]
+        q_pre = profiler_marker(q_pre, "[END] [MLA] Q-Proj")
+
+        # ── KV down-projection: split into low-rank latent and the shared rope-half ──
+        x_kv = profiler_marker(x_in, "[START] [MLA] KV-Down")
+        kv_full = self.wkv_a(x_kv)  # [B, 1, S, kv_lora + qk_rope]
         kv = autograd_slice(kv_full, [0, 0, 0, 0], [B, 1, S, kv_lora])
         k_pe = autograd_slice(kv_full, [0, 0, 0, kv_lora], [B, 1, S, kv_lora + qk_rope])
+        k_pe = profiler_marker(k_pe, "[END] [MLA] KV-Down")
 
-        # RoPE on k_pe (shared across heads, shape [B, 1, S, qk_rope])
-        k_pe = ttml.ops.rope.rope(k_pe, self.rope_params)
+        # ── RoPE on shared k_pe (per-token, not per-head) ──
+        k_pe = profiler_marker(k_pe, "[START] [MLA] RoPE-K")
+        k_pe = ttml.ops.rope.rope(k_pe, self.rope_params)  # [B, 1, S, qk_rope]
+        k_pe = profiler_marker(k_pe, "[END] [MLA] RoPE-K")
 
-        # Expand k_pe to all heads: [B, 1, S, qk_rope] -> [B, n_heads, S, qk_rope]
-        k_pe = autograd_concat([k_pe] * n_heads, dim=1)
-
-        # Up-project KV latent and split into per-head k_nope and v
+        # ── KV up-projection (produces packed per-head [k_nope | v]) ──
+        kv = profiler_marker(kv, "[START] [MLA] KV-Up")
         kv_up = self.wkv_b(self.kv_norm(kv))  # [B, 1, S, n_heads * (qk_nope + v_dim)]
-        kv_up = split_heads(kv_up, n_heads)  # [B, n_heads, S, qk_nope + v_dim]
+        kv_up = profiler_marker(kv_up, "[END] [MLA] KV-Up")
 
-        k_nope = autograd_slice(kv_up, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-        v = autograd_slice(kv_up, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + v_dim])
+        # ── Fused QKV assembly ──
+        # Q head-split, KV demux into per-head (k_nope, v), and broadcast k_pe
+        # into every head's rope-suffix of K. Q is emitted head-split but NOT
+        # yet rotated; rope_partial below applies RoPE to Q's rope-suffix.
+        q_pre = profiler_marker(q_pre, "[START] [MLA] QKV-Assemble")
+        q, k_full, v = ttml.ops.mla.qkv_assemble(q_pre, kv_up, k_pe, n_heads, qk_nope, qk_rope, v_dim)
+        # q, k_full : [B, n_heads, S, qk_head]
+        # v         : [B, n_heads, S, v_dim]
+        q = profiler_marker(q, "[END] [MLA] QKV-Assemble")
 
-        # Assemble full Q and K
-        q_full = autograd_concat([q_nope, q_pe], dim=3)  # [B, H, S, qk_head]
-        k_full = autograd_concat([k_nope, k_pe], dim=3)  # [B, H, S, qk_head]
+        q = profiler_marker(q, "[START] [MLA] RoPE-Q")
+        q = rope_partial(q, self.rope_params)
+        q = profiler_marker(q, "[END] [MLA] RoPE-Q")
 
         # ── Attention (composite path supports v_dim != qk_head) ──
-        attn = ttml.ops.attention.scaled_dot_product_attention_composite(q_full, k_full, v, mask)
+        q = profiler_marker(q, "[START] [MLA] SDPA")
+        attn = ttml.ops.attention.scaled_dot_product_attention_composite(q, k_full, v, mask)
+        attn = profiler_marker(attn, "[END] [MLA] SDPA")
 
-        # ── Output ──
+        # ── Output projection ──
+        attn = profiler_marker(attn, "[START] [MLA] Output")
         attn = ttml.ops.multi_head_utils.heads_fusion(attn)  # [B, 1, S, n_heads * v_dim]
-        return self.wo(attn)
+        out = self.wo(attn)
+        out = profiler_marker(out, "[END] [MLA] Output")
+
+        return profiler_marker(out, "[END] [MLA]")

@@ -64,43 +64,6 @@ class Slice(ttml.autograd.Function):
         return result
 
 
-class Concat(ttml.autograd.Function):
-    """Autograd-aware concat (ttnn.concat has no backward).
-
-    Forward: concatenate tensors along a dimension.
-    Backward: split gradient and distribute to each input.
-    """
-
-    @staticmethod
-    def forward(ctx, dim, *tensors):
-        sizes = [list(t.get_value().shape)[dim] for t in tensors]
-        ctx.sizes = sizes
-        ctx.dim = dim
-        ctx.num_tensors = len(tensors)
-
-        raw_tensors = [t.get_value() for t in tensors]
-        return ttnn.concat(raw_tensors, dim)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        dim = ctx.dim
-        sizes = ctx.sizes
-        shape = list(grad_output.shape)
-
-        grads = []
-        offset = 0
-        for size in sizes:
-            start = [0] * len(shape)
-            end = list(shape)
-            start[dim] = offset
-            end[dim] = offset + size
-            grad_slice = ttnn.slice(grad_output, start, end)
-            grads.append(grad_slice)
-            offset += size
-
-        return tuple(grads)
-
-
 class Sigmoid(ttml.autograd.Function):
     """Autograd-aware sigmoid.
 
@@ -142,40 +105,67 @@ class Softmax(ttml.autograd.Function):
         return grad_input
 
 
-class SplitHeads(ttml.autograd.Function):
-    """Reshape (B, 1, S, H*D) -> (B, H, S, D) with correct data layout.
+class RoPEPartial(ttml.autograd.Function):
+    """RoPE the last ``rope_dim`` columns of a 4-D tensor; pass the prefix through.
 
-    A plain reshape would corrupt the data ordering. This does:
-      Forward:  reshape to (B, S, H, D) then transpose dims 1,2
-      Backward: transpose dims 1,2 then reshape back
+    Replaces the slice -> rope -> concat pattern (used in MLA's Q path) with a
+    single autograd node so the slice/concat backward graph is collapsed into
+    one rope-bwd call plus a same-shape concat. ``rope_dim`` is taken from
+    ``rope_params.head_dim``.
     """
 
     @staticmethod
-    def forward(ctx, input, num_heads):
-        val = input.get_value()
-        B, _, S, HD = list(val.shape)
-        head_dim = HD // num_heads
-        ctx.num_heads = num_heads
+    def forward(ctx, input, rope_params):
+        x = input.get_value()
+        B, H, S, head_dim = list(x.shape)
+        rope_dim = rope_params.head_dim
+        nope_dim = head_dim - rope_dim
+
+        suffix = ttnn.slice(x, [0, 0, 0, nope_dim], [B, H, S, head_dim])
+        suffix_squished = ttnn.reshape(suffix, [1, B * H, S, rope_dim])
+        suffix_rotated_squished = ttnn.experimental.rotary_embedding_llama(
+            suffix_squished,
+            rope_params.cos_cache,
+            rope_params.sin_cache,
+            rope_params.trans_mat,
+            is_decode_mode=False,
+        )
+        suffix_rotated = ttnn.reshape(suffix_rotated_squished, [B, H, S, rope_dim])
+
+        prefix = ttnn.slice(x, [0, 0, 0, 0], [B, H, S, nope_dim])
+        out = ttnn.concat([prefix, suffix_rotated], dim=3)
+
         ctx.B = B
+        ctx.H = H
         ctx.S = S
         ctx.head_dim = head_dim
-
-        # (B, 1, S, H*D) -> (B, S, H, D) -> (B, H, S, D)
-        reshaped = ttnn.reshape(val, [B, S, num_heads, head_dim])
-        transposed = ttnn.transpose(reshaped, 1, 2)
-        return transposed
+        ctx.rope_dim = rope_dim
+        ctx.nope_dim = nope_dim
+        ctx.rope_params = rope_params
+        return out
 
     @staticmethod
     def backward(ctx, grad_output):
-        B = ctx.B
-        S = ctx.S
-        num_heads = ctx.num_heads
+        B, H, S = ctx.B, ctx.H, ctx.S
         head_dim = ctx.head_dim
+        rope_dim = ctx.rope_dim
+        nope_dim = ctx.nope_dim
+        rope_params = ctx.rope_params
 
-        # (B, H, S, D) -> (B, S, H, D) -> (B, 1, S, H*D)
-        transposed = ttnn.transpose(grad_output, 1, 2)
-        reshaped = ttnn.reshape(transposed, [B, 1, S, num_heads * head_dim])
-        return reshaped
+        grad_suffix = ttnn.slice(grad_output, [0, 0, 0, nope_dim], [B, H, S, head_dim])
+        grad_suffix_squished = ttnn.reshape(grad_suffix, [1, B * H, S, rope_dim])
+        grad_suffix_unrotated_squished = ttnn.experimental.rotary_embedding_llama(
+            grad_suffix_squished,
+            rope_params.neg_cos_cache,
+            rope_params.neg_sin_cache,
+            rope_params.trans_mat,
+            is_decode_mode=False,
+        )
+        grad_suffix_unrotated = ttnn.reshape(grad_suffix_unrotated_squished, [B, H, S, rope_dim])
+
+        grad_prefix = ttnn.slice(grad_output, [0, 0, 0, 0], [B, H, S, nope_dim])
+        grad_input = ttnn.concat([grad_prefix, grad_suffix_unrotated], dim=3)
+        return grad_input
 
 
 class MoERoutingNormalize(ttml.autograd.Function):
@@ -252,11 +242,6 @@ def autograd_slice(tensor, start, end):
     return Slice.apply(tensor, start, end)
 
 
-def autograd_concat(tensors, dim):
-    """Concat with autograd backward."""
-    return Concat.apply(dim, *tensors)
-
-
 def autograd_sigmoid(tensor):
     """Sigmoid with autograd backward."""
     return Sigmoid.apply(tensor)
@@ -267,9 +252,12 @@ def autograd_softmax(tensor):
     return Softmax.apply(tensor)
 
 
-def split_heads(tensor, num_heads):
-    """(B, 1, S, H*D) -> (B, H, S, D) with proper transpose."""
-    return SplitHeads.apply(tensor, num_heads)
+def rope_partial(tensor, rope_params):
+    """RoPE the last ``rope_params.head_dim`` columns; prefix is identity.
+
+    Replaces the slice -> rope -> concat pattern with a single autograd node.
+    """
+    return RoPEPartial.apply(tensor, rope_params)
 
 
 def moe_routing_normalize(scores, mask, route_scale, eps=1e-20):
