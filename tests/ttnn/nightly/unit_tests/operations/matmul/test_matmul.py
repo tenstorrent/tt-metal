@@ -457,6 +457,7 @@ def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
 
 def test_matmul_m_direction_padding(device):
     # Create input tensors (keep the same random data for comparison)
+    torch.manual_seed(0)
     torch_a = torch.randn((1, 1, 64, 2880), dtype=torch.bfloat16)
     torch_b = torch.randn((1, 1, 2880, 2880), dtype=torch.bfloat16)
 
@@ -487,7 +488,6 @@ def test_matmul_m_direction_padding(device):
         mcast_in0=True,
     )
 
-    print(tensor_a.shape, tensor_b.shape)
     # Perform matrix multiplication
     result = ttnn.matmul(
         tensor_a,
@@ -501,7 +501,6 @@ def test_matmul_m_direction_padding(device):
     output = ttnn.to_torch(result)
     expected = torch.matmul(torch_a, torch_b)
 
-    pcc = ttnn.pearson_correlation_coefficient(expected, output)
     assert_numeric_metrics(
         expected,
         output,
