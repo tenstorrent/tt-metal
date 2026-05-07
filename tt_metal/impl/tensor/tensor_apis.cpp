@@ -356,6 +356,11 @@ template <typename T>
 HostTensor to_layout_bfloat_impl(const HostTensor& tensor, Layout target_layout) {
     static_assert(
         std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, tensor_impl::bfloat4_b>, "Invalid type T");
+    // TODO(#43763):
+    // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
+    // This silent fail has a high impact area and should be studied and addressed asap.
+    //
+    // Original comment:
     // TODO: Flip to assert when we remove use cases in python and c++
     if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
         log_warning(
@@ -757,12 +762,7 @@ HostTensor pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
-    // TODO(#40993): Flip to assert when we remove use cases in python and c++
-    if (tensor.layout() != Layout::ROW_MAJOR) {
-        log_warning(
-            tt::LogOp, "Tensor layout {} must be ROW_MAJOR for padding! Returning original tensor!", tensor.layout());
-        return tensor;
-    }
+    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
@@ -798,25 +798,23 @@ HostTensor unpad(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
-    // TODO(#40993): This should be a FATAL
-    TT_ASSERT(tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
+    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::unpad_impl<T>(tensor, output_tensor_start, output_tensor_end);
     });
 }
 
 HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& output_tensor_shape) {
-    // TODO(#40993): These asserts should be FATAL
     for (auto index = -3; index >= -static_cast<int>(tensor.padded_shape().rank()); index--) {
-        TT_ASSERT(
+        TT_FATAL(
             tensor.logical_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
-    TT_ASSERT(
+    TT_FATAL(
         tensor.padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
             tensor.padded_shape()[-1] % constants::TILE_WIDTH == 0,
         "Last 2 dims of input shape must be multiples of 32");
-    TT_ASSERT(
+    TT_FATAL(
         tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
             tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
         "Last 2 dims of output must be within range to have been padded to input");
