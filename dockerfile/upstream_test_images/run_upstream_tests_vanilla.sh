@@ -168,9 +168,6 @@ test_suite_wh_6u_metal_unit_tests() {
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-}
-
-test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
     echo "[upstream-tests] Checking QSFP links on WH 6U (Only works on XY (2D) Torus systems. Check https://github.com/tenstorrent/tt-metal/issues/30415 for updates)"
     ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
 }
@@ -237,6 +234,12 @@ UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites:\
 UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations:\
 UnitMeshMultiCQMultiDeviceEventFixture.*:\
 UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
+}
+
+test_suite_bh_6u_metal_torus_xy_health_check_tests() {
+    echo "[upstream-tests] Checking for XY Torus topology on BH 6U Galaxy"
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic --num-iterations 1
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
 }
 
 test_suite_bh_glx_python_unit_tests() {
