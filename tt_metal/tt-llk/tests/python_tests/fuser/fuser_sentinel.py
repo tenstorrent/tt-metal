@@ -235,7 +235,7 @@ class FuserSentinel:
 
         if srca_changed:
             code += (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, false>(\n"
+                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
                 f"    {self._fmt(new_fmt.unpack_A_src)}, {self._fmt(new_fmt.unpack_A_dst)}, {compute_node.src_a.tile_size}\n"
                 f");\n"
             )
@@ -248,7 +248,7 @@ class FuserSentinel:
             )
             if srcb_tile_size is not None:
                 code += (
-                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
+                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
                     f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}, {srcb_tile_size}\n"
                     f");\n"
                 )

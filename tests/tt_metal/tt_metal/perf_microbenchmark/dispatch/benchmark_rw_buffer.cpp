@@ -351,7 +351,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
         ReplicatedBufferConfig{transfer_size},
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
-    std::vector<ElementType> host_buffer;
+    std::vector<ElementType> host_buffer(transfer_size / ElementSize);
 
     for ([[maybe_unused]] auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard

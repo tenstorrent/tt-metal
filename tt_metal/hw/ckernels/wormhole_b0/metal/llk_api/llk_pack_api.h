@@ -111,13 +111,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
 
     _llk_pack_init_<untilize, zero_output>(
-        pack_dst_format[output_id],
-        pack_src_format[output_id],
-        face_r_dim,
-        num_faces,
-        partial_face,
-        narrow_tile,
-        num_tiles);
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -225,7 +219,7 @@ inline void llk_pack_untilize(
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-            pack_tile_addr, pack_dst_format[output_id], face_r_dim, 4, block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
@@ -387,16 +381,6 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_pack_get_tile(std::uint32_t output, std::uint32_t tile_index, std::uint32_t* p_tile) {
-    _llk_pack_get_tile_<mail2math, mail2pack>(tile_index, p_tile);
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_pack_release_tile(std::uint32_t output) {
-    _llk_pack_release_tile_<mail2math, mail2pack>();
 }
 
 inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_pack_debug_dump_(data, byte_size); }

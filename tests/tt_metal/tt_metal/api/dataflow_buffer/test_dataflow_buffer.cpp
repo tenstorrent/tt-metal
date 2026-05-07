@@ -1127,6 +1127,9 @@ static void run_intra_tensix_dfb_program(
 }
 
 TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping intra-tensix DFB test for WH/BH until DFB is backported";
+    }
     run_intra_tensix_dfb_program(this->devices_.at(0), /*entry_size=*/1024, /*num_entries=*/16, /*num_threads=*/1);
 }
 

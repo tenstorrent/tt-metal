@@ -383,5 +383,50 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorLis
     EXPECT_ANY_THROW(resolve_bindings(program, desc, {buf_other.get()}));
 }
 
+// Regression: a scalar runtime arg whose value happens to numerically equal a
+// registered buffer's address must NOT trigger a safety-scan false positive.
+//
+// An earlier version of resolve_bindings ran a value-match scan that looked for
+// any uint32_t arg matching a registered buffer address but lacking a
+// BufferBinding at that position, and fired TT_FATAL. The intent was to catch
+// the push_back(buf->address()) factory-author mistake, but the check produced
+// false positives whenever a legitimate scalar arg (loop counter, shape dim,
+// etc.) happened to share the same numeric value as a buffer's address — most
+// notably under graph-capture (sentinel addresses) and for low-address buffers.
+//
+// The check was removed; this test pins that behavior so it is not silently
+// reintroduced.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_ScalarMatchingBufferAddress_DoesNotThrow) {
+    auto buf_a = MakeDramBuffer(device());
+    const uint32_t collision_value = buf_a->address();
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // arg[0] is the registered buffer; arg[1] is a plain scalar that happens to
+    // equal buf_a's address. The legacy value-match scan would have flagged
+    // arg[1] as an undeclared address; the current implementation must not.
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), collision_value});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
+}
+
+// Regression: same idea for common runtime args.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonScalarMatchingBufferAddress_DoesNotThrow) {
+    auto buf_a = MakeDramBuffer(device());
+    const uint32_t collision_value = buf_a->address();
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_common_runtime_args({buf_a.get(), collision_value});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

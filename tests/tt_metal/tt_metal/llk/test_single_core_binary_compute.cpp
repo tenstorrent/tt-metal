@@ -26,7 +26,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -419,7 +419,7 @@ bool single_core_binary(
 }
 }  // namespace unit_tests::compute::binary
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAdd) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -443,7 +443,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSub) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -467,7 +467,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMul) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -491,7 +491,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -516,7 +516,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -541,7 +541,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -566,7 +566,10 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -590,7 +593,10 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -614,7 +620,10 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -638,7 +647,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAdd) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -662,7 +671,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSub) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -686,7 +695,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMul) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -710,7 +719,10 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestAcc test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -736,7 +748,10 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestAcc test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -762,7 +777,10 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestAcc test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
