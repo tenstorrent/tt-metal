@@ -12,6 +12,7 @@ For detailed information about each model including performance metrics, usage i
 - **[Qwen-Image](models/QwenImage.md)** - Text-to-image generation model
 - **[Mochi-1](models/Mochi_1.md)** - Video generation model
 - **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
+- **[Wan2.2-Distill (lightx2v, 4-step I2V)](models/Wan2_2_Distill.md)** - Distilled image-to-video
 
 ## Directory Structure
 
@@ -113,6 +114,7 @@ python -m pytest tests/models/motif/test_pipeline_motif.py -v
 python -m pytest tests/models/qwenimage/test_pipeline_qwenimage.py -v
 python -m pytest tests/models/mochi/test_pipeline_mochi.py -v
 python -m pytest tests/models/wan2_2/test_pipeline_wan.py -v
+python -m pytest tests/models/wan2_2/test_pipeline_wan_distill_i2v.py -v
 ```
 
 ## Key Features
