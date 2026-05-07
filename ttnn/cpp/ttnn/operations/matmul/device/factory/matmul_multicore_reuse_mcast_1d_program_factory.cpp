@@ -896,7 +896,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
     }
 
-    // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
+    // Parameters for last row, col, or block. mcast_in0 replicates M across all cores
+    // (num_blocks_y == 1), so any M-direction padding lives entirely within a single h-block.
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
     uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
@@ -907,6 +908,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
+    // M-direction padding when M < per_core_M. With num_blocks_y == 1 the last (only) h-block
+    // holds last_out_block_h valid tile rows out of out_block_h.
+    uint32_t in0_last_per_core_M = M < per_core_M ? M : per_core_M;
+    uint32_t in0_last_out_block_h =
+        in0_last_per_core_M % out_block_h == 0 ? out_block_h : in0_last_per_core_M % out_block_h;
+    uint32_t in0_last_block_num_nonzero_subblocks_h = ((in0_last_out_block_h - 1) / out_subblock_h) + 1;
+    uint32_t in0_last_subblock_of_last_block_h =
+        in0_last_out_block_h % out_subblock_h == 0 ? out_subblock_h : in0_last_out_block_h % out_subblock_h;
+    uint32_t in0_last_block_padded_block_tiles_h_skip =
+        (out_block_h / out_subblock_h - in0_last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -968,7 +980,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
 
                 // padding args
-                (std::uint32_t)out_block_h,  // last_block_h
+                (std::uint32_t)in0_last_out_block_h,  // last_block_h
 
                 // sparsity args
                 (std::uint32_t)0,  // sparsity_addr
@@ -1021,9 +1033,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                 // padding args (WRITER)
-                mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_sender_writer_args.push_back(out_subblock_h);
-                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(in0_last_block_num_nonzero_subblocks_h);
+                mm_in1_sender_writer_args.push_back(in0_last_subblock_of_last_block_h);
+                mm_in1_sender_writer_args.push_back(in0_last_block_padded_block_tiles_h_skip);
                 mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);  // out_num_nonzero_subblocks_w
                 mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                 mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
@@ -1034,9 +1046,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 mm_in1_sender_writer_args.push_back(out_block_w);
 
                 // padding args (WRITER)
-                mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_sender_writer_args.push_back(out_subblock_h);
-                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(in0_last_block_num_nonzero_subblocks_h);
+                mm_in1_sender_writer_args.push_back(in0_last_subblock_of_last_block_h);
+                mm_in1_sender_writer_args.push_back(in0_last_block_padded_block_tiles_h_skip);
                 mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);  // out_num_nonzero_subblocks_w
                 mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                 mm_in1_sender_writer_args.push_back(out_subblock_w);
