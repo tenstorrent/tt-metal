@@ -422,8 +422,8 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void _calculate_exponential_tti_bf16_()
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void _calculate_exponential_tti_bf16_(const std::uint16_t exp_base_scale_factor)
 {
     constexpr std::uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
 
@@ -437,10 +437,13 @@ inline void _calculate_exponential_tti_bf16_()
     //   LREG2 = 255.0f                      (upper clamp threshold)
     //   LREG12 = 1/ln2                      (programmable constant, set in init)
     TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
+
     TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
     TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
+
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x33a8);
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0x5ada);
+
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
@@ -448,6 +451,12 @@ inline void _calculate_exponential_tti_bf16_()
     {
         // val = sfpi::dst_reg[0]
         TTI_SFPLOAD(p_sfpu::LREG0, input_type, ADDR_MOD_7, 0);
+
+        if constexpr (SCALE_EN)
+        {
+            // Multiply LREG0 by the BF16 scale immediate in-place.
+            TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+        }
 
         // xlog2 = val * (1/ln2) + 127.0f
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, p_sfpu::LREG0, 0);
@@ -540,11 +549,12 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
 {
     if constexpr (!APPROXIMATION_MODE)
     {
-        if constexpr (!is_fp32_dest_acc_en && !SCALE_EN)
+        if constexpr (!is_fp32_dest_acc_en)
         {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
             // CLAMP_NEGATIVE is implicit (always clamps via min/max).
-            _calculate_exponential_tti_bf16_<is_fp32_dest_acc_en, ITERATIONS>();
+            // SCALE_EN is handled inside the TTI kernel via SFPMULI.
+            _calculate_exponential_tti_bf16_<SCALE_EN, is_fp32_dest_acc_en, ITERATIONS>(exp_base_scale_factor);
         }
         else
         {
@@ -752,7 +762,7 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <bool APPROXIMATION_MODE, std::uint32_t scale /* 1.0f in FP32 */, bool CLAMP_NEGATIVE = true>
+template <bool APPROXIMATION_MODE, std::uint32_t scale /* 1.0f in FP32 */, bool CLAMP_NEGATIVE = true, bool is_fp32_dest_acc_en = false>
 inline void _init_exponential_()
 {
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE)
@@ -1060,11 +1070,13 @@ inline void _init_exponential_()
     }
     else
     {
-        // Accurate-mode init. Reciprocal init must come first because it sets
-        // sfpi::vConstFloatPrgm0 = 2.0f (= LREG12), which would otherwise
-        // clobber the 1/log(2) we load below for the TTI bfloat16 path.
-        _init_sfpu_reciprocal_<false>();
-        _init_exponential_tti_bf16_();
+        if constexpr (!is_fp32_dest_acc_en)
+        {
+            // TTI bfloat16 path: needs ADDR_MOD_6 + LREG12 = 1/ln2.
+            // Do NOT call _init_sfpu_reciprocal_ — it would overwrite LREG12 with 2.0f.
+            _init_exponential_tti_bf16_();
+        }
+        // fp32 scalar path (_sfpu_exp_fp32_accurate_) uses no SFPU-init-dependent state.
     }
 }
 
