@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <limits>
+#include <span>
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
@@ -16,11 +17,50 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // ============================================================================
-// Validation Helper
+// Validation Helpers
 // ============================================================================
 
 // Type alias for readability
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
+
+// Internal validation function - validates a TensorArg list against the Program's TensorParameters.
+// Shared by SetProgramRunParameters (full path) and UpdateTensorArgs (partial path).
+//   - No duplicate tensor_parameter_name entries
+//   - Every entry references a TensorParameter declared in the ProgramSpec
+//   - The supplied MeshTensor's TensorSpec equals the binding's expected TensorSpec
+//     (full equality is required, for now. This will be loosened to layout-compatible-modulo-shape
+//     in a follow-up PR that adds RuntimeTensorShape as a mutable parameter).
+//   - Every declared TensorParameter must be set
+void ValidateTensorArgs(const Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args) {
+    const detail::ProgramImpl& program_impl = program.impl();
+
+    std::unordered_set<std::string> tensor_parameters_with_params;
+    for (const auto& tensor_params : tensor_args) {
+        auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name);
+        TT_FATAL(
+            inserted,
+            "Duplicate tensor_parameter_name '{}' in tensor_args. Each TensorParameter must appear at most once.",
+            tensor_params.tensor_parameter_name);
+        const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(tensor_params.tensor_parameter_name);
+        TT_FATAL(
+            expected_spec != nullptr,
+            "TensorArg references unknown TensorParameter '{}'.",
+            tensor_params.tensor_parameter_name);
+        const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
+        TT_FATAL(
+            runtime_spec == *expected_spec,
+            "TensorArg for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
+            "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; the "
+            "supplied tensor must conform to it.",
+            tensor_params.tensor_parameter_name);
+    }
+    for (const std::string& declared : program_impl.get_registered_tensor_parameter_names()) {
+        TT_FATAL(
+            tensor_parameters_with_params.contains(declared),
+            "TensorParameter '{}' is declared in the Program but has no TensorArg entry.",
+            declared);
+    }
+}
 
 // Internal validation function - validates ProgramRunParams against the Program's schema.
 //
@@ -194,44 +234,12 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
     // Unlike kernels, DFBs don't require DFBRunParams.
     // It is only required for DFBs built on borrowed memory. (Which is not yet supported.)
 
-    // Validate tensor runtime parameters:
-    //   - No duplicate tensor_parameter_name entries
-    //   - Every entry references a TensorParameter declared in the ProgramSpec
-    //   - The supplied MeshTensor's TensorSpec equals the binding's expected TensorSpec
-    //     (full equality is required, for now. This will be loosened to layout-compatible-modulo-shape
-    //     in a follow-up PR that adds RuntimeTensorShape as a mutable parameter).
-    //   - Every declared TensorParameter must be set
-    std::unordered_set<std::string> tensor_parameters_with_params;
-    for (const auto& tensor_params : params.tensor_args) {
-        auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name);
-        TT_FATAL(
-            inserted,
-            "Duplicate tensor_parameter_name '{}' in ProgramRunParams.tensor_args. Each TensorParameter must appear "
-            "at most once.",
-            tensor_params.tensor_parameter_name);
-        const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(tensor_params.tensor_parameter_name);
-        TT_FATAL(
-            expected_spec != nullptr,
-            "TensorArg references unknown TensorParameter '{}'.",
-            tensor_params.tensor_parameter_name);
-        const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
-        TT_FATAL(
-            runtime_spec == *expected_spec,
-            "TensorArg for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
-            "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; the "
-            "supplied tensor must conform to it.",
-            tensor_params.tensor_parameter_name);
-    }
-    for (const std::string& declared : program_impl.get_registered_tensor_parameter_names()) {
-        TT_FATAL(
-            tensor_parameters_with_params.contains(declared),
-            "TensorParameter '{}' is declared in the Program but has no TensorArg entry.",
-            declared);
-    }
+    // Validate tensor runtime parameters (delegated to shared helper).
+    ValidateTensorArgs(program, params.tensor_args);
 }
 
 // ============================================================================
-// PUBLIC ENTRY POINTS: SetProgramRunParameters + GetProgramRunParamsView
+// PUBLIC ENTRY POINTS: SetProgramRunParameters + UpdateTensorArgs + GetProgramRunParamsView
 // ============================================================================
 
 void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
@@ -383,6 +391,64 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
     // Process DFB runtime parameters
     // (Not yet supported)
+}
+
+void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args) {
+    log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
+
+    // Validate the TensorArg list (shared with the full-path validator).
+    ValidateTensorArgs(program, tensor_args);
+
+    detail::ProgramImpl& program_impl = program.impl();
+
+    // Build a tensor_parameter_name -> base address lookup.
+    // As in SetProgramRunParameters, this assumes lockstep mesh allocation:
+    // a single device-independent uint32_t address per binding.
+    std::unordered_map<std::string, uint32_t> ta_binding_addresses;
+    ta_binding_addresses.reserve(tensor_args.size());
+    for (const auto& tensor_params : tensor_args) {
+        const auto address = tensor_params.tensor.get().address();
+        TT_FATAL(
+            address <= std::numeric_limits<uint32_t>::max(),
+            "TensorParameter '{}' base address {} exceeds uint32_t max",
+            tensor_params.tensor_parameter_name,
+            address);
+        ta_binding_addresses.emplace(tensor_params.tensor_parameter_name, static_cast<uint32_t>(address));
+    }
+
+    // For every kernel with tensor bindings, patch the binding-address slots in its CRTA buffer
+    // in place. The rest of the buffer (named CRTAs, vararg CRTAs) is left untouched and retains
+    // the values installed by the most recent SetProgramRunParameters call.
+    // The kernel's RTA buffer is left untouched (tensor binding addresses live in CRTAs only).
+    for (const KernelSpecName& kernel_name : program_impl.get_registered_kernel_names()) {
+        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+        const auto& binding_handles = kernel->tensor_binding_handles();
+        if (binding_handles.empty()) {
+            continue;
+        }
+
+        // Pre-condition: SetProgramRunParameters must have been called previously to size and
+        // populate this kernel's CRTA buffer. Without it, there is no buffer to patch into.
+        TT_FATAL(
+            !kernel->common_runtime_args().empty(),
+            "UpdateTensorArgs called on Program before SetProgramRunParameters: kernel '{}' has tensor "
+            "bindings but its CRTA buffer has not been allocated. Call SetProgramRunParameters at least "
+            "once first.",
+            kernel_name);
+
+        RuntimeArgsData& crta = kernel->common_runtime_args_data();
+        for (const auto& handle : binding_handles) {
+            auto addr_it = ta_binding_addresses.find(handle.tensor_parameter_name);
+            TT_FATAL(
+                addr_it != ta_binding_addresses.end(),
+                "Internal error: tensor binding '{}' has no resolved base address (validation should have "
+                "caught this).",
+                handle.tensor_parameter_name);
+            // addr_crta_offset is a byte offset; data() is uint32_t*.
+            const uint32_t word_index = handle.addr_crta_offset / sizeof(uint32_t);
+            crta.data()[word_index] = addr_it->second;
+        }
+    }
 }
 
 ProgramRunParamsView& GetProgramRunParamsView(Program& program) {
