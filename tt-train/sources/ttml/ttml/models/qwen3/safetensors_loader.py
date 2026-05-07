@@ -189,6 +189,67 @@ def _is_norm_proj(hf_name: str) -> bool:
     return hf_name.endswith(".self_attn.q_norm.weight") or hf_name.endswith(".self_attn.k_norm.weight")
 
 
+def _validate_attention_dims(hf_tensors: Dict[str, np.ndarray], config) -> None:
+    """Verify ``Qwen3Config`` matches the HF checkpoint's attention dimensions.
+
+    Q/K/V projections are arranged as ``[head_0_rows..., head_1_rows..., ...]``
+    with RoPE-pair interleaving applied per head. Loading them under a config
+    whose ``num_attention_heads * head_dim`` doesn't match the HF tensor would
+    silently misinterpret the layout (and any cropping in
+    :func:`load_from_hf` would discard whole heads or split them mid-rotation),
+    producing structurally nonsense weights. Catch this up front with a clear,
+    actionable error before any data is written.
+    """
+
+    def _peek(suffix: str):
+        for name, arr in hf_tensors.items():
+            if name.endswith(suffix) and arr.ndim == 2:
+                return name, arr
+        return None, None
+
+    q_name, q_arr = _peek(".self_attn.q_proj.weight")
+    if q_arr is not None:
+        expected_q = config.num_attention_heads * config.head_dim
+        if q_arr.shape[0] != expected_q:
+            implied_head_dim = q_arr.shape[0] // config.num_attention_heads
+            raise RuntimeError(
+                f"Qwen3Config does not match the HF checkpoint: {q_name} has "
+                f"{q_arr.shape[0]} output rows, but config implies "
+                f"num_attention_heads * head_dim = {config.num_attention_heads} "
+                f"* {config.head_dim} = {expected_q}. "
+                f"Likely fix: set head_dim={implied_head_dim} (or adjust "
+                f"num_attention_heads) so they multiply to {q_arr.shape[0]}."
+            )
+
+    k_name, k_arr = _peek(".self_attn.k_proj.weight")
+    if k_arr is not None:
+        expected_kv = config.num_key_value_heads * config.head_dim
+        if k_arr.shape[0] != expected_kv:
+            implied_head_dim = k_arr.shape[0] // config.num_key_value_heads
+            raise RuntimeError(
+                f"Qwen3Config does not match the HF checkpoint: {k_name} has "
+                f"{k_arr.shape[0]} output rows, but config implies "
+                f"num_key_value_heads * head_dim = {config.num_key_value_heads} "
+                f"* {config.head_dim} = {expected_kv}. "
+                f"Likely fix: set head_dim={implied_head_dim} (or adjust "
+                f"num_key_value_heads) so they multiply to {k_arr.shape[0]}."
+            )
+
+    qn_name, qn_arr = _peek(".self_attn.q_norm.weight")
+    if qn_arr is None:
+        # 1-D q_norm; loop manually since _peek only matches 2-D tensors.
+        for name, arr in hf_tensors.items():
+            if name.endswith(".self_attn.q_norm.weight"):
+                qn_name, qn_arr = name, arr
+                break
+    if qn_arr is not None and qn_arr.shape[0] != config.head_dim:
+        raise RuntimeError(
+            f"Qwen3Config does not match the HF checkpoint: {qn_name} has "
+            f"shape {tuple(qn_arr.shape)}, but config.head_dim = "
+            f"{config.head_dim}. Set head_dim={qn_arr.shape[0]}."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public API: load HF → ttml
 # ---------------------------------------------------------------------------
@@ -222,9 +283,25 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
     loaded: set[str] = set()
     unmapped_hf: list[str] = []
 
+    _validate_attention_dims(hf_tensors, config)
+
     for hf_name, hf_arr in hf_tensors.items():
         ttml_name = _hf_to_ttml_name(hf_name, root=root)
-        if ttml_name is None or ttml_name not in parameters:
+        if ttml_name is None:
+            unmapped_hf.append(hf_name)
+            continue
+        # Tied: tok_emb.weight and fc.weight share a Parameter object; the
+        # deduped parameters() may expose only one name. Fall back to whichever
+        # actually exists so the underlying tensor gets loaded either way.
+        if ttml_name not in parameters and tied:
+            alt = None
+            if ttml_name == f"{root}/tok_emb/weight":
+                alt = f"{root}/fc/weight"
+            elif ttml_name == f"{root}/fc/weight":
+                alt = f"{root}/tok_emb/weight"
+            if alt is not None and alt in parameters:
+                ttml_name = alt
+        if ttml_name not in parameters:
             unmapped_hf.append(hf_name)
             continue
 
