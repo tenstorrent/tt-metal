@@ -22,6 +22,26 @@
 
 namespace ttml::ops::distributed {
 
+namespace {
+
+// Fuses `exp` after `subtract` into a single binary_ng kernel via the SFPU
+// op-chain (post_activations).  The (a - b) intermediate stays in DST regs.
+ttnn::Tensor fused_subtract_exp_fp32(const ttnn::Tensor& a, const ttnn::Tensor& b) {
+    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+    // 0.0f matches ttnn::exp's default fast_and_approximate_mode=false.
+    const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0f};
+    const ttsl::Span<const EltwiseUnary> post_activations(&exp_act, 1);
+    return ttnn::subtract(
+        a,
+        b,
+        /*output_dtype=*/ttnn::DataType::FLOAT32,
+        /*memory_config=*/std::nullopt,
+        /*output=*/std::nullopt,
+        post_activations);
+}
+
+}  // namespace
+
 autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     const autograd::TensorPtr& logits, const autograd::TensorPtr& targets, std::optional<uint32_t> cluster_axis) {
     const auto logits_shape = logits->get_value().logical_shape();
@@ -93,21 +113,9 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
     auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
 
-    // Step 3: fused (logits - global_max) -> exp into FP32 in a single binary_ng kernel.
-    // BF16 inputs are read into DST; subtract+exp run on DST and the FP32 result is written once
-    // (no intermediate [B,1,S,V/tp_size] FP32 tensor).  EXP param 0.0f matches ttnn::exp default
-    // (fast_and_approximate_mode=false).
-    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
-    const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, /*fast_and_approximate=*/0.0f};
-    const ttsl::Span<const EltwiseUnary> post_activations(&exp_act, 1);
-
-    auto local_exp = ttnn::subtract(
-        logits->get_value(),
-        global_max,
-        /*output_dtype=*/ttnn::DataType::FLOAT32,
-        /*memory_config=*/std::nullopt,
-        /*output=*/std::nullopt,
-        post_activations);
+    // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel,
+    // no intermediate [B,1,S,V/tp_size] FP32 tensor.
+    auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
     auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
@@ -156,8 +164,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
         }
         const float inv_N = 1.0F / static_cast<float>(N);
 
-        auto shifted = ttnn::subtract(logits->get_value(), global_max, ttnn::DataType::FLOAT32);
-        auto local_exp = ttnn::exp(shifted);
+        auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
 
         auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
         auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
