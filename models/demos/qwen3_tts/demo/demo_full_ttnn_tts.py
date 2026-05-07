@@ -1502,15 +1502,18 @@ def generate_codes_ttnn(
     # the design pays off after Step 5 (mega-trace fusion) cuts inter-trace syncs.
     import os as _os
 
-    _device_cp_chain = bool(int(_os.environ.get("TT_QWEN3_DEVICE_CP_CHAIN", "0"))) and not config.greedy
+    _device_cp_chain = bool(int(_os.environ.get("TT_QWEN3_DEVICE_CP_CHAIN", "0")))
     _device_cp_sampling = False  # batch=1 regression — see comments above the chain path.
+    _greedy_chain = _device_cp_chain and config.greedy
     cp_sampler = None
-    if _device_cp_chain:
+    if _device_cp_chain and not config.greedy:
         cp_sampler = _DeviceSampler(device, top_k=config.top_k, top_p=1.0, temperature=config.temperature)
         print(
-            f"  CP decode on-device chain: topk(k={_SAMPLING_MAX_TOP_K}) + sampling + embed (top_k={cp_sampler.top_k}, "
-            f"temp={cp_sampler.temperature}) — TT_QWEN3_DEVICE_CP_CHAIN=1"
+            f"  CP decode on-device chain (sampling): topk(k={_SAMPLING_MAX_TOP_K}) + sampling + embed "
+            f"(top_k={cp_sampler.top_k}, temp={cp_sampler.temperature}) — TT_QWEN3_DEVICE_CP_CHAIN=1"
         )
+    elif _greedy_chain:
+        print("  CP decode on-device chain (greedy): argmax + embed — TT_QWEN3_DEVICE_CP_CHAIN=1")
     print(f"  Capturing {config.num_code_groups - 2} CP decode traces (one per lm_head)...")
     for _buf_i in range(2):
         for _trace_i, _step_code_idx in enumerate(range(2, config.num_code_groups)):
@@ -1540,6 +1543,19 @@ def generate_codes_ttnn(
             if config.greedy:
                 _tok_buf = _alloc_token_buf(device, shape=(1, 1, 1))
                 _argmax_into(_wu_cp_dc_logits, _tok_buf)
+                if _greedy_chain:
+                    # Warmup the chain ops (load kernels — same TT_FATAL constraint as
+                    # the sampling chain warmup below).
+                    _wu_tok_4d = ttnn.reshape(_tok_buf, [1, 1, 1, 1])
+                    _wu_embed_out = ttnn.embedding(
+                        _wu_tok_4d,
+                        _embed_table_tt,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    _wu_embed_out_4d = ttnn.reshape(_wu_embed_out, [1, 1, 1, _wu_embed_out.shape[-1]])
+                    ttnn.copy(_wu_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
+                    ttnn.deallocate(_wu_embed_out)  # frees the underlying buffer (4d is an alias view)
             elif _device_cp_chain:
                 _tok_buf = cp_sampler.alloc_token_buf()  # [1,1,1,32] uint32 RM
                 cp_sampler.append_sampling(_wu_cp_dc_logits, _tok_buf)
@@ -1556,7 +1572,7 @@ def generate_codes_ttnn(
                 _wu_embed_out_4d = ttnn.reshape(_wu_embed_out, [1, 1, 1, _wu_embed_out.shape[-1]])
                 ttnn.copy(_wu_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
                 ttnn.deallocate(_wu_tok_slice)
-                ttnn.deallocate(_wu_embed_out_4d)
+                ttnn.deallocate(_wu_embed_out)  # frees the underlying buffer (4d is an alias view)
             elif _device_cp_sampling:
                 _tok_buf = cp_sampler.alloc_token_buf()  # [1,1,1,32] uint32 RM
                 cp_sampler.append_sampling(_wu_cp_dc_logits, _tok_buf)
@@ -1582,6 +1598,19 @@ def generate_codes_ttnn(
                 )
                 if config.greedy:
                     _argmax_into(_logits_tt, _tok_buf)
+                    if _greedy_chain:
+                        # On-device chain (greedy): take argmax token, look up its embed,
+                        # copy into the next CP decode trace's input buffer.
+                        _tok_4d = ttnn.reshape(_tok_buf, [1, 1, 1, 1])
+                        _embed_out = ttnn.embedding(
+                            _tok_4d,
+                            _embed_table_tt,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                        )
+                        _embed_out_4d = ttnn.reshape(_embed_out, [1, 1, 1, _embed_out.shape[-1]])
+                        ttnn.copy(_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
+                        ttnn.deallocate(_embed_out_4d)
                 elif _device_cp_chain:
                     cp_sampler.append_sampling(_logits_tt, _tok_buf)
                     # On-device chain: take user[0]'s sampled token, look up its embed,
