@@ -4,14 +4,13 @@
 """Benchmark the efficiency of LLM inference with traced prefill and prefix caching.
 
 Loads a ``vllm.LLM`` instance with given options, collects prompts with a shared prefix
-from local markdown files, and runs inference. Evaluation results are logged and/or
-saved.
+from local text files, and runs inference. Evaluation results are logged and/or saved.
 The main goal is to investigate if traced (trace_mode="all") prefill helps reduce
-monitored metrics: TTFT and prefill latency.
+monitored metrics: TTFT and prefill latency (and hence end-to-end latency).
 
 Usage:
     $ python3 run.py \
-        --model Qwen/Qwen3-4B-Instruct-2507 \
+        -m Qwen/Qwen3-4B-Instruct-2507 \
         -p 20 -w 3 -v 1 \
         -t none decode_only all
     $ # You'll see something like this as an output:
@@ -40,14 +39,15 @@ import time
 from pathlib import Path
 from typing import Literal
 
-os.environ["TT_LOGGER_LEVEL"] = "ERROR"
-os.environ["TT_METAL_LOGGER_LEVEL"] = "ERROR"
-os.environ["LOGURU_LEVEL"] = "ERROR"
-os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
+LOGGER_LEVEL = os.getenv("TRACED_PREFILL_BENCHMARK_LOGGER_LEVEL") or "ERROR"
+os.environ["TT_LOGGER_LEVEL"] = LOGGER_LEVEL
+os.environ["TT_METAL_LOGGER_LEVEL"] = LOGGER_LEVEL
+os.environ["LOGURU_LEVEL"] = LOGGER_LEVEL
+os.environ["VLLM_LOGGING_LEVEL"] = LOGGER_LEVEL
 
-
-import tqdm  # noqa: I001
-from vllm import LLM, SamplingParams
+from tqdm import tqdm  # noqa: E402
+from transformers import AutoTokenizer  # noqa: E402
+from vllm import LLM, SamplingParams  # noqa: E402
 
 
 TraceModesT = Literal["all", "decode_only", "none"]
@@ -55,70 +55,71 @@ TraceModesT = Literal["all", "decode_only", "none"]
 RANDOM_STATE: int = 43165
 
 PARENT_DIR = Path(__file__).parent
-DEFAULT_SYSTEM_PROMPT_PATH = PARENT_DIR / "system-prompt.md"
-DEFAULT_CONTEXT_PATH = PARENT_DIR / "context.md"
-DEFAULT_QUESTIONS_PATH = PARENT_DIR / "questions.md"
+DEFAULT_SYSTEM_PROMPT_PATH = PARENT_DIR / "system-prompt.txt"
+DEFAULT_CONTEXT_PATH = PARENT_DIR / "context.txt"
+DEFAULT_QUESTIONS_PATH = PARENT_DIR / "questions.txt"
 
 
 def main() -> None:
-    """Main function: parses CLI, benchmarks, and saves & reports results."""
+    """Main function: parses CLI, benchmarks, and saves / reports results."""
     options = parse_options()
-
     sampling_params = load_sampling_params(options)
-
-    shared_prefix, prompt_tails = load_prompt_assets(options)
-    prompts = build_prompts(options, shared_prefix, prompt_tails)
-
+    prompts = build_prompts(options)
     results = benchmark_everything(sampling_params, prompts, options)
-
-    if options.verbose > 0:
-        print_metrics_table(results)
-
-    save_results(results, options)
+    maybe_print_metrics_table(results, options)
+    maybe_save_results(results, options)
 
 
 def parse_options() -> argparse.Namespace:
     """Parses CLI and returns parsed options such as model name."""
+
+    class RawTextDefaultsFormatter(
+        argparse.ArgumentDefaultsHelpFormatter,
+        argparse.RawTextHelpFormatter,
+    ):
+        """Preserves CLI text formatting and also shows option defaults."""
+
     parser = argparse.ArgumentParser(
         description=(
-            "Benchmark the efficiency of combination(s) of automatic prefix caching "
+            "Benchmark the efficiency of combination(s) of automatic prefix caching \n"
             "and traced prefill on a TT transformer.\n"
-            "Collects shared context and multiple prompt tails from ./*.md files, "
-            "load an LLM with provided options, generates responses on the prompts, "
-            "and saves & reports the inference-evaluation results. The main goal is to "
+            "Collects shared context and multiple prompt tails from ./*.txt files, \n"
+            "loads an LLM with provided options, generates responses on the prompts, \n"
+            "and saves & reports the inference-evaluation results. The main goal is to \n"
             "make sure that traced prefill reduces TTFT and prefill-latency metrics.\n"
             "See also https://github.com/tenstorrent/tt-metal/pull/43165"
         ),
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=RawTextDefaultsFormatter,
+        usage="python %(prog)s [LLM options] [sampling options] [I/O options]"
     )
     parser.add_argument(
         "-m",
         "--model",
         help=(
-            "Huggingface model name, format 'org/name'. "
-            "Currently support text-generation models such as Qwen3."
+            "Huggingface model name, format 'org/name'. \n"
+            "Currently support text-generation models such as Qwen3.\n"
         ),
         default="Qwen/Qwen3-4B-Instruct-2507",
     )
     parser.add_argument(
         "-b",
         "--block_size",
-        help="KV-cache block size.",
+        help="KV-cache block size.\n",
         type=int,
         default=64,
     )
     parser.add_argument(
         "-D",
         "--disable_prefix_caching",
-        help="Whether to disable automatic prefix caching through vLLM.",
+        help="Whether to disable automatic prefix caching through vLLM.\n",
         action="store_true",
     )
     parser.add_argument(
         "-t",
         "--trace_mode",
         help=(
-            "TT tracing mode(s) to benchmark. Pass one or more values, for example: "
-            "--trace_mode none decode_only all"
+            "TT tracing mode(s) to benchmark.\nPass one or more values, for example: "
+            "--trace_mode none decode_only all\n"
         ),
         nargs="+",
         default=["all"],
@@ -127,56 +128,72 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument(
         "-s",
         "--max_num_seqs",
-        help="Maximum number of sequences processed simultaneously.",
+        help="Maximum number of sequences processed simultaneously.\n",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "-c",
+        "--context_multiply",
+        help=(
+            "Context-length multiplier: shared context (excluding system prompt) will\n"
+            "be multiplied by this number; use for experiments with longer context.\n"
+            "Default context has 1,662 tokens and system prompt 730 tokens.\n"
+        ),
         type=int,
         default=1,
     )
     parser.add_argument(
         "-g",
         "--max_tokens",
-        help="Maximum number of tokens to generate.",
+        help="Maximum number of tokens to generate.\n",
         type=int,
-        default=64,
+        default=96,
     )
     parser.add_argument(
         "-w",
         "--warmup_runs",
-        help="Number of warmup runs before timed runs.",
+        help="Number of warmup runs before timed runs.\n",
         type=int,
-        default=3,
+        default=0,
     )
     parser.add_argument(
         "-p",
         "--num_prompts",
         help=(
-            "Number of realistic prompts to use from the built-in set. "
-            "If more than unique prompts in tails file, repeated."
+            "Number of realistic prompts to use from the built-in set.\n"
+            "If greater than the prompts from the tails file, repeated.\n"
         ),
         type=int,
         default=32,
     )
     parser.add_argument(
+        "-o",
+        "--output",
+        help="Optional path to save detailed benchmark rows and summary.\n",
+        default=None,
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         help=(
-            "Verbosity level (0 = no outputs, 1 = only summary, "
-            "2 = inference results such as prompts, responses, and metrics)."
+            "Verbosity level (0 = no outputs, 1 = only summary,\n"
+            "2 = inference results such as prompts, responses, and metrics).\n"
         ),
         type=int,
         default=1,
         choices=(0, 1, 2),
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        help="Optional path to save detailed benchmark rows and summary.",
-        default="results.json",
     )
     return parser.parse_args()
 
 
 def load_sampling_params(options: argparse.Namespace) -> SamplingParams:
     """Loads ``vllm.SamplingParams`` with parsed CLI arguments from ``options``."""
+    if options.verbose > 0:
+        print(
+            f"\n🎲 LLM will generate maximum {options.max_tokens} tokens with "
+            f"temperature = 1.0 and no top-{{p,k}} sampling."
+        )
     return SamplingParams(
         max_tokens=options.max_tokens,
         temperature=0.0,
@@ -186,21 +203,31 @@ def load_sampling_params(options: argparse.Namespace) -> SamplingParams:
     )
 
 
-def load_prompt_assets(options: argparse.Namespace) -> tuple[str, list[str]]:
-    """Loads shared prefix and prompt tails from text/markdown files."""
+def build_prompts(options: argparse.Namespace) -> list[str]:
+    """Builds ``options.num_prompts`` number of realistic prompts with shared prefix.
+
+    Context (excluding system prompt) can be multiplied as requested by
+    ``options.context_multiply``. If ``options.verbose``, prints the number of tokens
+    in obtained shared prefix.
+    """
+    # region Load local system, prefix, and user prompts
     system = DEFAULT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
-    context = DEFAULT_CONTEXT_PATH.read_text(encoding="utf-8").strip()
+    context = (
+        DEFAULT_CONTEXT_PATH.read_text(encoding="utf-8").strip()
+        * options.context_multiply
+    )
     shared_prefix = f"{system}\n---\n{context}"
     prompt_tails = DEFAULT_QUESTIONS_PATH.read_text(encoding="utf-8").splitlines()
-    return shared_prefix, prompt_tails
+    # endregion
 
+    # region Maybe print token stats
+    if options.verbose > 0:
+        tokenizer = AutoTokenizer.from_pretrained(options.model)
+        shared_tokens_map = tokenizer(shared_prefix, return_length=True)
+        n_shared_tokens = shared_tokens_map["length"][0]
+        print(f"\n📚 Shared context has {n_shared_tokens:,} tokens.")
+    # endregion
 
-def build_prompts(
-    options: argparse.Namespace,
-    shared_prefix: str,
-    prompt_tails: list[str],
-) -> list[str]:
-    """Builds ``options.num_prompts`` number of realistic prompts with shared prefix."""
     # If requested number of prompts is smaller than available prompt tails,
     # return the subset. Otherwise, just repeat the prompts.
     num_prompt_tails = len(prompt_tails)
@@ -251,6 +278,14 @@ def benchmark(
 
 def load_llm(options: argparse.Namespace, trace_mode: TraceModesT) -> LLM:
     """Loads ``vllm.LLM`` with parsed CLI arguments from ``options``."""
+    if options.verbose > 0:
+        apc_text = "disabled" if options.disable_prefix_caching else "enabled"
+        print(
+            f"\n🤖 Preparing LLM '{options.model}' for inference with {apc_text} "
+            f"prefix caching,\n   block size {options.block_size}, "
+            f"{options.max_num_seqs} simultaneously processed sequences, "
+            f"and with trace mode '{trace_mode}'.\n"
+        )
     return LLM(
         model=options.model,
         block_size=options.block_size,
@@ -280,7 +315,7 @@ def warmup_prompts(
         return
 
     warmup_prompt = prompts[0]
-    for _ in tqdm.tqdm(range(warmup_runs), desc="Warming up"):
+    for _ in tqdm(range(warmup_runs), desc="Warming up"):
         llm.generate(warmup_prompt, sampling_params=sampling_params, use_tqdm=False)
 
 
@@ -297,12 +332,12 @@ def run_prompts(
     """
     metrics_list = []
 
-    for i, prompt in enumerate(tqdm.tqdm(prompts, desc="Running inference on prompts")):
+    for i, prompt in enumerate(tqdm(prompts, desc="Running inference on prompts")):
         metrics = InferenceMetrics.from_llm(llm, sampling_params, prompt, id_=i)
         metrics_list.append(metrics)
 
         if verbose == 2:
-            print(metrics)
+            print(f"💬 Example {i}:\n{metrics!r}")
 
     return metrics_list
 
@@ -433,24 +468,31 @@ def summarize_metrics(
         e2e_latencies.append(metrics.e2e_latency)
 
     summary = {
-        "avg_ttft (sec.)": round(statistics.mean(ttfts), 3),
-        "avg_prefill_latency (sec.)": round(statistics.mean(prefill_latencies), 3),
-        "avg_decode_latency (sec.)": round(statistics.mean(decode_latencies), 3),
-        "avg_e2e_latency (sec.)": round(statistics.mean(e2e_latencies), 3),
+        "avg_ttft (sec.)": round(statistics.median(ttfts), 3),
+        "avg_prefill_latency (sec.)": round(statistics.median(prefill_latencies), 3),
+        "avg_decode_latency (sec.)": round(statistics.median(decode_latencies), 3),
+        "avg_e2e_latency (sec.)": round(statistics.median(e2e_latencies), 3),
     }
     if verbose > 0:
-        print("Inference-Evaluation Summary:")
+        print("\n📉 Inference-Evaluation Summary:")
         pprint.pprint(summary, sort_dicts=False)
 
     return summary
 
 
-def print_metrics_table(summaries: dict[str, dict[str, object]]) -> None:
+def maybe_print_metrics_table(
+    summaries: dict[str, dict[str, object]],
+    options: argparse.Namespace,
+) -> None:
     """Prints a compact summary table with per-metric minima highlighted.
 
     The output is intentionally close to a polars-like pretty table while using
-    plain ASCII for broad terminal compatibility.
+    plain ASCII for broad terminal compatibility. If ``options.verbose`` is 0,
+    nothing happens.
     """
+    if options.verbose == 0:
+        return
+
     first_summary = next(iter(summaries.values()))
     if not isinstance(first_summary, dict):
         return
@@ -477,7 +519,7 @@ def print_metrics_table(summaries: dict[str, dict[str, object]]) -> None:
         col_widths.append(max(len(header), max_cell_width))
 
     border = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
-    print("\nCross-Mode Summary (lower is better):")
+    print("\n🧮 Cross-Mode Summary (lower is better):")
     print(border)
 
     header_cells = [f" {headers[i].ljust(col_widths[i])} " for i in range(len(headers))]
@@ -493,12 +535,29 @@ def print_metrics_table(summaries: dict[str, dict[str, object]]) -> None:
     print(border)
     print("* marks the lowest value per metric (ties allowed).")
 
+    print(
+        "\n🎸 Reminder: benchmarking was done with the following configuration\n"
+        "   (if not specified explicitly, other parameters were set to defaults):"
+    )
+    pprint.pprint(
+        {
+            "model": options.model,
+            "block_size": options.block_size,
+            "enable_prefix_caching": not options.disable_prefix_caching,
+            "max_num_seqs": options.max_num_seqs,
+        },
+        sort_dicts=False,
+    )
 
-def save_results(
+
+def maybe_save_results(
     results: dict[str, dict[str, float]],
     options: argparse.Namespace,
 ) -> None:
-    """Saves benchmark ``results`` in file ``options.output``."""
+    """Saves benchmark ``results`` in file ``options.output`` if filename is provided."""
+    if options.output is None:
+        return
+
     with open(options.output, "w", encoding="utf-8") as fh:
         json.dump(results, fh, indent=2)
 
@@ -508,4 +567,3 @@ def save_results(
 
 if __name__ == "__main__":
     main()
-
