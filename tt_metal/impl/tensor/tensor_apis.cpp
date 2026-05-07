@@ -350,6 +350,11 @@ template <typename T>
 HostTensor to_layout_bfloat_impl(const HostTensor& tensor, Layout target_layout) {
     static_assert(
         std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, tensor_impl::bfloat4_b>, "Invalid type T");
+    // TODO(#43763):
+    // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
+    // This silent fail has a high impact area and should be studied and addressed asap.
+    //
+    // Original comment:
     // TODO: Flip to assert when we remove use cases in python and c++
     if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
         log_warning(
