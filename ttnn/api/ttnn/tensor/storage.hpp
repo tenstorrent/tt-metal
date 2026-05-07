@@ -41,7 +41,7 @@ public:
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
-    std::shared_ptr<HostTensor> tensor_;
+    HostTensor tensor;
 };
 
 // DeviceStorage is a wrapper around the MeshTensor to fit the semantics of ttnn::Tensor.
