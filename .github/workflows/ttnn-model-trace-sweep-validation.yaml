@@ -23,7 +23,6 @@ on:
         default: false
 
 permissions:
-  actions: write
   contents: read
   packages: write
 
@@ -142,10 +141,3 @@ jobs:
       allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}
       models-filter: ${{ inputs.models-filter }}
       upload-results: ${{ inputs.upload-results }}
-
-  auto-retry-on-failure:
-    if: failure()
-    needs: [run-model-trace-sweep-validation]
-    uses: ./.github/workflows/_auto-retry-failed-jobs.yaml
-    secrets:
-      RETRY_WORKFLOW_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
