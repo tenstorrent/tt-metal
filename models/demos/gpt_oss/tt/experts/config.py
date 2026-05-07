@@ -129,6 +129,16 @@ class ProgramConfig:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = cores
+        # Ceiling-divide ``Nt`` over the core grid so ``per_core_N * cores >= Nt``;
+        # otherwise the sparse-matmul factory's
+        # ``num_blocks_x = ceil(Nt / per_core_N)`` ends up one over the available
+        # core count and trips the
+        # ``num_blocks_total <= num_cores_available`` TT_FATAL (e.g. for
+        # ``Nt=90`` over a 12-core grid, floor-div gives ``per_core_N=7`` →
+        # ``num_blocks_x=13``; ceil-div gives ``per_core_N=8`` →
+        # ``num_blocks_x=12``).
+        nt = int(math.ceil(n / 32))
+        num_cores = core_x * core_y
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=in0_block_w,
@@ -137,7 +147,7 @@ class ProgramConfig:
             out_block_h=1,
             out_block_w=1,
             per_core_M=max(32, m) // 32,
-            per_core_N=int(math.ceil(n / 32)) // (core_x * core_y),
+            per_core_N=int(math.ceil(nt / num_cores)),
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
