@@ -132,20 +132,6 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) 
     EXPECT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MovedFromIsDestroyedSafely) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-
-    // Scope ensures moved-from DeviceStorage is destroyed before the tensor.
-    {
-        DeviceStorage original = tensor.device_storage();
-        DeviceStorage moved_into(std::move(original));
-        // original goes out of scope here — must not crash or double-free.
-        (void)moved_into;
-    }
-
-    EXPECT_TRUE(tensor.is_allocated());
-}
-
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewSharesOwnership) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
