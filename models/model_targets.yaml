@@ -14,7 +14,9 @@ targets:
               decode_t/s/u: 66.0
               decode_t/s: 2112.0
               decode_tolerance: 1.15
-            accuracy: {}
+            accuracy:
+              top1: 79.0
+              top5: 97.0
 
   llama3.2-3b:
     aliases: ["Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
@@ -29,7 +31,9 @@ targets:
               decode_t/s/u: 35.0
               decode_t/s: 1120.0
               decode_tolerance: 1.15
-            accuracy: {}
+            accuracy:
+              top1: 89.0
+              top5: 98.0
 
   llama3.1-8b:
     aliases: ["Llama-3.1-8B", "meta-llama/Llama-3.1-8B-Instruct"]
@@ -44,7 +48,9 @@ targets:
               decode_t/s/u: 21.0
               decode_t/s: 672.0
               decode_tolerance: 1.15
-            accuracy: {}
+            accuracy:
+              top1: 90.0
+              top5: 97.0
       wh_llmbox_perf:
         entries:
           - batch_size: 1
@@ -76,7 +82,9 @@ targets:
               prefill_time_to_token: 0.035
               decode_t/s/u: 22.0
               decode_t/s: 704.0
-            accuracy: {}
+            accuracy:
+              top1: 95.0
+              top5: 99.0
 
   qwen2.5-7b:
     aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"]
@@ -90,7 +98,26 @@ targets:
               prefill_time_to_token: 0.09
               decode_t/s/u: 21.0
               decode_t/s: 672.0
-            accuracy: {}
+            accuracy:
+              top1: 84.0
+              top5: 96.0
+
+  qwen2.5-72b:
+    aliases: ["Qwen2.5-72B", "Qwen/Qwen2.5-72B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 32
+            seq_len: 1024
+            status: active
+            perf:
+              prefill_time_to_token: 0.24
+              decode_t/s/u: 13.25
+              decode_t/s: 424.0
+              decode_tolerance: 1.4
+            accuracy:
+              top1: 99.0
+              top5: 100.0
 
   qwen2.5-coder-32b:
     aliases: ["Qwen2.5-Coder-32B", "Qwen/Qwen2.5-Coder-32B-Instruct"]
@@ -104,7 +131,9 @@ targets:
               prefill_time_to_token: 0.1
               decode_t/s/u: 20.0
               decode_t/s: 640.0
-            accuracy: {}
+            accuracy:
+              top1: 96.0
+              top5: 99.0
 
   qwen3-32b:
     aliases: ["Qwen3-32B", "Qwen/Qwen3-32B"]
@@ -118,7 +147,9 @@ targets:
               prefill_time_to_token: 0.043
               decode_t/s/u: 24.0
               decode_t/s: 768.0
-            accuracy: {}
+            accuracy:
+              top1: 89.0
+              top5: 97.0
 
   llama3.1-70b:
     aliases: ["Llama-3.1-70B", "meta-llama/Llama-3.1-70B-Instruct"]
@@ -132,7 +163,9 @@ targets:
               prefill_time_to_token: 0.073
               decode_t/s/u: 16.0
               decode_t/s: 512.0
-            accuracy: {}
+            accuracy:
+              top1: 96.0
+              top5: 100.0
 
   gemma-3-4b:
     aliases: ["gemma-3-4b", "google/gemma-3-4b-it"]
@@ -267,8 +300,19 @@ targets:
             owner_id: U08BH66EXAL # Radoica Draskic
             team: models
   llama3.2-11b-vision:
-    aliases: ["Llama-3.2-11B-Vision", "meta-llama/Llama-3.2-11B-Vision-Instruct"]
+    aliases: ["Llama-3.2-11B", "Llama-3.2-11B-Vision", "meta-llama/Llama-3.2-11B-Vision-Instruct"]
     skus:
+      wh_n300:
+        entries:
+          - batch_size: 16
+            seq_len: null
+            status: active
+            perf:
+              prefill_t/s: 19.3
+              decode_t/s/u: 15.9
+              decode_t/s: 254.4
+              decode_tolerance: 1.15
+            accuracy: {}
       wh_llmbox_perf:
         entries:
           - batch_size: 1
@@ -286,17 +330,19 @@ targets:
             owner_id: U03FJB5TM5Y # Colman Glagovich
             team: models
   llama90b-vl:
-    aliases: ["llama3.2-90b-vision", "Llama-3.2-90B-Vision", "meta-llama/Llama-3.2-90B-Vision-Instruct"]
+    aliases: ["Llama-3.2-90B", "llama3.2-90b-vision", "Llama-3.2-90B-Vision", "meta-llama/Llama-3.2-90B-Vision-Instruct"]
     skus:
       wh_llmbox_perf:
         entries:
           - batch_size: 1
             seq_len: null
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              prefill_t/s: 10.6
+              decode_t/s/u: 9.5
+              decode_t/s: 9.5
+              decode_tolerance: 1.15
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
-            team: models
   llama3.3-70b:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
     skus:
@@ -363,12 +409,16 @@ targets:
       wh_llmbox_perf:
         entries:
           - batch_size: 32
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
-            team: models
+            seq_len: 1024
+            status: active
+            perf:
+              prefill_time_to_token: 0.19
+              decode_t/s/u: 22.4
+              decode_t/s: 716.8
+              decode_tolerance: 1.27
+            accuracy:
+              top1: 98.0
+              top5: 99.0
   qwen2.5-72b-vl:
     aliases: ["Qwen2.5-VL-72B", "Qwen/Qwen2.5-VL-72B-Instruct"]
     skus:
@@ -399,24 +449,32 @@ targets:
       wh_llmbox_perf:
         entries:
           - batch_size: 32
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
-            team: models
+            seq_len: 1024
+            status: active
+            perf:
+              prefill_time_to_token: 0.105
+              decode_t/s/u: 20.7
+              decode_t/s: 662.4
+              decode_tolerance: 1.27
+            accuracy:
+              top1: 96.0
+              top5: 100.0
   mixtral-8x7b:
     aliases: ["Mixtral-8x7B", "mistralai/Mixtral-8x7B-Instruct-v0.1"]
     skus:
       wh_llmbox_perf:
         entries:
           - batch_size: 32
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
-            team: models
+            seq_len: 1024
+            status: active
+            perf:
+              prefill_time_to_token: 0.05393
+              decode_t/s/u: 67.82
+              decode_t/s: 2170.24
+              decode_tolerance: 1.4
+            accuracy:
+              top1: 98.0
+              top5: 100.0
   falcon-7b:
     aliases: ["falcon-7b"]
     skus:
@@ -472,8 +530,12 @@ targets:
         entries:
           - batch_size: 32
             seq_len: 128
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
-            team: models
+            status: active
+            perf:
+              prefill_time_to_token: 0.06858
+              decode_t/s/u: 25.66
+              decode_t/s: 821.12
+              decode_tolerance: 1.27
+            accuracy:
+              top1: 89.0
+              top5: 99.0

@@ -19,7 +19,7 @@ import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
-from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -74,14 +74,23 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
-def get_accuracy_thresholds(model_args):
-    """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+def get_accuracy_thresholds(model_args, batch_size=None, seq_len=None):
+    """Resolve token-accuracy thresholds from centralized YAML, then PERF.md fallback."""
     centralized_targets = resolve_accuracy_targets(
         model_name=model_args.base_model_name,
         sku=model_args.device_name,
+        batch_size=batch_size,
+        seq_len=seq_len,
     )
+    if centralized_targets is None and batch_size is not None:
+        centralized_targets = resolve_accuracy_targets(
+            model_name=model_args.base_model_name,
+            sku=model_args.device_name,
+            batch_size=batch_size,
+            seq_len=None,
+        )
     if centralized_targets and "top1" in centralized_targets and "top5" in centralized_targets:
-        return float(centralized_targets["top1"]), float(centralized_targets["top5"])
+        return float(centralized_targets["top1"]), float(centralized_targets["top5"]), "models/model_targets.yaml"
 
     # Read PERF.md
     perf_file = "models/tt_transformers/PERF.md"
@@ -121,7 +130,7 @@ def get_accuracy_thresholds(model_args):
     top5_acc = float(row[3].strip())
 
     # Allow for rounding
-    return top1_acc - 0.5, top5_acc - 0.5
+    return top1_acc - 0.5, top5_acc - 0.5, "models/tt_transformers/PERF.md (deprecated fallback)"
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -1480,71 +1489,36 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "N150x4", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
-
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
-    model_device_key = f"{tt_device_name}_{model_name}"
+    input_seq_len = int(max(prefill_lens)) if prefill_lens else None
 
-    if model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
+    resolved_perf_targets = resolve_perf_targets(
+        model_name=model_name,
+        sku=tt_device_name,
+        batch_size=global_batch_size,
+        seq_len=input_seq_len,
+    )
+    if resolved_perf_targets is None:
+        resolved_perf_targets = resolve_perf_targets(
+            model_name=model_name,
+            sku=tt_device_name,
+            batch_size=global_batch_size,
+            seq_len=None,
+        )
 
-        # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
-        dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
-        if model_device_key in dict_target_prefill_tok_s:
-            target_prefill_tok_s = dict_target_prefill_tok_s[model_device_key]
-        else:
-            target_prefill_tok_s = None
-            logger.info(f"Model {model_name} does not have prefill targets set for device {tt_device_name}")
-
-        # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
-        dict_target_decode_tok_s_u = {
-            "N150_Llama-3.2-1B": 160,
-            "N300_Llama-3.2-1B": 250,  # TODO Update target
-            "T3K_Llama-3.2-1B": 300,  # TODO Update target
-            "TG_Llama-3.2-1B": 300,  # TODO Update target
-            #
-            "N150_Llama-3.2-3B": 60,
-            "N300_Llama-3.2-3B": 100,  # TODO Update target
-            "T3K_Llama-3.2-3B": 150,  # TODO Update target
-            "TG_Llama-3.2-3B": 150,  # TODO Update target
-            #
-            "N150_Llama-3.1-8B": 23,
-            "P150_Llama-3.1-8B": 23,  # TODO Update target
-            "N300_Llama-3.1-8B": 38,
-            "P300_Llama-3.1-8B": 38,
-            "T3K_Llama-3.1-8B": 45,
-            "TG_Llama-3.1-8B": 45,  # TODO Update target
-            #
-            "N150_Llama-3.2-11B": 23,
-            "N300_Llama-3.2-11B": 38,  # TODO Update target
-            "T3K_Llama-3.2-11B": 45,  # TODO Update target
-            "TG_Llama-3.2-11B": 45,  # TODO Update target
-            #
-            "T3K_Llama-3.1-70B": 20,  # TODO Update target
-            "TG_Llama-3.1-70B": 20,  # TODO Update target
-            #
-            "N150_Mistral-7B": 23,
-            "N300_Mistral-7B": 38,  # TODO Update target
-            "T3K_Mistral-7B": 45,  # TODO Update target
-            "TG_Mistral-7B": 45,  # TODO Update target
-        }
-        if model_device_key in dict_target_decode_tok_s_u:
-            target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
-        else:
-            target_decode_tok_s_u = None
-            logger.info(f"Model {model_name} does not have decode targets set for device {tt_device_name}")
-
-        target_decode_tok_s = target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None
+    if resolved_perf_targets:
+        target_decode_tok_s_u = resolved_perf_targets.get("decode_t/s/u")
         targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
+            "prefill_t/s": resolved_perf_targets.get("prefill_t/s"),
+            "decode_t/s": target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None,
             "decode_t/s/u": target_decode_tok_s_u,
         }
-
     else:
-        logger.info(f"Model {model_name} does not have performance targets set")
+        logger.info(
+            f"Model {model_name} does not have centralized benchmark targets for device {tt_device_name}, "
+            f"batch_size={global_batch_size}, seq_len={input_seq_len}"
+        )
         targets = {}
 
     # Save benchmark data for CI dashboard
@@ -1611,86 +1585,70 @@ def test_demo_text(
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
-        # check measurements against CI performance targets -- for batch size 32
+        # check measurements against centralized CI performance targets -- for batch size 32
         if "performance" in test_id and "ci-32" in test_id:
             logger.info(
-                f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
+                f"Checking measurements against centralized CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
             )
-            # Targets set to 0.95x observed values for decode rates (higher is better)
-            # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
-            ci_target_ttft = {
-                # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 25,
-                "N150_Llama-3.2-3B": 62,
-                "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 35,
-                # N300 targets
-                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
-                "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
-                # T3K targets
-                "T3K_Llama-3.1-70B": (73, 1.25),
-                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
-                "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
-                # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
-                "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": 43,
-            }
-            ci_target_decode_tok_s_u = {
-                # N150 targets - higher is better
-                "N150_Llama-3.2-1B": 66,
-                "N150_Llama-3.2-3B": 35,
-                "N150_Llama-3.1-8B": 21,
-                "N150_Mistral-7B": 22,
-                # N300 targets
-                # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
-                "N300_Qwen2.5-7B": 21.0,
-                # T3K targets
-                "T3K_Llama-3.1-70B": 16,
-                "T3K_Qwen2.5-72B": 13.25,
-                "T3K_Qwen2.5-Coder-32B": 20,
-                "T3K_Qwen3-32B": 24,
-            }
-
-            # Only call verify_perf if the model_device_key exists in the targets
-            ci_targets = {}
-            if model_device_key in ci_target_ttft:
-                current_ttft_target = ci_target_ttft[model_device_key]
-                if isinstance(current_ttft_target, tuple):
-                    high_tol_percentage = current_ttft_target[1]
-                    current_ttft_target = current_ttft_target[0]
-                else:
-                    high_tol_percentage = 1.15
-                ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
-            if model_device_key in ci_target_decode_tok_s_u:
-                ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
-                # calculate from per-user rate
-                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+            ci_targets = resolve_perf_targets(
+                model_name=model_name,
+                sku=tt_device_name,
+                batch_size=global_batch_size,
+                seq_len=input_seq_len,
+            )
+            if ci_targets is None:
+                ci_targets = resolve_perf_targets(
+                    model_name=model_name,
+                    sku=tt_device_name,
+                    batch_size=global_batch_size,
+                    seq_len=None,
+                )
 
             if ci_targets:  # Only verify performance if we have targets for this model/device combination
-                verify_perf(
-                    measurements,
-                    ci_targets,
-                    high_tol_percentage=high_tol_percentage,
-                    expected_measurements={k: True for k in ci_targets.keys()},
-                )
+                high_tol_percentage = float(ci_targets.get("decode_tolerance", ci_targets.get("tolerance", 1.15)))
+                ci_targets_for_verify = {
+                    metric_name: metric_value
+                    for metric_name, metric_value in ci_targets.items()
+                    if metric_name in measurements
+                    and metric_name not in {"tolerance", "decode_tolerance"}
+                    and not metric_name.endswith("_tolerance")
+                }
+                if not ci_targets_for_verify:
+                    logger.warning(
+                        f"Centralized targets found for {model_name} on {tt_device_name}, but none match measured CI metrics."
+                    )
+                    ci_targets_for_verify = None
+                if ci_targets_for_verify:
+                    logger.info(f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}")
+                    verify_perf(
+                        measurements,
+                        ci_targets_for_verify,
+                        high_tol_percentage=high_tol_percentage,
+                        expected_measurements={k: True for k in ci_targets_for_verify.keys()},
+                    )
             else:
                 logger.warning(
-                    f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+                    f"No centralized CI performance targets found for model={model_name}, sku={tt_device_name}, "
+                    f"batch_size={global_batch_size}, seq_len={input_seq_len}. Skipping performance verification."
                 )
     if token_accuracy:
         total_top1_acc = math.ceil(acc[0] * 100)
         total_top5_acc = math.ceil(acc[1] * 100)
 
         if not json_config_file:
-            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
-            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
+            # Get accuracy thresholds from centralized targets, unless the configuration is from a json.
+            min_top1_acc, min_top5_acc, accuracy_source = get_accuracy_thresholds(
+                model_args[0],
+                batch_size=global_batch_size,
+                seq_len=input_seq_len,
+            )
             assert (
                 total_top1_acc >= min_top1_acc
             ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
             assert (
                 total_top5_acc >= min_top5_acc
             ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
-            logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
+            logger.info(f"Checks of top-1 and top-5 accuracy against {accuracy_source} passed")
 
     if (
         "ci-eval-1" in test_id

@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -621,34 +622,39 @@ def test_multimodal_demo_text(
     if is_ci_env and enable_trace:
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
+        input_seq_len = int(max(prefill_lens).item())
 
-        run_config = (tt_device_name, base_model_name, max_batch_size)
-        targets_prefill_tok_s = {
-            ("N300", "Llama-3.2-11B", 16): 19.3,
-            ("T3K", "Llama-3.2-90B", 1): 10.6,
-        }
-        targets_decode_tok_s_u = {
-            ("N300", "Llama-3.2-11B", 16): (15.9, None),  # None to default to tolerance percentage (1.15)
-            ("T3K", "Llama-3.2-90B", 1): (9.5, None),
-        }
+        perf_targets = resolve_perf_targets(
+            model_name=base_model_name,
+            sku=tt_device_name,
+            batch_size=max_batch_size,
+            seq_len=input_seq_len,
+        )
+        if perf_targets is None:
+            perf_targets = resolve_perf_targets(
+                model_name=base_model_name,
+                sku=tt_device_name,
+                batch_size=max_batch_size,
+                seq_len=None,
+            )
+        perf_tolerance = float(perf_targets.get("decode_tolerance", perf_targets.get("tolerance", 1.15))) if perf_targets else 1.15
 
-        perf_targets = {}
-        if run_config in targets_prefill_tok_s:
-            assert (
-                run_config in targets_decode_tok_s_u
-            ), f"Prefill targets exist, but decode targets are missing for {run_config}"
-
-            perf_targets = {
-                "prefill_t/s": targets_prefill_tok_s[run_config],
-                "decode_t/s": targets_decode_tok_s_u[run_config][0] * max_batch_size,
-                "decode_t/s/u": targets_decode_tok_s_u[run_config][0],
+        benchmark_targets = {}
+        if perf_targets:
+            benchmark_targets = {
+                "prefill_t/s": perf_targets.get("prefill_t/s"),
+                "decode_t/s": perf_targets.get("decode_t/s"),
+                "decode_t/s/u": perf_targets.get("decode_t/s/u"),
             }
-
-            perf_tolerance = targets_decode_tok_s_u[run_config][1] or 1.15  # default to 15% tolerance
+        else:
+            logger.warning(
+                f"No centralized vision perf targets found for model={base_model_name}, sku={tt_device_name}, "
+                f"batch_size={max_batch_size}, seq_len={input_seq_len}. Metrics will be recorded without targets."
+            )
 
         # Save benchmark data for CI
         N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
-        benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, perf_targets)
+        benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, benchmark_targets)
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
@@ -663,4 +669,17 @@ def test_multimodal_demo_text(
         )
 
         if perf_targets:
-            verify_perf(measurements, perf_targets, high_tol_percentage=perf_tolerance)
+            perf_targets_for_verify = {
+                metric_name: metric_value
+                for metric_name, metric_value in perf_targets.items()
+                if metric_name in measurements
+                and metric_name not in {"tolerance", "decode_tolerance"}
+                and not metric_name.endswith("_tolerance")
+            }
+            if perf_targets_for_verify:
+                verify_perf(
+                    measurements,
+                    perf_targets_for_verify,
+                    high_tol_percentage=perf_tolerance,
+                    expected_measurements={k: True for k in perf_targets_for_verify.keys()},
+                )
