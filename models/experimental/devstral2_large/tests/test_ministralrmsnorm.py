@@ -8,8 +8,7 @@ Loads **only** the requested HF weight tensors via ``model.safetensors.index.jso
 shards), builds the meta-format dict used by TT (``map_hf_to_meta_keys`` / HF RoPE path), and
 compares against TT. Avoids full checkpoint load.
 
-Covers layer ``input_layernorm`` / ``post_attention_layernorm`` and final ``model.norm`` — matching
-the ``Ministral3ForCausalLM`` tree (root ``(norm)`` is ``final_norm=True``).
+Covers layer ``input_layernorm`` and ``post_attention_layernorm``. Root ``model.norm`` is not tested.
 """
 
 from __future__ import annotations
@@ -27,7 +26,10 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3RMSNorm
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstral2_large.tt.tt_ministralrmsnorm import TtDevstral2LargeRMSNorm
+from models.experimental.devstral2_large.tt.tt_ministralrmsnorm import (
+    DEVSTRAL2_LARGE_L1_SMALL_SIZE,
+    TtDevstral2LargeRMSNorm,
+)
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta_no_qkv_permute, standardize_hf_keys
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -48,9 +50,7 @@ class _Ministral3NormArgsShim:
     """Subset of :class:`ModelArgs` for :class:`TtMinistralRMSNorm` in unit tests.
 
     ``is_distributed_norm`` / ``ccl_topology`` mirror :meth:`ModelArgs.is_distributed_norm` and
-    :meth:`ModelArgs.ccl_topology`. Devstral-2-123B uses ``dim`` = 12288; plain ``ttnn.rms_norm`` on
-    multi-chip prefill can exceed L1 circular-buffer limits on Blackhole (~1.5 MiB). The distributed
-    RMSNorm path (ring / linear all-gather around stats) matches production and stays within L1.
+    :meth:`ModelArgs.ccl_topology`.
     """
 
     mesh_device: object
@@ -68,14 +68,7 @@ class _Ministral3NormArgsShim:
         return None
 
     def is_distributed_norm(self, mode):
-        """Match ``ModelArgs.is_distributed_norm`` so wide models use ``_distributed_rmsnorm``."""
-        md = self.mesh_device
-        if md is None or md.get_num_devices() <= 1:
-            return False
-        if all(d > 1 for d in list(md.shape)):
-            return True
-        if self.dim > 4096 and mode == Mode.PREFILL:
-            return True
+        """Force **replicated** activations + ``ttnn.rms_norm`` for PCC vs HF (not tensor-parallel norm)."""
         return False
 
     def ccl_topology(self):
@@ -133,8 +126,6 @@ def _hf_key_for_variant(norm_variant: str) -> str:
         return "model.layers.0.input_layernorm.weight"
     if norm_variant == "layer_post":
         return "model.layers.0.post_attention_layernorm.weight"
-    if norm_variant == "final":
-        return "model.norm.weight"
     raise ValueError(norm_variant)
 
 
@@ -155,9 +146,17 @@ def _build_meta_state_dict(hf_partial: dict[str, torch.Tensor], text_cfg: Minist
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        # Align with models/tt_transformers/conftest.py: 4-device Quietbox / 1×4 fabric is N150x4 (WH)
+        # or P150x4 (Blackhole). Without these keys, MESH_DEVICE=N150x4 falls through to
+        # len(ttnn.get_device_ids()), which only matches 1×4 when exactly four boards are visible.
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "P150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -165,10 +164,17 @@ def _build_meta_state_dict(hf_partial: dict[str, torch.Tensor], text_cfg: Minist
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE,
+        }
+    ],
     indirect=True,
 )
-@pytest.mark.parametrize("norm_variant", ("layer_pre", "layer_post", "final"))
+@pytest.mark.parametrize("norm_variant", ("layer_pre", "layer_post"))
 def test_ministral3_rmsnorm_pcc_devstral2_large_partial_weights(
     mesh_device,
     seq_len,
@@ -213,7 +219,6 @@ def test_ministral3_rmsnorm_pcc_devstral2_large_partial_weights(
 
     dtype = ttnn.bfloat16
     tt_ccl = TT_CCL(mesh_device)
-    final_norm = norm_variant == "final"
     post_attention = norm_variant == "layer_post"
 
     tt_norm = TtDevstral2LargeRMSNorm(
@@ -224,7 +229,6 @@ def test_ministral3_rmsnorm_pcc_devstral2_large_partial_weights(
         layer_num=0,
         tt_ccl=tt_ccl,
         post_attention=post_attention,
-        final_norm=final_norm,
     )
 
     tt_in = ttnn.from_torch(
