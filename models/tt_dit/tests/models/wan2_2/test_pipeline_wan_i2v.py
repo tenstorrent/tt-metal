@@ -129,10 +129,13 @@ def test_pipeline_inference(
         # Remove batch dimension
         frames = frames[0]
         output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
-        from models.tt_dit.utils.video import export_to_video
+        try:
+            from models.tt_dit.utils.video import export_to_video
 
-        export_to_video(frames, output_filename, fps=16)
-        logger.info(f"Saved video to: {output_filename}")
+            export_to_video(frames, output_filename, fps=16)
+            logger.info(f"Saved video to: {output_filename}")
+        except ImportError:
+            logger.info("Could not export video - imageio_ffmpeg not available")
 
     if no_prompt:
         run(prompt=prompt, number=0, seed=42)
