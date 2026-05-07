@@ -82,7 +82,7 @@ jobs:
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
         # so repeated commits to a branch benefit from cached clang-tidy results.
-        if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && secrets.GARAGE_S3_ACCESS_KEY != '' }}
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           # ctcache is not published on PyPI — install from source tag
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@1.2.0" boto3
