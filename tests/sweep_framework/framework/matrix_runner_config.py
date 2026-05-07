@@ -15,11 +15,6 @@ parsing such as ``.mesh_*`` and ``.hw_*`` suffix semantics; this file maps those
 already-parsed routing hints to logical test groups and runner profiles.
 """
 
-import re
-
-_MESH_SUFFIX_RE = re.compile(r"\.mesh_\d+x\d+$")
-_HW_SUFFIX_RE = re.compile(r"\.hw_[^_]+_.+_[0-9]+c$")
-
 
 # ── Run type detection (workflow inputs vs cron schedule) ────────────────────
 # ``compute_sweep_matrix.main`` sets batching and which matrix builder to call
@@ -107,7 +102,7 @@ RUNNER_PROFILES = {
     },
     "galaxy-topology-6u": {
         "arch": "wormhole_b0",
-        "runs_on": ["topology-6u", "in-service", "bare-metal"],
+        "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "bare-metal"],
         "runner_label": "topology-6u",
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
@@ -172,37 +167,6 @@ LEAD_MODELS_BATCH_POLICY = {
 MODEL_TRACED_BATCH_POLICY = {
     "wormhole-t3k-sweeps": {"parallel_jobs": 5},
 }
-
-
-# ── Model-traced CCL module identification ───────────────────────────────────
-# CCL (collective communication) ops are batched separately from other
-# model-traced modules so they get their own CI jobs. This makes it easy to
-# re-run or triage CCL failures independently.
-#
-# A module's base name (after stripping ``_model_traced`` and grouping suffixes)
-# is checked against these prefixes.
-MODEL_TRACED_CCL_OP_PREFIXES = (
-    "all_gather",
-    "all_reduce",
-    "all_broadcast",
-    "all_to_all",
-    "reduce_scatter",
-    "fast_reduce_nc",
-)
-
-
-def _strip_grouping_suffix(module_name):
-    """Remove .mesh_* and .hw_* suffixes (local copy to avoid circular import)."""
-    return _HW_SUFFIX_RE.sub("", _MESH_SUFFIX_RE.sub("", module_name))
-
-
-def is_model_traced_ccl_module(module_name):
-    """Return True if a model-traced module name represents a CCL op."""
-    base = _strip_grouping_suffix(module_name)
-    stem = base.rsplit(".", 1)[-1]
-    if stem.endswith("_model_traced"):
-        stem = stem[: -len("_model_traced")]
-    return any(stem.startswith(prefix) for prefix in MODEL_TRACED_CCL_OP_PREFIXES)
 
 
 # ── Model-traced sweep: mesh suffix → logical test group ─────────────────────
