@@ -8,6 +8,9 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_math_fast_tilize_api.h"
+#endif
 #ifndef ARCH_QUASAR
 #include "llk_math_reduce_api.h"
 #include "llk_math_matmul_api.h"
@@ -15,7 +18,13 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_unpack_fast_tilize_api.h"
+#endif
 #include "llk_unpack_common_api.h"
+#endif
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_pack_fast_tilize_api.h"
 #endif
 
 namespace ckernel {

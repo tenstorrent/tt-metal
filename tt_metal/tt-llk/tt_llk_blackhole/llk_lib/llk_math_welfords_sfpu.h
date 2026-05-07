@@ -25,13 +25,6 @@ inline void welfords_sfpu_configure_addrmod()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_3);
-
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
         .set(ADDR_MOD_7);
 }
 
