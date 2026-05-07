@@ -231,7 +231,8 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: true
+          # Watcher + PROFILE_KERNEL=1 overflows BRISC firmware text region; disable on perf jobs.
+          enable-watcher: ${{ !contains(matrix.test-group.name, 'PERF') }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
