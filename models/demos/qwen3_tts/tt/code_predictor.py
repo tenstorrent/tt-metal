@@ -142,7 +142,11 @@ class CodePredictor(LightweightModule):
                 print(f"  WARNING: Missing CodePredictor embedding {embed_key}")
                 self.codec_embeddings_tt.append(None)
 
-        # Decoder layers
+        # Decoder layers — TT_QWEN3_BF8_WEIGHTS=1 switches matmul (QKV/o_proj/MLP)
+        # weights to bfloat8_b. RMSNorm weights stay bfloat16.
+        import os as _os_bf8
+
+        _matmul_dtype = ttnn.bfloat8_b if _os_bf8.environ.get("TT_QWEN3_BF8_WEIGHTS", "0") == "1" else ttnn.bfloat16
         self.layers = []
         for i in range(self.num_layers):
             layer = DecoderLayer(
@@ -156,7 +160,7 @@ class CodePredictor(LightweightModule):
                 layer_idx=i,
                 layer_prefix="talker.code_predictor.model",
                 rms_norm_eps=config.rms_norm_eps,
-                weight_dtype=ttnn.bfloat16,
+                weight_dtype=_matmul_dtype,
                 weight_cache_path=weight_cache_path,
             )
             self.layers.append(layer)
