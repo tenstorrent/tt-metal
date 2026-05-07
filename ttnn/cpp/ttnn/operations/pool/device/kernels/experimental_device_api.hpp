@@ -46,10 +46,18 @@ FORCE_INLINE auto local_addr(uint32_t addr, uint8_t noc_id = noc_index) {
 // Read with state: call set_read_state once, then read_with_state in a loop.
 // transfer_size is baked into both calls so they always agree on the transfer mode.
 // Supports transfer_size <= NOC_MAX_BURST_SIZE (single-packet) and > NOC_MAX_BURST_SIZE (multi-packet).
+//
+// Implementation note: the underlying NOC API only branches on whether max_page_size <=
+// NOC_MAX_BURST_SIZE or not. To avoid instantiating a unique copy of set_async_read_state /
+// async_read_with_state for every distinct multi-packet transfer size, all values of
+// transfer_size > NOC_MAX_BURST_SIZE are mapped to the same canonical sentinel
+// (NOC_MAX_BURST_SIZE + 1). The true transfer_size is still forwarded as size_bytes at runtime.
 template <uint32_t transfer_size>
 FORCE_INLINE void set_read_state(Noc noc, uint32_t src_addr) {
+    constexpr uint32_t max_page_size =
+        (transfer_size <= NOC_MAX_BURST_SIZE) ? transfer_size : (NOC_MAX_BURST_SIZE + 1);
     UnicastEndpoint ep;
-    noc.set_async_read_state<Noc::VcSelection::DEFAULT, transfer_size>(
+    noc.set_async_read_state<Noc::VcSelection::DEFAULT, max_page_size>(
         ep, transfer_size, local_addr(src_addr, noc.get_noc_id()));
 }
 
@@ -58,8 +66,10 @@ FORCE_INLINE void set_read_state(Noc noc, uint32_t src_addr) {
 // compatibility with callers that always use single-packet reads (size <= NOC_MAX_BURST_SIZE).
 template <uint32_t transfer_size = 1>
 FORCE_INLINE void read_with_state(Noc noc, uint32_t dst_addr, uint32_t src_addr) {
+    constexpr uint32_t max_page_size =
+        (transfer_size <= NOC_MAX_BURST_SIZE) ? transfer_size : (NOC_MAX_BURST_SIZE + 1);
     UnicastEndpoint ep;
-    noc.async_read_with_state<Noc::VcSelection::DEFAULT, transfer_size>(
+    noc.async_read_with_state<Noc::VcSelection::DEFAULT, max_page_size>(
         ep, CoreLocalMem<uint32_t>(dst_addr), transfer_size, local_addr(src_addr, noc.get_noc_id()), {});
 }
 
