@@ -260,6 +260,8 @@ class T5DenseGatedActDense(Module):
             activation_fn="gelu",
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=self.parallel_config.fsdp_mesh_axis,
+            ccl_manager=self.ccl_manager,
         )
         self.wi1 = ColParallelLinear(
             in_features=self.config.embed_dim,
@@ -267,6 +269,8 @@ class T5DenseGatedActDense(Module):
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=self.parallel_config.fsdp_mesh_axis,
+            ccl_manager=self.ccl_manager,
         )
         self.wo = RowParallelLinear(
             in_features=self.config.ff_dim,
@@ -275,6 +279,7 @@ class T5DenseGatedActDense(Module):
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=self.ccl_manager,
+            fsdp_mesh_axis=self.parallel_config.fsdp_mesh_axis,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -351,6 +356,8 @@ class T5Attention(Module):
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=self.parallel_config.fsdp_mesh_axis,
+            ccl_manager=self.ccl_manager,
         )
         self.k_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -358,6 +365,8 @@ class T5Attention(Module):
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=self.parallel_config.fsdp_mesh_axis,
+            ccl_manager=self.ccl_manager,
         )
         self.v_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -365,6 +374,8 @@ class T5Attention(Module):
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=self.parallel_config.fsdp_mesh_axis,
+            ccl_manager=self.ccl_manager,
         )
         self.o_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -372,6 +383,8 @@ class T5Attention(Module):
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=self.parallel_config.fsdp_mesh_axis,
+            ccl_manager=self.ccl_manager,
         )
 
         self.layer_norm = T5RMSNorm(

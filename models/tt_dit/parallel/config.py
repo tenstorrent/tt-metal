@@ -20,6 +20,7 @@ class DiTParallelConfig(NamedTuple):
 
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
+    fsdp_mesh_axis: int | None = None
 
 
 class VAEParallelConfig(NamedTuple):
