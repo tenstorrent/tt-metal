@@ -11,7 +11,13 @@ import random
 import torch
 import ttnn
 
-from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
+from ttnn.experimental.moe_compute_utils import (
+    determine_compute_matmul_cores,
+    get_w0_w1_memory_config,
+    get_w2_memory_config,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+)
 
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
