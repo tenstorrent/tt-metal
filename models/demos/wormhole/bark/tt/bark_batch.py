@@ -10,32 +10,22 @@ and reports per-item and aggregate performance metrics.
 Usage:
     from models.demos.wormhole.bark.tt.bark_batch import batch_generate_audio
 
-    results = batch_generate_audio(["Hello!", "Goodbye!"], bark_model, output_dir="outputs")
+    results = batch_generate_audio(["Hello!", "Goodbye!"], bark_model)
 """
 
-import os
-import re
 import time
+from pathlib import Path
 
 import numpy as np
 
-_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+_OUTPUT_ROOT = Path.cwd() / "bark_batch_outputs"
 
 
-def _safe_output_dir(output_dir: str) -> str:
-    """Resolve an output directory under the current working directory."""
-    base = os.path.abspath(os.getcwd())
-    resolved = os.path.abspath(output_dir)
-    if os.path.commonpath([base, resolved]) != base:
-        raise ValueError(f"output_dir must be under the working directory ({base}), got {resolved}")
-    return resolved
-
-
-def _safe_output_name(name: str) -> str:
-    """Sanitize a generated artifact filename."""
-    name = os.path.basename(name)
-    name = _SAFE_NAME_RE.sub("_", name)
-    return name or "output.wav"
+def _batch_output_path(index: int) -> Path:
+    """Return a deterministic batch artifact path for an item index."""
+    if index < 0:
+        raise ValueError("batch output index must be non-negative")
+    return _OUTPUT_ROOT / f"output_{index:03d}.wav"
 
 
 def batch_generate_audio(
@@ -53,16 +43,16 @@ def batch_generate_audio(
     Args:
         texts: List of input text strings.
         bark_model: A TtBarkModel instance.
-        output_dir: Directory to save output WAV files.
+        output_dir: Kept for backward compatibility; ignored for security.
         voice_preset: Optional voice preset for consistent speaker.
         verbose: Print per-item progress.
 
     Returns:
         List of result dicts with keys: text, output, duration, time, rtf
     """
-    output_dir = _safe_output_dir(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
+    del output_dir
 
+    _OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     results = []
     total_start = time.time()
 
@@ -75,8 +65,7 @@ def batch_generate_audio(
         audio = bark_model.generate(text, voice_preset=voice_preset, verbose=False)
         elapsed = time.time() - t0
 
-        # Save WAV
-        output_path = os.path.join(output_dir, _safe_output_name(f"output_{i:03d}.wav"))
+        output_path = _batch_output_path(i)
         _save_wav(audio, output_path)
 
         duration = len(audio) / 24000
@@ -85,7 +74,7 @@ def batch_generate_audio(
         results.append(
             {
                 "text": text,
-                "output": output_path,
+                "output": str(output_path),
                 "duration": duration,
                 "time": elapsed,
                 "rtf": rtf,
@@ -93,7 +82,7 @@ def batch_generate_audio(
         )
 
         if verbose:
-            print(f"  → {duration:.2f}s audio in {elapsed:.2f}s (RTF={rtf:.3f})")
+            print(f"  -> {duration:.2f}s audio in {elapsed:.2f}s (RTF={rtf:.3f})")
 
     total_time = time.time() - total_start
 
@@ -105,20 +94,20 @@ def batch_generate_audio(
         print(f"  Total time:  {total_time:.2f}s")
         print(f"  Total audio: {total_audio:.2f}s")
         print(f"  Avg RTF:     {avg_rtf:.3f}")
-        print(f"  Output dir:  {output_dir}")
+        print(f"  Output dir:  {_OUTPUT_ROOT}")
         print(f"{'='*50}")
 
     return results
 
 
-def _save_wav(audio: np.ndarray, filename: str, sample_rate: int = 24000):
-    """Save audio array to WAV file."""
+def _save_wav(audio: np.ndarray, output_path: Path, sample_rate: int = 24000):
+    """Save audio array to a deterministic WAV file."""
     try:
         from scipy.io import wavfile
 
         audio = np.asarray(audio, dtype=np.float32)
         audio = np.clip(audio, -1.0, 1.0)
         audio_int16 = (audio * 32767).astype(np.int16)
-        wavfile.write(filename, sample_rate, audio_int16)
+        wavfile.write(str(output_path), sample_rate, audio_int16)
     except ImportError:
-        print(f"scipy not installed — cannot save {filename}")
+        print(f"scipy not installed; cannot save {output_path}")

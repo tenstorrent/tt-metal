@@ -23,8 +23,8 @@ Each transformer stage: `hidden_size=768`, `num_heads=12`, `num_layers=12` (~80M
 # Standalone demo
 python models/demos/wormhole/bark/demo/demo.py --text "Hello from Tenstorrent!"
 
-# With custom output file
-python models/demos/wormhole/bark/demo/demo.py --text "Testing Bark" --output my_audio.wav
+# Demo writes bark_output.wav in the current working directory
+python models/demos/wormhole/bark/demo/demo.py --text "Testing Bark"
 ```
 
 ### Tests

@@ -8,55 +8,40 @@ Generates speech audio from text using the Bark Small model
 running on Tenstorrent Wormhole hardware via TTNN APIs.
 
 Usage:
-    # Standalone demo:
     python models/demos/wormhole/bark/demo/demo.py
 """
 
 import argparse
-import os
-import re
 import time
+from pathlib import Path
 
 import numpy as np
 
-_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+_OUTPUT_FILE = Path.cwd() / "bark_output.wav"
 
 
-def _safe_output_file(output_file: str) -> str:
-    """Return a sanitized WAV path under the current working directory."""
-    filename = os.path.basename(output_file)
-    filename = _SAFE_NAME_RE.sub("_", filename)
-    if not filename:
-        filename = "bark_output.wav"
-    if not filename.lower().endswith(".wav"):
-        filename = f"{filename}.wav"
-    return os.path.join(os.path.abspath(os.getcwd()), filename)
-
-
-def save_audio(audio: np.ndarray, filename: str, sample_rate: int = 24000):
-    """Save audio to WAV file using scipy."""
+def save_audio(audio: np.ndarray, sample_rate: int = 24000):
+    """Save audio to the demo WAV artifact path."""
     try:
         from scipy.io import wavfile
 
-        # Ensure NumPy array and clip to valid range before converting to int16
         audio = np.asarray(audio, dtype=np.float32)
         audio_clipped = np.clip(audio, -1.0, 1.0)
         audio_int16 = (audio_clipped * 32767).astype(np.int16)
-        safe_filename = _safe_output_file(filename)
-        wavfile.write(safe_filename, sample_rate, audio_int16)
-        print(f"Audio saved to {safe_filename}")
+        wavfile.write(str(_OUTPUT_FILE), sample_rate, audio_int16)
+        print(f"Audio saved to {_OUTPUT_FILE}")
     except ImportError:
-        print("scipy not installed — skipping WAV save. Install with: pip install scipy")
+        print("scipy not installed; skipping WAV save. Install with: pip install scipy")
 
 
-def run_demo(text: str = None, output_file: str = "bark_output.wav", verbose: bool = True):
+def run_demo(text: str = None, output_file: str = None, verbose: bool = True):
     """Run the Bark demo pipeline.
 
-    Args:
-        text: Input text (default: sample sentence)
-        output_file: Output WAV file path
-        verbose: Print progress info
+    output_file is accepted for compatibility but ignored. The demo writes to
+    the fixed repo-local artifact path bark_output.wav.
     """
+    del output_file
+
     import ttnn
     from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
 
@@ -83,17 +68,16 @@ def run_demo(text: str = None, output_file: str = "bark_output.wav", verbose: bo
         audio = np.clip(audio, -1.0, 1.0)
 
         # Save output
-        safe_output_file = _safe_output_file(output_file)
-        save_audio(audio, safe_output_file)
+        save_audio(audio)
 
         if verbose:
             duration = len(audio) / 24000
-            print(f"\n--- Summary ---")
+            print("\n--- Summary ---")
             print(f"Input:    {text!r}")
             print(f"Audio:    {duration:.2f}s at 24kHz")
             print(f"Time:     {total_time:.2f}s")
             print(f"RTF:      {total_time / duration:.2f}")
-            print(f"Output:   {safe_output_file}")
+            print(f"Output:   {_OUTPUT_FILE}")
 
     finally:
         ttnn.close_device(device)
@@ -104,7 +88,7 @@ def run_demo(text: str = None, output_file: str = "bark_output.wav", verbose: bo
 def main():
     parser = argparse.ArgumentParser(description="Bark Small Text-to-Audio Demo on Tenstorrent")
     parser.add_argument("--text", type=str, default=None, help="Text to synthesize")
-    parser.add_argument("--output", type=str, default="bark_output.wav", help="Output WAV file")
+    parser.add_argument("--output", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
     args = parser.parse_args()
 

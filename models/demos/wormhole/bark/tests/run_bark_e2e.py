@@ -2,62 +2,56 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Bark Small End-to-End Pipeline — text → .wav on Tenstorrent hardware.
+Bark Small End-to-End Pipeline: text to .wav on Tenstorrent hardware.
 
 Validates the complete pipeline with multiple test cases:
   1. English plain text
-  2. Multilingual (Spanish)
+  2. Multilingual Spanish
   3. Emotion annotations ([laughs], [sighs])
 
 Usage:
     python models/demos/wormhole/bark/tests/run_bark_e2e.py
-    python models/demos/wormhole/bark/tests/run_bark_e2e.py --text "Custom text" --output my_audio.wav
+    python models/demos/wormhole/bark/tests/run_bark_e2e.py --text "Custom text"
 """
 
 import argparse
-import os
-import re
 import time
+from pathlib import Path
 
 import numpy as np
 
 import ttnn
 
-_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+_OUTPUT_ROOT = Path.cwd() / "bark_e2e_outputs"
+_OUTPUT_FILES = {
+    "english": _OUTPUT_ROOT / "bark_english.wav",
+    "spanish": _OUTPUT_ROOT / "bark_spanish.wav",
+    "emotion": _OUTPUT_ROOT / "bark_emotion.wav",
+    "long": _OUTPUT_ROOT / "bark_long.wav",
+    "custom": _OUTPUT_ROOT / "bark_output.wav",
+}
 
 
-def _sanitize_output_dir(output_dir: str) -> str:
-    """Resolve *output_dir* to an absolute path and ensure it lives under cwd."""
-    base = os.path.abspath(os.getcwd())
-    resolved = os.path.abspath(output_dir)
-    if os.path.commonpath([base, resolved]) != base:
-        raise ValueError(f"output_dir must be under the working directory ({base}), got {resolved}")
-    return resolved
-
-
-def _sanitize_filename(name: str) -> str:
-    """Strip path separators and special characters from a file name."""
-    name = os.path.basename(name)
-    return _SAFE_NAME_RE.sub("_", name)
-
-
-def save_audio(audio: np.ndarray, filename: str, sample_rate: int = 24000):
-    """Save audio to WAV file using scipy."""
+def save_audio(audio: np.ndarray, output_key: str, sample_rate: int = 24000):
+    """Save audio to a whitelisted WAV artifact path."""
     try:
         from scipy.io import wavfile
 
-        filename = os.path.join(_sanitize_output_dir(os.path.dirname(filename) or "."), _sanitize_filename(filename))
+        if output_key not in _OUTPUT_FILES:
+            raise ValueError(f"unsupported Bark E2E output artifact: {output_key}")
+        output_path = _OUTPUT_FILES[output_key]
+        _OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
         audio = np.asarray(audio, dtype=np.float32)
         audio_clipped = np.clip(audio, -1.0, 1.0)
         audio_int16 = (audio_clipped * 32767).astype(np.int16)
-        wavfile.write(filename, sample_rate, audio_int16)
-        print(f"  ✓ Saved: {filename} ({len(audio_int16) / sample_rate:.2f}s)")
+        wavfile.write(str(output_path), sample_rate, audio_int16)
+        print(f"  Saved: {output_path} ({len(audio_int16) / sample_rate:.2f}s)")
     except ImportError:
-        print("  ⚠ scipy not installed — skipping WAV save.")
+        print("  scipy not installed; skipping WAV save.")
 
 
-def run_single(model, text: str, output_file: str, verbose: bool = True):
-    """Run one text → audio pipeline, return timing dict."""
+def run_single(model, text: str, output_key: str, verbose: bool = True):
+    """Run one text-to-audio pipeline, return timing dict."""
     timings = {}
 
     # Stage 1: Semantic
@@ -92,14 +86,16 @@ def run_single(model, text: str, output_file: str, verbose: bool = True):
     timings["audio_duration"] = len(audio) / 24000
     timings["rtf"] = timings["total_time"] / max(timings["audio_duration"], 1e-6)
 
-    save_audio(audio, output_file)
+    save_audio(audio, output_key)
 
     if verbose:
         print(
-            f"  Semantic: {timings['semantic_tokens']} tokens in {timings['semantic_time']:.2f}s ({timings['semantic_tps']:.1f} tok/s)"
+            f"  Semantic: {timings['semantic_tokens']} tokens in {timings['semantic_time']:.2f}s "
+            f"({timings['semantic_tps']:.1f} tok/s)"
         )
         print(
-            f"  Coarse:   {timings['coarse_tokens']} tokens in {timings['coarse_time']:.2f}s ({timings['coarse_tps']:.1f} tok/s)"
+            f"  Coarse:   {timings['coarse_tokens']} tokens in {timings['coarse_time']:.2f}s "
+            f"({timings['coarse_tps']:.1f} tok/s)"
         )
         print(f"  Fine:     {timings['fine_time']:.2f}s")
         print(f"  Decode:   {timings['decode_time']:.2f}s")
@@ -109,12 +105,17 @@ def run_single(model, text: str, output_file: str, verbose: bool = True):
     return audio, timings
 
 
-def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
-    """Run all standard e2e test cases."""
+def run_e2e_tests(output_dir=None):
+    """Run all standard e2e test cases.
+
+    output_dir is accepted for compatibility but intentionally ignored. WAV
+    artifacts are written only to whitelisted paths under bark_e2e_outputs.
+    """
+    del output_dir
+
     from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
 
-    output_dir = _sanitize_output_dir(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
+    _OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     device = ttnn.open_device(device_id=0)
 
     try:
@@ -123,20 +124,18 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
 
         test_cases = [
             ("english", "Hello, my dog is cooler than you!"),
-            ("spanish", "Hola, mi perro es más genial que tú!"),
+            ("spanish", "Hola, mi perro es mas genial que tu!"),
             ("emotion", "Hello [laughs] this is amazing [sighs] really incredible"),
             ("long", "The quick brown fox jumps over the lazy dog. " * 6),
         ]
 
         results = []
         for name, text in test_cases:
-            safe_name = _sanitize_filename(f"bark_{name}.wav")
-            output_file = os.path.join(output_dir, safe_name)
             print(f"\n{'='*60}")
             print(f"Test: {name}")
             print(f"Text: {text!r}")
             print(f"{'='*60}")
-            audio, timings = run_single(model, text, output_file)
+            audio, timings = run_single(model, text, name)
             timings["name"] = name
             timings["text"] = text
             results.append(timings)
@@ -157,10 +156,11 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
             if not (sem_ok and coarse_ok and rtf_ok):
                 all_pass = False
             print(
-                f"{r['name']:<12} {r['semantic_tps']:>10.1f} {r['coarse_tps']:>14.1f} {r['audio_duration']:>10.2f} {r['rtf']:>8.3f} {status:>8}"
+                f"{r['name']:<12} {r['semantic_tps']:>10.1f} {r['coarse_tps']:>14.1f} "
+                f"{r['audio_duration']:>10.2f} {r['rtf']:>8.3f} {status:>8}"
             )
 
-        print(f"\nOverall: {'ALL PASS ✓' if all_pass else 'SOME WARNINGS ⚠'}")
+        print(f"\nOverall: {'ALL PASS' if all_pass else 'SOME WARNINGS'}")
 
     finally:
         ttnn.close_device(device)
@@ -171,8 +171,8 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
 def main():
     parser = argparse.ArgumentParser(description="Bark Small E2E Pipeline Test")
     parser.add_argument("--text", type=str, default=None, help="Custom text (runs single test)")
-    parser.add_argument("--output", type=str, default="bark_output.wav", help="Output WAV file (basename only)")
-    parser.add_argument("--output-dir", type=str, default="bark_e2e_outputs", help="Output directory for batch tests")
+    parser.add_argument("--output", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--output-dir", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.text:
@@ -182,9 +182,8 @@ def main():
         device = ttnn.open_device(device_id=0)
         try:
             model = TtBarkModel(device, model_name="suno/bark-small")
-            safe_output = _sanitize_filename(args.output)
             print(f"Input: {args.text!r}")
-            run_single(model, args.text, os.path.join(_sanitize_output_dir("."), safe_output))
+            run_single(model, args.text, "custom")
         finally:
             ttnn.close_device(device)
     else:
