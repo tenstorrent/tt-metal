@@ -29,9 +29,9 @@ DEFAULT_LIMIT = 10
 
 # Each entry: (workflow_id, display_name, tier, pipeline_type)
 WORKFLOWS = [
-    ("235399384", "(Tier 1) Models e2e",  1, "e2e"),
-    ("235399388", "(Tier 2) Models e2e",  2, "e2e"),
-    ("235399383", "(Tier 3) Models e2e",  3, "e2e"),
+    ("235399384", "(Tier 1) Models e2e", 1, "e2e"),
+    ("235399388", "(Tier 2) Models e2e", 2, "e2e"),
+    ("235399383", "(Tier 3) Models e2e", 3, "e2e"),
     ("235399387", "(Tier 1) Models unit", 1, "unit"),
     ("235399386", "(Tier 2) Models unit", 2, "unit"),
     ("235399385", "(Tier 3) Models unit", 3, "unit"),
@@ -55,25 +55,42 @@ def fetch_runs(workflow_id, limit, since=None):
     `since`: optional timezone-aware datetime; runs older than this are dropped.
     `limit` is the cap; if `since` is set we may iterate to find enough.
     """
-    runs = gh_json([
-        "gh", "run", "list",
-        "-R", REPO,
-        "-w", workflow_id,
-        "--event", "schedule",
-        "-b", BRANCH,
-        "--limit", str(limit),
-        "--json", "databaseId,createdAt,conclusion,status,url,displayTitle,headSha",
-    ]) or []
+    runs = (
+        gh_json(
+            [
+                "gh",
+                "run",
+                "list",
+                "-R",
+                REPO,
+                "-w",
+                workflow_id,
+                "--event",
+                "schedule",
+                "-b",
+                BRANCH,
+                "--limit",
+                str(limit),
+                "--json",
+                "databaseId,createdAt,conclusion,status,url,displayTitle,headSha",
+            ]
+        )
+        or []
+    )
     if since is not None:
         runs = [r for r in runs if datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")) >= since]
     return runs
 
 
 def fetch_jobs(run_id):
-    data = gh_json([
-        "gh", "api", "--paginate",
-        f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
-    ])
+    data = gh_json(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
+        ]
+    )
     if data is None:
         return []
     if isinstance(data, dict):
@@ -87,10 +104,13 @@ def fetch_jobs(run_id):
 def fetch_annotations(check_run_id):
     """Annotations on a check-run usually carry the actual failure message
     (e.g. gtest/pytest summary). check_run_id == job id for GHA jobs."""
-    data = gh_json([
-        "gh", "api",
-        f"repos/{REPO}/check-runs/{check_run_id}/annotations",
-    ])
+    data = gh_json(
+        [
+            "gh",
+            "api",
+            f"repos/{REPO}/check-runs/{check_run_id}/annotations",
+        ]
+    )
     return data or []
 
 
@@ -121,10 +141,7 @@ def is_noise(msg):
 def filter_annotations(anns):
     """Return failure-level annotations first, then non-noise warnings."""
     failures = [a for a in anns if a.get("annotation_level") == "failure"]
-    warnings = [
-        a for a in anns
-        if a.get("annotation_level") != "failure" and not is_noise(a.get("message", ""))
-    ]
+    warnings = [a for a in anns if a.get("annotation_level") != "failure" and not is_noise(a.get("message", ""))]
     return failures + warnings
 
 
@@ -192,8 +209,7 @@ def write_report(out, workflows, limit, since=None, header_window=""):
             # Sort: failures first, then alphabetic so failures stand out.
             ordered = sorted(
                 test_jobs,
-                key=lambda j: (j.get("conclusion") not in ("failure", "timed_out"),
-                               j["name"].lower()),
+                key=lambda j: (j.get("conclusion") not in ("failure", "timed_out"), j["name"].lower()),
             )
             for j in ordered:
                 conclusion = j.get("conclusion") or "(running)"
@@ -203,8 +219,7 @@ def write_report(out, workflows, limit, since=None, header_window=""):
                 elif conclusion in ("failure", "timed_out"):
                     step = first_failed_step(j) or "(unknown step)"
                     out.write(
-                        f"- ❌ **{short_name}** — failed at step `{step}` "
-                        f"([job log]({j.get('html_url', '')}))\n"
+                        f"- ❌ **{short_name}** — failed at step `{step}` " f"([job log]({j.get('html_url', '')}))\n"
                     )
                     anns = filter_annotations(fetch_annotations(j["id"]))
                     shown = 0
@@ -262,18 +277,22 @@ def parse_type(value):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="CI status report for the (Tier 1/2/3) Models e2e+unit pipelines, "
-                    "scheduled runs on main only.",
+        description="CI status report for the (Tier 1/2/3) Models e2e+unit pipelines, " "scheduled runs on main only.",
     )
-    ap.add_argument("--tier", type=parse_tier, default=None,
-                    help="filter by tier: 1, 2, 3, all, or comma list (default: all)")
-    ap.add_argument("--type", dest="ptype", type=parse_type, default=None,
-                    help="pipeline type: e2e, unit, or both (default: both)")
-    ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
-                    help=f"max runs per pipeline (default {DEFAULT_LIMIT})")
-    ap.add_argument("--days", type=int, default=None,
-                    help="only include runs created in the last N days "
-                         "(takes precedence over --limit when fewer runs land in the window)")
+    ap.add_argument(
+        "--tier", type=parse_tier, default=None, help="filter by tier: 1, 2, 3, all, or comma list (default: all)"
+    )
+    ap.add_argument(
+        "--type", dest="ptype", type=parse_type, default=None, help="pipeline type: e2e, unit, or both (default: both)"
+    )
+    ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"max runs per pipeline (default {DEFAULT_LIMIT})")
+    ap.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="only include runs created in the last N days "
+        "(takes precedence over --limit when fewer runs land in the window)",
+    )
     ap.add_argument("--out", default="-", help="output file (default: stdout)")
     args = ap.parse_args()
 
