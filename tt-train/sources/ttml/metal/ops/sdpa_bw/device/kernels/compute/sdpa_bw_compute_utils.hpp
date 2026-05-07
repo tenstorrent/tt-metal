@@ -6,6 +6,7 @@
 
 #include <api/compute/reg_api.h>
 #include <api/debug/dprint.h>
+#include <api/debug/dprint_tensix.h>
 
 #include <cstdint>
 
@@ -129,11 +130,21 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     copy_tile_init(cb_intermediates);
     copy_tile(cb_intermediates, /* tile_idx */ 0, lse_reg);
 
+    // Debug: dump DST state before and after sfpu_sub_bcast_col
+    DPRINT << "=== apply_softmax_statistics_on_dst ===" << ENDL();
+    DPRINT << "DST[scores_reg=" << scores_reg << "] BEFORE sfpu_sub_bcast_col:" << ENDL();
+    dprint_tensix_dest_reg(scores_reg);
+    DPRINT << "DST[lse_reg=" << lse_reg << "] (loaded via copy_tile from cb_intermediates):" << ENDL();
+    dprint_tensix_dest_reg(lse_reg);
+
     // Step 2: SFPU column-broadcast subtract.
     //   Expected: DST[scores_reg][r][c] -= DST[lse_reg][r][0] for all c in [0..31]
     //   Observed: DST[scores_reg] is unchanged after this call.
     sfpu_sub_bcast_col_init();
     sfpu_sub_bcast_col(scores_reg, lse_reg);
+
+    DPRINT << "DST[scores_reg=" << scores_reg << "] AFTER sfpu_sub_bcast_col:" << ENDL();
+    dprint_tensix_dest_reg(scores_reg);
 
     // Step 3: exp in-place
     exp_tile_init</* approx */ false>();
