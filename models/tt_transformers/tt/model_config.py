@@ -1268,6 +1268,25 @@ class ModelArgs:
             return False
         return True
 
+    def _resolve_mm_grid(self, grid, seq_len):
+        """Apply QWEN_MM_GRID env override for MinimalMatmulConfig grid experiments.
+
+        QWEN_MM_GRID=13,10 sets the grid to (13,10)=130 cores on Blackhole.
+        """
+        override = os.getenv("QWEN_MM_GRID")
+        if override:
+            parts = override.split(",")
+            if len(parts) == 2:
+                return (int(parts[0]), int(parts[1]))
+        if (
+            is_blackhole()
+            and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
+            and grid == (8, 8)
+            and not self.use_short_seq_l1_prefill(seq_len)
+        ):
+            return (8, 10)
+        return grid
+
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
@@ -1341,25 +1360,7 @@ class ModelArgs:
                     )
         elif mode == Mode.PREFILL:
             if self.use_minimal_matmul_prefill(seq_len):
-                grid = self.mlp1_3_grid(seq_len)
-                # On Blackhole the find_prefill_grid helper caps at (8,8)=64 cores
-                # because its hardcoded max_rows=8. minimal_matmul handles non-
-                # integer M_tiles/grid_y internally (rounds up per_core_M, leaves
-                # extra rows partly idle), so we can opt-in to (8,10)=80 cores
-                # for FF1/FF3 with QWEN_MM_BIG_GRID_BH=1. Auto-disabled when
-                # the activation lives in L1 (TT_BATCHED_L1_PREFILL on bs<=10):
-                # the wider grid grows the static CB region per core, and on
-                # rows 8-9 it collides with the L1-resident activation buffer
-                # ("Statically allocated circular buffers ... clash with L1
-                # buffers on core range [(x=0,y=0) - (x=7,y=9)]"). For bs>=11
-                # (DRAM activations) the wider grid is a clean ~2-3% win.
-                if (
-                    is_blackhole()
-                    and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
-                    and grid == (8, 8)
-                    and not self.use_short_seq_l1_prefill(seq_len)
-                ):
-                    grid = (8, 10)
+                grid = self._resolve_mm_grid(self.mlp1_3_grid(seq_len), seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1418,18 +1419,7 @@ class ModelArgs:
                     )
         elif mode == Mode.PREFILL:
             if self.use_minimal_matmul_prefill(seq_len):
-                grid = self.mlp2_grid(seq_len)
-                # See QWEN_MM_BIG_GRID_BH note in get_mlp_ff1_3_prg_config: only
-                # safe when activations live in DRAM (not the L1 batched-prefill
-                # path) because the wider grid's per-core CB region collides
-                # with L1 activations on bs<=10.
-                if (
-                    is_blackhole()
-                    and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
-                    and grid == (8, 8)
-                    and not self.use_short_seq_l1_prefill(seq_len)
-                ):
-                    grid = (8, 10)
+                grid = self._resolve_mm_grid(self.mlp2_grid(seq_len), seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1790,11 +1780,12 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
             if self.use_minimal_matmul_prefill(seq_len):
+                qkv_grid = self._resolve_mm_grid((8, 10) if is_blackhole() else (8, 8), seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
                     N_block_size=8,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(qkv_grid[0], qkv_grid[1]),
                 )
             else:
                 # Tuned per ttnn-visualizer matmul analyzer for the bs=1 / short-seq
@@ -2148,17 +2139,9 @@ class ModelArgs:
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
             if self.use_minimal_matmul_prefill(seq_len) and not self.is_galaxy:
-                grid = self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE)
-                # See QWEN_MM_BIG_GRID_BH note in get_mlp_ff1_3_prg_config: only
-                # safe when activations live in DRAM (not the L1 batched-prefill
-                # path).
-                if (
-                    is_blackhole()
-                    and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
-                    and grid == (8, 8)
-                    and not self.use_short_seq_l1_prefill(seq_len)
-                ):
-                    grid = (8, 10)
+                grid = self._resolve_mm_grid(
+                    self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE), seq_len
+                )
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
