@@ -22,10 +22,12 @@ Things to remember:
    - [KernelSpec](#kernelspec)
    - [DataflowBufferSpec](#dataflowbufferspec)
    - [SemaphoreSpec](#semaphorespec)
+   - [TensorParameter](#tensorparameter)
    - [WorkUnitSpec](#workunitspec)
    - [ProgramRunParams](#programrunparams)
 5. [Device-Side Migration](#device-side-migration)
    - [Circular Buffers → Dataflow Buffers](#circular-buffers--dataflow-buffers)
+   - [TensorAccessor](#tensoraccessor)
    - [Kernel Argument Retrieval Syntax](#kernel-argument-retrieval-syntax)
 6. [Complete Migration Examples](#complete-migration-examples)
 7. [Troubleshooting](#troubleshooting)
@@ -50,6 +52,8 @@ Some benefits of Metal 2.0:
 - **Named resource bindings**. Metal 2.0 natively supports binding resources (DFBs, semaphores, tensors, etc) to kernels. The corresponding handles are cleanly passed to the device code with user-defined accessor names.
 - **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides
 
+> **Stated goal: eliminate raw pointer arguments.** With DFBs, semaphores, and tensors all bindable as named resources, runtime args carrying a buffer or tensor address should now be the exception rather than the rule. If you're about to put `tensor.buffer()->address()` in a runtime arg, you're probably doing it wrong — bind the tensor as a `TensorParameter` instead.
+
 Many additional improvements are planned, but are not yet available in the experimental APIs.
 
 ---
@@ -65,6 +69,7 @@ Many additional improvements are planned, but are not yet available in the exper
 | `KernelDescriptor::runtime_args` / `common_runtime_args` | **Schema** (names): declared on `KernelSpec::runtime_arguments_schema`<br>**Values**: supplied per execution on `ProgramRunParams::KernelRunParams` |
 | `CBDescriptor` | `DataflowBufferSpec` (placement derived from kernel bindings) |
 | `SemaphoreDescriptor` | `SemaphoreSpec` |
+| `TensorAccessorArgs<...>` <br> (plumbing + buffer-address RTA) | `TensorAccessor(ta::name)` in the kernel code; <br>`TensorParameter` on `ProgramSpec` (parallel to DFB / Semaphore) |
 | *(no analogue)* | `WorkUnitSpec` — declares groups of kernels that operate together on a worker node, and on which nodes they run |
 | `CoreCoord` / `CoreRange` / `CoreRangeSet`  | `NodeCoord` / `NodeRange` / `NodeRangeSet` |
 
@@ -84,6 +89,7 @@ Sub-headers are pulled in transitively:
  - `kernel_spec.hpp`
  - `dataflow_buffer_spec.hpp`
  - `semaphore_spec.hpp`
+ - `tensor_parameter.hpp`
 
 **These header files are self-documenting, with extensive comments.** Please read them!
 
@@ -122,8 +128,8 @@ ProgramSpec spec{
     .semaphores = {sem_1},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);  // temporary free function
-//Program program = Program(mesh_device, spec);            // stable API form
+Program program = MakeProgramFromSpec(spec);  // temporary free function
+//Program program = Program(spec);            // stable API form
 ```
 
 Two structural additions vs. `ProgramDescriptor`:
@@ -139,8 +145,7 @@ Two structural additions vs. `ProgramDescriptor`:
 
 1. **Placement.** The kernel's effective node set is derived from the `WorkUnitSpec`(s) that include it.
 2. **Runtime arguments.** The `KernelSpec` declares a runtime arguments _schema_; runtime-arg _values_ are supplied per execution through `ProgramRunParams` or `ProgramRunParamsView`.
-3. **Resource bindings.** New syntax to bind DFB endpoints and semaphores to the kernel, and retrieve them by name in device code.
-4. **Tensor bindings.** Coming soon.
+3. **Resource bindings.** New syntax to bind DFB endpoints, semaphores, and tensors to the kernel, and retrieve them by name in device code. (See [TensorParameter](#tensorparameter) for the tensor case.)
 
 
 **Legacy** (`KernelDescriptor`):
@@ -150,7 +155,7 @@ KernelDescriptor reader = {
     .kernel_source = "kernels/reader.cpp",
     .core_ranges = CoreRangeSet{CoreRange{{0,0}, {0,0}}},
     .compile_time_args = {src_cb_idx, dst_cb_idx, page_size},
-    .runtime_args = {{{0,0}, {src_addr, dst_addr}}},
+    .runtime_args = {{{0,0}, {start_page, num_pages}}},
     .config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
@@ -175,7 +180,7 @@ KernelSpec reader{
     },
     .runtime_arguments_schema = {
         // Schema only — argument values are set per execution, on ProgramRunParams.
-        .named_runtime_args = {"src_addr", "dst_addr"},
+        .named_runtime_args = {"start_page", "num_pages"},
     },
     .config_spec = DataMovementConfiguration{
         // For WH/BH
@@ -202,14 +207,14 @@ ProgramSpec spec{
     .kernels = {reader},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(*mesh_device, spec);
+Program program = MakeProgramFromSpec(spec);
 
 // ----- ProgramRunParams: argument values, set per execution -----
 ProgramRunParams params;
 params.kernel_run_params = {{
     .kernel_spec_name = READER,
     .named_runtime_args = {{NodeCoord{0, 0},
-        {{"src_addr", src_addr}, {"dst_addr", dst_addr}}}},
+        {{"start_page", start_page}, {"num_pages", num_pages}}}},
 }};
 SetProgramRunParameters(program, params);
 ```
@@ -316,6 +321,108 @@ KernelSpec writer{ /* ... */
 
 ---
 
+### TensorParameter
+
+`TensorParameter` declares a tensor as a Program-scope resource. Kernels access it via `KernelSpec::TensorBinding`; the runtime `MeshTensor` is supplied per execution via `ProgramRunParams::TensorArg`. The kernel-author API collapses to a single line: `TensorAccessor(ta::name)`.
+
+Three pieces, paralleling the DFB / Semaphore pattern with one deliberate asymmetry: tensors are *user-managed* resources (you own the lifetime), so the program-scope type is named `TensorParameter` (distinguished from the "Spec" pattern used elsewhere in the API) — echoing the "ProgramSpec is a function signature; ProgramRunParams is the call args" framing.
+
+One thing to be aware of: `TensorSpec` is a property of a `MeshTensor`. This pre-exists Metal 2.0; it is not part of the "Spec" object pattern in the rest of the Metal 2.0 APIs.
+
+> **⚠ Pre-migration check.** Before migrating an op, grep its kernel sources for `ArgConfig::Runtime`. If any kernel uses **`ArgConfig::RuntimeTensorShape`**, this op cannot migrate to Metal 2.0 yet. Metal 2.0 has no positional-CTA mechanism, so the legacy `TensorAccessorArgs(buffer, ArgConfig::RuntimeTensorShape).append_to(...)` plumbing has no equivalent in the current API. Stay on the legacy `ProgramDescriptor` path until the follow-up PR adds runtime-shape support. (The other deferred flavors — `RuntimeRank`, `RuntimeNumBanks`, `RuntimeShardShape`, `RuntimeBankCoords` — have zero user sites outside tests, so this check almost always reduces to "is `RuntimeTensorShape` present?".)
+
+#### Legacy
+
+```cpp
+// host: append TensorAccessor args to the kernel's positional CTA list,
+// pass the buffer base address as a runtime arg.
+std::vector<uint32_t> reader_cta = {input_page_size, /* other CTAs */};
+tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_cta);
+
+auto reader_kid = CreateKernel(program, "reader.cpp", core,
+    ReaderDataMovementConfig(reader_cta));
+SetRuntimeArgs(program, reader_kid, core,
+    {input.buffer()->address(), /* other RTAs */});
+```
+
+```cpp
+// kernel: read the buffer address from the RTA list, manually thread
+// CTA offsets to construct TensorAccessorArgs, then build the accessor.
+constexpr uint32_t input_page_size = get_compile_time_arg_val(0);
+// ...other compile-time args...
+constexpr auto input_args = TensorAccessorArgs<N>();   // N = number of preceding CTAs
+uint32_t input_addr = get_arg_val<uint32_t>(0);
+auto input = TensorAccessor(input_args, input_addr);
+```
+
+#### Metal 2.0
+
+```cpp
+constexpr const char* INPUT = "input";
+
+// In ProgramSpec — declare the tensor as a Program-scope parameter.
+// Use the tensor's own TensorSpec; the binding's spec must equal the runtime tensor's spec.
+ProgramSpec spec;
+spec.tensor_parameters = {
+    {.unique_id = INPUT, .spec = input_tensor.tensor_spec()},
+};
+
+// In KernelSpec — bind the parameter, naming the kernel-side accessor.
+KernelSpec reader{ /* ... */
+    .tensor_bindings = {{
+        .tensor_parameter_name = INPUT,
+        .accessor_name = "input",   // kernel accesses as `ta::input`
+    }},
+};
+spec.kernels = {reader};
+
+Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+// In ProgramRunParams — supply the actual MeshTensor per execution.
+ProgramRunParams params;
+params.tensor_args = {
+    {.tensor_parameter_name = INPUT, .tensor = input_tensor},
+};
+SetProgramRunParameters(program, params);
+```
+
+```cpp
+// kernel: one line. No CTA-offset bookkeeping, no buffer-address RTA.
+auto input = TensorAccessor(ta::input);
+```
+
+The buffer-address RTA is gone — the binding mechanism auto-injects the per-enqueue base address. The `TensorAccessorArgs<N>()` line is gone too — the layout metadata is packed by the host at program creation.
+
+#### Migration recipe
+
+For each op:
+
+1. **Pre-flight.** Grep the op's kernel sources for `ArgConfig::Runtime`. If `RuntimeTensorShape` appears anywhere, **do not migrate this op** (see callout above).
+2. **Find each `TensorAccessor`.** In each kernel, locate every `TensorAccessor(args, addr)` construction. For each, trace `addr` back through the host code to the originating `Tensor`.
+3. **Declare `TensorParameter`s.** Add one entry per tensor to `ProgramSpec::tensor_parameters`, using `tensor.tensor_spec()`. Pick a stable `unique_id`; reuse a `constexpr const char*` constant per the convention.
+4. **Add `TensorBinding`s.** On each `KernelSpec` whose kernel accesses the tensor, add an entry to `tensor_bindings` referencing the parameter by name. The `accessor_name` is the kernel-side identifier — it will appear as `ta::<accessor_name>`.
+5. **Update kernel code.**
+   - Replace `TensorAccessor(args, addr)` with `TensorAccessor(ta::<accessor_name>)`.
+   - Drop the `TensorAccessorArgs<offset>()` line and any manual `next_compile_time_args_offset()` chaining.
+   - Drop the `get_arg_val<uint32_t>(N)` line that retrieved the buffer address — those bytes are no longer in your RTA list, so re-index any RTAs that came after.
+6. **Wire `tensor_args`.** Add one `TensorArg` per `TensorParameter` to `ProgramRunParams::tensor_args`, passing the actual `MeshTensor`.
+
+#### Validation
+
+At enqueue, the runtime `MeshTensor`'s `TensorSpec` must equal the binding's declared spec. Mismatches error loudly with a message naming the binding. The binding declaration is the single source of truth for layout — if the supplied tensor doesn't match, the bug is at the call site (typically: a layout transformation that should have been wired into the program but was applied externally to the tensor).
+
+#### Multi-kernel-same-tensor
+
+The common case (matmul reader + compute reading the same input; reshard reader/writer pipelines) is the cleanest fit for the binding model. Each kernel declares its own `TensorBinding` to the same `TensorParameter` with its own kernel-local `accessor_name`; the underlying tensor identity stays singular at the program level. This is structurally different from the legacy pattern, where the same tensor's address would be passed as a separate RTA on every kernel — and divergence between those was a real (silent) failure mode.
+
+#### What's not covered yet
+
+- **`RuntimeTensorShape`** — eltwise unary/ternary/binary_ng currently rely on this. Follow-up PR ships shortly.
+- **Manual `DistributionSpec` reuse** (the "advanced reuse-bank-coords-across-accessors" path from the [TensorAccessor guide](../../../../tech_reports/tensor_accessor/tensor_accessor.md)). Not commonly used in production ops.
+- **Tensor bindings on compute kernels** are out of scope. `TensorAccessor` was never supported for compute kernels (TRISC builds don't compile its NoC-using includes), so migration should not encounter any.
+
+---
+
 ### WorkUnitSpec
 
 `WorkUnitSpec` is a new top-level concept in Metal 2.0. It declares groups of kernels that operate together on a worker node, and on which nodes they run.
@@ -363,6 +470,7 @@ WorkUnitSpec wu_halo{
 `ProgramRunParams` describes the mutable properties of the Program. These parameters are specified anew with each Program enqueue:
  - Kernel runtime arguments
  - Kernel common runtime arguments
+ - Tensor arguments (`tensor_args`) — one `MeshTensor` per declared `TensorParameter`. See [TensorParameter](#tensorparameter).
  - (optional) DFB size + entry size (not yet supported)
  - (optional) DFB borrowed memory (not yet supported)
 
@@ -373,7 +481,7 @@ All kernel arguments are named arguments in Metal 2.0. For kernels that accept a
 ```cpp
 KernelDescriptor reader = {
     // ...
-    .runtime_args = {{{0, 0}, {src_addr, num_tiles}}},
+    .runtime_args = {{{0, 0}, {start_page, num_tiles}}},
     .common_runtime_args = {bank_id},
 };
 ```
@@ -386,7 +494,7 @@ KernelSpec reader{
     .unique_id = READER,
     // ...
     .runtime_arguments_schema = {
-        .named_runtime_args = {"src_addr", "num_tiles"},
+        .named_runtime_args = {"start_page", "num_tiles"},
         .named_common_runtime_args = {"bank_id"},
     },
 };
@@ -396,7 +504,7 @@ ProgramRunParams params;
 params.kernel_run_params = {{
     .kernel_spec_name = READER,
     .named_runtime_args = {{NodeCoord{0, 0},
-        {{"src_addr", src_addr}, {"num_tiles", num_tiles}}}},
+        {{"start_page", start_page}, {"num_tiles", num_tiles}}}},
     .named_common_runtime_args = {{"bank_id", bank_id}},
 }};
 SetProgramRunParameters(program, params); // temporary free function
@@ -459,6 +567,39 @@ dfb.push_back(num_entries);
 
 ---
 
+### TensorAccessor
+
+Construction collapses to one line. `TensorAccessor` takes the codegen-emitted token directly; everything else is unchanged from today (`get_noc_addr`, `get_bank_and_offset`, `dspec()`, `noc_async_read_page`, etc.).
+
+The token lives in the `ta::` namespace inside `kernel_bindings_generated.h` (auto-generated from the host-side `TensorBinding`), parallel to the `dfb::` and `sem::` namespaces.
+
+**Legacy:**
+
+```cpp
+constexpr uint32_t input_page_size = get_compile_time_arg_val(0);
+// ...other compile-time args...
+constexpr auto input_args = TensorAccessorArgs<N>();    // N = preceding CTA count
+constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+uint32_t input_addr = get_arg_val<uint32_t>(0);
+uint32_t index_addr = get_arg_val<uint32_t>(1);
+
+auto input = TensorAccessor(input_args, input_addr);
+auto index = TensorAccessor(index_args, index_addr);
+```
+
+**Metal 2.0:**
+
+```cpp
+auto input = TensorAccessor(ta::input);
+auto index = TensorAccessor(ta::index);
+```
+
+The `TensorAccessorArgs<N>()` lines, the manual `next_compile_time_args_offset()` chaining for multi-tensor stacking, and the buffer-address RTAs are all gone. Layout metadata is packed by the host into the kernel's compile-time args at program creation, not retrieved by the kernel; the per-enqueue base address rides on a host-managed slot in the kernel's CRTA buffer that the kernel never sees directly.
+
+See [TensorParameter](#tensorparameter) for the host-side declaration that produces the `ta::` namespace.
+
+---
+
 ### Kernel Argument Retrieval Syntax
 
 The Metal 2.0 host API declares kernel arguments by name; the kernel-side API retrieves them by name. This replaces the legacy positional `get_arg_val<uint32_t>(N)` style.
@@ -472,7 +613,7 @@ Suppose the host declared the following on `KernelSpec`:
 ```cpp
 .compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", 1024}},
 .runtime_arguments_schema = {
-    .named_runtime_args = {"src_addr"},
+    .named_runtime_args = {"start_page"},
     .named_common_runtime_args = {"num_entries"},
 },
 ```
@@ -483,7 +624,7 @@ Suppose the host declared the following on `KernelSpec`:
 void kernel_main() {
     constexpr uint32_t bank_id    = get_compile_time_arg_val(0);
     constexpr uint32_t entry_size = get_compile_time_arg_val(1);
-    uint32_t src_addr    = get_arg_val<uint32_t>(0);    // RTA index 0
+    uint32_t start_page    = get_arg_val<uint32_t>(0);    // RTA index 0
     uint32_t num_entries = get_common_arg_val<uint32_t>(0);  // CRTA index 0
     // ...
 }
@@ -497,7 +638,7 @@ void kernel_main() {
 void kernel_main() {
     constexpr auto bank_id    = get_arg(args::bank_id);     // CTA — compile-time constant
     constexpr auto entry_size = get_arg(args::entry_size);  // CTA
-    auto src_addr             = get_arg(args::src_addr);    // RTA
+    auto start_page             = get_arg(args::start_page);    // RTA
     const auto num_entries    = get_arg(args::num_entries); // CRTA
     // ...
 }
@@ -511,7 +652,7 @@ Some kernels need a variable-count argument tail (e.g. an N-dimensional tensor's
 
 ```cpp
 .runtime_arguments_schema = {
-    .named_runtime_args = {"src_addr"},
+    .named_runtime_args = {"start_page"},
     .named_common_runtime_args = {"num_entries"},
     .num_runtime_varargs = 3,         // 3 positional RTA varargs (per node)
     .num_common_runtime_varargs = 1,  // 1 positional CRTA vararg (broadcast)
@@ -522,7 +663,7 @@ Some kernels need a variable-count argument tail (e.g. an N-dimensional tensor's
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    auto src_addr          = get_arg(args::src_addr);
+    auto start_page          = get_arg(args::start_page);
     const auto num_entries = get_arg(args::num_entries);
 
     // Vararg RTAs (positional, indexed from 0):
@@ -546,7 +687,7 @@ Vararg indices are stable across schema changes: if you later promote a named RT
 
 ### Example 1: Single-Core Reader / Writer with One DFB
 
-Reader kernel reads from DRAM into a DFB; writer kernel pulls from the DFB and writes to DRAM.
+Reader kernel reads pages from an input tensor into a DFB; writer kernel pulls from the DFB and writes pages to an output tensor.
 
 **Legacy (`ProgramDescriptor`):**
 
@@ -566,19 +707,28 @@ CBDescriptor cb_desc = {
     }},
 };
 
+// Reader: TensorAccessor args appended to the positional CTA list; buffer
+// address passed as an RTA.
+std::vector<uint32_t> reader_cta = {cb_idx, page_size};
+tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_cta);
+
 KernelDescriptor reader = {
     .kernel_source = "kernels/reader.cpp",
     .core_ranges = CoreRangeSet{CoreRange{core}},
-    .compile_time_args = {cb_idx, page_size},
-    .runtime_args = {{core, {src_addr, num_pages}}},
+    .compile_time_args = reader_cta,
+    .runtime_args = {{core, {input_tensor.buffer()->address(), num_pages}}},
     .config = ReaderConfigDescriptor{},
 };
+
+// Writer: same shape on the output side.
+std::vector<uint32_t> writer_cta = {cb_idx, page_size};
+tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_cta);
 
 KernelDescriptor writer = {
     .kernel_source = "kernels/writer.cpp",
     .core_ranges = CoreRangeSet{CoreRange{core}},
-    .compile_time_args = {cb_idx, page_size},
-    .runtime_args = {{core, {dst_addr, num_pages}}},
+    .compile_time_args = writer_cta,
+    .runtime_args = {{core, {output_tensor.buffer()->address(), num_pages}}},
     .config = WriterConfigDescriptor{},
 };
 
@@ -594,6 +744,8 @@ ProgramDescriptor program_desc = {
 constexpr const char* READER = "reader";
 constexpr const char* WRITER = "writer";
 constexpr const char* DFB    = "loopback_dfb";
+constexpr const char* INPUT  = "input";
+constexpr const char* OUTPUT = "output";
 
 constexpr uint32_t page_size = 1024;
 constexpr uint32_t num_pages = 8;
@@ -603,11 +755,15 @@ KernelSpec reader{
     .unique_id = READER,
     .source = KernelSpec::SourceFilePath{"kernels/reader.cpp"},
     .compile_time_arg_bindings = {{"page_size", page_size}},
-    .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "num_pages"}},
+    .runtime_arguments_schema = {.named_runtime_args = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .local_accessor_name = "out_dfb",
         .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER
+    }},
+    .tensor_bindings = {{
+        .tensor_parameter_name = INPUT,
+        .accessor_name = "input",   // kernel accesses as `ta::input`
     }},
     .config_spec = DataMovementConfiguration{
         .gen1_data_movement_config = {.processor = DataMovementProcessor::RISCV_0},
@@ -618,11 +774,15 @@ KernelSpec writer{
     .unique_id = WRITER,
     .source = KernelSpec::SourceFilePath{"kernels/writer.cpp"},
     .compile_time_arg_bindings = {{"page_size", page_size}},
-    .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "num_pages"}},
+    .runtime_arguments_schema = {.named_runtime_args = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .local_accessor_name = "in_dfb",
         .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER
+    }},
+    .tensor_bindings = {{
+        .tensor_parameter_name = OUTPUT,
+        .accessor_name = "output",  // kernel accesses as `ta::output`
     }},
     .config_spec = DataMovementConfiguration{
         .gen1_data_movement_config = {.processor = DataMovementProcessor::RISCV_1},
@@ -640,6 +800,10 @@ ProgramSpec spec{
     .program_id = "loopback",
     .kernels = {reader, writer},
     .dataflow_buffers = {dfb},
+    .tensor_parameters = {
+        {.unique_id = INPUT,  .spec = input_tensor.tensor_spec()},
+        {.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
+    },
     .work_units = {{
         .unique_id = "main",
         .kernels = {READER, WRITER},
@@ -651,23 +815,28 @@ Program program = MakeProgramFromSpec(*mesh_device, spec);
 ProgramRunParams params;
 params.kernel_run_params = {
     {.kernel_spec_name = READER,
-     .named_runtime_args = {{node, {{"src_addr", src_addr}, {"num_pages", num_pages}}}}},
+     .named_runtime_args = {{node, {{"num_pages", num_pages}}}}},
     {.kernel_spec_name = WRITER,
-     .named_runtime_args = {{node, {{"dst_addr", dst_addr}, {"num_pages", num_pages}}}}},
+     .named_runtime_args = {{node, {{"num_pages", num_pages}}}}},
+};
+params.tensor_args = {
+    {.tensor_parameter_name = INPUT,  .tensor = input_tensor},
+    {.tensor_parameter_name = OUTPUT, .tensor = output_tensor},
 };
 SetProgramRunParameters(program, params);
 ```
 
-`ProgramDescriptor` collapses all of placement, schema, and values into one nested struct, while Metal 2.0 keeps each concern visible as its own field. This example demonstrated named CTAs, DFB binding-by-name, derived DFB placement, and mutable / immutable separation.
+`ProgramDescriptor` collapses all of placement, schema, and values into one nested struct, while Metal 2.0 keeps each concern visible as its own field. This example demonstrated named CTAs, DFB binding-by-name, derived DFB placement, TensorAccessor binding (replacing the manual `TensorAccessorArgs` plumbing chain on the host and the `TensorAccessorArgs<N>()` offset bookkeeping in the kernel), and mutable / immutable separation.
 
 ### Example 2: Multi-Core with Cross-Core Synchronization
 
-Same reader/writer kernels as Example 1, but now running on a 2×2 grid with a semaphore-based handshake. Only the deltas are shown — fields that are unchanged from Example 1 are elided with `// (unchanged)`.
+Same reader/writer kernels as Example 1, but now running on a 2×2 grid with a semaphore-based handshake. Each node reads (and writes) its own slice of the tensor. Only the deltas are shown — fields that are unchanged from Example 1 are elided with `// (unchanged)`.
 
 **Legacy (`ProgramDescriptor`):**
 
 ```cpp
 const CoreRangeSet cores = CoreRangeSet{CoreRange{{0, 0}, {1, 1}}};
+const uint32_t pages_per_core = num_pages / 4;  // 8 / 4 = 2 pages per core
 
 SemaphoreDescriptor done_sem{
     .id = 0,
@@ -677,14 +846,15 @@ SemaphoreDescriptor done_sem{
 };
 
 KernelDescriptor reader = {
-    // (unchanged)
+    // (unchanged — same TensorAccessor CTAs, kernel source, etc.)
     .core_ranges = cores,
-    // Per-core runtime args; the semaphore ID is passed as a runtime arg:
+    // Per-core runtime args. Same buffer base address on every core; each
+    // core reads a different slice via start_page. Semaphore ID rides as an RTA.
     .runtime_args = {
-        {{0,0}, {src_addr_0, num_pages, /*sem_id=*/0}},
-        {{1,0}, {src_addr_1, num_pages, 0}},
-        {{0,1}, {src_addr_2, num_pages, 0}},
-        {{1,1}, {src_addr_3, num_pages, 0}},
+        {{0,0}, {input_tensor.buffer()->address(), 0u,                  pages_per_core, /*sem_id=*/0}},
+        {{1,0}, {input_tensor.buffer()->address(), 1u*pages_per_core,   pages_per_core, 0}},
+        {{0,1}, {input_tensor.buffer()->address(), 2u*pages_per_core,   pages_per_core, 0}},
+        {{1,1}, {input_tensor.buffer()->address(), 3u*pages_per_core,   pages_per_core, 0}},
     },
     // ...
 };
@@ -701,6 +871,7 @@ ProgramDescriptor program_desc = {
 ```cpp
 constexpr const char* DONE = "done";
 const NodeRange cores{{0, 0}, {1, 1}};
+const uint32_t pages_per_node = num_pages / 4;  // 8 / 4 = 2 pages per node
 
 SemaphoreSpec done_sem{
     .unique_id = DONE,
@@ -708,13 +879,16 @@ SemaphoreSpec done_sem{
 };
 
 KernelSpec reader{
-    // (unchanged)
+    // (unchanged — same TensorBinding to INPUT, DFB binding, source, etc.)
     // No core_ranges — placement comes from WorkUnitSpec, below.
     // No semaphore in the args — bind it instead:
     .semaphore_bindings = {{
         .semaphore_spec_name = DONE,
         .accessor_name = "done",  // kernel accesses as `sem::done`
     }},
+    // RTA schema gains start_page so each node knows which slice it owns.
+    // The buffer address is gone — the TensorBinding auto-injects it.
+    .runtime_arguments_schema = {.named_runtime_args = {"start_page", "num_pages"}},
     // ...
 };
 
@@ -723,6 +897,10 @@ ProgramSpec spec{
     .kernels = {reader, writer},
     .dataflow_buffers = {dfb},
     .semaphores = {done_sem},
+    .tensor_parameters = {
+        {.unique_id = INPUT,  .spec = input_tensor.tensor_spec()},
+        {.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
+    },
     .work_units = {{
         .unique_id = "main",
         .kernels = {READER, WRITER},
@@ -732,16 +910,23 @@ ProgramSpec spec{
 Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 ProgramRunParams params;
-// One named_runtime_args entry per node where the kernel runs:
+// One named_runtime_args entry per node where the kernel runs.
+// Tensor identity is singular: one TensorParameter for the input tensor,
+// regardless of how many nodes access it. Per-node access varies via slice
+// indices, not addresses.
 params.kernel_run_params = {{
     .kernel_spec_name = READER,
     .named_runtime_args = {
-        {{0,0}, {{"src_addr", src_addr_0}, {"num_pages", num_pages}}},
-        {{1,0}, {{"src_addr", src_addr_1}, {"num_pages", num_pages}}},
-        {{0,1}, {{"src_addr", src_addr_2}, {"num_pages", num_pages}}},
-        {{1,1}, {{"src_addr", src_addr_3}, {"num_pages", num_pages}}},
+        {{0,0}, {{"start_page", 0u},                  {"num_pages", pages_per_node}}},
+        {{1,0}, {{"start_page", 1u*pages_per_node},   {"num_pages", pages_per_node}}},
+        {{0,1}, {{"start_page", 2u*pages_per_node},   {"num_pages", pages_per_node}}},
+        {{1,1}, {{"start_page", 3u*pages_per_node},   {"num_pages", pages_per_node}}},
     },
 }, /* writer entry similarly */ };
+params.tensor_args = {
+    {.tensor_parameter_name = INPUT,  .tensor = input_tensor},
+    {.tensor_parameter_name = OUTPUT, .tensor = output_tensor},
+};
 SetProgramRunParameters(program, params);
 ```
 
@@ -749,6 +934,7 @@ Key differences vs. the legacy pattern:
 
 - Multi-core placement moves from `core_ranges` on each kernel to a single `target_nodes` on the `WorkUnitSpec`.
 - The semaphore is bound at the kernel spec; the semaphore ID no longer travels as a runtime argument. Kernel code accesses it as `sem::done`.
+- **Tensor identity is singular** — one `TensorParameter` per tensor, regardless of how many nodes access it. The legacy column repeats `input_tensor.buffer()->address()` on every node; Metal 2.0 makes that singular by construction. Per-node access varies through `start_page` / `num_pages` slice RTAs only.
 - Per-node runtime args are still per-node, but addressed by `NodeCoord` and named.
 
 ---
@@ -757,6 +943,7 @@ Key differences vs. the legacy pattern:
 
 Common pitfalls when migrating from `ProgramDescriptor`:
 
+- **Don't pass tensor addresses as runtime arguments.** Metal 2.0's `TensorBinding` auto-injects per-enqueue base addresses; that's the supported path. If your migration ports `tensor.buffer()->address()` over verbatim as an RTA, revisit — you want a `TensorBinding`.
 - **Every kernel must belong to a `WorkUnitSpec`.** A kernel listed in `ProgramSpec::kernels` but not referenced by any `WorkUnitSpec::kernels` has no place to run. This will trigger an error.
 - **DFB placement is derived, not specified.** Don't pass a node range to `DataflowBufferSpec` — the DFB lives wherever its bound producer / consumer kernels run. `DataflowBufferSpec` has no `target_nodes` field by design.
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
