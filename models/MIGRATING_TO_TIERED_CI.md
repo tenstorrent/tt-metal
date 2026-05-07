@@ -9,16 +9,16 @@ to know *what* to edit, skim the [step-by-step checklist](#step-by-step-checklis
 If you want to know *why* the system is shaped this way, read the
 [overview](#overview) first.
 
-For the human-readable index of which models are in which tier, see
+For the list of models part of the 3-tier CI infra, see
 [`models/model_ci_tiers.md`](./model_ci_tiers.md).
 
 ---
 
 ## Overview
 
-The new Models CI is organised into **six pipelines** — three tiers
-(1, 2, 3) × two test types (e2e, unit). Each runs on a daily cron on
-`main` and is also dispatchable manually:
+The 3-tier Models CI is organised into **six scheduled pipelines** —
+three tiers (1, 2, 3) × two test types (e2e, unit). Each runs on a
+daily cron on `main` and is also dispatchable manually:
 
 | Pipeline | Workflow | Filterable list |
 |---|---|---|
@@ -38,6 +38,27 @@ central registries:
 Each entry in those registries declares which SKUs it runs on and which
 tier it belongs to. The workflows read the registry at runtime and
 dispatch jobs whose `tier` matches the workflow.
+
+### Additional pipelines (manual today, scheduled later)
+
+In addition to the six scheduled pipelines above, the same 3-tier
+infrastructure already hosts **sweep** and **device-perf** pipelines.
+These exist on `main` and follow the **same registry-driven approach**
+as e2e / unit, but are **not yet on a daily cron** — they're only
+runnable via `workflow_dispatch`. **You can register tests in them
+today**; once the schedule is enabled the entries will start running
+automatically with no further changes required.
+
+| Pipeline | Workflow | Registry |
+|---|---|---|
+| (Tier 1) Models sweep | [`models-t1-sweep-tests.yaml`](https://github.com/tenstorrent/tt-metal/actions/workflows/models-t1-sweep-tests.yaml) | `tests/pipeline_reorg/models_sweep_tests.yaml` |
+| (Tier 2) Models sweep | [`models-t2-sweep-tests.yaml`](https://github.com/tenstorrent/tt-metal/actions/workflows/models-t2-sweep-tests.yaml) | `tests/pipeline_reorg/models_sweep_tests.yaml` |
+| (Tier 1) Models device-perf | [`models-t1-device-perf-tests.yaml`](https://github.com/tenstorrent/tt-metal/actions/workflows/models-t1-device-perf-tests.yaml) | `tests/pipeline_reorg/models_device_perf_tests.yaml` |
+
+Entry shape, env conventions, naming, owner_id rules, and the
+`workflow_dispatch.inputs.model` enum requirement are all identical to
+e2e / unit — see the rest of this guide. The only difference is the
+registry filename and the corresponding workflow file you edit.
 
 ### What "tier" means
 
@@ -63,10 +84,15 @@ When porting model `<your-model>`:
   appropriate tier table, with the SKUs it runs on.
 - [ ] **3. Migrate tests** off the old single-card / T3000 / Galaxy
   pipelines (`t3k_*_tests.yaml`, `galaxy_*_tests.yaml`,
-  blackhole-specific demo files, etc.) into:
+  blackhole-specific demo files, etc.) into the matching tiered
+  registry:
   - `tests/pipeline_reorg/models_e2e_tests.yaml` for end-to-end demos.
   - `tests/pipeline_reorg/models_unit_tests.yaml` for module / op-level
     correctness tests.
+  - `tests/pipeline_reorg/models_sweep_tests.yaml` for sweep tests
+    (Tier 1 / 2 — manual-only today, scheduled later).
+  - `tests/pipeline_reorg/models_device_perf_tests.yaml` for
+    device-perf tests (Tier 1 — manual-only today, scheduled later).
 - [ ] **4. Use the standard cache + weights paths** (see
   [Standard env conventions](#standard-env-conventions)).
 - [ ] **5. Use the HuggingFace name** for `HF_MODEL` and the model
@@ -361,7 +387,11 @@ the report and is green on the next nightly cycle.
 | `models/model_ci_tiers.md` | Add a row under the matching tier table. |
 | `tests/pipeline_reorg/models_e2e_tests.yaml` | Add e2e job entry/entries. |
 | `tests/pipeline_reorg/models_unit_tests.yaml` | Add unit job entry/entries. |
+| `tests/pipeline_reorg/models_sweep_tests.yaml` | Add sweep entries (Tier 1/2; manual-only today). |
+| `tests/pipeline_reorg/models_device_perf_tests.yaml` | Add device-perf entries (Tier 1; manual-only today). |
 | `.github/workflows/models-tN-e2e-tests.yaml` | Add `model` to the `workflow_dispatch` input enum. |
 | `.github/workflows/models-tN-unit-tests.yaml` | Same, if you registered a unit test. |
+| `.github/workflows/models-tN-sweep-tests.yaml` | Same, if you registered a sweep test (Tier 1/2). |
+| `.github/workflows/models-t1-device-perf-tests.yaml` | Same, if you registered a device-perf test. |
 | `.github/time_budget.yaml` | Verify or extend the budget for the SKU you target. |
 | Legacy `t3k_*` / `galaxy_*` / `blackhole_*` YAMLs | **Remove** any old entries for this model. |
