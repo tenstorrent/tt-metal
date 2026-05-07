@@ -21,7 +21,15 @@ std::string AdamWFullPrecision::get_name() const {
 AdamWFullPrecision::AdamWFullPrecision(
     ttml::serialization::NamedParameters parameters, const AdamWFullPrecisionConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    m_state_dict_schema = {{"steps", size_t{0}}, {"lr", float{0}}, {"amsgrad", bool{false}}};
+    m_state_dict_schema = {
+        {"steps", size_t{0}},
+        {"lr", float{0}},
+        {"beta1", float{0}},
+        {"beta2", float{0}},
+        {"epsilon", float{0}},
+        {"weight_decay", float{0}},
+        {"amsgrad", bool{false}},
+    };
 
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -107,10 +115,14 @@ serialization::StateDict AdamWFullPrecision::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
     dict["lr"] = m_config.lr;
+    dict["beta1"] = m_config.beta1;
+    dict["beta2"] = m_config.beta2;
+    dict["epsilon"] = m_config.epsilon;
+    dict["weight_decay"] = m_config.weight_decay;
+    dict["amsgrad"] = m_config.amsgrad;
     dict["master_weights"] = m_master_weights;
     dict["exp_avg"] = m_exp_avg;
     dict["exp_avg_sq"] = m_exp_avg_sq;
-    dict["amsgrad"] = m_config.amsgrad;
     if (m_config.amsgrad) {
         dict["max_exp_avg_sq"] = m_max_exp_avg_sq;
     }
@@ -119,15 +131,16 @@ serialization::StateDict AdamWFullPrecision::get_state_dict() const {
 
 void AdamWFullPrecision::set_state_dict(const serialization::StateDict& dict) {
     set_steps(serialization::get_value_type<size_t>(dict, "steps"));
-    if (dict.contains("lr")) {
-        set_lr(serialization::get_value_type<float>(dict, "lr"));
-    }
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
+    m_config.beta1 = serialization::get_value_type<float>(dict, "beta1");
+    m_config.beta2 = serialization::get_value_type<float>(dict, "beta2");
+    m_config.epsilon = serialization::get_value_type<float>(dict, "epsilon");
+    m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
     m_master_weights = std::get<serialization::NamedParameters>(dict.at("master_weights"));
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
 
-    const bool amsgrad =
-        dict.contains("amsgrad") ? serialization::get_value_type<bool>(dict, "amsgrad") : m_config.amsgrad;
+    const bool amsgrad = serialization::get_value_type<bool>(dict, "amsgrad");
     if (amsgrad && dict.contains("max_exp_avg_sq")) {
         m_config.amsgrad = true;
         m_max_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("max_exp_avg_sq"));

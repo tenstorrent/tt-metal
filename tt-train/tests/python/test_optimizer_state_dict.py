@@ -139,9 +139,15 @@ def test_adamw_get_state_dict_keys():
     state = opt.get_state_dict()
 
     assert "steps" in state
+    assert "lr" in state
+    assert "beta1" in state
+    assert "beta2" in state
+    assert "epsilon" in state
+    assert "weight_decay" in state
+    assert "amsgrad" in state
+    assert "stochastic_rounding" in state
     assert "exp_avg" in state
     assert "exp_avg_sq" in state
-    assert "amsgrad" in state
 
     # ``steps`` should be a Python int. When non-AmsGrad, ``max_exp_avg_sq``
     # must not be present (per ``AdamW::get_state_dict`` in C++).
@@ -252,3 +258,39 @@ def test_lr_restored_after_set_state_dict(optimizer_name):
     assert opt.get_lr() == pytest.approx(
         5e-4
     ), f"{optimizer_name}: expected lr=5e-4 after set_state_dict, got {opt.get_lr()}"
+
+
+# Per-optimizer hyperparameter keys (excluding lr which is tested separately)
+# and the mutated values to round-trip through set_state_dict.
+_HYPERPARAMS_BY_OPTIMIZER = {
+    "AdamW": {"beta1": 0.8, "beta2": 0.99, "epsilon": 1e-6, "weight_decay": 1e-2, "stochastic_rounding": False},
+    "AdamWFullPrecision": {"beta1": 0.8, "beta2": 0.99, "epsilon": 1e-6, "weight_decay": 1e-2},
+    "SGD": {"momentum_factor": 0.9, "dampening": 0.1, "weight_decay": 1e-4, "nesterov": False},
+    "MuonComposite": {"momentum": 0.85, "ns_steps": 3},
+}
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("optimizer_name", list(_HYPERPARAMS_BY_OPTIMIZER))
+def test_hyperparams_restored_after_set_state_dict(optimizer_name):
+    """All config hyperparameters survive a get/set_state_dict round-trip.
+
+    Mutates each hyperparameter key in the state dict and verifies that
+    set_state_dict restores the mutated value, exercising the ValueType
+    schema routing for float, bool, and int fields.
+    """
+    params = _make_simple_params()
+    opt = _make_optimizer(optimizer_name, params)
+    overrides = _HYPERPARAMS_BY_OPTIMIZER[optimizer_name]
+
+    state = dict(opt.get_state_dict())
+    state.update(overrides)
+    opt.set_state_dict(state)
+
+    restored = opt.get_state_dict()
+    for key, expected in overrides.items():
+        actual = restored[key]
+        if isinstance(expected, float):
+            assert actual == pytest.approx(expected), f"{optimizer_name}['{key}']: expected {expected}, got {actual}"
+        else:
+            assert actual == expected, f"{optimizer_name}['{key}']: expected {expected}, got {actual}"
