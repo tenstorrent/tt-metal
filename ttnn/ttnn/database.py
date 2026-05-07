@@ -11,11 +11,13 @@ import networkx as nx
 
 import ttnn
 from .stack_trace_source import (
+    CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+    CREATE_SOURCE_FILES_TABLE_SQL,
+    CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
     get_source_file_id,
     insert_source_file_id_column,
-    extract_stack_trace_file,
-    normalize_existing_source_file_path,
-    read_source_file_contents,
+    normalize_source_path_from_stack_trace,
+    read_source_file,
 )
 
 SQLITE_DB_PATH = "db.sqlite"
@@ -203,14 +205,8 @@ def get_or_create_sqlite_db(report_path):
         """CREATE TABLE IF NOT EXISTS operation_arguments
                 (operation_id int, name text, value text)"""
     )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS source_files
-                (id INTEGER PRIMARY KEY, path text UNIQUE NOT NULL, contents text)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS stack_traces
-                (operation_id int, stack_trace text, source_file_id int REFERENCES source_files(id))"""
-    )
+    cursor.execute(CREATE_SOURCE_FILES_TABLE_SQL)
+    cursor.execute(CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL)
     insert_source_file_id_column(cursor)
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS input_tensors
@@ -251,7 +247,7 @@ def get_or_create_sqlite_db(report_path):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_buffer_type ON buffers (buffer_type)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_output_tensors_tensor_id ON output_tensors (tensor_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_input_tensors_tensor_id ON input_tensors (tensor_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stack_traces_source_file_id ON stack_traces (source_file_id)")
+    cursor.execute(CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL)
     sqlite_connection.commit()
     return sqlite_connection
 
@@ -330,10 +326,9 @@ def insert_stack_trace(report_path, operation_id, stack_trace):
 
     # let sqlite handle formatting strings with mixed quotes
     source_file_id = None
-    source_file_path = extract_stack_trace_file(formatted_stack_trace)
-    normalized_path = normalize_existing_source_file_path(source_file_path)
+    normalized_path = normalize_source_path_from_stack_trace(formatted_stack_trace)
     if normalized_path is not None:
-        file_contents = read_source_file_contents(normalized_path)
+        file_contents = read_source_file(normalized_path)
         if file_contents is not None:
             source_file_id = get_source_file_id(cursor, normalized_path, file_contents)
 

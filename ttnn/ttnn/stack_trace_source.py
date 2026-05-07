@@ -4,12 +4,142 @@
 
 """Shared helpers for resolving Python stack traces to on-disk source and SQLite source_files rows."""
 
+import functools
+import os
 import re
+import site
 import sqlite3
+import stat
+import sys
+import tempfile
 from pathlib import Path
 
 _PYTHON_STACK_FILE_PATTERN = re.compile(r'^\s*File "([^"]+)", line \d+, in ')
 _PATH_WITH_LINE_PATTERN = re.compile(r"^\s*([^:\n]+):(\d+)(?::\d+)?\s*$")
+
+# Shared by ``graph_report.create_database_schema`` and ``database.get_or_create_sqlite_db``.
+CREATE_SOURCE_FILES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS source_files (
+    id INTEGER PRIMARY KEY,
+    path text UNIQUE NOT NULL,
+    contents text
+)
+"""
+
+CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL = """
+CREATE TABLE IF NOT EXISTS stack_traces (
+    operation_id int,
+    stack_trace text,
+    source_file_id int REFERENCES source_files(id)
+)
+"""
+
+CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_stack_traces_source_file_id ON stack_traces (source_file_id)"
+)
+
+
+def _realpath(path: str) -> str | None:
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError):
+        return None
+
+
+def _is_regular_file(path: str) -> bool:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode)
+
+
+def _path_is_under_root(candidate: str, root: str) -> bool:
+    if candidate == root:
+        return True
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    return candidate.startswith(prefix)
+
+
+@functools.lru_cache(maxsize=64)
+def _allowed_stack_trace_source_roots(
+    cwd: str,
+    sys_prefix: str,
+    sys_base_prefix: str,
+    venv: str | None,
+    sys_path: tuple[str, ...],
+) -> frozenset[str]:
+    """Prefix-allowlist for paths that may be read when snapshotting stack traces (SAST CWE-22).
+
+    Paths come from Python stack frames captured while generating a tt-metal memory report on
+    this machine; they are not arbitrary remote input. Reads are still limited to resolved paths
+    under these roots so a crafted trace cannot point at unrelated sensitive files.
+    """
+    roots: list[str] = []
+
+    def add(raw: str | None) -> None:
+        if not raw:
+            return
+        resolved = _realpath(raw)
+        if resolved is None or resolved == os.sep:
+            # Never allow the filesystem root as a prefix; it would match every absolute path.
+            return
+        if resolved not in roots:
+            roots.append(resolved)
+
+    add(cwd)
+    try:
+        add(str(Path.home()))
+    except RuntimeError:
+        pass
+    add(sys_prefix)
+    if sys_base_prefix != sys_prefix:
+        add(sys_base_prefix)
+    exe = getattr(sys, "executable", None)
+    if exe:
+        add(os.path.dirname(exe))
+    if venv:
+        add(venv)
+    try:
+        for d in site.getsitepackages():
+            add(d)
+    except (AttributeError, OSError):
+        pass
+    try:
+        add(site.getusersitepackages())
+    except (AttributeError, OSError):
+        pass
+    add(tempfile.gettempdir())
+    for entry in sys_path:
+        if not entry:
+            continue
+        add(entry)
+    here = os.path.dirname(os.path.abspath(__file__))
+    p = here
+    for _ in range(8):
+        if p == os.sep:
+            break
+        add(p)
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+
+    return frozenset(roots)
+
+
+def _resolved_path_allowed_for_stack_trace_read(resolved: str) -> bool:
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        venv = _realpath(venv)
+    roots = _allowed_stack_trace_source_roots(
+        _realpath(os.getcwd()) or os.getcwd(),
+        _realpath(sys.prefix) or sys.prefix,
+        _realpath(getattr(sys, "base_prefix", sys.prefix)) or getattr(sys, "base_prefix", sys.prefix),
+        venv,
+        tuple(sys.path),
+    )
+    return any(_path_is_under_root(resolved, r) for r in roots)
 
 
 # Gets the first file path from a stack trace
@@ -29,31 +159,45 @@ def extract_stack_trace_file(stack_trace_text: str | None) -> str | None:
     return None
 
 
+def normalize_source_path_from_stack_trace(stack_trace_text: str | None) -> str | None:
+    """First source path named in *stack_trace_text*, if it exists on disk and passes read checks."""
+    return normalize_existing_source_file_path(extract_stack_trace_file(stack_trace_text))
+
+
 def normalize_existing_source_file_path(file_path: str | None) -> str | None:
-    if not file_path:
-        return None
+    """Resolve to an absolute path of an existing regular file, or None.
 
-    candidate = Path(file_path).expanduser()
-    if not candidate.is_absolute():
-        candidate = (Path.cwd() / candidate).resolve(strict=False)
-
-    if not candidate.is_file():
-        return None
-
-    return str(candidate.resolve(strict=False))
-
-
-def read_source_file_contents(file_path: str) -> str | None:
-    """Read text only after the same existence/resolve checks as path normalization.
-
-    Stack-trace-derived paths are not arbitrary remote input, but we still avoid
-    opening a path that is not a verified regular file on disk.
+    Stack trace paths are produced by Python while recording a memory report; they are still
+    validated (realpath, regular file, prefix allowlist) before any read.
     """
-    safe = normalize_existing_source_file_path(file_path)
-    if safe is None:
+    if not file_path or not isinstance(file_path, str):
+        return None
+    if "\x00" in file_path:
+        return None
+    expanded = os.path.expanduser(file_path.strip())
+    if not expanded:
+        return None
+    if not os.path.isabs(expanded):
+        expanded = os.path.abspath(os.path.join(os.getcwd(), expanded))
+    resolved = _realpath(expanded)
+    if resolved is None or not _is_regular_file(resolved):
+        return None
+    if not _resolved_path_allowed_for_stack_trace_read(resolved):
+        return None
+    return resolved
+
+
+def read_source_file(normalized_path: str) -> str | None:
+    """Read UTF-8 text from *normalized_path* only.
+
+    Caller must pass a path previously returned by :func:`normalize_existing_source_file_path`
+    (avoids repeating normalization and keeps stack-trace read logic in one place).
+    """
+    if not normalized_path:
         return None
     try:
-        return Path(safe).read_text(encoding="utf-8", errors="replace")
+        with open(normalized_path, encoding="utf-8", errors="replace") as handle:
+            return handle.read()
     except OSError:
         return None
 
