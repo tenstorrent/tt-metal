@@ -107,7 +107,7 @@ RUNNER_PROFILES = {
     },
     "galaxy-topology-6u": {
         "arch": "wormhole_b0",
-        "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "bare-metal"],
+        "runs_on": ["topology-6u", "in-service", "bare-metal"],
         "runner_label": "topology-6u",
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
