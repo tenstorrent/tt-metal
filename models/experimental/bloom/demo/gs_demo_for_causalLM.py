@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import BloomForCausalLM, BloomTokenizerFast
+from transformers import AutoTokenizer, BloomForCausalLM
 import numpy as np
 import pytest
 
@@ -19,7 +19,7 @@ import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
     ((4),),
 )
 def test_bloom_causal_lm(device, model_location_generator, iterations):
-    tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    tokenizer = AutoTokenizer.from_pretrained("bigscience/bloom-560m")
     hf_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hf_reference_model.eval()
 

@@ -7,7 +7,7 @@ import re
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.models.mllama.modeling_mllama import MllamaForCausalLM
 
 import ttnn
@@ -125,12 +125,12 @@ def test_cross_attention_transformer_text_inference(
 
     add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
     partial_state_dict = add_prefix(
-        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.language_model."),
+        load_partial_weights(AutoModelForImageTextToText, model_repo_name, "model.language_model."),
         "model.",
     )
 
     lm_head_weights = add_prefix(
-        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "lm_head."),
+        load_partial_weights(AutoModelForImageTextToText, model_repo_name, "lm_head."),
         "lm_head.",
     )
     partial_state_dict.update(lm_head_weights)

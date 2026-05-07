@@ -6,7 +6,7 @@ import os
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.cache_utils import DynamicCache
 from transformers.models.mllama.modeling_mllama import MllamaCrossAttentionDecoderLayer
 
@@ -68,7 +68,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     reference_model = MllamaCrossAttentionDecoderLayer(config.text_config, layer_idx=layer_idx)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        AutoModelForVision2Seq, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}."
+        AutoModelForImageTextToText, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}."
     )
     reference_model.load_state_dict(partial_state_dict)
     num_chunks = 4

@@ -241,6 +241,7 @@ def generate_reference(
         [{"role": "user", "content": prompt}],
         add_generation_prompt=True,
         tokenize=True,
+        return_dict=False,
     )
     prompt_len = len(raw_prompt_tokens)
     prompt_tokens_tensor = torch.tensor([raw_prompt_tokens], device=device, dtype=torch.long)

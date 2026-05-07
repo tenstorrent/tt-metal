@@ -8,7 +8,7 @@ import os
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.models.mllama.image_processing_mllama import convert_aspect_ratios_to_ids
 from transformers.models.mllama.modeling_mllama import MllamaPrecomputedPositionEmbedding
 
@@ -94,7 +94,7 @@ def test_positional_embedding_inference(
     reference_model = MllamaPrecomputedPositionEmbedding(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        AutoModelForVision2Seq, model_repo_name, "model.vision_model.gated_positional_embedding."
+        AutoModelForImageTextToText, model_repo_name, "model.vision_model.gated_positional_embedding."
     )
     reference_model.load_state_dict(partial_state_dict)
     # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector

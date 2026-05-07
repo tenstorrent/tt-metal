@@ -9,7 +9,7 @@ from datasets import load_dataset
 import evaluate
 from models.experimental.bloom.bloom_utils import pad_input_32
 
-from transformers import BloomTokenizerFast, BloomForQuestionAnswering
+from transformers import AutoTokenizer, BloomForQuestionAnswering
 from models.experimental.bloom.tt.bloom_qa import TtBloomForQuestionAnswering
 
 
@@ -18,7 +18,7 @@ from models.experimental.bloom.tt.bloom_qa import TtBloomForQuestionAnswering
     (("bigscience/bloom-560m", 10),),
 )
 def test_bloom_qa(model_name, device, iterations):
-    tokenizer = BloomTokenizerFast.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     hf_reference_model = BloomForQuestionAnswering.from_pretrained(model_name)
     config = hf_reference_model.config
 

@@ -7,7 +7,7 @@
 import torch
 from PIL import Image
 from torch import nn
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import TTNNLinearLLama
@@ -23,7 +23,7 @@ def test_openvla(device):
     }
 
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True
     )
 

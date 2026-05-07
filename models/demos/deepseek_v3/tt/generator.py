@@ -2496,7 +2496,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Use HF chat template if a tokenizer is provided; otherwise synthesize simple token ids
         if self.tokenizer is not None:
             ids = self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=True
+                [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=True, return_dict=False
             )
             return list(ids)
 

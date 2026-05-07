@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from transformers import BloomForCausalLM, BloomTokenizerFast
+from transformers import AutoTokenizer, BloomForCausalLM
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -30,7 +30,7 @@ def run_bloom_model_test(device):
     pt_bloom_model = hugging_bloom_reference_model.transformer
 
     # Prepare input
-    tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    tokenizer = AutoTokenizer.from_pretrained("bigscience/bloom-560m")
     input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
     tokenized = tokenizer(input_sentance, return_tensors="pt")
     input_ids = tokenized.input_ids

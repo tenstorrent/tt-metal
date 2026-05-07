@@ -17,7 +17,7 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.modeling_utils import no_init_weights
+from transformers.initialization import no_init_weights
 
 import ttnn
 from models.common.modules.lazy_weight import LazyWeight

@@ -9,7 +9,7 @@ Run this in a separate environment with compatible versions:
     # Create venv
     python3 -m venv /tmp/openvla_pt_env
     source /tmp/openvla_pt_env/bin/activate
-    pip install torch transformers==4.40.0 timm==0.9.16 accelerate safetensors pillow numpy
+    pip install torch transformers==5.8.0 timm==0.9.16 accelerate safetensors pillow numpy
 
     # Run this script
     python run_pytorch_openvla.py --output /tmp/pytorch_openvla_outputs.pt
@@ -22,7 +22,7 @@ import sys
 import numpy as np
 import torch
 from PIL import Image
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 
 def main():
@@ -57,7 +57,7 @@ def main():
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
 
     print("Loading PyTorch OpenVLA model...")
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b",
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
@@ -179,7 +179,7 @@ def capture_layer_outputs(output_path="/tmp/pytorch_llm_layers.pt"):
     # Load model
     print("\nLoading model...")
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b",
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
@@ -281,7 +281,7 @@ def benchmark_fps(iterations=10, warmup=2, device="cpu"):
     # Load model
     print("\nLoading model...")
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b",
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,

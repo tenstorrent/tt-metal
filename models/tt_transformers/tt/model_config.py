@@ -2722,8 +2722,8 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
+        rp = text_config["rope_parameters"]
+        self.rope_theta = rp["rope_theta"]
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -2733,8 +2733,18 @@ class ModelArgs:
         ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
-        rope_scaling_params = text_config.get("rope_scaling", None)
-        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        rope_scaling_params = text_config.get("rope_scaling")
+        if rope_scaling_params is None:
+            rope_scaling_params = (
+                {k: v for k, v in rp.items() if k not in ("rope_theta", "partial_rotary_factor")}
+                if rp["rope_type"] != "default"
+                else None
+            )
+
+        self.original_max_context_len = (
+            text_config.get("original_max_position_embeddings") or rp["original_max_position_embeddings"]
+        )
+
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
             if rope_scaling_params
@@ -2995,14 +3005,13 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
-            if type(self.hf_config) in model_cls._model_mapping:
-                return model_cls
+        if type(self.hf_config) in AutoModelForImageTextToText._model_mapping:
+            return AutoModelForImageTextToText
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 

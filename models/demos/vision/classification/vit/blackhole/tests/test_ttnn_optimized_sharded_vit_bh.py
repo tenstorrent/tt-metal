@@ -29,8 +29,7 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
     config = model.config
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_pixel_values)
-    torch_output, *_ = model.vit.embeddings.patch_embeddings(torch_pixel_values)
+    torch_output = model.vit.embeddings.patch_embeddings(torch_pixel_values)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -87,14 +86,11 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     model = load_torch_model(model_location_generator, embedding=True)
 
-    dataset = load_dataset(
-        "huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149", trust_remote_code=True
-    )
-    image = dataset["test"]["image"][0]
+    image = load_dataset("huggingface/cats-image", split="test")["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
-    torch_output, *_ = model.vit.embeddings(torch_pixel_values)
+    torch_output = model.vit.embeddings(torch_pixel_values)
 
     # cls_token & position embeddings expand to batch_size
     # TODO: pass batch_size to preprocess_model_parameters
@@ -169,7 +165,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    torch_output = model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -293,7 +289,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    torch_output = model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -380,14 +376,11 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    dataset = load_dataset(
-        "huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149", trust_remote_code=True
-    )
-    image = dataset["test"]["image"][0]
+    image = load_dataset("huggingface/cats-image", split="test")["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
-    torch_output, *_ = model(torch_pixel_values).logits
+    torch_output = model(torch_pixel_values).logits[0]
 
     # cls_token & position embeddings expand to batch_size
     # TODO: pass batch_size to preprocess_model_parameters

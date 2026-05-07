@@ -6,7 +6,7 @@ import torch
 
 from transformers import (
     BloomForQuestionAnswering,
-    BloomTokenizerFast,
+    AutoTokenizer,
     pipeline,
 )
 from models.common.utility_functions import print_diff_argmax
@@ -48,7 +48,7 @@ def run_bloom_qa_inference(device):
 
     # Prepare input
     # tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer = BloomTokenizerFast.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     nlp = pipeline("question-answering", model=hugging_bloom_reference_model, tokenizer=tokenizer)
     preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
 

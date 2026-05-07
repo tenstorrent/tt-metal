@@ -4,7 +4,7 @@
 
 import torch
 
-from transformers import BloomForCausalLM, BloomTokenizerFast
+from transformers import AutoTokenizer, BloomForCausalLM
 from models.common.utility_functions import print_diff_argmax
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -43,7 +43,7 @@ def run_bloom_model_test(device):
     pt_bloom_model = hugging_bloom_reference_model.transformer
 
     # Prepare input
-    tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    tokenizer = AutoTokenizer.from_pretrained("bigscience/bloom-560m")
     input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
     tokenized = tokenizer(input_sentance, return_tensors="pt")
     input_ids = pad_input_32(tokenized.input_ids, config.pad_token_id)

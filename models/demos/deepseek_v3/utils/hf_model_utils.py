@@ -20,7 +20,7 @@ from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_utils import no_init_weights
+from transformers.initialization import no_init_weights
 
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 

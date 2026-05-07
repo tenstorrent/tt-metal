@@ -103,8 +103,7 @@ def test_vit_embeddings(device, model_name, image_size_h, image_size_w, model_lo
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
 
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0].resize((image_size_h, image_size_w))
+    image = load_dataset("huggingface/cats-image", split="test")["image"][0].resize((image_size_h, image_size_w))
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt", do_resize=False, do_center_crop=False).pixel_values
     torch_output, *_ = model.vit.embeddings(torch_pixel_values, interpolate_pos_encoding=True)
@@ -328,8 +327,7 @@ def test_vit(device, model_name, image_size_h, image_size_w, sequence_size, mode
     model = load_torch_model(model_location_generator)
     config = model.config
 
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0].resize((image_size_h, image_size_w))
+    image = load_dataset("huggingface/cats-image", split="test")["image"][0].resize((image_size_h, image_size_w))
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(
         image, return_tensors="pt", do_resize=False, do_center_crop=False

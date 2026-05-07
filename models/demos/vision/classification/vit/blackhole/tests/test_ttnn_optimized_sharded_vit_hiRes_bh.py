@@ -50,7 +50,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     model = transformers.models.vit.modeling_vit.ViTLayer(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    torch_output = model(torch_hidden_states)
     torch_hidden_states = torch_hidden_states.unsqueeze(1)
 
     parameters = preprocess_model_parameters(

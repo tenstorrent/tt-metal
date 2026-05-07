@@ -192,10 +192,10 @@ class GeneratorChat:
 
 class GeneratorText:
     def __init__(self, model_name):
-        from transformers import AutoModelForVision2Seq, AutoProcessor
+        from transformers import AutoProcessor
 
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name)
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name)
 
     def text_completion(
         self,

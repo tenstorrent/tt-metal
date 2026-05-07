@@ -115,6 +115,11 @@ class CLIPEncoder(Module):
             state["final_layer_norm"] = state.pop("text_model.final_layer_norm.weight")
         if "text_model.final_layer_norm.bias" in state:
             state["final_layer_norm_bias"] = state.pop("text_model.final_layer_norm.bias")
+        # Newer HF CLIPTextModel is flat (no "text_model." nesting)
+        if "final_layer_norm.weight" in state:
+            state["final_layer_norm"] = state.pop("final_layer_norm.weight")
+        if "final_layer_norm.bias" in state:
+            state["final_layer_norm_bias"] = state.pop("final_layer_norm.bias")
         if "text_projection.weight" in state:
             state["text_projection"] = state.pop("text_projection.weight")
 

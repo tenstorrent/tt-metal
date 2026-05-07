@@ -88,8 +88,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
 
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image = load_dataset("huggingface/cats-image", split="test")["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
@@ -395,8 +394,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     model = load_torch_model(model_location_generator)
     config = model.config
 
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image = load_dataset("huggingface/cats-image", split="test")["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)

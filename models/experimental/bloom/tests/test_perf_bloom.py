@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import profiler
 from models.perf.perf_utils import prep_perf_report
 
-from transformers import BloomForCausalLM, BloomTokenizerFast
+from transformers import AutoTokenizer, BloomForCausalLM
 
 from loguru import logger
 
@@ -39,7 +39,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     HF_model = HF_model_top.transformer
 
     # Prepare input
-    tokenizer = BloomTokenizerFast.from_pretrained(tokenizer_name)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     inputs = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
 
     tokenized = tokenizer(inputs, return_tensors="pt")

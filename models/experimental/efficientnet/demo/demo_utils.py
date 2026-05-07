@@ -45,8 +45,7 @@ def preprocess():
 
 
 def download_images(img_path):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image = load_dataset("huggingface/cats-image", split="test")["image"][0]
     image.save(img_path)
     logger.info(f"Input image saved to {img_path}")
 

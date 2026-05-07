@@ -5,9 +5,28 @@
 import torch
 from loguru import logger
 from transformers.generation.configuration_utils import GenerationConfig
-from transformers.generation.logits_process import LogitsProcessorList
+from transformers.generation.logits_process import (
+    EncoderNoRepeatNGramLogitsProcessor,
+    EncoderRepetitionPenaltyLogitsProcessor,
+    ExponentialDecayLengthPenalty,
+    ForcedBOSTokenLogitsProcessor,
+    ForcedEOSTokenLogitsProcessor,
+    InfNanRemoveLogitsProcessor,
+    LogitNormalization,
+    LogitsProcessorList,
+    MinLengthLogitsProcessor,
+    MinNewTokensLengthLogitsProcessor,
+    NoBadWordsLogitsProcessor,
+    NoRepeatNGramLogitsProcessor,
+    PrefixConstrainedLogitsProcessor,
+    RepetitionPenaltyLogitsProcessor,
+    SuppressTokensAtBeginLogitsProcessor,
+    SuppressTokensLogitsProcessor,
+)
+from transformers.generation.stopping_criteria import StoppingCriteria
 from typing import Optional
 import ttnn
+from models.common.generation_utils import ForceTokensLogitsProcessor, HammingDiversityLogitsProcessor
 from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
@@ -67,6 +86,7 @@ def _get_logits_processor(
     encoder_input_ids,  # torch.LongTensor
     prefix_allowed_tokens_fn,  # Callable[[int, torch.Tensor], List[int]],
     logits_processor,  # Optional[LogitsProcessorList]
+    is_encoder_decoder: bool,
 ):  # -> LogitsProcessorList:
     """
     This class returns a [`LogitsProcessorList`] list object that contains all relevant [`LogitsProcessor`]
@@ -100,7 +120,7 @@ def _get_logits_processor(
         generation_config.encoder_no_repeat_ngram_size is not None
         and generation_config.encoder_no_repeat_ngram_size > 0
     ):
-        if self.config.is_encoder_decoder:
+        if is_encoder_decoder:
             processors.append(
                 EncoderNoRepeatNGramLogitsProcessor(generation_config.encoder_no_repeat_ngram_size, encoder_input_ids)
             )
@@ -181,6 +201,7 @@ def get_logits_processor(input_ids, config):
         encoder_input_ids=input_ids,
         prefix_allowed_tokens_fn=None,
         logits_processor=LogitsProcessorList(),
+        is_encoder_decoder=config.is_encoder_decoder,
     )
 
     return logits_processor

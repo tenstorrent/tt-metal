@@ -308,9 +308,9 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
             chat.append({"role": "system", "content": system_prompt_text})
         if prompt_text:
             chat.append({"role": "user", "content": prompt_text})
-        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True, return_dict=False)
     else:
-        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True, return_dict=False)
 
 
 def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):

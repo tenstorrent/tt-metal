@@ -212,10 +212,14 @@ class ModelArgs:
                 chat.append({"role": "system", "content": system_prompt_text})
             if prompt_text:
                 chat.append({"role": "user", "content": prompt_text})
-            return self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+            return self.tokenizer.apply_chat_template(
+                chat, add_generation_prompt=True, tokenize=True, return_dict=False
+            )
         else:
             # prompt_text is already a list of chat messages
-            return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+            return self.tokenizer.apply_chat_template(
+                prompt_text, add_generation_prompt=True, tokenize=True, return_dict=False
+            )
 
     @staticmethod
     def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
