@@ -308,7 +308,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            _llk_pack_init_<false, false, true>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4, false, false, 1, false);
+            _llk_pack_init_<false, false, true>(formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4, 1, false);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
