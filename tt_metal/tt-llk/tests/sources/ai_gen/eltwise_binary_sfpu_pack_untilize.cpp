@@ -86,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, tile_size);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, false /* tilize */>(formats.pack_src, formats.pack_dst, tile_size);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, UNTILIZE>();
     _llk_pack_untilize_init_wrapper_<ct_dim>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
 

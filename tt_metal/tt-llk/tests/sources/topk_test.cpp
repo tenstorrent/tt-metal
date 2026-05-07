@@ -301,8 +301,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         DataCopyType::A2D,
                         is_fp32_dest_acc_en,
                         BroadcastType::NONE,
-                        false, // tilize
-                        false  // is_int_fpu_en
+                        false /* tilize */,
+                        false /* is_int_fpu_en */
                         >(/*num_rows_per_matrix=*/4, /*math_format=*/math_format);
 
                     const int first_tile_in_pair_idx = stage_index * NUM_TILES_PER_STAGE;
@@ -397,7 +397,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // We pack the result with index tiles right after value tiles.
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
 
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, false, false>();
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, false /* untilize */, false /* wormhole_is_fp32_dest_acc_en */>();
 
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, ckernel::to_underlying(DataFormat::UInt16)};
     const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, ckernel::to_underlying(DataFormat::UInt16)};
@@ -427,13 +427,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     if (first_hardware_configuration)
                     {
-                        _llk_pack_hw_configure_wrapper_<
-                            is_fp32_dest_acc_en,
-                            false,  // untilize
-                            false>( // tilize
-                            pack_src_format,
-                            pack_dst_format,
-                            16 * 16 * 4 /* tile_size */);
+                        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+                            pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */);
                     }
                     else
                     {
@@ -451,7 +446,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             1 /* num_tiles */);
                     }
 
-                    _llk_pack_init_wrapper_<false, false>(pack_dst_format);
+                    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 

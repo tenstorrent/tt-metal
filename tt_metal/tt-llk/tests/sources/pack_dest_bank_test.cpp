@@ -124,9 +124,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const int num_blocks         = params.NUM_BLOCKS;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, tilize_en>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, tilize_en>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_with_src_wrapper_<false, false, tilize_en>(
+    _llk_pack_init_with_src_wrapper_<false /* untilize */, false /* zero_output */, tilize_en>(
         formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces, false, false, num_tiles_in_block);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);

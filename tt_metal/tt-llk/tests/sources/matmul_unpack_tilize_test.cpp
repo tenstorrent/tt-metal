@@ -162,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool TILIZE = true;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(
         formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4 /* tile_size */);
-    _llk_pack_init_wrapper_<UNTILIZE, false, TILIZE>(formats_array[run].pack_dst);
+    _llk_pack_init_wrapper_<UNTILIZE, false /* zero_output */, TILIZE>(formats_array[run].pack_dst);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
 
     _llk_packer_wait_for_math_done_();

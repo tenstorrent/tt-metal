@@ -69,9 +69,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<false, false, false>(
+    _llk_pack_hw_configure_wrapper_<false /* is_fp32_dest_acc_en */, false /* untilize */, false /* tilize */>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
-    _llk_pack_init_wrapper_<false, false, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
 
     _llk_packer_wait_for_math_done_();

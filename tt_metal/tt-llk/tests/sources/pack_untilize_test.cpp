@@ -81,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en = false;
 
 // copy srca to dest
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, is_int_fpu_en>(
         params.num_faces, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -130,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         L1_ACCESS_ADDRESS_GRANULARITY;
     const std::uint32_t base_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, false /* tilize */>(formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, UNTILIZE>();
     _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
@@ -142,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false, false, TILE_C_DIM, TILE_DST_CT_OFFSET>(
+            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
                 pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }

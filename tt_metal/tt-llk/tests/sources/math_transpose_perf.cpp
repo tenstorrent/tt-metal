@@ -102,8 +102,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-            _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(
-                TILE_NUM_FACES, formats.math);
+            _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                DataCopyType::A2D,
+                is_fp32_dest_acc_en,
+                BroadcastType::NONE,
+                false /* tilize */,
+                false /* is_int_fpu_en */>(TILE_NUM_FACES, formats.math);
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
@@ -144,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
-        _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
+        _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }

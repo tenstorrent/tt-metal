@@ -87,11 +87,12 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure packer hardware
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
 
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, false, false>();
+    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, false /* untilize */, false /* wormhole_is_fp32_dest_acc_en */>();
 
     // Pack the result from destination register to output buffer
     _llk_packer_wait_for_math_done_();

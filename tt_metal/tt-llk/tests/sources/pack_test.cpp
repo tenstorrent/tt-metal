@@ -60,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 // copy srca to dest
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, is_int_fpu_en>(
         params.num_faces, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -95,9 +95,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, tilize_en>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, tilize_en>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, params.num_faces, false, false, params.RELU_CONFIG);
-    _llk_pack_init_wrapper_<false, false, tilize_en>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */, tilize_en>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;

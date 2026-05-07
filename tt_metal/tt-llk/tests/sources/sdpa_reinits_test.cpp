@@ -145,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync1, false>();
 
     // Custom addr_mod reinit for reduce_block_max_row (full init done in Operation 0)
-    _llk_math_reduce_block_max_row_reinit_wrapper_<1, false>();
+    _llk_math_reduce_block_max_row_reinit_wrapper_<1 /* block_ct_dim */, false /* is_fp32_dest_acc_en */>();
 
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
@@ -211,10 +211,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand buffer_Res0(0x1b000, 2048);
     const std::uint32_t pack_src_format0 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format0 = ckernel::to_underlying(DataFormat::Float16_b);
-    _llk_pack_hw_configure_wrapper_<false, false, false>(pack_src_format0, pack_dst_format0, 128 /* tile_size */);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(
+    _llk_pack_hw_configure_wrapper_<false /* is_fp32_dest_acc_en */, false /* untilize */, false /* tilize */>(
+        pack_src_format0, pack_dst_format0, 128 /* tile_size */);
+    _llk_pack_init_with_src_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(
         pack_src_format0, pack_dst_format0, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false /* is_fp32_dest_acc_en */, false /* untilize */>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();
@@ -232,9 +233,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format1, pack_dst_format1, 128);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(
+    _llk_pack_init_with_src_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(
         pack_src_format1, pack_dst_format1, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false /* is_fp32_dest_acc_en */, false /* untilize */>();
     _llk_pack_reduce_mask_config_<false, ckernel::ReduceDim::REDUCE_ROW>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
@@ -254,9 +255,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format2, pack_dst_format2, 128);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(
+    _llk_pack_init_with_src_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(
         pack_src_format2, pack_dst_format2, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false /* is_fp32_dest_acc_en */, false /* untilize */>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();
@@ -274,9 +275,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     const std::uint32_t pack_dst_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format3, pack_dst_format3, 128);
-    _llk_pack_init_with_src_wrapper_<false, false, false>(
+    _llk_pack_init_with_src_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(
         pack_src_format3, pack_dst_format3, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, false>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false /* is_fp32_dest_acc_en */, false /* untilize */>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();

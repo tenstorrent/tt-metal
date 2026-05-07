@@ -216,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
             formats.pack_src,
             formats.pack_dst,
             TILE_SIZE_PACK,
@@ -224,7 +224,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_C_DIM,
             num_faces,
             PARTIAL_FACE_PACK);
-        _llk_pack_init_wrapper_<false, false, false>(formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(
+            formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
