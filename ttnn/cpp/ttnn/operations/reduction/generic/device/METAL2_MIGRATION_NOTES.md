@@ -14,28 +14,60 @@ The list below is structured "what bit me, and why the guide didn't help".
 
 ---
 
-### 1. `TensorAccessorArgs` is silently incompatible with `ProgramSpec`
+### 1. `TensorAccessorArgs` was incompatible with `ProgramSpec` (resolved by Metal 2.0 TensorBindings)
 
 The legacy reader/writer use the modern `TensorAccessor` device-side accessor,
 which is configured by appending positional CTAs via
 `TensorAccessorArgs(*buffer).append_to(reader_compile_time_args)`. Metal 2.0
 `KernelSpec::compile_time_arg_bindings` is **named-only**; positional CTAs are
-hard-coded to empty inside `MakeProgramFromSpec`.
+hard-coded to empty inside `MakeProgramFromSpec`. The named CTAs themselves are
+emitted as `experimental::CtaVal<uint32_t>` constants in
+`kernel_args_generated.h`, never reaching the legacy positional CTA slot table
+that `TensorAccessorArgs<CTA_OFFSET>` reads via `get_compile_time_arg_val(...)`.
 
-Concrete consequences:
-- Sharded tensor support cannot be ported as-is. The Metal 2.0 reader/writer
-  for `MULTI_CORE_W` was forced to fall back to `InterleavedAddrGenFast` and
-  the host factory now `TT_FATAL`s on non-interleaved memory configs.
-- Any kernel that uses `TensorAccessor` (the recommended accessor going
-  forward) currently has to be downgraded to `InterleavedAddrGenFast` for the
-  Metal 2.0 path.
+Concrete consequences (pre-resolution):
+- The canonical
+  `constexpr auto args = TensorAccessorArgs<CTA_OFFSET>(); auto a = TensorAccessor(args, addr);`
+  pattern doesn't work in Metal 2.0 kernels.
+- An interim local helper
+  (`tt_metal/hw/inc/api/tensor/interleaved_tensor_accessor_helpers.h`) was
+  introduced for the non-sharded interleaved case: the host declared `is_dram`
+  + `aligned_page_size` as named CTAs and the kernel constructed
+  `TensorAccessor<InterleavedDSpec<IsDram>>` directly. It worked, but it was a
+  per-port shim and didn't extend to sharded buffers.
+
+**Resolution** — `akertesz/tensor-binding-support` adds first-class TensorParameter
+bindings to Metal 2.0:
+
+- `ProgramSpec::tensor_parameters` declares each tensor a program operates on
+  (`{unique_id, TensorSpec}`).
+- `KernelSpec::tensor_bindings` binds a tensor parameter to a per-kernel
+  accessor name (`{tensor_parameter_name, accessor_name}`).
+- `ProgramRunParams::tensor_args` supplies the actual MeshTensors at execution
+  time (`{tensor_parameter_name, std::cref(mesh_tensor)}`).
+- The kernel constructs the accessor via `TensorAccessor accessor(ta::name)`;
+  the codegen-emitted token in `kernel_bindings_generated.h` carries the right
+  CTA layout, and the buffer base address comes from the binding's CRTA slot
+  populated automatically by `SetProgramRunParameters` from the TensorArg.
+
+The reduction factory ports use this directly. The interim helper was deleted.
+`is_dram` and `aligned_page_size` are no longer named CTAs in the kernel — they
+fall out of the bound TensorSpec.
+
+Sharded support: the binding mechanism is sharded-capable in principle (the
+TensorAccessorArgs bridge handles all distribution kinds), but the ttnn factory
+ports still `TT_FATAL` on sharded inputs because the sharded reader / writer
+plumbing wasn't part of this migration. Re-enabling sharded reductions under
+Metal 2.0 just requires lifting that fail-fast and supplying the matching
+sharded reader/writer; no further framework work is required.
 
 The guide should:
-- Call this out explicitly in [Troubleshooting](#troubleshooting) and in the
-  CTA section of the kernel-args migration.
-- Either provide a shim (named CTA bindings emitted by
-  `TensorAccessorArgs::append_named_to(...)`) or an officially recommended
-  workaround.
+- Document the TensorParameter / TensorBinding / TensorArg trio as the
+  canonical way to expose tensor accessors in Metal 2.0.
+- Show the kernel-side `TensorAccessor accessor(ta::name)` pattern explicitly.
+- Mention that this replaces the pre-binding interim of constructing
+  `TensorAccessor` from named-CTA `is_dram` + `aligned_page_size` (the
+  reduction factories' first-pass workaround, since deleted).
 
 ### 2. Self-referential DFB bindings (producer == consumer)
 
@@ -345,22 +377,26 @@ We refactored to remove the Gen1-only assumption from the helpers themselves:
 
 What this **does** unblock for Quasar:
 
-- The compute kernels (`reduce_metal2.cpp`, `reduce_w_neg_metal2.cpp`) compile
+- The compute kernels (`reduce.cpp`, `reduce_w_neg.cpp`, `reduce_h.cpp`,
+  `reduce_h_neg.cpp`, `reduce_hw_neg.cpp`, plus the welford trio) compile
   and execute the reduce flow without any `#ifdef ARCH_QUASAR` branches.
 - The host factory now sets both `gen1_data_movement_config` and
   `gen2_data_movement_config` on the reader/writer KernelSpecs so the same
   ProgramSpec lowers on both archs.
+- The reader/writer data path goes through `TensorAccessor` (constructed from
+  Metal 2.0 TensorBindings) and `experimental::Noc::async_read/async_write`,
+  both of which have arch-agnostic noc_traits specializations
+  (`noc_traits_t<TensorAccessor<DSpec>>` in `experimental/tensor.h`,
+  `noc_traits_t<DataflowBuffer>` in `experimental/dataflow_buffer.h`). No
+  `InterleavedAddrGenFast` references remain in the reduction kernels.
 
-What this **does not** yet unblock for Quasar:
+What this **does not** yet unblock:
 
-- The reader/writer **data path** still uses Gen1-only primitives:
-  `InterleavedAddrGenFast<...>` and `noc_async_read_tile / noc_async_write_tile`.
-  Porting requires either (a) the Metal 2.0 framework supporting positional CTAs
-  so `TensorAccessor` works (then `experimental::Noc::async_read(tensor_accessor,
-  dfb, ...)` lights up via the existing `noc_traits_t<DataflowBuffer>` specialization),
-  or (b) an upstream `noc_traits_t<InterleavedAddrGenFast<...>>` specialization so
-  the arch-agnostic `Noc` API can drive the older interleaved address gen. Neither
-  is in place today; tracked under shortcoming #1.
+- Sharded reductions: the framework's TensorBinding mechanism handles sharded
+  TensorAccessors fine, but the ttnn factory ports here `TT_FATAL` on sharded
+  inputs because the sharded reader / writer kernels haven't been migrated.
+  Lifting the fail-fast plus porting the sharded reader/writer is a separate
+  task; no further framework work is needed.
 - ~~`MakeQuasarComputeConfig` in `tt_metal/impl/metal2_host_api/program_spec.cpp`
   still sizes `unpack_modes` to `dfb_name_to_id.size()` (mirror of the Gen1 bug
   patched as #10).~~ **Patched** when first hit on a Quasar emulator run; see #10
@@ -677,7 +713,7 @@ The guide should:
 
 | # | Shortcoming | Severity |
 |---|-------------|---------|
-| 1 | `TensorAccessorArgs` incompatible with `ProgramSpec` (positional CTAs) | High — blocks sharded migration |
+| 1 | ~~`TensorAccessorArgs` incompatible with `ProgramSpec` (positional CTAs)~~ — **resolved** by the Metal 2.0 TensorBinding mechanism (`akertesz/tensor-binding-support`) | Was high; now n/a for non-sharded |
 | 2 | Self-referential DFB bindings undocumented | Medium — easy to discover but not documented |
 | 3 | No way to express per-WorkUnit CTAs (split_work_to_cores) | Medium — forces RTA demotion |
 | 4 | Kernel-library helpers still take raw CB ids | Medium — relies on Gen1 invariant |

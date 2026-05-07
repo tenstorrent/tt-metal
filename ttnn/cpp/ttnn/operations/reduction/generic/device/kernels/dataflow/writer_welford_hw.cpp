@@ -12,20 +12,23 @@
 // Phase 2 (per output): Waits for the compute kernel to pack the output tile
 // into cb_out, then NOC-writes it to DRAM.
 //
-// Migration notes: address generation goes through InterleavedAddrGenFast
-// (Gen1-only); see reader_unary_reduce_universal_start_id.cpp for the
-// framework-level discussion.
+// Migration notes: the output tensor is bound by name (ta::output_tensor); the
+// host declares a TensorParameter and supplies the MeshTensor via
+// ProgramRunParams::TensorArg, so the kernel constructs a TensorAccessor
+// directly without needing is_dram or aligned_page_size as named CTAs.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/dataflow_buffer.h"
+#include "experimental/noc.h"
+#include "experimental/tensor.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_combine.h"
 
 void kernel_main() {
     // Per-node runtime arguments.
-    const uint32_t dst_addr = get_arg(args::dst_addr);
     const uint32_t NC_per_core = get_arg(args::NC_per_core);
     const uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
 
@@ -36,15 +39,12 @@ void kernel_main() {
     constexpr uint32_t H = get_arg(args::H);
     constexpr bool correction = get_arg(args::correction) != 0;
     constexpr uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
-    constexpr uint32_t aligned_page_size = get_arg(args::aligned_page_size);
-    constexpr bool is_dram = get_arg(args::is_dram) != 0;
 
     experimental::DataflowBuffer cb_partial_obj(dfb::partial);
     experimental::DataflowBuffer cb_combined_obj(dfb::combined);
     experimental::DataflowBuffer cb_out_obj(dfb::output);
 
     const uint32_t cb_partial = cb_partial_obj.get_id();
-    const uint32_t cb_out = cb_out_obj.get_id();
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0. In tile
     // format, row 0 spans Face 0 (cols 0–15) and Face 1 (cols 16–31). Each face
@@ -54,13 +54,11 @@ void kernel_main() {
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
     const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
-    const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
+    const uint32_t out_tile_size_bytes = get_tile_size(cb_out_obj.get_id());
 
-    const InterleavedAddrGenFast<is_dram> s = {
-        .bank_base_address = dst_addr,
-        .page_size = aligned_page_size,
-        .data_format = get_dataformat(cb_out),
-    };
+    TensorAccessor output_accessor(ta::output_tensor);
+
+    experimental::Noc noc;
 
     // NC_per_core is the total number of NC slices assigned to this core. Each
     // output element is produced by combining reduce_batch_size consecutive NC
@@ -118,10 +116,11 @@ void kernel_main() {
         // Phase 2: NOC-write the output tile (packed by compute) to DRAM.
         cb_out_obj.wait_front(1);
         const uint32_t out_tile_id = output_tile_start_id + out;
-        noc_async_write_tile(out_tile_id, s, cb_out_obj.get_read_ptr());
-        noc_async_writes_flushed();
+        noc.async_write(
+            cb_out_obj, output_accessor, out_tile_size_bytes, {.offset_bytes = 0}, {.page_id = out_tile_id});
+        noc.async_writes_flushed();
         cb_out_obj.pop_front(1);
     }
 
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

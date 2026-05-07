@@ -12,6 +12,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -25,6 +26,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "reduce_metal2_factory_helpers.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
@@ -35,17 +37,23 @@ namespace m2 = tt::tt_metal::experimental::metal2_host_api;
 
 namespace {
 
-// KernelSpec / WorkUnitSpec ids — kept local with an `HW_` prefix so the symbols
-// don't clash with the W factory's analogues under Unity builds. DFB ids and the
-// MakeDFB / BindDFB / DefinesFromMap helpers are shared and live in
-// reduce_metal2_factory_helpers.hpp.
+// KernelSpec / WorkUnitSpec / TensorParameter ids — kept local with an `HW_`
+// prefix so the symbols don't clash with other factories' analogues under
+// Unity builds. DFB ids and the MakeDFB / BindDFB / DefinesFromMap helpers are
+// shared and live in reduce_metal2_factory_helpers.hpp.
 constexpr const char* HW_READER_KERNEL = "reduce_hw_reader";
 constexpr const char* HW_WRITER_KERNEL = "reduce_hw_writer";
 constexpr const char* HW_COMPUTE_KERNEL = "reduce_hw_compute";
 constexpr const char* HW_WORK_UNIT = "single_core";
+constexpr const char* HW_INPUT_TENSOR = "input_tensor";
+constexpr const char* HW_OUTPUT_TENSOR = "output_tensor";
 
 m2::ProgramRunParams BuildRunParams(
-    const ReduceSingleCoreHwSharedVariables& shared, bool negate, uint32_t Ht, uint32_t src_addr, uint32_t dst_addr) {
+    const ReduceSingleCoreHwSharedVariables& shared,
+    bool negate,
+    uint32_t Ht,
+    const tt::tt_metal::MeshTensor& input_mt,
+    const tt::tt_metal::MeshTensor& output_mt) {
     m2::ProgramRunParams params;
 
     m2::ProgramRunParams::KernelRunParams reader_params;
@@ -54,7 +62,6 @@ m2::ProgramRunParams BuildRunParams(
         .node = shared.core,
         .args =
             {
-                {"src_addr", src_addr},
                 {"num_tiles", shared.num_tensor_tiles},
                 {"start_id", 0u},
             },
@@ -66,7 +73,6 @@ m2::ProgramRunParams BuildRunParams(
         .node = shared.core,
         .args =
             {
-                {"dst_addr", dst_addr},
                 {"num_pages", shared.num_tensor_tiles / shared.out_dim_divider},
                 {"start_id", 0u},
             },
@@ -85,6 +91,10 @@ m2::ProgramRunParams BuildRunParams(
     }
 
     params.kernel_run_params = {std::move(reader_params), std::move(writer_params), std::move(compute_params)};
+    params.tensor_args = {
+        m2::ProgramRunParams::TensorArg{.tensor_parameter_name = HW_INPUT_TENSOR, .tensor = std::cref(input_mt)},
+        m2::ProgramRunParams::TensorArg{.tensor_parameter_name = HW_OUTPUT_TENSOR, .tensor = std::cref(output_mt)},
+    };
     return params;
 }
 
@@ -100,8 +110,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
 
-    // The Metal 2.0 reader/writer kernels rely on InterleavedAddrGenFast — sharded buffers
-    // aren't supported on this path. Match the W factory's stance.
+    // The Metal 2.0 TensorAccessor binding currently only supports non-sharded
+    // interleaved buffers. Match the W factory's stance.
     TT_FATAL(
         !a.memory_config().is_sharded(),
         "ReduceSingleCoreHwProgramFactory (Metal 2.0): only interleaved input buffers are supported (got "
@@ -184,22 +194,15 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t dst_single_tile_size = tile_size(dst_cb_data_format);
 
-    // Buffer addressing setup.
-    const Buffer* src_buffer = a.buffer();
-    const Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
-    const uint32_t src_is_dram = src_buffer->is_dram() ? 1u : 0u;
-    const uint32_t dst_is_dram = dst_buffer->is_dram() ? 1u : 0u;
-    const uint32_t src_aligned_page_size = src_buffer->aligned_page_size();
-    const uint32_t dst_aligned_page_size = dst_buffer->aligned_page_size();
+    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device");
 
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     const uint32_t scaler_bits = std::bit_cast<uint32_t>(scaler);
     const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
     // ---- DFBs ----
-    // Quasar's implicit-sync DFB scheduling allocates 2 transaction IDs per side and
-    // requires capacity to be a multiple of 2; we standardize on 2 entries here.
+    // Quasar's implicit-sync DFB scheduling allocates 2 transaction IDs per side
+    // and asserts capacity % num_txn_ids == 0; standardize on 2 entries.
     constexpr uint32_t kNumInputEntries = 2;
     constexpr uint32_t kNumScalerEntries = 2;
     constexpr uint32_t kNumOutputEntries = 2;
@@ -232,10 +235,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     reader.num_threads = 1;
     reader.compile_time_arg_bindings = {
         {"scaler_bits", scaler_bits},
-        {"is_dram", src_is_dram},
-        {"aligned_page_size", src_aligned_page_size},
     };
-    reader.runtime_arguments_schema.named_runtime_args = {"src_addr", "num_tiles", "start_id"};
+    reader.runtime_arguments_schema.named_runtime_args = {"num_tiles", "start_id"};
     reader.compiler_options.defines = reduce_defines;
     reader.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
@@ -247,6 +248,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     };
     BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
     BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    reader.tensor_bindings.push_back(
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = HW_INPUT_TENSOR, .accessor_name = "input_tensor"});
 
     // ---- Writer ----
     m2::KernelSpec writer;
@@ -254,11 +257,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     writer.source = m2::KernelSpec::SourceFilePath{
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved.cpp"};
     writer.num_threads = 1;
-    writer.compile_time_arg_bindings = {
-        {"is_dram", dst_is_dram},
-        {"aligned_page_size", dst_aligned_page_size},
-    };
-    writer.runtime_arguments_schema.named_runtime_args = {"dst_addr", "num_pages", "start_id"};
+    writer.runtime_arguments_schema.named_runtime_args = {"num_pages", "start_id"};
     writer.compiler_options.defines = reduce_defines;
     writer.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
@@ -269,6 +268,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
         .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
+    writer.tensor_bindings.push_back(
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = HW_OUTPUT_TENSOR, .accessor_name = "output_tensor"});
 
     // ---- Compute ----
     // Non-negate uses the shared reduce.cpp (Ht is runtime so the same source
@@ -290,7 +291,6 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             {"NC", NC},
             {"post_mul_scaler_bits", post_mul_scaler_bits},
         };
-        // No runtime args for the negate kernel.
     } else {
         compute.compile_time_arg_bindings = {
             {"Wt", Wt},
@@ -324,14 +324,17 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     work_unit.kernels = {HW_READER_KERNEL, HW_WRITER_KERNEL, HW_COMPUTE_KERNEL};
     work_unit.target_nodes = core_set;
 
-    // ---- Assemble the spec ----
+    // ---- Assemble + parameterize ----
     m2::ProgramSpec spec;
     spec.program_id = "ttnn::reduce_single_core_hw";
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = std::move(dataflow_buffers);
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = HW_INPUT_TENSOR, .spec = a.tensor_spec()},
+        m2::TensorParameter{.unique_id = HW_OUTPUT_TENSOR, .spec = output.tensor_spec()},
+    };
     spec.work_units = {std::move(work_unit)};
 
-    // ---- Build and parameterize ----
     Program program = m2::MakeProgramFromSpec(*a.device(), spec);
 
     shared_variables_t shared{
@@ -340,8 +343,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
         .out_dim_divider = out_dim_divider,
     };
 
-    auto run_params =
-        BuildRunParams(shared, operation_attributes.negate, Ht, src_buffer->address(), dst_buffer->address());
+    auto run_params = BuildRunParams(shared, operation_attributes.negate, Ht, a.mesh_tensor(), output.mesh_tensor());
     m2::SetProgramRunParameters(program, run_params);
 
     return cached_program_t{std::move(program), std::move(shared)};
@@ -352,16 +354,17 @@ void ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
     const ReduceParams& operation_attributes,
     const tt::tt_metal::Tensor& tensor_args,
     tt::tt_metal::Tensor& tensor_return_value) {
-    const auto* src_buffer = tensor_args.buffer();
-    const auto* dst_buffer = tensor_return_value.buffer();
-
     const auto& shape = tensor_args.padded_shape();
     const uint32_t H = shape[2];
     const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
     const uint32_t Ht = H / tile_height;
 
     auto run_params = BuildRunParams(
-        cached_program.shared_variables, operation_attributes.negate, Ht, src_buffer->address(), dst_buffer->address());
+        cached_program.shared_variables,
+        operation_attributes.negate,
+        Ht,
+        tensor_args.mesh_tensor(),
+        tensor_return_value.mesh_tensor());
     m2::SetProgramRunParameters(cached_program.program, run_params);
 }
 

@@ -10,15 +10,16 @@
 // a single KernelSpec covers both groups (mirroring the W factory's treatment of Ht).
 //
 // Sharded inputs are not supported on this path; sharded H reductions still go
-// through the Gen1 pipeline upstream. (The Gen1 factory's WIDTH_SHARDED branch
-// used a sharded-specific reader and the data_movement writer_unary_sharded.cpp,
-// neither of which is wired through Metal 2.0 yet.)
+// through the Gen1 pipeline upstream. Tensor base addresses are resolved via
+// Metal 2.0 TensorAccessor bindings (see ProgramSpec::tensor_parameters and
+// KernelSpec::tensor_bindings); is_dram and aligned_page_size are no longer
+// needed as kernel-side arguments.
 
 #include "reduce_op_multi_core_h_program_factory.hpp"
 
 #include <bit>
-#include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -36,6 +37,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "reduce_metal2_factory_helpers.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
@@ -46,12 +48,12 @@ namespace m2 = tt::tt_metal::experimental::metal2_host_api;
 
 namespace {
 
-// KernelSpec / WorkUnitSpec ids — H_-prefixed to avoid Unity-build collisions
-// with the W and HW factories. DFB ids and helpers come from the shared header.
 constexpr const char* H_READER_KERNEL = "reduce_h_reader";
 constexpr const char* H_WRITER_KERNEL = "reduce_h_writer";
 constexpr const char* H_COMPUTE_KERNEL = "reduce_h_compute";
 constexpr const char* H_WORK_UNIT = "all_workers";
+constexpr const char* H_INPUT_TENSOR = "input_tensor";
+constexpr const char* H_OUTPUT_TENSOR = "output_tensor";
 
 struct HWorkDistribution {
     uint32_t num_cores = 0;
@@ -108,7 +110,9 @@ HWorkDistribution ComputeHWorkDistribution(const ReduceParams& attrs, const tt::
 }
 
 m2::ProgramRunParams BuildRunParams(
-    const ReduceMultiCoreHSharedVariables& shared, uint32_t src_addr, uint32_t dst_addr) {
+    const ReduceMultiCoreHSharedVariables& shared,
+    const tt::tt_metal::MeshTensor& input_mt,
+    const tt::tt_metal::MeshTensor& output_mt) {
     m2::ProgramRunParams params;
 
     m2::ProgramRunParams::KernelRunParams reader_params;
@@ -135,11 +139,9 @@ m2::ProgramRunParams BuildRunParams(
             TT_THROW("Core not in specified core ranges");
         }
 
-        // The H factory reader expects column-partitioned tile addressing:
+        // Column-partitioned tile addressing:
         //   col_start_tile_id = (num_cols_read / Wt) * HtWt + (num_cols_read % Wt)
         //   curr_col_in_batch = num_cols_read % Wt
-        // This lets the reader walk H rows for each (NC slice, column) pair while
-        // the compute kernel sees tiles as (per-core Wt columns × Ht rows × NC=1).
         const uint32_t col_start_tile_id = (num_cols_read / Wt) * HtWt + (num_cols_read % Wt);
         const uint32_t curr_col_in_batch = num_cols_read % Wt;
 
@@ -147,7 +149,6 @@ m2::ProgramRunParams BuildRunParams(
             .node = core,
             .args =
                 {
-                    {"src_addr", src_addr},
                     {"col_start_tile_id", col_start_tile_id},
                     {"curr_col_in_batch", curr_col_in_batch},
                     {"num_cols", num_cols_per_core},
@@ -157,7 +158,6 @@ m2::ProgramRunParams BuildRunParams(
             .node = core,
             .args =
                 {
-                    {"dst_addr", dst_addr},
                     {"num_pages", num_cols_per_core},
                     {"start_id", num_cols_read},
                 },
@@ -171,6 +171,10 @@ m2::ProgramRunParams BuildRunParams(
     }
 
     params.kernel_run_params = {std::move(reader_params), std::move(writer_params), std::move(compute_params)};
+    params.tensor_args = {
+        m2::ProgramRunParams::TensorArg{.tensor_parameter_name = H_INPUT_TENSOR, .tensor = std::cref(input_mt)},
+        m2::ProgramRunParams::TensorArg{.tensor_parameter_name = H_OUTPUT_TENSOR, .tensor = std::cref(output_mt)},
+    };
     return params;
 }
 
@@ -213,7 +217,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
     (void)math_approx_mode;
     (void)packer_l1_acc;
-    (void)dst_full_sync_en;
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     const uint32_t src0_single_tile_size = tile_size(src0_cb_data_format);
@@ -233,17 +236,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     const uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
     const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    const Buffer* src_buffer = a.buffer();
-    const Buffer* dst_buffer = output.buffer();
-    const uint32_t src_is_dram = src_buffer->is_dram() ? 1u : 0u;
-    const uint32_t dst_is_dram = dst_buffer->is_dram() ? 1u : 0u;
-    const uint32_t src_aligned_page_size = src_buffer->aligned_page_size();
-    const uint32_t dst_aligned_page_size = dst_buffer->aligned_page_size();
-
     // ---- DFBs ----
-    // Gen1 used 2-tile CBs (chunk_size for negate to absorb the kernel's batched
-    // pushes). Quasar's implicit-sync DFB scheduling requires capacity to be a
-    // multiple of 2; the negate scratch sizing rounds up to satisfy that.
     const uint32_t num_input_entries = operation_attributes.negate ? std::max<uint32_t>(chunk_size, 2u) : 2u;
     const uint32_t num_output_entries = operation_attributes.negate ? std::max<uint32_t>(chunk_size, 2u) : 2u;
     constexpr uint32_t kNumScalerEntries = 2;
@@ -325,9 +318,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
     std::map<std::string, std::string> reduce_defines_map =
         reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::H);
-    // The reader's row_chunk sizing depends on FP32_DEST_ACC / DST_SYNC_FULL config —
-    // the kernel reads these via DEST_AUTO_LIMIT. Pass them through as defines so the
-    // reader's compile-time row_chunk matches what the negate compute kernel uses.
     reduce_defines_map["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines_map["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
     const auto reduce_defines = DefinesFromMap(reduce_defines_map);
@@ -345,11 +335,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         {"HtWt", HtWt},
         {"scaler_bits", scaler_bits},
         {"use_welford", 0u},
-        {"is_dram", src_is_dram},
-        {"aligned_page_size", src_aligned_page_size},
     };
-    reader.runtime_arguments_schema.named_runtime_args = {
-        "src_addr", "col_start_tile_id", "curr_col_in_batch", "num_cols"};
+    reader.runtime_arguments_schema.named_runtime_args = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     reader.compiler_options.defines = reduce_defines;
     reader.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
@@ -361,6 +348,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     };
     BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
     BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    reader.tensor_bindings.push_back(
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = H_INPUT_TENSOR, .accessor_name = "input_tensor"});
 
     // ---- Writer ----
     m2::KernelSpec writer;
@@ -368,11 +357,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     writer.source = m2::KernelSpec::SourceFilePath{
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved.cpp"};
     writer.num_threads = 1;
-    writer.compile_time_arg_bindings = {
-        {"is_dram", dst_is_dram},
-        {"aligned_page_size", dst_aligned_page_size},
-    };
-    writer.runtime_arguments_schema.named_runtime_args = {"dst_addr", "num_pages", "start_id"};
+    writer.runtime_arguments_schema.named_runtime_args = {"num_pages", "start_id"};
     writer.compiler_options.defines = reduce_defines;
     writer.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
@@ -383,11 +368,10 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
+    writer.tensor_bindings.push_back(
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = H_OUTPUT_TENSOR, .accessor_name = "output_tensor"});
 
     // ---- Compute ----
-    // H factory passes compute_NC = 1 because the reader's column-partitioned
-    // addressing already iterates NC slices (a per-core column run can span them).
-    // From the kernel's view, it sees Wt_per_core columns × Ht rows × NC=1.
     constexpr uint32_t compute_NC = 1u;
     const std::string compute_kernel_path =
         operation_attributes.negate
@@ -435,6 +419,10 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     spec.program_id = "ttnn::reduce_multi_core_h";
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = std::move(dataflow_buffers);
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = H_INPUT_TENSOR, .spec = a.tensor_spec()},
+        m2::TensorParameter{.unique_id = H_OUTPUT_TENSOR, .spec = output.tensor_spec()},
+    };
     spec.work_units = {std::move(work_unit)};
 
     Program program = m2::MakeProgramFromSpec(*a.device(), spec);
@@ -450,7 +438,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         .HtWt = HtWt,
     };
 
-    auto run_params = BuildRunParams(shared, src_buffer->address(), dst_buffer->address());
+    auto run_params = BuildRunParams(shared, a.mesh_tensor(), output.mesh_tensor());
     m2::SetProgramRunParameters(program, run_params);
 
     return cached_program_t{std::move(program), std::move(shared)};
@@ -461,10 +449,8 @@ void ReduceMultiCoreHProgramFactory::override_runtime_arguments(
     const ReduceParams& /*operation_attributes*/,
     const tt::tt_metal::Tensor& tensor_args,
     tt::tt_metal::Tensor& tensor_return_value) {
-    const auto* src_buffer = tensor_args.buffer();
-    const auto* dst_buffer = tensor_return_value.buffer();
-
-    auto run_params = BuildRunParams(cached_program.shared_variables, src_buffer->address(), dst_buffer->address());
+    auto run_params =
+        BuildRunParams(cached_program.shared_variables, tensor_args.mesh_tensor(), tensor_return_value.mesh_tensor());
     m2::SetProgramRunParameters(cached_program.program, run_params);
 }
 

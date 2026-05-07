@@ -3,30 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 column-partitioned reader for the multi-core H reduction primitive
-// (also used by welford H/HW once that factory is migrated).
+// (also used by Welford H/HW).
 //
 // Migration notes:
 //   - Compile-time arguments are bound by name (args::Ht, args::Wt, args::HtWt,
-//     args::scaler_bits, args::use_welford, args::is_dram, args::aligned_page_size).
-//   - Runtime arguments are bound by name (args::src_addr, args::col_start_tile_id,
+//     args::scaler_bits, args::use_welford).
+//   - Runtime arguments are bound by name (args::col_start_tile_id,
 //     args::curr_col_in_batch, args::num_cols).
-//   - The input dataflow buffer is bound by name (dfb::input); placement is
-//     derived from kernel bindings, not specified per-CB on the host.
-//
-// Arch coverage caveat: address generation goes through InterleavedAddrGenFast and
-// noc_async_read_tile (Gen1-only). See the header of
-// reader_unary_reduce_universal_start_id.cpp for the framework-level discussion.
+//   - The input dataflow buffer is bound by name (dfb::input).
+//   - The input tensor is bound by name (ta::input_tensor); the host supplies a
+//     MeshTensor via ProgramRunParams::TensorArg so address generation no
+//     longer needs is_dram or aligned_page_size as kernel arguments.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/dataflow_buffer.h"
+#include "experimental/noc.h"
+#include "experimental/tensor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     // Per-node runtime arguments.
-    const uint32_t src_addr = get_arg(args::src_addr);
     uint32_t col_start_tile_id = get_arg(args::col_start_tile_id);  // start id in column-major order
     uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
     const uint32_t num_cols = get_arg(args::num_cols);
@@ -37,8 +37,6 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_arg(args::HtWt);
     constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
     constexpr bool use_welford = get_arg(args::use_welford) != 0;
-    constexpr uint32_t aligned_page_size = get_arg(args::aligned_page_size);
-    constexpr bool is_dram = get_arg(args::is_dram) != 0;
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
@@ -54,11 +52,11 @@ void kernel_main() {
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<scaler_buf_id, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    const InterleavedAddrGenFast<is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = aligned_page_size,
-        .data_format = get_dataformat(input_buf.get_id()),
-    };
+    // TensorAccessor built from the Metal 2.0 tensor binding (ta::input_tensor).
+    TensorAccessor input_accessor(ta::input_tensor);
+    const uint32_t tile_bytes = get_tile_size(input_buf.get_id());
+
+    experimental::Noc noc;
 
     constexpr uint32_t onetile = 1;
 
@@ -76,9 +74,6 @@ void kernel_main() {
     // chunk can contain elements with different N or C values
     // in each row we possibly need to move the col_start_tile_id to the first column of the next batch
     // reset variables are used to correctly return to the start column + repeat the process for each row
-    // reset_col_start - resets col_start_tile_id to the starting column
-    // reset_w - resets w to the column number in the batch of the starting column
-    // reset_curr_id - resets curr_id to the next tile in the starting column
     for (uint32_t i = 0; i < num_cols; i += row_chunk) {
         uint32_t chunk_end = std::min(i + row_chunk, num_cols);
         uint32_t curr_id = col_start_tile_id;
@@ -91,8 +86,8 @@ void kernel_main() {
             col_start_tile_id = reset_col_start;
             for (uint32_t k = i; k < chunk_end; ++k) {
                 input_buf.reserve_back(onetile);
-                noc_async_read_tile(curr_id, s, input_buf.get_write_ptr());
-                noc_async_read_barrier();
+                noc.async_read(input_accessor, input_buf, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                noc.async_read_barrier();
                 input_buf.push_back(onetile);
 
                 ++w;

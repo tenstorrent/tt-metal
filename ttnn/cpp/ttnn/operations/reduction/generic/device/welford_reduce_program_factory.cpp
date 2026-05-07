@@ -9,13 +9,16 @@
 // scratch DFBs. Each variant produces a single ProgramSpec.
 //
 // Sharded inputs are not supported on this path; sharded Welford reductions
-// still go through the Gen1 pipeline upstream (matches the W/H/HW factories).
+// still go through the Gen1 pipeline upstream. Tensor base addresses are
+// resolved via Metal 2.0 TensorAccessor bindings (see
+// ProgramSpec::tensor_parameters and KernelSpec::tensor_bindings); is_dram
+// and aligned_page_size are no longer needed as kernel-side arguments.
 
 #include "welford_reduce_program_factory.hpp"
 
 #include <bit>
-#include <cmath>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -30,6 +33,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "reduce_metal2_factory_helpers.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
@@ -41,12 +45,12 @@ namespace m2 = tt::tt_metal::experimental::metal2_host_api;
 
 namespace {
 
-// KernelSpec / WorkUnitSpec ids — WELFORD_-prefixed to avoid Unity-build
-// collisions with the W, H, HW reduce factories.
 constexpr const char* WELFORD_READER_KERNEL = "welford_reader";
 constexpr const char* WELFORD_WRITER_KERNEL = "welford_writer";
 constexpr const char* WELFORD_COMPUTE_KERNEL = "welford_compute";
 constexpr const char* WELFORD_WORK_UNIT = "all_workers";
+constexpr const char* WELFORD_INPUT_TENSOR = "input_tensor";
+constexpr const char* WELFORD_OUTPUT_TENSOR = "output_tensor";
 
 // Welford-specific DFB ids (in addition to INPUT_DFB / SCALER_DFB / OUTPUT_DFB
 // from the shared header).
@@ -102,7 +106,10 @@ WelfordWorkDistribution ComputeWelfordWorkDistribution(
     return wd;
 }
 
-m2::ProgramRunParams BuildRunParams(const WelfordReduceSharedVariables& shared, uint32_t src_addr, uint32_t dst_addr) {
+m2::ProgramRunParams BuildRunParams(
+    const WelfordReduceSharedVariables& shared,
+    const tt::tt_metal::MeshTensor& input_mt,
+    const tt::tt_metal::MeshTensor& output_mt) {
     using tt::tt_metal::ReduceOpDim;
 
     m2::ProgramRunParams params;
@@ -141,7 +148,6 @@ m2::ProgramRunParams BuildRunParams(const WelfordReduceSharedVariables& shared, 
                 .node = core,
                 .args =
                     {
-                        {"src_addr", src_addr},
                         {"num_tiles", num_input_tiles_per_core},
                         {"start_id", input_tiles_offset},
                     },
@@ -150,7 +156,6 @@ m2::ProgramRunParams BuildRunParams(const WelfordReduceSharedVariables& shared, 
                 .node = core,
                 .args =
                     {
-                        {"dst_addr", dst_addr},
                         {"num_pages", num_output_tiles_per_core},
                         {"start_id", output_tiles_offset},
                     },
@@ -184,19 +189,17 @@ m2::ProgramRunParams BuildRunParams(const WelfordReduceSharedVariables& shared, 
                 .node = core,
                 .args =
                     {
-                        {"src_addr", src_addr},
                         {"col_start_tile_id", col_start_tile_id},
                         {"curr_col_in_batch", 0u},
                         {"num_cols", num_cols},
                     },
             });
             // HW writer is welford-specific (writer_welford_hw.cpp): args are
-            // {dst_addr, NC_per_core, output_tile_start_id}.
+            // {NC_per_core, output_tile_start_id} (tensor binding supplies dst_addr).
             writer_params.named_runtime_args.push_back(m2::ProgramRunParams::KernelRunParams::NodeNamedRTAs{
                 .node = core,
                 .args =
                     {
-                        {"dst_addr", dst_addr},
                         {"NC_per_core", nc_slices_per_core},
                         {"output_tile_start_id", output_offset},
                     },
@@ -228,7 +231,6 @@ m2::ProgramRunParams BuildRunParams(const WelfordReduceSharedVariables& shared, 
                 .node = core,
                 .args =
                     {
-                        {"src_addr", src_addr},
                         {"col_start_tile_id", col_start_tile_id},
                         {"curr_col_in_batch", curr_col_in_batch},
                         {"num_cols", num_cols_per_core},
@@ -238,7 +240,6 @@ m2::ProgramRunParams BuildRunParams(const WelfordReduceSharedVariables& shared, 
                 .node = core,
                 .args =
                     {
-                        {"dst_addr", dst_addr},
                         {"num_pages", num_cols_per_core},
                         {"start_id", num_cols_read},
                     },
@@ -253,6 +254,10 @@ m2::ProgramRunParams BuildRunParams(const WelfordReduceSharedVariables& shared, 
     }
 
     params.kernel_run_params = {std::move(reader_params), std::move(writer_params), std::move(compute_params)};
+    params.tensor_args = {
+        m2::ProgramRunParams::TensorArg{.tensor_parameter_name = WELFORD_INPUT_TENSOR, .tensor = std::cref(input_mt)},
+        m2::ProgramRunParams::TensorArg{.tensor_parameter_name = WELFORD_OUTPUT_TENSOR, .tensor = std::cref(output_mt)},
+    };
     return params;
 }
 
@@ -336,20 +341,12 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t dst_single_tile_size = tile_size(dst_cb_data_format);
 
-    // Number of work units depends on which dim we're reducing.
     const uint32_t num_work_units = reduce_w ? (NC * Ht) : (reduce_hw ? (NC / reduce_batch_size) : (NC * Wt));
     if (reduce_hw) {
         TT_FATAL(
             NC % reduce_batch_size == 0, "NC ({}) must be divisible by reduce_batch_size ({})", NC, reduce_batch_size);
     }
     const WelfordWorkDistribution wd = ComputeWelfordWorkDistribution(operation_attributes, a, num_work_units);
-
-    const Buffer* input_buffer = a.buffer();
-    const Buffer* output_buffer = output.buffer();
-    const uint32_t src_is_dram = input_buffer->is_dram() ? 1u : 0u;
-    const uint32_t dst_is_dram = output_buffer->is_dram() ? 1u : 0u;
-    const uint32_t src_aligned_page_size = input_buffer->aligned_page_size();
-    const uint32_t dst_aligned_page_size = output_buffer->aligned_page_size();
 
     const uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     const bool do_scale = (operation_attributes.scalar != 1.0f);
@@ -371,22 +368,14 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()));
 
     if (reduce_w) {
-        // cb_var: scratch buffer for variance tile between the two transpose steps.
-        // Format matches DST register format (Float32 when fp32_dest_acc enabled,
-        // else Float16_b) since it caches DST contents.
         const tt::DataFormat var_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t var_single_tile_size = tile_size(var_data_format);
         dataflow_buffers.push_back(
             MakeDFB(VAR_DFB, var_single_tile_size, kNumScratchEntries, var_data_format, a.tensor_spec().tile()));
-        // cb_scaled: 1-tile intermediate between FPU mul and SFPU transpose. Always
-        // bound for W-reduce (the kernel gates use with `if constexpr (do_scale)`,
-        // but the wrapper construction needs the binding to exist).
         dataflow_buffers.push_back(MakeDFB(
             SCALED_DFB, input_single_tile_size, kNumScratchEntries, input_cb_data_format, a.tensor_spec().tile()));
     }
     if (reduce_hw) {
-        // cb_partial / cb_combined: both Float32, used to thread the per-column
-        // (mean, var) pair through the writer's W-combine step.
         constexpr tt::DataFormat partial_data_format = tt::DataFormat::Float32;
         const uint32_t partial_single_tile_size = tile_size(partial_data_format);
         dataflow_buffers.push_back(MakeDFB(
@@ -415,19 +404,14 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     if (reduce_w) {
-        // W-reduce uses the universal-start-id reader (sequential row-major).
         reader.source = m2::KernelSpec::SourceFilePath{
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_reduce_universal_start_id.cpp"};
         reader.compile_time_arg_bindings = {
             {"scaler_bits", scaler_bits},
-            {"is_dram", src_is_dram},
-            {"aligned_page_size", src_aligned_page_size},
         };
-        reader.runtime_arguments_schema.named_runtime_args = {"src_addr", "num_tiles", "start_id"};
+        reader.runtime_arguments_schema.named_runtime_args = {"num_tiles", "start_id"};
     } else {
-        // H/HW use the column-partitioned transpose reader with use_welford=1
-        // (forces row_chunk=1 so Welford sees one column at a time).
         reader.source = m2::KernelSpec::SourceFilePath{
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp"};
@@ -437,14 +421,13 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             {"HtWt", HtWt},
             {"scaler_bits", scaler_bits},
             {"use_welford", 1u},
-            {"is_dram", src_is_dram},
-            {"aligned_page_size", src_aligned_page_size},
         };
-        reader.runtime_arguments_schema.named_runtime_args = {
-            "src_addr", "col_start_tile_id", "curr_col_in_batch", "num_cols"};
+        reader.runtime_arguments_schema.named_runtime_args = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     }
     BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
     BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    reader.tensor_bindings.push_back(
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = WELFORD_INPUT_TENSOR, .accessor_name = "input_tensor"});
 
     // ---- Writer ----
     m2::KernelSpec writer;
@@ -459,8 +442,6 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     if (reduce_hw) {
-        // HW-reduce uses the welford-specific writer that W-combines per-column
-        // partials and writes the final scalar.
         writer.source = m2::KernelSpec::SourceFilePath{
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_welford_hw.cpp"};
         writer.compile_time_arg_bindings = {
@@ -470,26 +451,21 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             {"H", H},
             {"correction", static_cast<uint32_t>(operation_attributes.correction)},
             {"reduce_batch_size", reduce_batch_size},
-            {"is_dram", dst_is_dram},
-            {"aligned_page_size", dst_aligned_page_size},
         };
-        writer.runtime_arguments_schema.named_runtime_args = {"dst_addr", "NC_per_core", "output_tile_start_id"};
+        writer.runtime_arguments_schema.named_runtime_args = {"NC_per_core", "output_tile_start_id"};
         // HW writer doesn't propagate reduce_defines (matches Gen1 behavior).
         BindDFB(writer, PARTIAL_DFB, "partial", m2::KernelSpec::DFBEndpointType::CONSUMER);
         BindDFB(writer, COMBINED_DFB, "combined", m2::KernelSpec::DFBEndpointType::PRODUCER);
         BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
     } else {
-        // W and H reduce share the generic interleaved tile writer.
         writer.source = m2::KernelSpec::SourceFilePath{
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved.cpp"};
-        writer.compile_time_arg_bindings = {
-            {"is_dram", dst_is_dram},
-            {"aligned_page_size", dst_aligned_page_size},
-        };
-        writer.runtime_arguments_schema.named_runtime_args = {"dst_addr", "num_pages", "start_id"};
+        writer.runtime_arguments_schema.named_runtime_args = {"num_pages", "start_id"};
         writer.compiler_options.defines = reduce_defines;
         BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
     }
+    writer.tensor_bindings.push_back(m2::KernelSpec::TensorBinding{
+        .tensor_parameter_name = WELFORD_OUTPUT_TENSOR, .accessor_name = "output_tensor"});
 
     // ---- Compute ----
     std::string compute_kernel_path;
@@ -546,16 +522,12 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     BindDFB(compute, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::CONSUMER);
     BindDFB(compute, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::PRODUCER);
     if (reduce_w) {
-        // var DFB: produced when packing variance, consumed when transposing back.
         BindDFB(compute, VAR_DFB, "var_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
         BindDFB(compute, VAR_DFB, "var_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
-        // scaled DFB: produced after FPU mul, consumed by SFPU transpose.
         BindDFB(compute, SCALED_DFB, "scaled_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
         BindDFB(compute, SCALED_DFB, "scaled_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
     }
     if (reduce_hw) {
-        // partial DFB: produced by compute, consumed by writer. combined DFB:
-        // produced by writer, consumed by compute.
         BindDFB(compute, PARTIAL_DFB, "partial", m2::KernelSpec::DFBEndpointType::PRODUCER);
         BindDFB(compute, COMBINED_DFB, "combined", m2::KernelSpec::DFBEndpointType::CONSUMER);
     }
@@ -571,6 +543,10 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     spec.program_id = "ttnn::welford_reduce";
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = std::move(dataflow_buffers);
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = WELFORD_INPUT_TENSOR, .spec = a.tensor_spec()},
+        m2::TensorParameter{.unique_id = WELFORD_OUTPUT_TENSOR, .spec = output.tensor_spec()},
+    };
     spec.work_units = {std::move(work_unit)};
 
     Program program = m2::MakeProgramFromSpec(*a.device(), spec);
@@ -588,7 +564,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         .reduce_dim = reduce_dim,
     };
 
-    auto run_params = BuildRunParams(shared, input_buffer->address(), output_buffer->address());
+    auto run_params = BuildRunParams(shared, a.mesh_tensor(), output.mesh_tensor());
     m2::SetProgramRunParameters(program, run_params);
 
     return cached_program_t{std::move(program), std::move(shared)};
@@ -599,11 +575,8 @@ void WelfordReduceProgramFactory::override_runtime_arguments(
     const WelfordReduceParams& /*operation_attributes*/,
     const tt::tt_metal::Tensor& tensor_args,
     tt::tt_metal::Tensor& tensor_return_value) {
-    const auto* input_buffer = tensor_args.buffer();
-    const auto* output_buffer = tensor_return_value.buffer();
-
     auto run_params =
-        BuildRunParams(cached_program.shared_variables, input_buffer->address(), output_buffer->address());
+        BuildRunParams(cached_program.shared_variables, tensor_args.mesh_tensor(), tensor_return_value.mesh_tensor());
     m2::SetProgramRunParameters(cached_program.program, run_params);
 }
 
