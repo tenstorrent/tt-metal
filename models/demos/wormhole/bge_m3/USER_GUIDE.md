@@ -22,6 +22,72 @@ model_args, tt_model, state_dict = create_tt_model(
 
 You can then tokenize with `model_args.encode_prompts(...)` and pass `input_ids`, `attention_mask`, and `token_type_ids` to `tt_model`.
 
+## Trace capture for repeated inference
+
+Trace capture records the model's program once on device and replays it without recompilation, giving the best latency for repeated inference. When using trace capture, follow the warmup → capture → replay pattern:
+
+```python
+import ttnn
+from models.common.auto_compose import to_torch_auto_compose
+from models.demos.wormhole.bge_m3.tt.common import create_tt_model
+
+device = ttnn.open_device(device_id=0, trace_region_size=50_000_000, num_command_queues=1)
+
+model_args, model, _ = create_tt_model(
+    mesh_device=device, max_batch_size=1, max_seq_len=512,
+    dtype=ttnn.bfloat8_b, hf_model_name="BAAI/bge-m3",
+)
+
+# 1. Warmup (JIT compile)
+encoded = model_args.encode_prompts(["warmup"], prompt_length=512)
+staged = encoded["model_inputs"]
+warmup_out = model(**staged)
+ttnn.synchronize_device(device)
+ttnn.deallocate(warmup_out)
+
+# 2. Capture trace (records the program at fixed device memory addresses)
+output_dev = model.capture_trace(
+    input_ids=staged["input_ids"],
+    attention_mask=staged["attention_mask"],
+    token_type_ids=staged["token_type_ids"],
+    position_ids=staged["position_ids"],
+    mesh_device=device, cq_id=0,
+)
+
+# 3. For each new prompt: overwrite device tensors in-place, then replay
+for prompt in ["First query.", "Second query.", "Third query."]:
+    enc = model_args.encode_prompts([prompt], prompt_length=512)
+
+    # copy_host_to_device_tensor writes new data to the SAME device address
+    # the trace reads from — this is how new inputs reach the captured program.
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(enc["input_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        staged["input_ids"],
+    )
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(enc["attention_mask"].bfloat16(),
+                        dtype=model_args.attention_mask_dtype, layout=ttnn.TILE_LAYOUT),
+        staged["attention_mask"],
+    )
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(enc["token_type_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        staged["token_type_ids"],
+    )
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(enc["position_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        staged["position_ids"],
+    )
+
+    model.execute_trace(blocking=True)
+    hidden_states = to_torch_auto_compose(output_dev, device=device)
+    # ... extract embeddings from hidden_states
+
+model.release_trace()
+ttnn.close_device(device)
+```
+
+See `demo/demo_v2.py` for a complete runnable example.
+
 ## Embedding API
 
 For dense, sparse, and ColBERT-style embeddings, use `BgeM3ForEmbedding`.
