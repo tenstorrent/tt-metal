@@ -129,7 +129,7 @@ def test_dflash_lossless_block_replay_matches_golden_fixture() -> None:
     assert sum(length - 1 for length in result.acceptance_lengths) == trace["expected"]["accepted_draft_tokens"]
 
 
-def test_dflash_deepseek_b1_write_contract_preserves_block_positions() -> None:
+def test_dflash_blaze_spec_decode_write_contract_preserves_block_positions() -> None:
     trace = _load_json(TRACE_PATH)
     result = _replay_dflash_lossless_trace(trace)
 

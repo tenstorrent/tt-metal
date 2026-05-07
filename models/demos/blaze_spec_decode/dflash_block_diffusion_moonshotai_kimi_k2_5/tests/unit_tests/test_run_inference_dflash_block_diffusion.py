@@ -79,7 +79,7 @@ class _TraceBackedModel:
 
 
 class _DFlashTraceBackedPipeline:
-    """Temporary host-side seam until DeepSeek B1 exposes DFlash block proposals in ModelPipeline."""
+    """Temporary host-side seam until the Blaze spec-decode pipeline exposes DFlash block proposals."""
 
     def __init__(self, trace: dict, model: _TraceBackedModel) -> None:
         self.pipeline = SimpleNamespace(my_stage_idx=0)
