@@ -828,7 +828,27 @@ protected:
                 e.what());
             shared_mesh_.reset();
         }
-        shared_mesh_ = mesh_device_shared_detail::mesh_fixture_open(cfg);
+        auto new_mesh = mesh_device_shared_detail::mesh_fixture_open(cfg);
+        // Mitigation — post-open fabric health check: if fabric is broken right after open
+        // (e.g. chip 4 erisc was degraded by a prior suite's TearDown), skip rather than
+        // letting every test timeout for TT_METAL_OPERATION_TIMEOUT_SECONDS.
+        if (new_mesh && Traits::config().fabric_config != tt_fabric::FabricConfig::DISABLED) {
+            if (!fabric_health_detail::check_fabric_routers_healthy(new_mesh)) {
+                log_warning(
+                    tt::LogTest,
+                    "open_shared_mesh: post-open fabric health check FAILED — mesh appears degraded. "
+                    "Releasing mesh so tests skip instead of timing out.");
+                try {
+                    mesh_device_shared_detail::mesh_fixture_close(new_mesh, cfg);
+                } catch (...) {
+                    new_mesh.reset();
+                }
+                devices_valid_ = false;
+                needs_recovery_ = false;
+                return;
+            }
+        }
+        shared_mesh_ = new_mesh;
         devices_valid_ = static_cast<bool>(shared_mesh_);
         needs_recovery_ = false;
         // Cache the runtime fabric config now that the mesh (and therefore MetalContext +
