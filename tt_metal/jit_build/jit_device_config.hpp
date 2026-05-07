@@ -16,6 +16,10 @@
 
 #include "impl/context/context_types.hpp"
 
+namespace tt::llrt {
+class RunTimeOptions;
+}  // namespace tt::llrt
+
 namespace tt::tt_metal {
 
 class Hal;
@@ -81,5 +85,14 @@ void enumerate_jit_device_configs(
     const std::string& core_descriptor_path,
     const std::string& soc_descriptor_path,
     const std::function<void(const JitDeviceConfig&)>& callback);
+
+// Iterate every JitDeviceConfig that is officially supported for ahead-of-time
+// (offline) compilation, covering both firmware precompile and offline kernel
+// compile. Resolves core/SoC descriptor paths under the rtoptions root and
+// expands each (arch, core_descriptor, soc_descriptor) tuple via
+// enumerate_jit_device_configs. The supported-products table itself is an
+// implementation detail of jit_device_config.cpp.
+void enumerate_offline_compile_device_configs(
+    const tt::llrt::RunTimeOptions& rtoptions, const std::function<void(const JitDeviceConfig&)>& callback);
 
 }  // namespace tt::tt_metal

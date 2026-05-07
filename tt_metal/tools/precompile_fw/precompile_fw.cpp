@@ -47,25 +47,6 @@ void precompile_for_config(
 
 }  // namespace tt::tt_metal
 
-namespace {
-
-struct PrecompileConfig {
-    tt::ARCH arch;
-    std::string core_descriptor_name;
-    std::string soc_descriptor_name;
-};
-
-const auto supported_configs = std::to_array<PrecompileConfig>({
-    {tt::ARCH::WORMHOLE_B0, "wormhole_b0_80_arch.yaml", "wormhole_b0_80_arch.yaml"},
-    {tt::ARCH::WORMHOLE_B0, "wormhole_b0_80_arch_eth_dispatch.yaml", "wormhole_b0_80_arch.yaml"},
-    {tt::ARCH::WORMHOLE_B0, "wormhole_b0_80_arch_fabric_mux.yaml", "wormhole_b0_80_arch.yaml"},
-    {tt::ARCH::BLACKHOLE, "blackhole_140_arch.yaml", "blackhole_140_arch.yaml"},
-    {tt::ARCH::BLACKHOLE, "blackhole_140_arch_eth_dispatch.yaml", "blackhole_140_arch.yaml"},
-    {tt::ARCH::BLACKHOLE, "blackhole_140_arch_fabric_mux.yaml", "blackhole_140_arch.yaml"},
-});
-
-}  // namespace
-
 int main() {
     tt::llrt::RunTimeOptions rtoptions;
     // Regenerate firmware into the JIT cache (out_firmware_root_), not an existing
@@ -77,18 +58,9 @@ int main() {
     // stale) weakened ELF over it. Disabling precompiled FW keeps both in the JIT
     // cache so the .elf and its weakened ELF stay consistent before the copy.
     rtoptions.set_disable_precompiled_fw(true);
-    const std::string core_descriptors_dir = rtoptions.get_root_dir() + "tt_metal/core_descriptors/";
-    const std::string soc_descriptors_dir = rtoptions.get_root_dir() + "tt_metal/soc_descriptors/";
-    for (const auto& [arch, core_descriptor_name, soc_descriptor_name] : supported_configs) {
-        std::string full_core_descriptor_path = core_descriptors_dir + core_descriptor_name;
-        std::string full_soc_descriptor_path = soc_descriptors_dir + soc_descriptor_name;
-        tt::tt_metal::enumerate_jit_device_configs(
-            arch,
-            full_core_descriptor_path,
-            full_soc_descriptor_path,
-            [&rtoptions](const tt::tt_metal::JitDeviceConfig& jit_device_config) {
-                tt::tt_metal::precompile_for_config(jit_device_config, rtoptions);
-            });
-    }
+    tt::tt_metal::enumerate_offline_compile_device_configs(
+        rtoptions, [&rtoptions](const tt::tt_metal::JitDeviceConfig& jit_device_config) {
+            tt::tt_metal::precompile_for_config(jit_device_config, rtoptions);
+        });
     return 0;
 }

@@ -6,6 +6,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <array>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -21,6 +23,7 @@
 #include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
+#include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
@@ -217,6 +220,41 @@ void enumerate_jit_device_configs(
                 }
             }
         }
+    }
+}
+
+namespace {
+
+// Supported (arch, core_descriptor, soc_descriptor) tuples for ahead-of-time
+// (offline) compilation. Used by both firmware precompile and offline kernel
+// compile to enumerate JitDeviceConfig values without a live device.
+struct OfflineCompileDeviceConfig {
+    tt::ARCH arch;
+    std::string_view core_descriptor_name;
+    std::string_view soc_descriptor_name;
+};
+
+constexpr auto offline_compile_device_configs = std::to_array<OfflineCompileDeviceConfig>({
+    {tt::ARCH::WORMHOLE_B0, "wormhole_b0_80_arch.yaml", "wormhole_b0_80_arch.yaml"},
+    {tt::ARCH::WORMHOLE_B0, "wormhole_b0_80_arch_eth_dispatch.yaml", "wormhole_b0_80_arch.yaml"},
+    {tt::ARCH::WORMHOLE_B0, "wormhole_b0_80_arch_fabric_mux.yaml", "wormhole_b0_80_arch.yaml"},
+    {tt::ARCH::BLACKHOLE, "blackhole_140_arch.yaml", "blackhole_140_arch.yaml"},
+    {tt::ARCH::BLACKHOLE, "blackhole_140_arch_eth_dispatch.yaml", "blackhole_140_arch.yaml"},
+    {tt::ARCH::BLACKHOLE, "blackhole_140_arch_fabric_mux.yaml", "blackhole_140_arch.yaml"},
+});
+
+}  // namespace
+
+void enumerate_offline_compile_device_configs(
+    const tt::llrt::RunTimeOptions& rtoptions, const std::function<void(const JitDeviceConfig&)>& callback) {
+    const std::string core_descriptors_dir = rtoptions.get_root_dir() + "tt_metal/core_descriptors/";
+    const std::string soc_descriptors_dir = rtoptions.get_root_dir() + "tt_metal/soc_descriptors/";
+    for (const auto& [arch, core_descriptor_name, soc_descriptor_name] : offline_compile_device_configs) {
+        enumerate_jit_device_configs(
+            arch,
+            core_descriptors_dir + std::string(core_descriptor_name),
+            soc_descriptors_dir + std::string(soc_descriptor_name),
+            callback);
     }
 }
 
