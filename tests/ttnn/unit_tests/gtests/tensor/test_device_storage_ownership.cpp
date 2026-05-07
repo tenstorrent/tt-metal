@@ -19,6 +19,7 @@ using ::testing::SizeIs;
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::DeviceStorage;
+using tt::tt_metal::GenericMeshDeviceFixture;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshDevice1x2Fixture;
@@ -26,7 +27,10 @@ using tt::tt_metal::Tensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
 
-using DeviceStorageOwnershipTest = MeshDevice1x2Fixture;
+// Most ownership tests only need a single device.
+using DeviceStorageOwnershipTest = GenericMeshDeviceFixture;
+// Tests that explicitly exercise multi-device behaviour (views, shards).
+using DeviceStorageMultiDeviceTest = MeshDevice1x2Fixture;
 
 TensorSpec make_test_tensor_spec() {
     return TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -132,7 +136,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) 
     EXPECT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewSharesOwnership) {
+TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewSharesOwnership) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
@@ -149,7 +153,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewSharesOwnership) {
     ASSERT_THAT(view_storage.get_coords(), SizeIs(1));
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewDeallocateAffectsOwner) {
+TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewDeallocateAffectsOwner) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
@@ -162,7 +166,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewDeallocateAffectsOwner) {
     EXPECT_FALSE(storage.is_allocated());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_OwnerDeallocateAffectsView) {
+TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_OwnerDeallocateAffectsView) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage owner_storage = tensor.device_storage();
 
@@ -242,12 +246,8 @@ TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateIsIdempotent) {
     EXPECT_NO_THROW(tensor.deallocate(/*force=*/false));
 }
 
-TEST_F(DeviceStorageOwnershipTest, Tensor_ShardsShareDeviceStorageOwnership) {
+TEST_F(DeviceStorageMultiDeviceTest, Tensor_ShardsShareDeviceStorageOwnership) {
     const auto num_devices = mesh_device_->num_devices();
-    if (num_devices < 2) {
-        GTEST_SKIP() << "Test requires at least 2 devices";
-    }
-
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     auto shards = get_device_tensors(tensor);
 
