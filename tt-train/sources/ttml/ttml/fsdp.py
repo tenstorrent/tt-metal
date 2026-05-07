@@ -174,8 +174,8 @@ class FSDPState:
         forward time held the gathered value, and their `add_grad` calls will
         pass grads of gathered shape into it.
 
-        We also UNINITIALIZE ``m_grad``. Reason: If ``optimizer.zero_grad()`` 
-        actually creates zeros, it will create grad with shard shape, but we 
+        We also UNINITIALIZE ``m_grad``. Reason: If ``optimizer.zero_grad()``
+        actually creates zeros, it will create grad with shard shape, but we
         need a grad with gathered shape for the next add_grad call.
 
         #TODO: fix gradient accumulation broken by clearing m_grad here.
@@ -229,12 +229,9 @@ class FSDPState:
             param_tensor.set_grad(reduced)
 
             # Explicit deallocate of the now-unreferenced full-size buffers.
-            # Without this, Python GC may keep them around too long enough
-            for full in (gathered_value, gathered_grad):
-                try:
-                    ttnn.deallocate(full)
-                except Exception:
-                    pass
+            # Without this, Python GC may keep them around for too long
+            ttnn.deallocate(gathered_value)
+            ttnn.deallocate(gathered_grad)
 
         self.sharded_state = _ShardedState.SHARDED
 
@@ -266,12 +263,7 @@ class FSDPState:
                 raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
             gathered = param_tensor.get_value()
             param_tensor.set_value(shard)
-            try:
-                ttnn.deallocate(gathered)
-            except Exception:
-                # Best-effort: older ttnn builds or already-deallocated handles
-                # can raise here. Falling back to GC is fine, just less predictable.
-                pass
+            ttnn.deallocate(gathered)
 
 
 # ---------------------------------------------------------------------------
