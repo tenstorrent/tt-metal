@@ -113,12 +113,15 @@ def _cmdline_targets_this_script(argv: list[str], script_realpath: str) -> bool:
 
 
 def _resolve_wasm_http_port(explicit_port=None):
+    """Return HTTP listen port; WebSocket uses this value + 1, so max is 65534."""
     if explicit_port is not None:
-        return int(explicit_port)
-    env_port = os.environ.get("TRACY_WASM_HTTP_PORT")
-    if env_port:
-        return int(env_port)
-    return DEFAULT_HTTP_PORT
+        port = int(explicit_port)
+    else:
+        env_port = os.environ.get("TRACY_WASM_HTTP_PORT")
+        port = int(env_port) if env_port else DEFAULT_HTTP_PORT
+    if not (1 <= port <= 65534):
+        raise ValueError(f"TRACY web HTTP port must be in [1, 65534] (need room for WebSocket on port+1), got {port}")
+    return port
 
 
 clients = set()
@@ -158,7 +161,7 @@ def _kill_previous_server_process():
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
-                pass
+                logger.debug("Previous Tracy WASM server PID %s already exited before SIGKILL", pid)
             except PermissionError as e:
                 logger.warning(f"Could not kill PID {pid}: {e}")
     except Exception as e:
@@ -194,6 +197,7 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
             stderr=child_log,
             start_new_session=True,
             close_fds=True,
+            shell=False,
         )
     finally:
         child_log.close()
@@ -260,9 +264,7 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                             ]
                             files.sort(reverse=True)
                             if files:
-                                new_target = os.path.relpath(
-                                    os.path.join(traces_dir, files[0]), embed_path.parent
-                                )
+                                new_target = os.path.relpath(os.path.join(traces_dir, files[0]), embed_path.parent)
                                 os.symlink(new_target, embed_path)
                                 print(f"[DEBUG] embed.tracy now points to: {new_target}")
                             else:
@@ -430,6 +432,9 @@ def start_websocket_server(ws_port):
 
 
 def run_server(directory, port):
+    if not (1 <= port <= 65534):
+        print(f"HTTP port must be in [1, 65534] (WebSocket uses port+1), got {port}", file=sys.stderr)
+        sys.exit(1)
     ws_port = port + 1
     if is_server_running(port):
         print(f"Server is already running on HTTP port {port}. Exiting.")
