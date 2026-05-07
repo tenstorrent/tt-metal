@@ -56,7 +56,7 @@ void kernel_main() {
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
 
-    // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
+    // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     // Needed when any K/joint dimension has padding, or when causal masking is active.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
@@ -87,16 +87,25 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
+    // TODO: CB indices below are hardcoded and duplicated from the program factory.
+    // They should be passed as compile-time args so the factory is the single source of truth.
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: running max
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: LSE
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
+    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;  // 1-tile scratch for normalize_row_streaming
+    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
+    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
+    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
     constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
@@ -105,18 +114,6 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
-
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
-
-    // Streaming compute uses c_9 as 1-tile recip scratch for normalize_row_streaming.
-    // (c_4 is used by cb_scale_in in ring joint SDPA, unlike regular SDPA.)
-    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;
-
-    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
-    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -144,8 +141,8 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
-    const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
 
     uint32_t ring_index = fused_op_indexer.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
@@ -208,13 +205,29 @@ void kernel_main() {
 
         const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
 
+        // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
+        // (sdpa_ring_v2) paths.
+        //   rix > rid (Case 3): only sender's L half is sent — halve KV count, or extend to
+        //     include the straddle chunk when it crosses the coarse-half boundary (its
+        //     late-half columns are -inf-masked via lw_mask.straddle_*).
+        //   rix < rid && balanced (Case 2): skip first-half (L) Q-chunks.
+        uint32_t iter_num_kv_chunks = num_kv_chunks;
+        if (is_causal && is_balanced && ring_index > ring_id) {
+            if constexpr (has_straddle) {
+                iter_num_kv_chunks = straddle_chunk_id + 1;
+            } else {
+                iter_num_kv_chunks /= 2;
+            }
+        }
+        const bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
+
         if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
                 0,  // Skt — not used for ring
                 DHt,
-                DHt,  // vDHt = DHt for ring
+                vDHt,
                 scale_fp32,
                 qk_subblock_h,
                 qk_subblock_w,
@@ -238,10 +251,14 @@ void kernel_main() {
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
                 cb_sum_in,
-                needs_lightweight_mask>(
+                cb_signal,
+                needs_lightweight_mask,
+                is_causal,
+                is_balanced>(
                 global_q_start,
                 global_q_end,
-                num_kv_chunks,
+                iter_num_kv_chunks,
+                num_q_chunks,
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
@@ -256,22 +273,10 @@ void kernel_main() {
                 acc_state,
                 is_last_ring_iter,
                 q_per_core,
-                lw_mask);
+                lw_mask,
+                skip_first_half_q,
+                use_zigzag_balancing);
         } else {
-            bool is_causal_ring_iter = (ring_iter == 0 ? is_causal : false);
-
-            uint32_t iter_num_kv_chunks = num_kv_chunks;
-            if (is_causal && is_balanced && ring_index > ring_id) {
-                if constexpr (has_straddle) {
-                    // Straddle chunk straddles the coarse-half boundary; extend to include it.
-                    // Its late-half columns are -inf-masked via lw_mask.straddle_* above.
-                    iter_num_kv_chunks = straddle_chunk_id + 1;
-                } else {
-                    iter_num_kv_chunks /= 2;
-                }
-            }
-            bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
-
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
@@ -333,7 +338,7 @@ void kernel_main() {
                 cb_prev_out,
                 cb_out,
                 lw_mask,
-                is_causal_ring_iter,
+                lw_mask.is_causal,
                 skip_first_half_q,
                 is_last_ring_iter,
                 use_zigzag_balancing);

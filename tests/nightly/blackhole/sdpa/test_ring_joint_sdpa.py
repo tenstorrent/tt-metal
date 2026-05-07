@@ -20,10 +20,12 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 """
 import os
 import math
+from unittest import mock
+
 import torch
 from dataclasses import dataclass, field
 from itertools import product
-from typing import ClassVar, List, Tuple, Dict, Optional
+from typing import List, Dict
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -75,10 +77,6 @@ class ModelConfig:
 
     # Can be hardware-dependent to keep per-core work balanced between Galaxy and Quiet Box
     seq_len: int
-
-    # Override worker L1 size for configs whose kernel binary exceeds the default buffer.
-    # None means use the device default.
-    worker_l1_size: Optional[int] = None
 
 
 def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
@@ -209,31 +207,10 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             is_balanced=True,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat8_b,
-            q_chunk_sizes=[160],  # Tuned for each sequence length
-            k_chunk_sizes=[160],
-            seq_len=3200,
-        )
-    )
-
-    configs.append(
-        ModelConfig(
-            name="mla_100k_straddle",  # k_chunk doesn't divide seq_len
-            nhq=mla_nhq,
-            nhk=1,
-            nhv=mla_nhq,
-            d_q=576,
-            d_k=576,
-            d_v=128,
-            is_causal=True,
-            is_balanced=True,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat8_b,
             q_chunk_sizes=[160],
-            k_chunk_sizes=[256],
+            # k=160 -> Sk_chunk_t=5; k=256 straddles (3200%256=128); k=320 -> Sk_chunk_t=10 with kt-sub=2.
+            k_chunk_sizes=[160, 256, 320],
             seq_len=3200,
-            # Sk_chunk_t=8 straddle-mask branch exceeds default kernel config buffer.
-            # Empirically tuned to give +5 KiB headroom on this shape.
-            worker_l1_size=1456640,
         )
     )
 
@@ -390,7 +367,6 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
                     model.is_balanced,
                     model.q_dtype,
                     model.kv_dtype,
-                    model.worker_l1_size,
                 )
             )
             config_ids.append(get_test_case_id(model, q_chunk, k_chunk))
@@ -424,7 +400,6 @@ def run_ring_joint_sdpa(
     rmse_threshold=None,
     do_check=True,
     num_iterations=1,
-    worker_l1_size=None,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -506,10 +481,7 @@ def run_ring_joint_sdpa(
 
     # Open mesh device based on calculated configuration
     mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
-    open_kwargs = {}
-    if worker_l1_size is not None:
-        open_kwargs["worker_l1_size"] = worker_l1_size
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **open_kwargs)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
     num_links = 2
 
     try:
@@ -828,7 +800,7 @@ TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,worker_l1_size",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -847,7 +819,6 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
     is_balanced,
     q_dtype,
     kv_dtype,
-    worker_l1_size,
 ):
     """
     Performance sweep test for ring joint attention SDPA.
@@ -873,13 +844,12 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
         is_causal=is_causal,
         is_balanced=is_balanced,
         do_check=False,
-        worker_l1_size=worker_l1_size,
     )
 
 
 # === TEST 2: ACCURACY VERIFICATION ===
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,worker_l1_size",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -898,7 +868,6 @@ def test_ring_joint_attention_sdpa_accuracy(
     is_balanced,
     q_dtype,
     kv_dtype,
-    worker_l1_size,
 ):
     """
     Accuracy verification test for ring joint attention SDPA.
@@ -933,13 +902,12 @@ def test_ring_joint_attention_sdpa_accuracy(
         is_balanced=is_balanced,
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
-        worker_l1_size=worker_l1_size,
     )
 
 
 # === TEST 3: DETERMINISM VERIFICATION ===
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,worker_l1_size",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -958,7 +926,6 @@ def test_ring_joint_attention_sdpa_determinism(
     is_balanced,
     q_dtype,
     kv_dtype,
-    worker_l1_size,
 ):
     """
     Test ring joint attention SDPA determinism: run 10 times with same inputs and verify outputs match exactly.
@@ -983,7 +950,6 @@ def test_ring_joint_attention_sdpa_determinism(
         is_causal=is_causal,
         is_balanced=is_balanced,
         num_iterations=num_iterations,
-        worker_l1_size=worker_l1_size,
     )
 
 
@@ -1054,7 +1020,6 @@ def test_ring_joint_attention_create_perf_table(model_name):
             is_balanced,
             q_dtype,
             kv_dtype,
-            worker_l1_size,
         ) = config
 
         # Config now contains global (TP/SP-scaled) values
@@ -1212,3 +1177,90 @@ def test_ring_joint_attention_create_perf_table(model_name):
         print(f"  Total coordination: {ring_size} devices x {best['ccl_cores']} CCL cores each")
 
     print(f"{'='*190}\n")
+
+
+# === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
+# Symmetric +/- band — catches both regressions and unexpected speedups.
+RING_JOINT_PERF_MARGIN = 0.005
+
+RING_JOINT_PERF_CHECK_CONFIGS = [
+    # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+    # 4-device ring (QuietBox)
+    ("wan2_2_1xGLX", 288, 512, 4, 68.9),
+    ("mla_100k", 160, 320, 4, 58.4),
+]
+
+
+@pytest.mark.skipif(
+    os.environ.get("SDPA_PERF_CHECKS") != "1",
+    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
+)
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
+    RING_JOINT_PERF_CHECK_CONFIGS,
+    ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_JOINT_PERF_CHECK_CONFIGS],
+)
+def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
+    """Measure ring joint SDPA math utilization via tracy and assert within +/- RING_JOINT_PERF_MARGIN."""
+    from tracy.process_model_log import run_device_profiler
+
+    if MESH_CONFIG.sp_size != ring_size_expected:
+        pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
+
+    if model_name not in MODEL_CONFIGS:
+        pytest.skip(f"Model {model_name} not available for current mesh config")
+
+    model = MODEL_CONFIGS[model_name]
+    config_id = get_test_case_id(model, q_chunk_size, k_chunk_size)
+
+    sq = model.seq_len * MESH_CONFIG.sp_size
+    local_seq_len = model.seq_len
+    local_nhq = model.nhq
+
+    subdir = "ttnn_ring_joint_sdpa_perf_check"
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/"
+        f"test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_sweep_perf_impl"
+        f"[{config_id}]"
+    )
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+    )
+
+    assert (
+        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
+    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
+
+    measured_core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
+
+    # Match perf-table effective_cores rounding (ignore non-multiple-of-10 strays)
+    effective_cores = measured_core_count - measured_core_count % 10
+    assert (
+        effective_cores > 0
+    ), f"effective_cores=0 (measured_core_count={measured_core_count}) — profiler output incomplete"
+
+    utilization = compute_ring_joint_utilization(
+        local_seq_len, sq, model.d_q, model.d_v, local_nhq, duration_ns, effective_cores, model.is_causal
+    )
+
+    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
+    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+
+    logger.info(
+        f"Ring joint SDPA perf check {config_id}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )

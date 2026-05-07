@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -84,12 +85,19 @@ def run(
     arg2 = pos_args.get(2, None)
     arg3 = pos_args.get(3, None)
 
+    # Track which calling convention the master used so we can mirror it.
+    # Master may have called ttnn.pad(t, padding) (positional → arg1) or
+    # ttnn.pad(t, padding=padding) (kwarg). The two produce different traces.
+    pad_was_positional = False
+
     if padding is None and arg1 is not None:
         is_nested = isinstance(arg1, list) and arg1 and isinstance(arg1[0], (list, tuple))
         if is_nested:
             padding = arg1
+            pad_was_positional = True
         else:
             output_padded_shape = arg1
+            pad_was_positional = True
             if arg2 is not None and input_tensor_start is None:
                 input_tensor_start = arg2
             if arg3 is not None and value is None:
@@ -145,9 +153,15 @@ def run(
         )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.pad(input_tensor, padding, value=value, **op_kwargs)
+    if pad_was_positional:
+        # Mirror master: pad passed as arg1 positionally.
+        output_tensor = ttnn.pad(input_tensor, padding, value=value, **op_kwargs)
+    else:
+        output_tensor = ttnn.pad(input_tensor, padding=padding, value=value, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

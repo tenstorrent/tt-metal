@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 @pytest.mark.parametrize(
@@ -266,7 +266,7 @@ def test_interleaved_to_sharded_nd_with_equivalent_2d(
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
-    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize(

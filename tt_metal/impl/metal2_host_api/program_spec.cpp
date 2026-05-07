@@ -658,9 +658,56 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Compute kernels cannot have any semaphore bindings.
+    // (This may later change for Quasar.)
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty(),
+            "KernelSpec '{}' has semaphore bindings. "
+            "Semaphore bindings are not currently supported for compute kernels.",
+            kernel.unique_id);
+    }
+
     //////////////////////////////////
     // Validate DataflowBufferSpecs
     //////////////////////////////////
+
+    // Validate the total number of DFBs in the ProgramSpec:
+    //  - For Gen1, there's a hard limit (hal::get_arch_num_circular_buffers())
+    //  - For Gen2, the true DFB limit is configuration-dependent, based on the availability
+    //    of tile counters. This won't actually get checked until the Program is enqueued :(
+    //  - However, the Gen1 check actually DOES apply to Gen2 as a strict upper limit.
+    //    In practice, we'll run out of tile counters long before we hit the HAL CB limit,
+    //    but then runtime software sizes some buffers based on this.
+    //
+    // For Quasar, this is a partial validation only!
+    // The true number of available DFBs depends on the tile counters, which are consumed in
+    // a DFB configuration-dependent way.
+    // Unfortunately, those checks won't trigger until the DFB code runs... not until the
+    // Program is actually enqueued :(
+    {
+        const uint32_t max_dfbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+        if (spec.dataflow_buffers.size() > max_dfbs) {
+            if (is_gen1_arch()) {
+                TT_THROW(
+                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The target "
+                    "architecture supports up to {}.",
+                    spec.program_id,
+                    spec.dataflow_buffers.size(),
+                    max_dfbs);
+            } else if (is_gen2_arch()) {
+                TT_THROW(
+                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The permitted "
+                    "number of DFBs for the target architecture is configuration-dependent, "
+                    "but {} is a hard upper limit.",
+                    spec.program_id,
+                    spec.dataflow_buffers.size(),
+                    max_dfbs);
+            } else {
+                TT_FATAL(false, "Unknown architecture");
+            }
+        }
+    }
 
     // Validate local DFB endpoint placement:
     // A local DFB's producer and consumer kernels must be on the same node (sharing SRAM memory).
@@ -728,6 +775,63 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Validate KernelSpec::dfb_compute_self_loop_scopes entries.
+    // This is a niche advanced option that only applies to compute kernels that self-loop a DFB
+    // (bind it as both producer and consumer).
+    // All misapplications fail loudly here for the benefit of users (especially AI users).
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.dfb_compute_self_loop_scopes.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            kernel.is_compute_kernel(),
+            "KernelSpec '{}' specifies dfb_compute_self_loop_scopes, but is not a compute kernel. "
+            "This option applies only to compute kernels.",
+            kernel.unique_id);
+
+        std::unordered_set<DFBSpecName> seen_dfb_names;
+        for (const auto& entry : kernel.dfb_compute_self_loop_scopes) {
+            TT_FATAL(
+                seen_dfb_names.insert(entry.dfb_spec_name).second,
+                "KernelSpec '{}' has duplicate dfb_compute_self_loop_scopes entries for DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                collected.dfb_by_name.contains(entry.dfb_spec_name),
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry referencing unknown DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            bool has_producer_binding = false;
+            bool has_consumer_binding = false;
+            for (const auto& binding : kernel.dfb_bindings) {
+                if (binding.dfb_spec_name != entry.dfb_spec_name) {
+                    continue;
+                }
+                if (binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
+                    has_producer_binding = true;
+                } else if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                    has_consumer_binding = true;
+                }
+            }
+            TT_FATAL(
+                has_producer_binding && has_consumer_binding,
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry for DFB '{}', but the "
+                "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
+                "consumer). This option applies only to self-looped DFBs.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                entry.scope != KernelSpec::DFBComputeSelfLoopScope::Scope::INTER,
+                "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
+                "not yet supported by the runtime.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+        }
+    }
+
     // Data format must be valid for the architecture
     const tt::ARCH arch = get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
@@ -756,19 +860,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
                 sem.unique_id,
                 sem.initial_value);
-        }
-    }
-
-    // On Gen1 (WH/BH), semaphores can only be bound to DM kernels, not compute kernels.
-    // Compute-kernel semaphore access is a Quasar-only feature.
-    if (is_gen1_arch()) {
-        for (const auto& kernel : spec.kernels) {
-            if (kernel.is_compute_kernel() && !kernel.semaphore_bindings.empty()) {
-                TT_THROW(
-                    "KernelSpec '{}' has semaphore bindings, but it is a compute kernel. "
-                    "On WH/BH, semaphores can only be bound to data movement kernels.",
-                    kernel.unique_id);
-            }
         }
     }
 
@@ -1205,13 +1296,33 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto to_hw_access_pattern = [](DFBAccessPattern pattern) -> experimental::dfb::AccessPattern {
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
-            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
-            case DFBAccessPattern::CONTIGUOUS: TT_FATAL(false, "CONTIGUOUS access pattern is not yet supported");
+            case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
+            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
     auto producer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.producer_binding->access_pattern);
     auto consumer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.consumer_binding->access_pattern);
+
+    // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
+    // lower-layer DFB API requires an explicit scope.
+    // The user can declare it via KernelSpec::dfb_compute_self_loop_scopes:
+    //  - absence of an entry means we infer INTRA (the common case)
+    //  - user-specified INTRA is also fine
+    //  - user-specified INTER is not currently supported. This will have already failed validation.
+    std::optional<experimental::dfb::TensixScope> tensix_scope;
+    if (producer == consumer && producer->is_compute_kernel()) {
+        auto user_scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
+        for (const auto& entry : producer->dfb_compute_self_loop_scopes) {
+            if (entry.dfb_spec_name == dfb_spec->unique_id) {
+                user_scope = entry.scope;
+                break;
+            }
+        }
+        tensix_scope = (user_scope == KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA)
+                           ? experimental::dfb::TensixScope::INTRA
+                           : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
+    }
 
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
@@ -1224,7 +1335,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .cap = consumer_access_pattern,
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
-        .tile = dfb_spec->tile_format_metadata};
+        .tile = dfb_spec->tile_format_metadata,
+        .tensix_scope = tensix_scope};
 }
 
 // ----------------------------------------------------------------------------
@@ -1282,6 +1394,46 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 }
 
 // ----------------------------------------------------------------------------
+// BuildUnpackToDestModeVector:
+// Translate the Metal 2.0 user-facing DFB-name->mode map into the (gross)
+// CB-indexed vector that the JIT data-format machinery expects.
+//
+// This DFB/CB translation layer is confusing. The gory details:
+//   - The JIT consumer (get_unpack_dst_formats) will read unpack_to_dest_mode at
+//     index cb_id, where cb_id is the slot used by set_dfb_data_fmt_and_tile
+//     in buf_dataformat_arr (aka, dfb->id).
+//   - The unpack_mode for a DFB "d" needs to be at unpack_modes[d->id]
+//   - The vector must be at least max_cbs long, or the consumer gets angry
+//     (it iterates buf_formats up to max_cbs).
+//   - This is true on WH, BH, and Quasar. (Yes, Quasar too.)
+//
+// What is the max CBs / DFBs?
+//   - WH/BH: Hardcoded as max_cbs. Different number on WH vs. BH.
+//   - Quasar has a variable cap, based on tile-counter registers.
+//     In actual practice, we'll run out LONG before we get the HAL-reported
+//     limit of 64.
+// ----------------------------------------------------------------------------
+
+std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
+    const std::vector<ComputeConfiguration::UnpackToDestModeEntry>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
+    for (const auto& [dfb_name, mode] : user_modes) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        // This TT_FATAL is unreachable, provided that validation wasn't skipped.
+        TT_FATAL(
+            dfb_id < max_cbs,
+            "Internal Error: DFB '{}' has id {} which exceeds the JIT data-format "
+            "slot count ({}); compute kernels cannot reference DFBs past this limit",
+            dfb_name,
+            dfb_id,
+            max_cbs);
+        unpack_modes[dfb_id] = mode;
+    }
+    return unpack_modes;
+}
+
+// ----------------------------------------------------------------------------
 // MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
@@ -1289,11 +1441,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
-    for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
-        unpack_modes[dfb_id] = mode;
-    }
+    std::vector<UnpackToDestMode> unpack_modes =
+        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return ComputeConfig{
         .math_fidelity = compute_config.math_fidelity,
@@ -1335,19 +1484,8 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    // Handle unpack_to_dest_mode:
-    //  - The user-facing KernelSpec provides the modes keyed by DFB name.
-    //  - The unpack_to_dest_mode vector in the QuasarComputeConfig is indexed by DFB ID.
-    //  - DFB IDs are always issued sequentially from zero, so this works.
-
-    // Size the vector to the number of DFBs.
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
-
-    // Populate unpack_modes using DFB ID as the index
-    for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
-        unpack_modes[dfb_id] = mode;
-    }
+    std::vector<UnpackToDestMode> unpack_modes =
+        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -1411,7 +1549,9 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // Public Entry Point
 // ============================================================================
 
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+    // The mesh_device argument is required for forthcoming work but is not yet consumed.
+    (void)mesh_device;
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)

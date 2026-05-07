@@ -36,6 +36,11 @@ on:
         type: string
         description: "Comma-separated model names to filter reconstruction (empty = all models in registry)"
         default: ""
+      upload-results:
+        required: false
+        type: boolean
+        description: "Upload sweep results to SFTP server"
+        default: false
 
 permissions:
   contents: read
@@ -88,6 +93,7 @@ jobs:
             echo "  Trace IDs:     ${TRACE_IDS}"
           fi
           echo "  Allow partial: ${ALLOW_PARTIAL_HASH_CHANGES}"
+          echo "  Upload results: ${{ inputs.upload-results }}"
           if [ -n "${CALLER_ID}" ]; then
             echo "  Caller ID:     ${CALLER_ID}"
           fi
@@ -116,14 +122,18 @@ jobs:
           MODELS_FILTER: ${{ inputs.models-filter }}
         run: |
           mkdir -p model_tracer/traced_operations
-          FILTER_ARGS=""
+          # Build args as an array so a multi-token MODELS_FILTER value (e.g.
+          # "gpt_oss, tt_dit" with a space) is passed as one argument to argparse,
+          # not word-split by the shell.
+          RECONSTRUCT_ARGS=(
+            "$MANIFEST_PATH"
+            model_tracer/traced_operations/ttnn_operations_master.json
+          )
           if [[ -n "$MODELS_FILTER" ]]; then
-            FILTER_ARGS="--models-filter $MODELS_FILTER"
+            RECONSTRUCT_ARGS+=(--models-filter "$MODELS_FILTER")
           fi
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-            "$MANIFEST_PATH" \
-            model_tracer/traced_operations/ttnn_operations_master.json \
-            $FILTER_ARGS
+            "${RECONSTRUCT_ARGS[@]}"
 
       - name: Reconstruct master JSON from pinned trace
         if: ${{ inputs.pinned-trace-id != '' }}
@@ -422,6 +432,39 @@ jobs:
           name: ${{ matrix.vectors_artifact_name }}
           path: /work/tests/sweep_framework/vectors_export
 
+      - name: Detect mesh device shape from vectors
+        run: |
+          # Extract the mesh_device_shape from vector tensor_placement metadata.
+          # This ensures the sweep fixture creates a mesh device matching the
+          # traced topology (e.g., 4x8 for Galaxy, 1x2 for N300).
+          MESH=$(python3 -c "
+          import json, glob, sys
+          for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
+              with open(f) as fh:
+                  data = json.load(fh)
+              for suite in data.values():
+                  if not isinstance(suite, dict):
+                      continue
+                  for cfg in suite.values():
+                      if not isinstance(cfg, dict):
+                          continue
+                      for key, val in cfg.items():
+                          if key.endswith('_tensor_placement') and isinstance(val, dict):
+                              ms = val.get('mesh_device_shape', '')
+                              if isinstance(ms, str) and ',' in ms:
+                                  nums = [int(x.strip().strip('[]')) for x in ms.split(',')]
+                                  if len(nums) == 2 and nums != [1, 1]:
+                                      print(f'{nums[0]}x{nums[1]}')
+                                      sys.exit(0)
+          print('')
+          " 2>/dev/null || true)
+          if [[ -n "$MESH" ]]; then
+            echo "Detected MESH_DEVICE_SHAPE=$MESH from vector metadata"
+            echo "MESH_DEVICE_SHAPE=$MESH" >> "$GITHUB_ENV"
+          else
+            echo "No multi-device mesh shape detected in vectors, using default"
+          fi
+
       - name: Run sweeps with tracer
         run: |
           mkdir -p /work/tests/sweep_framework/results_export
@@ -566,3 +609,38 @@ jobs:
           name: validation-summary
           path: validation_summary.md
           retention-days: 7
+
+  upload-results:
+    name: Upload sweep results to SFTP server
+    needs: [run-sweeps-with-tracer]
+    if: |
+      !cancelled() &&
+      inputs.upload-results &&
+      (needs.run-sweeps-with-tracer.result == 'success' || needs.run-sweeps-with-tracer.result == 'failure')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          sparse-checkout: |
+            .github/actions
+
+      - name: Download sweep results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sweeps-results-*
+          path: tests/sweep_framework/results_export
+          merge-multiple: true
+
+      - name: List all downloaded files
+        run: |
+          ls -hal tests/sweep_framework/results_export
+
+      - name: Upload via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: ${{ github.workspace }}
