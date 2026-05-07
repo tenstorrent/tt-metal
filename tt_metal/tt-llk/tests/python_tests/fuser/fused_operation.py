@@ -9,6 +9,7 @@ import torch
 from helpers.llk_params import (
     DestSync,
     GoldenType,
+    PackerReluType,
     StochasticRounding,
     Tilize,
 )
@@ -29,6 +30,8 @@ class FusedOperation:
     tiny_tiles: bool = False
     dest_sync: DestSync = DestSync.Half
     block_size: Tuple[int, int] = (32, 32)
+    pack_relu: PackerReluType = PackerReluType.NoRelu
+    relu_threshold: float = 0.0
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):
@@ -54,7 +57,7 @@ class FusedOperation:
         )
         l1_golden_tensor = self.math.packer().golden(l1_golden_tensor, self, config)
 
-        self.output.l1_golden = l1_golden_tensor.flatten()
+        self.output.l1_golden = l1_golden_tensor
 
         # calculate master golden
         master_golden_tensor = self.math.golden(
@@ -64,7 +67,7 @@ class FusedOperation:
             master_golden_tensor, self, config
         )
 
-        self.output._master_golden = master_golden_tensor.flatten()
+        self.output._master_golden = master_golden_tensor
 
         return master_golden_tensor
 
