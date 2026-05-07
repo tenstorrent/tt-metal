@@ -5,7 +5,7 @@
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIM,
     MatmulGolden,
@@ -33,6 +33,7 @@ from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
+    EN_MXFP_2X,
     IMPLIED_MATH_FORMAT,
     MATH_FIDELITY,
     NUM_FACES,
@@ -74,6 +75,21 @@ MATMUL_FORMAT = input_output_formats(
         DataFormat.MxInt2,
     ],
 )
+
+# 2x-packed FP4 src register variants. L1 input stays MxFp4; the unpacker produces
+# MxFp4_2x_A/B in src registers. _A pairs with the FP16 family, _B with the FP16_b family.
+MATMUL_FORMAT += [
+    InputOutputFormat(
+        DataFormat.MxFp4,
+        DataFormat.Float16,
+        register_format_hint=DataFormat.MxFp4_2x_A,
+    ),
+    InputOutputFormat(
+        DataFormat.MxFp4,
+        DataFormat.Float16_b,
+        register_format_hint=DataFormat.MxFp4_2x_B,
+    ),
+]
 
 
 @pytest.mark.quasar
@@ -174,7 +190,12 @@ def test_matmul(
         is_fp32_dest_acc_en=dest_acc,
         num_iterations=1,
         unpacking_to_dest=False,
-        disable_format_inference=format.input_format.is_mx_format(),
+        # 2x register-format opt-in needs to flow through inference; only disable
+        # for plain MX formats where there's nothing to infer.
+        disable_format_inference=(
+            format.input_format.is_mx_format() and format.register_format_hint is None
+        ),
+        register_format_hint=format.register_format_hint,
     )[0]
     pack_src_format = formats_config.pack_src
 
@@ -201,6 +222,10 @@ def test_matmul(
         templates=[
             MATH_FIDELITY(math_fidelity),
             IMPLIED_MATH_FORMAT(implied_math_format),
+            EN_MXFP_2X(
+                format.register_format_hint
+                in (DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B)
+            ),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
@@ -222,7 +247,11 @@ def test_matmul(
         unpack_to_dest=False,
         dest_acc=dest_acc,
         boot_mode=BootMode.TRISC,
-        disable_format_inference=format.input_format.is_mx_format(),
+        # 2x register-format opt-in needs to flow through inference; only disable
+        # for plain MX formats where there's nothing to infer.
+        disable_format_inference=(
+            format.input_format.is_mx_format() and format.register_format_hint is None
+        ),
     )
 
     res_from_L1 = configuration.run().result

@@ -616,6 +616,7 @@ class TestConfig:
                 chip_arch=TestConfig.CHIP_ARCH,
                 disable_format_inference=self.disable_format_inference,
                 unpacking_to_srcs=self.unpack_to_srcs,
+                register_format_hint=formats.register_format_hint,
             )
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
             self.unpack_size_a = TILE_SIZES.get(

@@ -23,6 +23,8 @@ VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Int8,
     DataFormat.UInt8,
     DataFormat.Int16,
+    DataFormat.MxFp4_2x_A,
+    DataFormat.MxFp4_2x_B,
 ]
 
 VALID_QUASAR_DEST_REG_FORMATS = [
@@ -111,12 +113,15 @@ def is_format_combination_outlier(
     )
 
 
+_SRCAB_ONLY_FORMATS = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
+
 def infer_unpack_out(
     input_format: DataFormat,
     output_format: DataFormat,
     is_fp32_dest_acc_en: DestAccumulation,
     unpacking_to_dest: bool = False,
     unpacking_to_srcs: bool = False,
+    register_format_hint: Optional[DataFormat] = None,
 ) -> DataFormat:
     """
     Returns the output format for the unpacker (data format config for registers)
@@ -131,10 +136,43 @@ def infer_unpack_out(
         output_format: The final desired output format
         is_fp32_dest_acc_en: Whether FP32 accumulation is enabled
         unpacking_to_dest: Indicates whether unpacking targets the destination register
+        register_format_hint: Optional opt-in for a SrcA/SrcB-only register format
+            (MxFp4_2x_A or MxFp4_2x_B). When set, returned as the unpack-out format
+            instead of the default. Only valid when input_format == MxFp4 and the
+            requested hint is family-compatible with output_format.
 
     Returns:
         The inferred output data format for unpacking to registers
     """
+    # 2x-packed SrcA/SrcB opt-in: caller explicitly requests MxFp4 to be stored
+    # in src registers as MxFp4_2x_A / MxFp4_2x_B (vs. default unpack-to-Float16_b path).
+    if register_format_hint is not None:
+        if register_format_hint not in _SRCAB_ONLY_FORMATS:
+            raise ValueError(
+                f"register_format_hint={register_format_hint.name} is not a supported "
+                f"SrcA/SrcB-only register format. Expected MxFp4_2x_A or MxFp4_2x_B."
+            )
+        if input_format != DataFormat.MxFp4:
+            raise ValueError(
+                f"register_format_hint={register_format_hint.name} requires input_format=MxFp4 "
+                f"(got {input_format.name})."
+            )
+        if register_format_hint == DataFormat.MxFp4_2x_A and output_format not in {
+            DataFormat.Float16,
+            DataFormat.Float32,
+        }:
+            raise ValueError(
+                f"MxFp4_2x_A pairs with Float16 or Float32 output (got {output_format.name})."
+            )
+        if register_format_hint == DataFormat.MxFp4_2x_B and output_format not in {
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        }:
+            raise ValueError(
+                f"MxFp4_2x_B pairs with Float16_b or Float32 output (got {output_format.name})."
+            )
+        return register_format_hint
+
     # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
     if input_format.is_mx_format():
         return DataFormat.Float16_b
@@ -291,6 +329,13 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
     # inference historically models the unpacked payload as BFP8_b.
     if unpack_out in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return DataFormat.Bfp8_b
+   
+    # Map a 2x-packed SrcA/SrcB-only register format back to its paired non-2x family member,
+    # used to derive a math/pack format (those fields cannot hold the 2x format itself).
+    if unpack_out == DataFormat.MxFp4_2x_A:
+        return DataFormat.Float16
+    if unpack_out == DataFormat.MxFp4_2x_B:
+        return DataFormat.Float16_b
     return unpack_out
 
 
@@ -324,6 +369,7 @@ def infer_data_formats(
     chip_arch: Optional[ChipArchitecture] = None,
     input_format_B: DataFormat = None,
     unpacking_to_srcs: bool = False,
+    register_format_hint: Optional[DataFormat] = None,
 ) -> FormatConfig:
     """
     Infers all data formats needed for unpacking, math, and packing stages in a pipeline.
@@ -344,7 +390,11 @@ def infer_data_formats(
 
     # Determine the intermediate formats
     unpack_out_A = infer_unpack_out(
-        input_format, output_format, is_fp32_dest_acc_en, unpacking_to_dest
+        input_format,
+        output_format,
+        is_fp32_dest_acc_en,
+        unpacking_to_dest,
+        register_format_hint=register_format_hint,
     )
 
     # Infer unpack_out_B based on input_format_B separately.
@@ -352,11 +402,16 @@ def infer_data_formats(
         unpack_out_A
         if input_format_B is None
         else infer_unpack_out(
-            input_format_B, output_format, is_fp32_dest_acc_en, unpacking_to_dest
+            input_format_B,
+            output_format,
+            is_fp32_dest_acc_en,
+            unpacking_to_dest,
+            register_format_hint=register_format_hint,
         )
     )
 
-    # Infer unpack_out_S using separate logic for SrcS
+    # Infer unpack_out_S using separate logic for SrcS.
+    # SrcS does not support 2x packing, so the hint is intentionally not forwarded here.
     unpack_out_S = infer_unpack_out(
         input_format,
         output_format,
@@ -470,6 +525,7 @@ def data_formats(
     disable_format_inference: bool = False,
     input_format_B: DataFormat = None,
     unpacking_to_srcs: bool = False,
+    register_format_hint: Optional[DataFormat] = None,
 ) -> List[FormatConfig]:
     """
     Entry point for computing a list of FormatConfig objects.
@@ -554,6 +610,7 @@ def data_formats(
             chip_arch,
             input_format_B,
             unpacking_to_srcs,
+            register_format_hint=register_format_hint,
         )
     else:
         intermediate_config = None
@@ -566,6 +623,7 @@ def data_formats(
         chip_arch,
         input_format_B,
         unpacking_to_srcs,
+        register_format_hint=register_format_hint,
     )
 
     return build_data_formats(num_iterations, intermediate_config, final_config)

@@ -88,8 +88,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(
         static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
-    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, false, false>(CT_DIM, RT_DIM); // disable flags for matmul with indexing and mxfp_2x not part
-                                                                                                // of P0 test suite
+    // EN_MXFP_2X enables the 2x-packed FP4 matmul path: MVMULDI with sub-element indices and a halved
+    // replay buffer. Set when SrcA/SrcB are configured as MxFp4_2x_A or MxFp4_2x_B.
+    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, EN_MXFP_2X, EN_MXFP_2X>(CT_DIM, RT_DIM);
 
     for (std::uint32_t i = 0; i < KT_DIM; i++)
     {

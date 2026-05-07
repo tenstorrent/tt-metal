@@ -283,6 +283,14 @@ class IMPLIED_MATH_FORMAT(TemplateParameter):
 
 
 @dataclass
+class EN_MXFP_2X(TemplateParameter):
+    en_mxfp_2x: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool EN_MXFP_2X = {str(self.en_mxfp_2x).lower()};"
+
+
+@dataclass
 class UNPACKER_ENGINE_SEL(TemplateParameter):
     unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
