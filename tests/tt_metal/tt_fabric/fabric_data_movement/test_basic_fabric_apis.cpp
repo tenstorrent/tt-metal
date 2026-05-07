@@ -720,6 +720,9 @@ TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadEast) {
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadWest) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+        GTEST_SKIP() << "Skipping with watcher enabled";
+    }
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
 }
 
