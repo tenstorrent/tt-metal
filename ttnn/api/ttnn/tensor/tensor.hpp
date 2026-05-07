@@ -39,9 +39,6 @@ namespace ttnn {
 
 using TensorSpec = tt::tt_metal::TensorSpec;
 
-// These will be moved to ttnn namespace
-using TensorAttributes = tt::tt_metal::TensorAttributes;
-
 class Tensor {
 public:
     constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
