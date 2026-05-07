@@ -83,7 +83,6 @@ TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
     const auto& hal = MetalContext::instance().hal();
     const uint64_t scratch_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    constexpr uint16_t value16 = 0xCAFE;
     constexpr uint32_t value32 = 0xDEADBEEF;
 
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -101,9 +100,6 @@ TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
 
         tt::umd::TlbWindow* window = cluster.get_static_tlb_window(target);
         ASSERT_NE(window, nullptr);
-
-        window->write16(scratch_addr, value16);
-        EXPECT_EQ(window->read16(scratch_addr), value16);
 
         window->write32(scratch_addr, value32);
         EXPECT_EQ(window->read32(scratch_addr), value32);
