@@ -112,7 +112,7 @@ class TtTrainMetricsData(BaseModel):
     )
     mfu: Optional[float] = Field(
         default=None,
-        description="Model flops utilization.",
+        description="Model FLOPs utilization.",
     )
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}
