@@ -1776,7 +1776,11 @@ def generate_codes_ttnn(
                     trace_cq0_idle = cp_decode_input_ready[_buf_i]
 
                 _dsp = {}
-                if config.greedy or _device_cp_chain or _device_cp_sampling:
+                if _device_cp_chain:
+                    # Aggregated D2H: chain feeds next embed on-device, defer reads.
+                    code_row.append(None)
+                    continue
+                elif config.greedy or _device_cp_sampling:
                     # Device wrote the token id; small D2H.
                     _t_dc0 = time.perf_counter()
                     token = _read_device_token(cp_decode_token_tts[_buf_i][_trace_i], index=0)
@@ -1793,6 +1797,15 @@ def generate_codes_ttnn(
                 _decode_sp_agg["device_logits"] += _dsp.get("device_logits", 0.0)
                 _decode_sp_agg["cpu_sample"] += _dsp.get("cpu_sample", 0.0)
                 code_row.append(token)
+
+            # Aggregated D2H: when chain is on, all 14 traces dispatched without
+            # per-iter token reads. Resolve all 14 placeholders here in one pass.
+            if _device_cp_chain:
+                _t_dc0 = time.perf_counter()
+                for _ti in range(config.num_code_groups - 2):
+                    _bi = (_ti % 2) if use_2cq else 0
+                    code_row[2 + _ti] = _read_device_token(cp_decode_token_tts[_bi][_ti], index=0)
+                _decode_sp_agg["device_logits"] += time.perf_counter() - _t_dc0
 
             all_codes.append(code_row)
             if streaming_decoder is not None:
