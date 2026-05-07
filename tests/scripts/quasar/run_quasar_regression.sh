@@ -146,14 +146,19 @@ is_valid_config() {
 
 SEP=$'\x1f'
 declare -a test_entries=()
-while IFS=$'\t' read -r group filter config envvars; do
+while IFS=$'\t' read -r group filter configs envvars; do
     [[ -z "$group" ]] && continue
-    if ! is_valid_config "$config"; then
-        echo "ERROR: invalid config '$config' for test '$filter' in group '$group'"
-        echo "       Supported configs: ${VALID_CONFIGS[*]}"
-        exit 1
-    fi
-    test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
+    # Split comma-separated configs and create one entry per config
+    IFS=',' read -ra config_list <<< "$configs"
+    for config in "${config_list[@]}"; do
+        config="$(echo "$config" | xargs)"  # trim whitespace
+        if ! is_valid_config "$config"; then
+            echo "ERROR: invalid config '$config' for test '$filter' in group '$group'"
+            echo "       Supported configs: ${VALID_CONFIGS[*]}"
+            exit 1
+        fi
+        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
+    done
 done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("\u001f"))] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}

@@ -16,13 +16,7 @@
 
 unit_tests_legacy:
   - filter: "*SingleDmL1Write*"
-    config: 1x3
-
-  - filter: "*SingleDmL1Write*"
-    config: 2x3
-
-  - filter: "*SingleDmL1Write*"
-    config: 2x3_DISPATCH
+    config: 1x3, 2x3, 2x3_DISPATCH
 
   - filter: "*DmLoopback*"
     config: 1x3
@@ -37,10 +31,7 @@ unit_tests_legacy:
     config: 1x3
 
   - filter: "*MultiDmAddTwoInts*"
-    config: 2x3
-
-  - filter: "*MultiDmAddTwoInts*"
-    config: 2x3_DISPATCH
+    config: 2x3, 2x3_DISPATCH
 
   - filter: "*Bmm"
     config: 1x3
@@ -75,13 +66,11 @@ unit_tests_debug_tools:
   - filter: "*TestWatcherWaypoints"
     config: 1x3
 
-# Hung last time run
-#  - filter: "*TestWatcherTileCounterLogRemapper*"
-#    config: 1x3
+  - filter: "*TestWatcherTileCounterLogRemapper*"
+    config: 1x3
 
-# Hung last time run
-#  - filter: "*TestWatcherTileCounterLogBypass*"
-#    config: 1x3
+  - filter: "*TestWatcherTileCounterLogBypass*"
+    config: 1x3
 
   - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
     config: 1x3
