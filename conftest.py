@@ -51,13 +51,39 @@ def is_ci_env():
     return False
 
 
+def safe_get_cluster_type():
+    """
+    Return Metal cluster type, or None if the descriptor is not ready yet or backend lookup fails.
+
+    CCL tests resolve `device_params` → `galaxy_type` before `mesh_device` opens the mesh; on some
+    stacks (e.g. Blackhole Galaxy) `get_cluster_type()` may throw ``IndexError`` until the cluster
+    is initialized. Treat that as unknown and fall through to conservative defaults (e.g. FABRIC_1D).
+    """
+    import ttnn
+
+    try:
+        return ttnn.cluster.get_cluster_type()
+    except (IndexError, KeyError, RuntimeError):
+        return None
+
+
+def safe_get_pcie_device_ids():
+    """Return PCIe bus id list from ttnn, or None if enumeration hits a backend lookup error."""
+    import ttnn
+
+    try:
+        return ttnn.get_pcie_device_ids()
+    except (IndexError, KeyError, RuntimeError):
+        return None
+
+
 @pytest.fixture(scope="function")
 def is_single_card_n300(device):
     import ttnn
 
     num_pcie = ttnn.GetNumPCIeDevices()
 
-    return num_pcie == 1 and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.N300
+    return num_pcie == 1 and safe_get_cluster_type() == ttnn.cluster.ClusterType.N300
 
 
 @pytest.fixture(scope="function")
@@ -73,7 +99,10 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() in [
+    ct = safe_get_cluster_type()
+    if ct is None:
+        return False
+    return ct in [
         ttnn.cluster.ClusterType.GALAXY,
         ttnn.cluster.ClusterType.TG,
         ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
@@ -84,14 +113,14 @@ def is_galaxy():
 def is_6u():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    return safe_get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
+    return safe_get_cluster_type() == ttnn.cluster.ClusterType.TG
 
 
 def first_available_tg_device():
@@ -548,7 +577,9 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    pci_ids = safe_get_pcie_device_ids()
+    if pci_ids is not None:
+        request.node.pci_ids = pci_ids
 
     try:
         param = request.param
@@ -629,7 +660,9 @@ def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormho
 def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
-    device_ids = ttnn.get_pcie_device_ids()
+    device_ids = safe_get_pcie_device_ids()
+    if device_ids is None:
+        pytest.skip("PCIe device ids not available before mesh creation on this stack")
     try:
         num_pcie_devices_requested = min(request.param, len(device_ids))
     except (ValueError, AttributeError):
@@ -673,7 +706,9 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    pci_ids = safe_get_pcie_device_ids()
+    if pci_ids is not None:
+        request.node.pci_ids = pci_ids
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
@@ -743,7 +778,9 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    pci_ids = safe_get_pcie_device_ids()
+    if pci_ids is not None:
+        request.node.pci_ids = pci_ids
     with bh_2d_mesh_device_context(device_params) as mesh_device:
         yield mesh_device
 
