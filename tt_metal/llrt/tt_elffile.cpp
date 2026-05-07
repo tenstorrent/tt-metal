@@ -375,6 +375,10 @@ void ElfFile::WriteImage(std::string const& path) {
                 if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
                 return false;
             }
+            // POSIX allows ::write() to write fewer bytes than requested (a "short write"),
+            // particularly on NFS or when interrupted by a signal. A single write() call is
+            // therefore not sufficient to guarantee all bytes are written. Loop until all
+            // bytes are flushed or an error occurs.
             const char* buf = reinterpret_cast<const char*>(contents_.data());
             ssize_t remaining = static_cast<ssize_t>(contents_.size());
             while (remaining > 0) {
