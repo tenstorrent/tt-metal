@@ -129,9 +129,9 @@ void call_unary_sfpu_operation_init()
  * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
  * Delegates to SFPU_CALL / SFPU_CALL_CAST from llk_math_eltwise_unary_sfpu_macros.h,
  * which funnel through ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>
- * (dst-bound LLK_ASSERT, then _llk_math_eltwise_unary_sfpu_params_). Passing
- * ITERATIONS as vector_mode (≥ 8, never matching R/C/RC = 0/1/2) triggers the
- * single-call else branch, preserving existing ITERATIONS-covers-full-tile semantics.
+ * (dst-bound LLK_ASSERT, then _llk_math_eltwise_unary_sfpu_params_). Face-looping
+ * versus single-call behavior is selected by the explicit vector_mode parameter;
+ * the default/non-face mode preserves the existing single-call full-tile behavior.
  *
  * DST_SYNC_MODE and DST_ACCUM_MODE are the first two template parameters, mirroring
  * the convention of the underlying SFPU macros and helpers (SFPU_CALL,
