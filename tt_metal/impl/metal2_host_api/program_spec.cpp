@@ -1766,7 +1766,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         // The Kernel-side handle map: same shape as ta_bindings.handles, just renamed for clarity
         // at the kernel ctor call site (codegen + dispatch consume it under this name).
-        const TensorBindingHandles& tensor_binding_handles = ta_bindings.handles;
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
 
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time
         // to emit kernel_args_generated.h and factor into the kernel cache key. The implicit

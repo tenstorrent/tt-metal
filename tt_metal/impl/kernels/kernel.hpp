@@ -104,7 +104,6 @@ struct TensorBindingHandle {
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
     uint32_t addr_crta_offset;  // byte offset of the implicit base-address CRTA within the kernel's CRTA section
 };
-using TensorBindingHandles = std::vector<TensorBindingHandle>;
 
 // kTensorAccessorAddrCrtaPrefix is defined in jit_build_settings.hpp.
 
@@ -171,7 +170,7 @@ public:
     void process_tensor_binding_handles(
         std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>)
         const override;
-    const TensorBindingHandles& tensor_binding_handles() const { return tensor_binding_handles_; }
+    const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }
     const std::vector<std::string>& get_named_common_runtime_args() const override {
         return named_common_runtime_args_;
@@ -240,7 +239,7 @@ protected:
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
-        const TensorBindingHandles& tensor_binding_handles = {});
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -259,7 +258,7 @@ protected:
     const SemaphoreLocalAccessorHandleMap semaphore_local_accessor_handles_;
     const std::vector<std::string> named_runtime_args_;
     const std::vector<std::string> named_common_runtime_args_;
-    const TensorBindingHandles tensor_binding_handles_;
+    const std::vector<TensorBindingHandle> tensor_binding_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -298,7 +297,7 @@ public:
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
-        const TensorBindingHandles& tensor_binding_handles = {}) :
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -432,7 +431,7 @@ public:
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
-        const TensorBindingHandles& tensor_binding_handles = {}) :
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -515,7 +514,7 @@ public:
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
-        const TensorBindingHandles& tensor_binding_handles = {}) :
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -584,7 +583,7 @@ public:
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
-        const TensorBindingHandles& tensor_binding_handles = {}) :
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,

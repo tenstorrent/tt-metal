@@ -101,15 +101,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
     // Get the semaphore bindings from the settings callback
-    // Sort them to ensure the file output is deterministic for the JIT build cache
-    // (aka the on-disk per-object dephash cache)
+    // Sort them to ensure the file output is deterministic, as explained above
     vector<pair<string, uint16_t>> sem_entries;
     settings.process_semaphore_local_accessor_handles(
         [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
-    // Get the tensor binding handles from the settings callback
-    // Sort by name for deterministic output (parallel to DFB / Semaphore handling above)
+    // Get the tensor binding handles from the settings callback.
+    // Unlike DFB/semaphore handles (sourced from unordered_map and sorted above), tensor binding
+    // handles are sourced from a std::vector populated in user-specified order, so iteration order
+    // is already deterministic. No sort needed. Kernel::compute_hash hashes them in the same
+    // order; the two must stay in lockstep.
     struct TaEntry {
         string name;
         uint32_t cta_offset;
@@ -120,7 +122,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
-    sort(ta_entries.begin(), ta_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace

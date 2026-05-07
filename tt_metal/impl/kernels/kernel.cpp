@@ -110,7 +110,7 @@ Kernel::Kernel(
     const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
     const std::vector<std::string>& named_runtime_args,
     const std::vector<std::string>& named_common_runtime_args,
-    const TensorBindingHandles& tensor_binding_handles) :
+    const std::vector<TensorBindingHandle>& tensor_binding_handles) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -478,6 +478,18 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& it : sorted_iters(this->semaphore_local_accessor_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
+    }
+    // Tensor binding handles:
+    //  - stored as a std::vector (user-specified order), so no sort step needed
+    //  - genfiles.cpp emits the `ta::` namespace in the same order
+    //  - hash the size first to avoid the [a, b] vs [ab] collision noted below.
+    //  - tensor_parameter_name is intentionally omitted, as it doesn't appear in
+    //    the generated headers
+    hasher.update(static_cast<uint64_t>(this->tensor_binding_handles_.size()));
+    for (const auto& handle : this->tensor_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.cta_offset));
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!
