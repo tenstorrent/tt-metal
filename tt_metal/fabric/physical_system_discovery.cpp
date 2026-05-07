@@ -695,37 +695,20 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
     bool run_live_discovery) {
-    // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
-    distributed_context->barrier();
-
-    // Resolve hostname uniqueness before discovery so run_local_discovery can use the right key
-    // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
-    bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
-    auto psd = discovery_impl::run_local_discovery(
-        cluster, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
-
-    // Set local hostname and rank (friend access)
-    auto my_rank = *(distributed_context->rank());
-    auto hostname = get_host_name();
-    psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
-
-    if (run_global_discovery) {
-        exchange_metadata(psd, distributed_context, true);
-        auto my_rank_val = *(distributed_context->rank());
-        constexpr uint32_t controller_rank = 0;
-        if (my_rank_val == controller_rank) {
-            remove_unresolved_nodes(psd);
-            generate_cross_host_connections(psd);
-            validate_graphs(psd);
-
-            // With multi-rank (size > 1), run_local_discovery uses hostname_rank keys from the start,
-            // so asic_connectivity_graph, exit_node_connection_table, and host_connectivity_graph
-            // already have the correct keys. No rename needed.
-        }
-        exchange_metadata(psd, distributed_context, false);
-    }
-
-    return psd;
+    // look at this function signature, what we do below is the point of differentiation
+    //
+    // run_local_discovery(
+    //    tt::umd::Cluster& cluster,
+    //    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    //    tt::TargetDevice target_device_type,
+    //    bool run_live_discovery,
+    //    bool all_hostnames_unique);
+    //
+    auto cluster_desc = (!run_live_discovery || target_device_type != TargetDevice::Silicon)
+        ? std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description())
+        : tt::umd::Cluster::create_cluster_descriptor();
+    return run_physical_system_discovery(
+        *cluster_desc, distributed_context, target_device_type, run_global_discovery);
 }
 
 LocalEthernetMetrics query_local_ethernet_metrics(
