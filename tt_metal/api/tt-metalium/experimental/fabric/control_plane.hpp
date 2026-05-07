@@ -58,8 +58,8 @@ struct UbbId {
     std::uint32_t asic_id;
 };
 
-UbbId get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
-UbbId get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
+uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
+uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
 
 UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);

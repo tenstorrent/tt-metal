@@ -287,7 +287,7 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     const auto& driver = context.get_cluster().get_driver();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto physical_system_descriptor = tt::tt_metal::run_physical_system_discovery(
-        driver_ref, context.get_distributed_context_ptr(), context.rtoptions().get_target_device());
+        *driver_ref.get_cluster_description(), context.get_distributed_context_ptr(), context.rtoptions().get_target_device());
     log_output_rank0("Physical Discovery Complete");
     log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
     return physical_system_descriptor;
@@ -400,7 +400,7 @@ int main(int argc, char* argv[]) {
         physical_system_descriptor.clear();
         auto& driver_ref = const_cast<tt::umd::Cluster&>(*context_ref.get_cluster().get_driver());
         auto new_psd = tt::tt_metal::run_physical_system_discovery(
-            driver_ref,
+            *driver_ref.get_cluster_description(),
             context_ref.get_distributed_context_ptr(),
             context_ref.rtoptions().get_target_device(),
             true,

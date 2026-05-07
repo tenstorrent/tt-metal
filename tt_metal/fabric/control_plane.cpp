@@ -164,9 +164,19 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
 
-UbbId get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id) {
+uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    uint16_t const bus_id = cluster_desc.get_bus_id(chip_id);
+    uint16_t bus_id = cluster_desc.get_bus_id(chip_id);
+    return bus_id;
+}
+
+uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
+    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
+    auto* cluster_desc = cluster.get_cluster_description();
+    if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
+        chip_id = cluster_desc->get_closest_mmio_capable_chip(chip_id);
+    }
+    uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
     return bus_id;
 }
 
@@ -180,16 +190,6 @@ UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id) {
             static_cast<uint32_t>(tray_bus_id_it - tray_bus_ids.begin() + 1), static_cast<uint32_t>(ubb_asic_id)};
     }
     return UbbId{0, 0};  // Invalid UBB ID if not found
-}
-
-UbbId get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
-    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto* cluster_desc = cluster.get_cluster_description();
-    if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
-        chip_id = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-    }
-    uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
-    return bus_id;
 }
 
 UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
@@ -485,7 +485,7 @@ void ControlPlane::init_control_plane(
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+        tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -596,7 +596,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Initialize physical system descriptor
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+        tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     // Generate Mesh graph based on physical system descriptor

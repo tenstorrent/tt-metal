@@ -533,15 +533,25 @@ PhysicalSystemDescriptor run_local_discovery(
     tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
+    bool run_live_discovery,
     bool all_hostnames_unique) {
+
+    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr = 
+        (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
+            // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
+            tt::umd::Cluster::create_cluster_descriptor() :
+            std::make_unique<tt::umd::ClusterDescriptor>(cluster_desc);
+    
+    auto & cluster_desc_ref = *cdptr;
+
     PhysicalSystemDescriptor psd(target_device_type);
-    if (is_bh_galaxy_rev_c(cluster_desc)) {
+    if (is_bh_galaxy_rev_c(cluster_desc_ref)) {
         psd.set_is_bh_galaxy_rev_c(true);
     }
 
-    const auto& chip_unique_ids = cluster_desc.get_chip_unique_ids();
-    const auto& eth_connections = cluster_desc.get_ethernet_connections();
-    auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
+    const auto& chip_unique_ids = cluster_desc_ref.get_chip_unique_ids();
+    const auto& eth_connections = cluster_desc_ref.get_ethernet_connections();
+    auto cross_host_eth_connections = cluster_desc_ref.get_ethernet_connections_to_remote_devices();
 
     auto my_rank = *(distributed_context->rank());
     auto hostname = get_host_name();
@@ -562,7 +572,7 @@ PhysicalSystemDescriptor run_local_discovery(
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] = get_asic_position(
-            cluster_desc,
+            cluster_desc_ref,
             src_chip_id,
             target_device_type != TargetDevice::Silicon,
             psd.get_pcie_devices_per_tray()[hostname_key],
@@ -570,7 +580,7 @@ PhysicalSystemDescriptor run_local_discovery(
         psd.get_asic_descriptors()[src_unique_id] = ASICDescriptor{
             TrayID{tray_id},
             asic_location,
-            cluster_desc.get_board_type(src_chip_id),
+            cluster_desc_ref.get_board_type(src_chip_id),
             src_unique_id,
             src_chip_id,
             hostname_key};
@@ -630,27 +640,9 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster_desc.get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc_ref.get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
 
     return psd;
-}
-
-PhysicalSystemDescriptor run_local_discovery(
-    tt::umd::Cluster& cluster,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    tt::TargetDevice target_device_type,
-    bool run_live_discovery,
-    bool all_hostnames_unique) {
-
-    std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
-    if (!run_live_discovery || target_device_type != TargetDevice::Silicon) {
-        cluster_desc = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
-    } else {
-        // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
-        cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    }
-
-    return run_local_discovery(*cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
@@ -659,7 +651,17 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     tt::umd::ClusterDescriptor & cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
-    bool run_global_discovery) {
+    bool run_global_discovery,
+    bool run_live_discovery) {
+
+    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr = 
+        (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
+            // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
+            tt::umd::Cluster::create_cluster_descriptor() :
+            std::make_unique<tt::umd::ClusterDescriptor>(cluster_desc);
+
+    auto & cluster_desc_ref = *cdptr;
+
     // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
     distributed_context->barrier();
 
@@ -667,7 +669,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
     auto psd = discovery_impl::run_local_discovery(
-        cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+        cluster_desc_ref, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
@@ -687,28 +689,6 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     }
 
     return psd;
-}
-
-PhysicalSystemDescriptor run_physical_system_discovery(
-    tt::umd::Cluster& cluster,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    tt::TargetDevice target_device_type,
-    bool run_global_discovery,
-    bool run_live_discovery) {
-    // look at this function signature, what we do below is the point of differentiation
-    //
-    // run_local_discovery(
-    //    tt::umd::Cluster& cluster,
-    //    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    //    tt::TargetDevice target_device_type,
-    //    bool run_live_discovery,
-    //    bool all_hostnames_unique);
-    //
-    auto cluster_desc = (!run_live_discovery || target_device_type != TargetDevice::Silicon)
-        ? std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description())
-        : tt::umd::Cluster::create_cluster_descriptor();
-    return run_physical_system_discovery(
-        *cluster_desc, distributed_context, target_device_type, run_global_discovery);
 }
 
 LocalEthernetMetrics query_local_ethernet_metrics(
