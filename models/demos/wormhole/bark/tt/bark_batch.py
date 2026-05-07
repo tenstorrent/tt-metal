@@ -14,9 +14,28 @@ Usage:
 """
 
 import os
+import re
 import time
 
 import numpy as np
+
+_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+
+
+def _safe_output_dir(output_dir: str) -> str:
+    """Resolve an output directory under the current working directory."""
+    base = os.path.abspath(os.getcwd())
+    resolved = os.path.abspath(output_dir)
+    if os.path.commonpath([base, resolved]) != base:
+        raise ValueError(f"output_dir must be under the working directory ({base}), got {resolved}")
+    return resolved
+
+
+def _safe_output_name(name: str) -> str:
+    """Sanitize a generated artifact filename."""
+    name = os.path.basename(name)
+    name = _SAFE_NAME_RE.sub("_", name)
+    return name or "output.wav"
 
 
 def batch_generate_audio(
@@ -41,6 +60,7 @@ def batch_generate_audio(
     Returns:
         List of result dicts with keys: text, output, duration, time, rtf
     """
+    output_dir = _safe_output_dir(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     results = []
@@ -56,7 +76,7 @@ def batch_generate_audio(
         elapsed = time.time() - t0
 
         # Save WAV
-        output_path = os.path.join(output_dir, f"output_{i:03d}.wav")
+        output_path = os.path.join(output_dir, _safe_output_name(f"output_{i:03d}.wav"))
         _save_wav(audio, output_path)
 
         duration = len(audio) / 24000

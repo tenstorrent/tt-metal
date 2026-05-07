@@ -13,9 +13,24 @@ Usage:
 """
 
 import argparse
+import os
+import re
 import time
 
 import numpy as np
+
+_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+
+
+def _safe_output_file(output_file: str) -> str:
+    """Return a sanitized WAV path under the current working directory."""
+    filename = os.path.basename(output_file)
+    filename = _SAFE_NAME_RE.sub("_", filename)
+    if not filename:
+        filename = "bark_output.wav"
+    if not filename.lower().endswith(".wav"):
+        filename = f"{filename}.wav"
+    return os.path.join(os.path.abspath(os.getcwd()), filename)
 
 
 def save_audio(audio: np.ndarray, filename: str, sample_rate: int = 24000):
@@ -27,8 +42,9 @@ def save_audio(audio: np.ndarray, filename: str, sample_rate: int = 24000):
         audio = np.asarray(audio, dtype=np.float32)
         audio_clipped = np.clip(audio, -1.0, 1.0)
         audio_int16 = (audio_clipped * 32767).astype(np.int16)
-        wavfile.write(filename, sample_rate, audio_int16)
-        print(f"Audio saved to {filename}")
+        safe_filename = _safe_output_file(filename)
+        wavfile.write(safe_filename, sample_rate, audio_int16)
+        print(f"Audio saved to {safe_filename}")
     except ImportError:
         print("scipy not installed — skipping WAV save. Install with: pip install scipy")
 
@@ -67,7 +83,8 @@ def run_demo(text: str = None, output_file: str = "bark_output.wav", verbose: bo
         audio = np.clip(audio, -1.0, 1.0)
 
         # Save output
-        save_audio(audio, output_file)
+        safe_output_file = _safe_output_file(output_file)
+        save_audio(audio, safe_output_file)
 
         if verbose:
             duration = len(audio) / 24000
@@ -76,7 +93,7 @@ def run_demo(text: str = None, output_file: str = "bark_output.wav", verbose: bo
             print(f"Audio:    {duration:.2f}s at 24kHz")
             print(f"Time:     {total_time:.2f}s")
             print(f"RTF:      {total_time / duration:.2f}")
-            print(f"Output:   {output_file}")
+            print(f"Output:   {safe_output_file}")
 
     finally:
         ttnn.close_device(device)

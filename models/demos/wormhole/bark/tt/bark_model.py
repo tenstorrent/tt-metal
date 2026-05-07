@@ -32,6 +32,20 @@ CODEBOOK_SIZE = 1024
 N_COARSE_CODEBOOKS = 2
 
 
+def _finalize_coarse_output(generated_tokens: list[torch.Tensor]) -> torch.Tensor:
+    """Return remapped coarse tokens with complete interleaved codebook pairs."""
+    if not generated_tokens:
+        return torch.zeros((1, 2), dtype=torch.long)
+
+    if len(generated_tokens) % N_COARSE_CODEBOOKS != 0:
+        # The last token is codebook 0 without its codebook 1 partner.
+        pad_token = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
+        generated_tokens = generated_tokens + [pad_token]
+
+    coarse_output = torch.cat(generated_tokens, dim=-1)  # [1, n_tokens]
+    return (coarse_output - SEMANTIC_VOCAB_SIZE) % CODEBOOK_SIZE
+
+
 class TtBarkModel:
     """Complete Bark Small pipeline: text-to-audio on Tenstorrent hardware.
 
@@ -349,20 +363,7 @@ class TtBarkModel:
             print("WARNING: Coarse generation produced no tokens. Returning silence.")
             return torch.zeros((1, 2), dtype=torch.long)
 
-        coarse_output = torch.cat(generated_tokens, dim=-1)  # [1, n_tokens]
-
-        # Final guard: truncate any trailing incomplete codebook pair.
-        # This is a safety net independent of the EOS logic above — ensures
-        # Stage 3 never receives an odd-length tensor regardless of how
-        # the generation loop exited (EOS, max_new_tokens, or other).
-        n_generated = coarse_output.shape[-1]
-        if n_generated % N_COARSE_CODEBOOKS != 0:
-            n_generated = (n_generated // N_COARSE_CODEBOOKS) * N_COARSE_CODEBOOKS
-            coarse_output = coarse_output[:, :n_generated]
-
-        # Remap to [0, CODEBOOK_SIZE) — fine model embedding tables expect this range
-        coarse_output = (coarse_output - SEMANTIC_VOCAB_SIZE) % CODEBOOK_SIZE
-        return coarse_output
+        return _finalize_coarse_output(generated_tokens)
 
     def generate_fine_tokens(self, coarse_tokens: torch.Tensor) -> torch.Tensor:
         """Stage 3: Generate fine EnCodec tokens (on-device loop).

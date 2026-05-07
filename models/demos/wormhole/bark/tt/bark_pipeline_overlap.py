@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Bark Small — Streaming Pipeline Overlap (Stage 1 → Stage 2).
+Bark Small — Pipeline Overlap Analysis (Stage 1 → Stage 2).
 
-Implements a producer-consumer pattern between Semantic (Stage 1) and
-Coarse (Stage 2) generation to reduce total latency by starting coarse
-generation before semantic generation completes.
+Measures the current sequential pipeline and estimates the latency benefit
+available from overlapping Semantic (Stage 1) and Coarse (Stage 2) on
+multi-device or async scheduling setups.
 
 Strategy:
   - Semantic generation produces tokens autoregressively (full completion)
@@ -27,13 +27,9 @@ import time
 
 import numpy as np
 
-# Minimum semantic tokens to accumulate before starting coarse generation
-MIN_SEMANTIC_TOKENS = 50
-SEMANTIC_CHUNK_SIZE = 100  # Generate this many semantic tokens per chunk
-
 
 class BarkStreamingPipeline:
-    """Streaming pipeline that overlaps stages where possible.
+    """Sequential pipeline with multi-device overlap estimates.
 
     Architecture:
         ┌──────────────────────────┐
@@ -41,7 +37,7 @@ class BarkStreamingPipeline:
         │  Generates chunks of     │
         │  semantic tokens         │
         └──────────┬───────────────┘
-                   │ Early start after MIN_SEMANTIC_TOKENS
+                   │ Multi-device overlap opportunity
         ┌──────────▼───────────────┐
         │  Stage 2 (Coarse)        │
         │  Begins processing       │
@@ -61,8 +57,8 @@ class BarkStreamingPipeline:
     On single-device systems, true parallelism isn't possible (the device
     can only run one model at a time). This module's value is in:
     1. Documenting the overlap opportunity for multi-device scaling
-    2. Implementing early-start to reduce perceived latency
-    3. Chunked processing for memory efficiency with long inputs
+    2. Capturing per-stage timings for performance reports
+    3. Estimating upper-bound latency improvements
     """
 
     def __init__(self, model):
@@ -99,8 +95,8 @@ class BarkStreamingPipeline:
             print(f"Stage 1 (Semantic): {n_sem} tokens in {timings['semantic']:.2f}s ({tps:.1f} tok/s)")
 
         # Stage 2: Coarse generation — can start immediately after Stage 1
-        # On a multi-device system, Stage 2 would start as soon as
-        # MIN_SEMANTIC_TOKENS are available from Stage 1
+        # On a multi-device system, this stage is the overlap candidate
+        # once semantic generation has produced a usable prefix.
         t0 = time.time()
         coarse_tokens = self.model.generate_coarse_tokens(semantic_tokens)
         timings["coarse"] = time.time() - t0

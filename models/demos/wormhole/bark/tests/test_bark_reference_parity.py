@@ -14,6 +14,8 @@ import numpy as np
 import pytest
 import torch
 
+from models.demos.wormhole.bark.tt.bark_model import _finalize_coarse_output
+
 MODEL_ID = "suno/bark-small"
 
 SEMANTIC_VOCAB_SIZE = 10_000
@@ -196,6 +198,31 @@ class TestCoarseTokenContract:
             "inf"
         ), f"EOS at {COARSE_SEMANTIC_PAD_TOKEN} was suppressed by codebook mask!"
         print(f"Coarse EOS at {COARSE_SEMANTIC_PAD_TOKEN} is allowed in mask  ✓")
+
+    def test_coarse_finalize_keeps_complete_pairs_when_eos_follows_cb1(self):
+        """Regression: EOS after a completed pair must not add an extra frame."""
+        generated = [
+            torch.tensor([[SEMANTIC_VOCAB_SIZE + 7]], dtype=torch.long),
+            torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE + 9]], dtype=torch.long),
+        ]
+
+        coarse = _finalize_coarse_output(generated)
+
+        assert coarse.shape == (1, 2)
+        assert coarse.tolist() == [[7, 9]]
+
+    def test_coarse_finalize_pads_missing_cb1_when_eos_follows_cb0(self):
+        """Regression: EOS after codebook 0 pads codebook 1 instead of dropping the frame."""
+        generated = [
+            torch.tensor([[SEMANTIC_VOCAB_SIZE + 7]], dtype=torch.long),
+            torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE + 9]], dtype=torch.long),
+            torch.tensor([[SEMANTIC_VOCAB_SIZE + 11]], dtype=torch.long),
+        ]
+
+        coarse = _finalize_coarse_output(generated)
+
+        assert coarse.shape == (1, 4)
+        assert coarse.tolist() == [[7, 9, 11, 0]]
 
 
 class TestEnCodecContract:

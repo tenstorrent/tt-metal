@@ -73,9 +73,13 @@ def validate_stage(stage_name, tt_model, ref_model, config, device, seq_len=64):
     tt_logits_torch = ttnn.to_torch(tt_logits)
     ttnn.deallocate(tt_logits)
 
-    # Reshape for comparison
-    if tt_logits_torch.dim() != ref_logits.dim():
-        tt_logits_torch = tt_logits_torch.view_as(ref_logits)
+    # Align TTNN logits shape with reference by removing only the expected
+    # singleton dimension: TTNN [B, 1, S, V] -> reference [B, S, V].
+    if tt_logits_torch.dim() == ref_logits.dim() + 1 and tt_logits_torch.size(1) == 1:
+        tt_logits_torch = tt_logits_torch.squeeze(1)
+    assert tt_logits_torch.shape == ref_logits.shape, (
+        f"{stage_name} logits shape mismatch: TTNN={tt_logits_torch.shape}, " f"reference={ref_logits.shape}"
+    )
 
     # Metrics
     pcc_score = pcc(tt_logits_torch, ref_logits)
@@ -150,8 +154,12 @@ def validate_fine_stage(tt_fine_model, ref_fine_model, device, seq_len=32):
         tt_logits_torch = ttnn.to_torch(tt_logits)
         ttnn.deallocate(tt_logits)
 
-        if tt_logits_torch.dim() != ref_logits.dim():
-            tt_logits_torch = tt_logits_torch.view_as(ref_logits)
+        if tt_logits_torch.dim() == ref_logits.dim() + 1 and tt_logits_torch.size(1) == 1:
+            tt_logits_torch = tt_logits_torch.squeeze(1)
+        assert tt_logits_torch.shape == ref_logits.shape, (
+            f"Fine codebook {codebook_idx} logits shape mismatch: "
+            f"TTNN={tt_logits_torch.shape}, reference={ref_logits.shape}"
+        )
 
         pcc_score = pcc(tt_logits_torch, ref_logits)
         top1_pct = top1_agreement(tt_logits_torch, ref_logits)

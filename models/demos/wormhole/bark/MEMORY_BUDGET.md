@@ -52,6 +52,6 @@ KV cache is stored in DRAM to prevent L1 circular buffer overflow during long au
 ## Known Constraints
 
 - TTNN SDPA requires `chunk_size >= 32`, so decode mode (seq=1) falls back to explicit matmul
-- QKV split done on host after projection due to tile layout constraints in `split_query_key_value_and_split_heads`
+- QKV split is done on-device after projection using TTNN tensor slicing
 - Fine model codebook embeddings extracted on host as uint32 for dtype compatibility
 - Transposed key tensor in decode path is deallocated immediately after matmul to free L1

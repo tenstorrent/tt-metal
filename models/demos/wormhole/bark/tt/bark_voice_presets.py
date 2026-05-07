@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Voice preset loading and caching for Bark Small.
+Voice preset validation and caching for Bark Small.
 
 Provides efficient voice preset management with an in-memory cache
-so that switching between presets does not re-download weights.
+of validated preset-name strings. BarkProcessor resolves the actual
+speaker embedding assets when the preset is used.
 
 Usage:
     from models.demos.wormhole.bark.tt.bark_voice_presets import load_voice_preset

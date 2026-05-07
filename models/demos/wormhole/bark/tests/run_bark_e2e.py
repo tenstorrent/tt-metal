@@ -30,7 +30,7 @@ def _sanitize_output_dir(output_dir: str) -> str:
     """Resolve *output_dir* to an absolute path and ensure it lives under cwd."""
     base = os.path.abspath(os.getcwd())
     resolved = os.path.abspath(output_dir)
-    if not resolved.startswith(base):
+    if os.path.commonpath([base, resolved]) != base:
         raise ValueError(f"output_dir must be under the working directory ({base}), got {resolved}")
     return resolved
 
@@ -46,6 +46,7 @@ def save_audio(audio: np.ndarray, filename: str, sample_rate: int = 24000):
     try:
         from scipy.io import wavfile
 
+        filename = os.path.join(_sanitize_output_dir(os.path.dirname(filename) or "."), _sanitize_filename(filename))
         audio = np.asarray(audio, dtype=np.float32)
         audio_clipped = np.clip(audio, -1.0, 1.0)
         audio_int16 = (audio_clipped * 32767).astype(np.int16)
@@ -183,7 +184,7 @@ def main():
             model = TtBarkModel(device, model_name="suno/bark-small")
             safe_output = _sanitize_filename(args.output)
             print(f"Input: {args.text!r}")
-            run_single(model, args.text, safe_output)
+            run_single(model, args.text, os.path.join(_sanitize_output_dir("."), safe_output))
         finally:
             ttnn.close_device(device)
     else:
