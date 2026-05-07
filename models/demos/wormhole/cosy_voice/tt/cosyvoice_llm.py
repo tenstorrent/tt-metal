@@ -40,7 +40,7 @@ class CosyVoice3LM:
         self.model = CosyVoiceTransformer.from_pretrained(config, mesh_device, dtype)
 
         # Keep a reference to the text embedding (on host for easy prompt composition)
-        self.llm_embedding_torch = self.model.qwen2_state_dict["model.embed_tokens.weight"].float()
+        self.llm_embedding_torch = self.model.text_embedding_torch.float()
         self.speech_embedding_torch = self.model.speech_embedding.weight_torch.float()
 
     def sampling_ids(self, logp, out_tokens, sampling_kwargs, ignore_eos=False):
@@ -146,6 +146,9 @@ class CosyVoice3LM:
             batch_size=batch_size,
         )
 
+        logger.info(f"lm_input shape: {lm_input.shape}")
+        logger.info(f"tt_tokens_embd shape: {tt_tokens_embd.shape}, padded: {tt_tokens_embd.padded_shape}")
+
         # Run prefill forward
         tt_hidden_states = self.model.ttnn_prefill_forward(
             tt_tokens_embd,
@@ -159,8 +162,13 @@ class CosyVoice3LM:
             batch_size=batch_size,
         )
 
-        # Read prefill output logit
-        hidden_states_torch = ttnn.to_torch(tt_hidden_states)
+        # Read prefill output logit — output is replicated across devices
+        # since the speech decoder head weight is replicated (not sharded).
+        # Extract the first device's tensor to avoid the multi-device compose error.
+        if self.config.num_devices > 1:
+            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_hidden_states)[0]).float()
+        else:
+            hidden_states_torch = ttnn.to_torch(tt_hidden_states).float()
         # Apply output norm & head since process_logits_after_prefill_trace handles batched case
         # For simplicity, our CosyVoiceTransformer already applied norm and head in forward!
         # Because we didn't use `process_hidden_states_after_prefill_trace`.
@@ -181,28 +189,48 @@ class CosyVoice3LM:
 
         # 3. Decode loop
         for i in range(1, max_len):
-            # Prepare decode inputs
-            # Embed the generated token
+            # Prepare decode inputs: returns (tokens, current_pos_tt, rope_idxs, page_table)
             token_tensor = torch.tensor([next_token], dtype=torch.int32)
             tt_inputs = self.model.prepare_inputs_decode(token_tensor, torch.tensor([current_pos]))
-            (tt_tokens, tt_rot_mats_global, tt_rot_mats_local, tt_page_table) = tt_inputs
+            (tt_tokens, tt_current_pos, tt_rope_idxs, tt_page_table) = tt_inputs
 
-            # Since tt_tokens are token IDs, but we want to embed with speech embeddings:
-            # We can use speech_embedding directly on host, or let tt_transformers do it
-            # if we override self.embd. We will embed on host!
-            token_emb = self.speech_embedding_torch[next_token].reshape(1, 1, 1, -1)
+            # Compute rotation matrices from rope indices (same as ttnn_decode_forward)
+            tt_rot_mats_global = self.model.rope_setup.get_rot_mats(tt_rope_idxs)
+            tt_rot_mats_local = (
+                self.model.rope_local_setup.get_rot_mats(tt_rope_idxs)
+                if hasattr(self.model, "rope_local_setup")
+                else None
+            )
+
+            # Embed the speech token on host and prepare for decode.
+            # Decode mode requires height=32 (tile-padded batch) and WIDTH sharding
+            # matching the decode residual memory config used by the transformer layers.
+            token_emb = self.speech_embedding_torch[next_token].reshape(1, -1)  # [1, dim]
+            # Pad to batch=32 as required by decode attention kernels
+            token_emb = torch.nn.functional.pad(token_emb, (0, 0, 0, 31))  # [32, dim]
+            token_emb = token_emb.unsqueeze(0).unsqueeze(0)  # [1, 1, 32, dim]
+
+            if self.config.num_devices > 1:
+                mesh_mapper = ttnn.ShardTensor2dMesh(
+                    mesh_device=device, dims=(None, 3), mesh_shape=self.config.cluster_shape
+                )
+            else:
+                mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+
             tt_tokens_embd = ttnn.from_torch(
                 token_emb,
                 device=device,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
             )
-            tt_tokens_embd = ttnn.unsqueeze_to_4D(tt_tokens_embd)
+            # Move to the decode residual memory config (WIDTH sharded, height=32)
+            decode_residual_mem_cfg = self.config.get_residual_mem_config(Mode.DECODE)
+            tt_tokens_embd = ttnn.to_memory_config(tt_tokens_embd, decode_residual_mem_cfg)
 
             tt_logits = self.model.forward(
                 tt_tokens_embd,
-                current_pos=torch.tensor([current_pos]),
+                current_pos=tt_current_pos,
                 rot_mats_global=tt_rot_mats_global,
                 rot_mats_local=tt_rot_mats_local,
                 mode=Mode.DECODE,
@@ -211,7 +239,10 @@ class CosyVoice3LM:
                 batch_size=batch_size,
             )
 
-            logits_torch = ttnn.to_torch(tt_logits)
+            if self.config.num_devices > 1:
+                logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()
+            else:
+                logits_torch = ttnn.to_torch(tt_logits).float()
             logits = logits_torch[0, 0, 0, :]
             logp = torch.log_softmax(logits, dim=-1)
 
@@ -225,4 +256,7 @@ class CosyVoice3LM:
             current_pos += 1
 
         # Teardown KV Cache
-        self.model.teardown_kv_cache(kv_cache)
+        for cache in kv_cache:
+            for tensor in cache:
+                if tensor is not None:
+                    ttnn.deallocate(tensor)

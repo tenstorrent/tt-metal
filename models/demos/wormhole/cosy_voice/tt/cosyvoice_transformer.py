@@ -174,6 +174,10 @@ class CosyVoiceTransformer(Transformer):
             state_dict=qwen2_state_dict,
             weight_cache_path=weight_cache_path,
         )
+        self.config = config
+
+        # Store CPU copies of embeddings for prompt composition
+        self.text_embedding_torch = qwen2_state_dict["tok_embeddings.weight"]
 
         # --- Speech-specific modules ---
 
@@ -191,6 +195,14 @@ class CosyVoiceTransformer(Transformer):
             f"heads={config.n_heads}, kv_heads={config.n_kv_heads}, "
             f"speech_vocab={config.speech_vocab_size}"
         )
+
+    def setup_kv_cache(self, batch_size, max_seq_len):
+        """
+        Returns the KV cache structures for all transformer layers.
+        Usually tt_transformers Attention class initializes self.layer_past
+        during initialization if use_paged_kv_cache is False.
+        """
+        return [layer.attention.layer_past for layer in self.layers]
 
     def prepare_inputs_prefill_embeddings(
         self,
@@ -213,28 +225,46 @@ class CosyVoiceTransformer(Transformer):
         assert embeddings.dim() in (3, 4), f"embeddings must be 3D or 4D, got {embeddings.dim()}D"
 
         if embeddings.dim() == 3:
-            # (batch, seq_len, dim) -> (1, 1, batch, seq_len * dim) to match ttnn unsqueeze logic
+            # (batch, seq_len, dim) -> (1, 1, batch * seq_len, dim) to match ttnn unsqueeze logic
             B, S, D = embeddings.shape
-            embeddings = embeddings.reshape(1, 1, B, S * D)
+            embeddings = embeddings.reshape(1, 1, B * S, D)
         else:
-            S = embeddings.shape[-1] // self.config.dim
+            S = embeddings.shape[2]  # Shape is likely [1, 1, seq_len, dim]
 
-        # Send to device
+        # The attention kernel requires seq_len to be a multiple of 128.
+        # Also, the LM head slices a TILE (32 elements) starting at seq_len - 1,
+        # so we must guarantee padded_S >= seq_len + 31.
+        padded_S = ((S + 31 + 127) // 128) * 128
+        if padded_S > S:
+            import torch.nn.functional as F
+
+            # Pad dim=2 (seq_len): F.pad works on last dims, so we need to pad dim=-2
+            embeddings = F.pad(embeddings, (0, 0, 0, padded_S - S))  # (0,0) for dim, (0, pad) for seq
+
+        if self.config.num_devices > 1:
+            mesh_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.config.cluster_shape
+            )
+        else:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+        # Send to device — must be TILE_LAYOUT for RMSNorm in transformer layers
         tokens_embd = ttnn.from_torch(
             embeddings,
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
         )
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Slice the rot mats to the prefill seqlen
+        # Slice the rot mats to the padded prefill seqlen (must match the
+        # padded embedding tensor that the attention kernel will process).
         mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
-        required_end = start_pos + S
+        required_end = start_pos + padded_S
         pad_len = max(0, required_end - mat_len)
 
         # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix

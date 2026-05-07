@@ -59,13 +59,20 @@ def device():
 
 @pytest.fixture(scope="session")
 def mesh_device():
-    """Open and close a mesh device (N300 = 2 chips) for the test session."""
+    """Open and close a mesh device (N300 = 2 chips) for the test session.
+
+    Fabric must be enabled for all_gather_async used by DistributedNorm in the
+    transformer layers. Without it the Ethernet semaphores are never initialized
+    and the gather call deadlocks.
+    """
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(
         ttnn.MeshShape(1, 2),
-        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
     )
     yield mesh
     ttnn.close_mesh_device(mesh)
+    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # ---------------------------------------------------------------------------

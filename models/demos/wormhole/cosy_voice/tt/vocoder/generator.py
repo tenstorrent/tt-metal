@@ -144,6 +144,69 @@ class TtResBlock:
         return x
 
 
+class TtCausalResBlock:
+    """
+    TTNN ResBlock using CausalConv1d (causal_type='left') for all internal convolutions.
+
+    Used in CausalHiFTGenerator for both source_resblocks and main resblocks.
+    """
+
+    def __init__(self, device, state_dict, prefix="", kernel_size=3, dilations=[1, 3, 5]):
+        self.device = device
+        self.num_layers = len(dilations)
+        self.convs1 = []
+        self.convs2 = []
+        self.activations1 = []
+        self.activations2 = []
+
+        for i in range(self.num_layers):
+            # Activations
+            alpha1 = state_dict[f"{prefix}activations1.{i}.alpha"]
+            alpha2 = state_dict[f"{prefix}activations2.{i}.alpha"]
+            self.activations1.append(TtSnake(alpha1, device))
+            self.activations2.append(TtSnake(alpha2, device))
+
+            w1 = state_dict[f"{prefix}convs1.{i}.weight"]
+            b1 = state_dict[f"{prefix}convs1.{i}.bias"]
+            out_ch, in_ch, ks = w1.shape
+            self.convs1.append(
+                TtCausalConv1d(
+                    device,
+                    w1,
+                    b1,
+                    in_channels=in_ch,
+                    out_channels=out_ch,
+                    kernel_size=ks,
+                    dilation=dilations[i],
+                    causal_type="left",
+                )
+            )
+
+            w2 = state_dict[f"{prefix}convs2.{i}.weight"]
+            b2 = state_dict[f"{prefix}convs2.{i}.bias"]
+            self.convs2.append(
+                TtCausalConv1d(
+                    device,
+                    w2,
+                    b2,
+                    in_channels=in_ch,
+                    out_channels=out_ch,
+                    kernel_size=ks,
+                    dilation=1,
+                    causal_type="left",
+                )
+            )
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        for i in range(self.num_layers):
+            xt = self.activations1[i](x)
+            xt = self.convs1[i](xt)
+            xt = self.activations2[i](xt)
+            xt = self.convs2[i](xt)
+            x = ttnn.add(xt, x)
+        return x
+
+
 class TtConv1d:
     """Wrapper for a single TTNN conv1d layer with pre-loaded weights."""
 
@@ -559,22 +622,33 @@ class TtCausalConv1d:
     """
     TTNN implementation of CausalConv1d.
 
-    Applies left causal padding (zeros) then standard Conv1d with padding=0.
-    causal_padding = (kernel_size * dilation - dilation) for 'left' type.
+    Supports both causal_type='left' (pad zeros on left) and 'right' (pad zeros on right).
+    Uses symmetric padding in ttnn.conv1d then trims the output to match causal behavior.
 
     For non-streaming inference, the cache is always zeros.
     """
 
-    def __init__(self, device, weight, bias, in_channels, out_channels, kernel_size, dilation=1, groups=1):
+    def __init__(
+        self,
+        device,
+        weight,
+        bias,
+        in_channels,
+        out_channels,
+        kernel_size,
+        dilation=1,
+        groups=1,
+        causal_type="left",
+    ):
         self.device = device
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.dilation = dilation
         self.groups = groups
+        self.causal_type = causal_type
 
-        # causal_padding = int((kernel_size * dilation - dilation) / 2) * 2 + (kernel_size + 1) % 2
-        # Simplifies to: (kernel_size - 1) * dilation for odd kernel_size
+        # Match reference: int((kernel_size * dilation - dilation) / 2) * 2 + (kernel_size + 1) % 2
         self.causal_padding = int((kernel_size * dilation - dilation) / 2) * 2 + (kernel_size + 1) % 2
 
         self.conv_config = ttnn.Conv2dConfig(
@@ -591,18 +665,9 @@ class TtCausalConv1d:
         batch_size = x.shape[0]
         length = x.shape[2]
 
-        # For non-streaming: pad with causal_padding zeros on the left
-        # Total input length after padding = length + causal_padding
-        # With Conv1d(padding=0, dilation=d, kernel_size=k):
-        #   output_length = length + causal_padding - (kernel_size - 1) * dilation = length (preserves length)
-        # We achieve this by passing padding=causal_padding to ttnn.conv1d (left+right symmetric)
-        # and adjusting. But ttnn.conv1d applies symmetric padding, so we use
-        # padding = causal_padding (which adds causal_padding on both sides),
-        # then trim the extra right padding from the output.
-
-        # Strategy: use standard conv1d with full causal_padding as padding parameter
-        # This pads both sides symmetrically. Output length = L + 2*causal_padding - (K-1)*D
-        # We need output length = L, so we'll trim the extra.
+        # Symmetric padding produces output length = L + 2*cp - (K-1)*D
+        # Causal (left or right) produces output length = L + cp - (K-1)*D = L
+        # Extra output from symmetric = cp elements to trim
         padding = self.causal_padding
 
         y, _, _ = ttnn.conv1d(
@@ -625,12 +690,18 @@ class TtCausalConv1d:
             return_weights_and_bias=True,
         )
 
-        # Trim to original length (symmetric padding adds extra on the right)
+        # Trim to original length
         out_length = y.shape[2]
         if out_length > length:
             dram_interleaved = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
             y = ttnn.to_memory_config(y, dram_interleaved)
-            y = ttnn.slice(y, [0, 0, 0, 0], [batch_size, 1, length, self.out_channels])
+            if self.causal_type == "left":
+                # Left causal: zeros on left, trim extra from right
+                y = ttnn.slice(y, [0, 0, 0, 0], [batch_size, 1, length, self.out_channels])
+            else:
+                # Right causal: zeros on right, trim extra from left
+                extra = out_length - length
+                y = ttnn.slice(y, [0, 0, extra, 0], [batch_size, 1, out_length, self.out_channels])
 
         return y
 
@@ -749,6 +820,7 @@ class TtCausalHiFTGenerator:
             in_channels=in_channels,
             out_channels=base_channels,
             kernel_size=conv_pre_ks,
+            causal_type="right",
         )
 
         # ---- Upsampling layers (CausalConv1dUpsample = Upsample + Conv1d) ----
@@ -807,7 +879,9 @@ class TtCausalHiFTGenerator:
             self.source_downs.append(sd)
 
             self.source_resblocks.append(
-                TtResBlock(device, state_dict, prefix=f"{prefix}source_resblocks.{i}.", kernel_size=k, dilations=d)
+                TtCausalResBlock(
+                    device, state_dict, prefix=f"{prefix}source_resblocks.{i}.", kernel_size=k, dilations=d
+                )
             )
 
         # ---- Main ResBlocks ----
@@ -817,7 +891,7 @@ class TtCausalHiFTGenerator:
             for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
                 idx = i * self.num_kernels + j
                 self.resblocks.append(
-                    TtResBlock(device, state_dict, prefix=f"{prefix}resblocks.{idx}.", kernel_size=k, dilations=d)
+                    TtCausalResBlock(device, state_dict, prefix=f"{prefix}resblocks.{idx}.", kernel_size=k, dilations=d)
                 )
 
         # ---- conv_post: CausalConv1d(ch, n_fft + 2, 7, causal_type='left') ----

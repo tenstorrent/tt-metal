@@ -188,6 +188,19 @@ class CosyVoiceModelConfig(ModelArgs):
         self.model_name = "Qwen2-0.5B"
         self.is_multimodal = False
 
+        self.rope_scaling = None  # Qwen2-0.5B doesn't use RoPE scaling
+        self.rope_theta_local = None  # No local RoPE variant
+        self.layer_types = ["attention"] * self.n_layers  # No sliding window attention
+        self.sliding_window_pattern = [False] * self.n_layers
+        self.query_pre_attn_scalar = None
+        self.mlp_activation_type = ttnn.UnaryOpType.SILU
+        self.unpadded_hidden_dim = self.hidden_dim
+        self.use_sliding_window = False
+        self.padded_vocab_size = self.vocab_size
+        self.dummy_weights = False
+        self.multiple_of = None
+        self.ffn_dim_multiplier = None
+
         super().__init__(
             mesh_device=mesh_device,
             max_batch_size=max_batch_size,
@@ -227,12 +240,19 @@ class CosyVoiceModelConfig(ModelArgs):
         pass
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        # Override to match the mapping we established in remap_cosyvoice_llm_state_dict
-        # The remapped keys look like "layers.0." instead of "llm.model.model.layers.0."
         if module_name == "lm_head":
-            return "output."
+            return "output"
+
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
-        return layer_prefix
+
+        module_map = {
+            "MLP": "feed_forward",
+            "Attention": "attention",
+            "TransformerBlock": "",
+            "": "",
+        }
+
+        return layer_prefix + module_map.get(module_name, "")
 
     def load_llm_weights(self):
         """Load and remap LLM weights from CosyVoice checkpoint."""

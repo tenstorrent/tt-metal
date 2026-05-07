@@ -2,6 +2,7 @@
 pretrained_models/*/CosyVoice-BlankEN/
 pretrained_models/*/*.pt
 pretrained_models/*/*.safetensors
+pretrained_models/*/*.onnx
 pretrained_models/*/.cache/
 
 # Reference code (cloned separately)
