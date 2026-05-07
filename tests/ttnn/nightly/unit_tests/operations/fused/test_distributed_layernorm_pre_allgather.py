@@ -130,50 +130,57 @@ def run_pre_all_gather_residual_pcc(device, inp_shape, op_name):
     )
 
     tt_output_host = tt2torch_tensor(tt_stats)
-    all_passing = True
+    failures = []
     n_devices = 1
     reduction_width = inp_shape[-1] // n_devices
 
+    def _log_errors(label, passing, output_str):
+        logger.debug(f"tt vs torch {label} = {output_str}")
+        if not passing:
+            failures.append(f"{label}: {output_str}")
+
     device_offset = 0
     # sum(x^2) lives in column 0 of the first stats tile (same layout as run_layernorm_part_1)
-    passing, output_str = comp_allclose_and_pcc(
-        out_torch[:, :, :, 0 + device_offset],
-        tt_output_host[:, :, :, 0 + device_offset],
-        rtol=1e-01 * reduction_width,
-        atol=0,
-        pcc=0.99,
+    _log_errors(
+        "sum(x^2) residual path",
+        *comp_allclose_and_pcc(
+            out_torch[:, :, :, 0 + device_offset],
+            tt_output_host[:, :, :, 0 + device_offset],
+            rtol=1e-02 * reduction_width,
+            atol=0,
+            pcc=0.999,
+        ),
     )
-    logger.debug(f"tt vs torch sum(x^2) residual path = {output_str}")
-    all_passing &= passing
-
-    passing, output_str = comp_equal(
-        out_torch[:, :, :, 1 + device_offset : 32 + device_offset],
-        tt_output_host[:, :, :, 1 + device_offset : 32 + device_offset],
+    _log_errors(
+        "padding 1 residual path",
+        *comp_equal(
+            out_torch[:, :, :, 1 + device_offset : 32 + device_offset],
+            tt_output_host[:, :, :, 1 + device_offset : 32 + device_offset],
+        ),
     )
-    logger.debug(f"tt vs torch padding 1 residual path = {output_str}")
-    all_passing &= passing
 
     # rmsnorm output is one tile wide; layernorm has a second tile holding sum(x).
     if not is_rmsnorm:
         # sum(x) lives in column 0 of the second stats tile (offset 32)
-        passing, output_str = comp_allclose_and_pcc(
-            out_torch[:, :, :, 32 + device_offset],
-            tt_output_host[:, :, :, 32 + device_offset],
-            rtol=5e-01 * reduction_width,
-            atol=10,
-            pcc=0.99,
+        _log_errors(
+            "sum(x) residual path",
+            *comp_allclose_and_pcc(
+                out_torch[:, :, :, 32 + device_offset],
+                tt_output_host[:, :, :, 32 + device_offset],
+                rtol=1e-02 * reduction_width,
+                atol=0,
+                pcc=0.9999,
+            ),
         )
-        logger.debug(f"tt vs torch sum(x) residual path = {output_str}")
-        all_passing &= passing
-
-        passing, output_str = comp_equal(
-            out_torch[:, :, :, 33 + device_offset : 64 + device_offset],
-            tt_output_host[:, :, :, 33 + device_offset : 64 + device_offset],
+        _log_errors(
+            "padding 2 residual path",
+            *comp_equal(
+                out_torch[:, :, :, 33 + device_offset : 64 + device_offset],
+                tt_output_host[:, :, :, 33 + device_offset : 64 + device_offset],
+            ),
         )
-        logger.debug(f"tt vs torch padding 2 residual path = {output_str}")
-        all_passing &= passing
 
-    assert all_passing
+    assert not failures, "tt vs torch comparison(s) failed:\n  " + "\n  ".join(failures)
 
 
 def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
@@ -486,7 +493,7 @@ def test_layernorm_pre_all_gather_residual_pcc(device, op_name, inp_shape):
     "inp_shape",
     [(1, 1, 32, 42)],  # W=42 → padded W=64, 22 cols of implicit tile padding per row
 )
-def test_layernorm_pre_all_gather_residual_padding_isolated_from_stats(device, inp_shape):
+def test_layernorm_pre_all_gather_residual_padding_zeroed(device, inp_shape):
     """Both input and residual implicit tile padding must not contaminate the layernorm stats.
 
     The kernel reads input and residual tile-by-tile and adds them inside the tile,
@@ -497,7 +504,7 @@ def test_layernorm_pre_all_gather_residual_padding_isolated_from_stats(device, i
     """
     torch.manual_seed(0)
 
-    POISON = 100.0  # large enough that 22 * POISON^2 dominates any honest stat value
+    POISON = 100.0  # large enough that 22 * POISON^2 dominates any correct stat value
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
@@ -547,17 +554,17 @@ def test_layernorm_pre_all_gather_residual_padding_isolated_from_stats(device, i
     assert_numeric_metrics(
         out_torch[:, :, :, 0].float(),
         tt_output_host[:, :, :, 0].float(),
-        rtol=1e-2,
-        atol=1.0,
-        pcc_threshold=0.999,
+        rtol=0.01,
+        atol=0.01,
+        pcc_threshold=0.9999,
     )
     # Column 32 = start of the second tile where sum(x) lives.
     assert_numeric_metrics(
         out_torch[:, :, :, 32].float(),
         tt_output_host[:, :, :, 32].float(),
-        rtol=1e-2,
-        atol=1.0,
-        pcc_threshold=0.999,
+        rtol=0.01,
+        atol=0.02,
+        pcc_threshold=0.9999,
     )
 
 
@@ -618,16 +625,16 @@ def test_layernorm_pre_all_gather_residual_mismatched_dtype(device, inp_dtype, r
     assert_numeric_metrics(
         out_torch[:, :, :, 0].float(),
         tt_output_host[:, :, :, 0].float(),
-        rtol=5e-2,
-        atol=1.0,
-        pcc_threshold=0.99,
+        rtol=0.01,
+        atol=0.1,
+        pcc_threshold=0.999,
     )
     assert_numeric_metrics(
         out_torch[:, :, :, 32].float(),
         tt_output_host[:, :, :, 32].float(),
-        rtol=5e-2,
-        atol=1.0,
-        pcc_threshold=0.99,
+        rtol=0.01,
+        atol=0.1,
+        pcc_threshold=0.9999,
     )
 
 
@@ -693,12 +700,6 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
             ttnn.layer_norm(tt_inp, epsilon=1e-5, residual_input_tensor=tt_res, memory_config=dram_memcfg)
 
 
-def _create_recip_tensor(device, w):
-    grid = device.compute_with_storage_grid_size()
-    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-    return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
-
-
 @pytest.mark.parametrize(
     "inp_shape",
     [(1, 1, 32, 128), (1, 1, 32, 1024)],
@@ -761,7 +762,9 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     )
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
-    recip_tensor = _create_recip_tensor(device, w)
+    grid = device.compute_with_storage_grid_size()
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    recip_tensor = ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
     # Passing residual_input_tensor causes the program factory to set the FUSE_PRE_ADD
     # compile-time define, so the kernel is compiled with the in-kernel add path: it reads
@@ -806,23 +809,25 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     if stats_dtype == ttnn.float32:
         atol = 0.002
         rtol = 0.002
+        pcc = 0.9999
     else:
         atol = 0.01
         rtol = 0.01
+        pcc = 0.999
     # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference.
-    assert_numeric_metrics(torch_mean, fused_mean, rtol=rtol, atol=atol, pcc_threshold=0.999)
-    assert_numeric_metrics(torch_var, fused_var, rtol=rtol, atol=atol, pcc_threshold=0.999)
+    assert_numeric_metrics(torch_mean, fused_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
+    assert_numeric_metrics(torch_var, fused_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
     # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Independently
     # exercises the welford path without the in-kernel add, so a regression isolated to
     # either side is caught.
-    assert_numeric_metrics(torch_mean, combined_mean, rtol=rtol, atol=atol, pcc_threshold=0.999)
-    assert_numeric_metrics(torch_var, combined_var, rtol=rtol, atol=atol, pcc_threshold=0.999)
+    assert_numeric_metrics(torch_mean, combined_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
+    assert_numeric_metrics(torch_var, combined_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
 
-    # Fused-pre-add output vs manually-pre-added output, tight against each other. Catches
+    # Fused-pre-add output vs manually-pre-added output. Catches
     # fused-add-specific bugs whose magnitude is below the bf16 torch tolerance: the shared
     # kernel/quantization noise that limits that tolerance cancels between the two paths.
-    assert_numeric_metrics(combined_mean, fused_mean, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
-    assert_numeric_metrics(combined_var, fused_var, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
+    assert_numeric_metrics(combined_mean, fused_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
+    assert_numeric_metrics(combined_var, fused_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
 
 
 @pytest.mark.parametrize(

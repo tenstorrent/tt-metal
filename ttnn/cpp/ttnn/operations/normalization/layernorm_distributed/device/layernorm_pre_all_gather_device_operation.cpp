@@ -112,10 +112,13 @@ Tensor layer_norm_pre_all_gather(
         const auto& b = residual_input_tensor.value();
         TT_FATAL(b.layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.layout());
         TT_FATAL(
-            input.logical_shape() == b.logical_shape(),
-            "Input and residual logical shapes must match, got input: {} vs residual: {}",
+            input.logical_shape() == b.logical_shape() && input.padded_shape() == b.padded_shape(),
+            "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
+            "logical={} padded={}",
             input.logical_shape(),
-            b.logical_shape());
+            input.padded_shape(),
+            b.logical_shape(),
+            b.padded_shape());
         TT_FATAL(
             b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Residual tensor must be interleaved.");
