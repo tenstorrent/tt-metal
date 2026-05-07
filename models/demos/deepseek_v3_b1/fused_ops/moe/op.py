@@ -91,7 +91,11 @@ class MoeSem:
     # Dedicated SRAM down mcast receiver sem (can't reuse DOWN_PROJ_MCAST_RECEIVER:
     # both mcasts target overlapping receivers and run back-to-back, racey otherwise).
     SRAM_DOWN_MCAST_RECEIVER = 21
-    NUM_SEMAPHORES = 22
+    # Per-core sync sem used by sync_riscs_enter/exit inside scan_n_sram_active
+    # (sender_scan + receiver_scan share it — sequential within an iter, sync
+    # primitives leave the sem at (0,0) after each call).
+    SCAN_SYNC = 22
+    NUM_SEMAPHORES = 23
 
 
 @dataclass
@@ -267,6 +271,8 @@ class _MoeRoutedExpertContext:
     # Routing semaphore IDs
     expert_scale_mcast_sender_semaphore_addr: int = 0
     expert_scale_mcast_receiver_semaphore_addr: int = 0
+    # Per-core sync sem for scan_n_sram_active (sender_scan + receiver_scan).
+    scan_sync_sem_addr: int = 0
 
     # Routing setup result dicts
     gate_mm_params: dict = None
@@ -1351,6 +1357,11 @@ class MoeRoutedExpertOp:
         # (num_active_experts × FACE_HEIGHT, FACE_WIDTH) bf16, HEIGHT_SHARDED on
         # sender_core. Holds n_active output faces (one per placed SRAM expert).
         sram_mcast_src_dummy_tensor=None,
+        # SRAM GR scratch backing — sender-only L1 region for sram_intermed_cb +
+        # sram_gr_scalar_cb. Shape (4×FACE_HEIGHT, FACE_WIDTH) bf16, HEIGHT_SHARDED
+        # on sender_core. Dedicated tensor (no overlap) so reconfig-path's
+        # record_cb_metadata sees a non-zero L1 address per descriptor.
+        sram_gr_scratch_dummy_tensor=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1379,6 +1390,7 @@ class MoeRoutedExpertOp:
         index_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.INDEX_MCAST_RECEIVER]
         down_proj_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_MCAST_RECEIVER]
         sram_down_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.SRAM_DOWN_MCAST_RECEIVER]
+        scan_sync_sem_addr = sem_addrs[MoeSem.SCAN_SYNC]
 
         # ==================================================================
         # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
@@ -1504,8 +1516,12 @@ class MoeRoutedExpertOp:
         sram_up_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         # SRAM gather destination CBs (sender core only). Sized for the gather
         # output: num_active_experts × 64 cores = 512 tiles per device.
-        sram_group1_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
-        sram_group2_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Allocate with face-tile descriptor (16x16) so the dummy CB descriptor
+        # built for reconfig=true matches the runtime tile shape used by GR.
+        # The L1 layout is the same either way; this only affects the tile-shape
+        # the kernel compiles against (mirrors shared_group1/2 — see line 4015).
+        sram_group1_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        sram_group2_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
         # SRAM extended GatedReduce intermediate + output CBs (sender core only).
         # Output is [16,16] face tiles, one per active SRAM expert (each face
         # holds 8 N-tiles' worth of post-silu*up*scale data).
@@ -1975,22 +1991,17 @@ class MoeRoutedExpertOp:
         face_tile_desc = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH, False)
         face_tile_size = face_tile.get_tile_size(data_format)  # 256 * 2 = 512 bytes for bf16
 
+        # sram_intermed_cb / sram_gr_scalar_cb are sender-only scratch CBs.
+        # Back them with a dedicated dummy tensor (sram_gr_scratch_dummy_tensor)
+        # so they have non-zero L1 addresses (required by record_cb_metadata in
+        # the reconfig_moe_cbs=True path) without overlapping any mcast-written
+        # CB on the sender's L1. Layout inside the scratch tensor:
+        #   bytes [0,            2*face_tile_size) → intermed_cb (cap=2)
+        #   bytes [2*face_tile_size, 4*face_tile_size) → scalar_cb (cap=2)
         sram_intermed_cb_descriptor = None
+        sram_gr_scalar_cb_descriptor = None
         sram_mcast_src_cb_descriptor = None
         if sram_gate_proj_weights_tensor:
-            # intermed_cb: 2 face tiles, scratch space (no tensor backing needed).
-            sram_intermed_cb_descriptor = ttnn.CBDescriptor(
-                total_size=2 * face_tile_size,
-                core_ranges=sender_core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=sram_intermed_cb,
-                        data_format=data_format,
-                        page_size=face_tile_size,
-                        tile=face_tile_desc,
-                    )
-                ],
-            )
             # mcast_src_cb: n_active face tiles, output of extended GatedReduce.
             # Backed by caller-provided sram_mcast_src_dummy_tensor for PCC readback.
             assert (
@@ -2002,24 +2013,28 @@ class MoeRoutedExpertOp:
             sram_mcast_src_cb_descriptor.format_descriptors[0].tile = face_tile_desc
             sram_mcast_src_cb_descriptor.format_descriptors[0].page_size = face_tile_size
 
-        # SRAM GatedReduce scalar CB descriptor (sender_core only). One 16x16
-        # face tile per active expert (only [0,0] used at runtime via SCALAR
-        # broadcast); matches intermed/out CB tile shape so FPU mul sees
-        # consistent operand sizes.
-        sram_gr_scalar_cb_descriptor = None
-        if sram_gate_proj_weights_tensor:
-            sram_gr_scalar_cb_descriptor = ttnn.CBDescriptor(
-                total_size=gate_up_num_active_experts * face_tile_size,
-                core_ranges=sender_core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=sram_gr_scalar_cb,
-                        data_format=data_format,
-                        page_size=face_tile_size,
-                        tile=face_tile_desc,
-                    )
-                ],
+            # GR scratch backing: 4 face tiles in a sender-only HEIGHT_SHARDED
+            # tensor. intermed_cb at offset 0, scalar_cb at offset 2*face_tile_size.
+            assert (
+                sram_gr_scratch_dummy_tensor is not None
+            ), "sram_gr_scratch_dummy_tensor required when sram_gate_proj_weights_tensor is provided"
+            sram_intermed_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                sram_intermed_cb,
+                sram_gr_scratch_dummy_tensor,
+                address_offset=0,
+                total_size=2 * face_tile_size,
             )
+            sram_intermed_cb_descriptor.format_descriptors[0].tile = face_tile_desc
+            sram_intermed_cb_descriptor.format_descriptors[0].page_size = face_tile_size
+
+            sram_gr_scalar_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                sram_gr_scalar_cb,
+                sram_gr_scratch_dummy_tensor,
+                address_offset=2 * face_tile_size,
+                total_size=2 * face_tile_size,
+            )
+            sram_gr_scalar_cb_descriptor.format_descriptors[0].tile = face_tile_desc
+            sram_gr_scalar_cb_descriptor.format_descriptors[0].page_size = face_tile_size
 
         # ==================================================================
         # Eltwise Mul: silu(gate_proj) * up_proj [* expert_scale if routing]
@@ -2491,6 +2506,7 @@ class MoeRoutedExpertOp:
             # Routing semaphore IDs
             expert_scale_mcast_sender_semaphore_addr=expert_scale_mcast_sender_semaphore_addr,
             expert_scale_mcast_receiver_semaphore_addr=expert_scale_mcast_receiver_semaphore_addr,
+            scan_sync_sem_addr=scan_sync_sem_addr,
             # Routing setup result dicts
             gate_mm_params=gate_mm_params,
             gate_mm_gather_params=gate_mm_gather_params,
@@ -3186,6 +3202,10 @@ class MoeRoutedExpertOp:
             # 8 sender writes (1×32 tiles) → 1 face (16×16). Used by gather call
             # to compute total_dst_pages = n_sram_active * sram_gather_pages_per_expert.
             ("sram_gather_pages_per_expert", 8),
+            # Per-core sync sem for scan_n_sram_active (sender_scan + receiver_scan).
+            # Used by sync_riscs_enter/exit so only BRISC waits on the index CB and
+            # the other 4 RISCs sync via this sem.
+            ("scan_sync_sem_addr", ctx.scan_sync_sem_addr),
         ]
         ncrisc_named_compile_time_args += sram_gather_common
         brisc_named_compile_time_args += sram_gather_common
@@ -6246,6 +6266,7 @@ class MoeOp:
         sram_ag_dummy_tensor=None,
         sram_bg_dummy_tensor=None,
         sram_mcast_src_dummy_tensor=None,
+        sram_gr_scratch_dummy_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -6305,6 +6326,7 @@ class MoeOp:
             sram_ag_dummy_tensor=sram_ag_dummy_tensor,
             sram_bg_dummy_tensor=sram_bg_dummy_tensor,
             sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
+            sram_gr_scratch_dummy_tensor=sram_gr_scratch_dummy_tensor,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -6425,7 +6447,23 @@ class MoeOp:
         cb_descriptors += MoeRoutedExpertOp._build_cb_descriptors(self.ctx.routed_ctx)
         cb_descriptors += MoeSharedExpertOp._build_cb_descriptors(self.ctx.shared_ctx)
         if self.ctx.reconfig_moe_cbs:
-            self.cb_metadata = record_cb_metadata(cb_descriptors)
+            # Include per-device SRAM weight CB descriptors in the metadata so
+            # the reconfig mask covers them too. Without this, NCRISC's
+            # reset_stream_regs skips these CBs and setup_sharded_buffer's iter-2
+            # cb_reserve_back blocks because iter-1's push (received=1, acked=0,
+            # cap=1) was never reset.
+            sram_metadata_descs = []
+            rctx = self.ctx.routed_ctx
+            for per_dev_attr in (
+                "sram_gate_proj_cb_in1_descriptors_per_device",
+                "sram_up_proj_cb_in1_descriptors_per_device",
+                "sram_down_proj_cb_in1_descriptors_per_device",
+            ):
+                per_dev = getattr(rctx, per_dev_attr, None) or {}
+                for descs in per_dev.values():
+                    if descs:
+                        sram_metadata_descs.extend(descs)
+            self.cb_metadata = record_cb_metadata(cb_descriptors + sram_metadata_descs)
         return cb_descriptors
 
     def _build_dummy_cb_descs(self):
@@ -6809,6 +6847,9 @@ class MoeOp:
         # SRAM extended GatedReduce output tensor (sender-resident).
         # Shape (n_active*FACE_HEIGHT, FACE_WIDTH) bf16.
         sram_mcast_src_dummy_tensor=None,
+        # SRAM GR scratch backing for intermed_cb + scalar_cb (sender-only).
+        # Shape (4*FACE_HEIGHT, FACE_WIDTH) bf16 = 4 face tiles = 2048 B.
+        sram_gr_scratch_dummy_tensor=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -6892,6 +6933,7 @@ class MoeOp:
             sram_ag_dummy_tensor=sram_ag_dummy_tensor,
             sram_bg_dummy_tensor=sram_bg_dummy_tensor,
             sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
+            sram_gr_scratch_dummy_tensor=sram_gr_scratch_dummy_tensor,
         )
 
         # ==================================================================

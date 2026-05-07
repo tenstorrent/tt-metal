@@ -74,6 +74,7 @@ class RoutedExpertTensors(NamedTuple):
     sram_ag_dummy_tensor: Any  # SRAM gate gather dst, sender-resident
     sram_bg_dummy_tensor: Any  # SRAM up gather dst, sender-resident
     sram_mcast_src_dummy_tensor: Any  # SRAM extended GatedReduce output, sender-resident
+    sram_gr_scratch_dummy_tensor: Any  # SRAM GR intermed_cb + scalar_cb backing (sender-resident scratch)
     final_output_tensor: Any
     gate_proj_expert_tensors: Any
     up_proj_expert_tensors: Any
@@ -531,6 +532,7 @@ def create_routed_expert_tensors(
     sram_ag_dummy_tensor = None
     sram_bg_dummy_tensor = None
     sram_mcast_src_dummy_tensor = None
+    sram_gr_scratch_dummy_tensor = None
     if sram_expert_ids and is_moe and enable_routing:
         from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
         from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
@@ -730,6 +732,28 @@ def create_routed_expert_tensors(
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
+        # SRAM GR scratch backing (sender-only). Holds intermed_cb (cap=2 face
+        # tiles, 1024 B) + scalar_cb (cap=2 face tiles, 1024 B) back-to-back.
+        # Total: 4 face tiles = (64, 16) bf16 = 2048 B. Sender-core HEIGHT_SHARDED.
+        # Dedicated tensor so addr is non-zero (record_cb_metadata requirement)
+        # without overlapping any mcast-written CB on the sender's L1.
+        _gr_scratch_total_h = 4 * FACE_HEIGHT_TILE  # 64
+        _gr_scratch_shard_spec = ttnn.ShardSpec(
+            sender_core_grid, (_gr_scratch_total_h, FACE_WIDTH_TILE), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        _gr_scratch_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _gr_scratch_shard_spec
+        )
+        sram_gr_scratch_dummy_tensor = ttnn.from_torch(
+            torch.zeros((_gr_scratch_total_h, FACE_WIDTH_TILE), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_gr_scratch_mem,
+            tile=ttnn.Tile([FACE_HEIGHT_TILE, FACE_WIDTH_TILE]),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
     return RoutedExpertTensors(
         ttnn_residual_mcast_src=ttnn_residual_mcast_src,
         ttnn_rmsnorm_gamma=ttnn_rmsnorm_gamma,
@@ -751,6 +775,7 @@ def create_routed_expert_tensors(
         sram_ag_dummy_tensor=sram_ag_dummy_tensor,
         sram_bg_dummy_tensor=sram_bg_dummy_tensor,
         sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
+        sram_gr_scratch_dummy_tensor=sram_gr_scratch_dummy_tensor,
         final_output_tensor=final_output_tensor,
         gate_proj_expert_tensors=gate_proj_expert_tensors,
         up_proj_expert_tensors=up_proj_expert_tensors,
@@ -1310,7 +1335,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     # ── Run fused MoE op with reduce (looping inside kernel) ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
-    num_iterations = 1
+    num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r.ttnn_residual_mcast_src,
         r.ttnn_gate_mm_weights,
@@ -1350,6 +1375,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         sram_ag_dummy_tensor=r.sram_ag_dummy_tensor,
         sram_bg_dummy_tensor=r.sram_bg_dummy_tensor,
         sram_mcast_src_dummy_tensor=r.sram_mcast_src_dummy_tensor,
+        sram_gr_scratch_dummy_tensor=r.sram_gr_scratch_dummy_tensor,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1524,14 +1550,38 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     if r.sram_mcast_src_dummy_tensor is not None and sram_expert_ids:
         device_gate_scores = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
         scores_top8 = device_gate_scores[0].flatten()[:8].float()
+
+        def _reduce_gather_to_per_expert(gather_torch, slot_idx):
+            """Replicate gather check's K-reduce: for each n_idx, sum 8 K-slice
+            1x32 tiles → 1x32 col_sum. Concat 8 col_sums → 1x256."""
+            expert_base_tile = slot_idx * 64
+            reduced = torch.zeros((1, _N_per_dev), dtype=gather_torch.dtype)
+            for n_idx in range(_sram_n_parallel):
+                col_sum = torch.zeros((1, _tile_w), dtype=gather_torch.dtype)
+                for k_idx in range(_sram_k_parallel):
+                    tile_idx = expert_base_tile + k_idx * _sram_n_parallel + n_idx
+                    col_sum = col_sum + gather_torch[tile_idx : tile_idx + 1, :]
+                reduced[..., n_idx * _tile_w : (n_idx + 1) * _tile_w] = col_sum
+            return reduced.float()
+
         for dev_idx, gr_dev in enumerate(ttnn.get_device_tensors(r.sram_mcast_src_dummy_tensor)):
             gr_torch = ttnn.to_torch(gr_dev)  # shape (n_active*16, 16)
+            ag_torch = ttnn.to_torch(ttnn.get_device_tensors(r.sram_ag_dummy_tensor)[dev_idx])
+            bg_torch = ttnn.to_torch(ttnn.get_device_tensors(r.sram_bg_dummy_tensor)[dev_idx])
             for slot_idx, eid in enumerate(sram_expert_ids):
                 face = gr_torch[slot_idx * 16 : (slot_idx + 1) * 16, :].contiguous()
                 gr_out = face.flatten().view(1, _N_per_dev)
-                # Find eid's TopK position to get its score (the scale).
                 k_pos = (tt_top8_decoded == eid).nonzero(as_tuple=True)[0].item()
                 scale = scores_top8[k_pos].item()
+
+                # ── DIAGNOSTIC: GR math from ACTUAL gather outputs (isolates GR kernel) ──
+                g1_reduced = _reduce_gather_to_per_expert(ag_torch, slot_idx)
+                g2_reduced = _reduce_gather_to_per_expert(bg_torch, slot_idx)
+                expected_from_gather = torch.nn.functional.silu(g1_reduced) * scale * g2_reduced
+                pcc_g_passing, pcc_g_val = comp_pcc(expected_from_gather, gr_out.float(), 0.97)
+                logger.info(f"SRAM GR-from-gather dev={dev_idx} eid={eid} slot={slot_idx} PCC: {pcc_g_val}")
+
+                # ── End-to-end check: vs weight-based reference ──
                 gate_w_full = r.expert_weights_dict[eid].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
                 up_w_full = r.up_proj_weights_dict[eid].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
                 gate_w = gate_w_full[:, dev_idx * _N_per_dev : (dev_idx + 1) * _N_per_dev].float()

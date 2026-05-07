@@ -58,9 +58,14 @@ struct GatedReduce {
     // tiles_per_k stays compile-time (face inner-reduce count, fixed for both
     // shared and SRAM paths). k_num_tiles moved to runtime (ComputeArgs)
     // so the SRAM path can supply n_sram_active without an extra template flag.
-    template <uint32_t TilesPerK>
+    // EnableScalar: 1 = SRAM path multiplies the silu(g1)*g2 product by a per-K
+    // scalar from scalar_cb; 0 = shared path skips the scalar mul. Replaces the
+    // old `scalar_cb != 0` runtime check (which would mis-fire if cb_id 0 ever
+    // got assigned to scalar_cb).
+    template <uint32_t TilesPerK, uint32_t EnableScalar = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t tiles_per_k = TilesPerK;
+        static constexpr bool enable_scalar = EnableScalar != 0;
     };
 
     struct ReaderArgs {};
@@ -167,7 +172,7 @@ struct GatedReduce {
                 cb_wait_front(args.intermed_cb, 2);
                 cb_reserve_back(args.out_cb, 1);
 
-                if (args.scalar_cb != 0) {
+                if constexpr (CTArgs::enable_scalar) {
                     // Wait for this iteration's scalar (BRISC pushes one bf16 per
                     // active expert into scalar_cb in TopK SRAM-flagged order).
                     cb_wait_front(args.scalar_cb, 1);
@@ -208,6 +213,27 @@ struct GatedReduce {
             if (padding > 0) {
                 cb_reserve_back(args.out_cb, padding);
                 cb_push_back(args.out_cb, padding);
+            }
+
+            // Drain-pop the garbage face pages on group1/group2_cb. Required for
+            // multi-iter correctness on the SRAM path: the gather sender writes at
+            // fixed L1 base offsets (ignoring wr_ptr), so the gather dst CBs MUST
+            // advance by full capacity each iter (push num_active × tiles_per_k,
+            // pop same) — otherwise rd_ptr drifts and iter 2+ reads stale data
+            // from iter 1's L1 region.
+            // The K-loop above popped k_num_tiles × tiles_per_k real pages; this
+            // drains the remaining (out_cb_total_pushes − k_num_tiles) × tiles_per_k.
+            // No-op when out_cb_total_pushes == k_num_tiles (shared path: padding=0).
+            //
+            // scalar_cb is NOT drained here: BRISC pushes only n_sram scalars per
+            // iter (compact TopK-SRAM-flagged order, GR reads in same order). Push
+            // and pop are variable but balanced. Multi-iter is safe AS LONG AS
+            // n_sram_active is constant across iters; for varying n_sram both BRISC
+            // and GR would need to push/pop num_active (full) — separate fix.
+            if (padding > 0) {
+                const uint32_t in_drain_pops = padding * tiles_per_k;
+                cb_pop_front(args.group1_cb, in_drain_pops);
+                cb_pop_front(args.group2_cb, in_drain_pops);
             }
 #endif
         }
