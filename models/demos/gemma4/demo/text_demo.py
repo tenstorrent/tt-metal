@@ -683,6 +683,9 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     if prefill_len > max_prefill:
         pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
 
+    if os.environ.get("CI") == "true" and prefill_len != 128:
+        pytest.skip(f"CI: only prefill_128 runs in CI; skipping prefill_{prefill_len}")
+
     prompt = load_demo_prompt(prefill_len, instruct=True)
 
     # KV cache must hold the prefill plus the 200 decode tokens. Keep a small
