@@ -183,7 +183,7 @@ TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
     auto topology = TensorTopology();
 
     MeshTensor original(mesh_buffer, std::move(spec), std::move(topology));
-    auto* buffer_ptr = &original.mesh_buffer();
+    const auto* buffer_ptr = &original.mesh_buffer();
 
     MeshTensor moved(std::move(original));
 
@@ -205,7 +205,7 @@ TEST_F(MeshTensorDeviceTest, MoveAssignmentTransfersOwnership) {
     MeshTensor tensor1(mesh_buffer1, std::move(spec1), TensorTopology());
     MeshTensor tensor2(mesh_buffer2, std::move(spec2), TensorTopology());
 
-    auto* buffer1_ptr = &tensor1.mesh_buffer();
+    const auto* buffer1_ptr = &tensor1.mesh_buffer();
 
     tensor2 = std::move(tensor1);
 
