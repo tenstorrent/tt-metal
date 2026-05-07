@@ -183,7 +183,7 @@ template tt::tt_metal::Tensor from_vector<uint16_t, ttnn::DataType::UINT16>(
     const ttnn::distributed::TensorToMesh*);
 
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
-    return tensor.tensor_attributes != nullptr;
+    return tensor.is_allocated();
 }
 
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name) {
