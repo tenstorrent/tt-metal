@@ -42,6 +42,13 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 )
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config, deallocate_weight_config_tensors
+from models.demos.deepseek_v3.utils.signpost_names import (
+    DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST,
+    DECODE_EXECUTE_TRACE_SIGNPOST,
+    DECODE_TRACE_CAPTURE_SIGNPOST,
+    DECODE_WARMUP_SIGNPOST,
+    WARMUP_MODEL_SIGNPOST,
+)
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -342,6 +349,9 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _warmup_model_decode_demo(self, enable_trace: bool, sample_on_device: bool):
         warmup_tokens = torch.zeros(self.batch_size, dtype=torch.int32)
         warmup_start_pos = torch.zeros(self.batch_size, dtype=torch.int32)
+        signpost_decode_warmup = self.signpost and not enable_trace
+        if signpost_decode_warmup:
+            signpost(header=DECODE_WARMUP_SIGNPOST)
         decode_logits = self.decode_forward(
             tokens=warmup_tokens,
             start_pos=warmup_start_pos,
@@ -349,6 +359,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_table=None,
             sample_on_device=sample_on_device,
         )
+        if signpost_decode_warmup:
+            ttnn.synchronize_device(self.mesh_device)
+            signpost(header=DECODE_WARMUP_SIGNPOST)
 
         if sample_on_device:
             self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
@@ -1904,16 +1917,16 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         if warmup_cache_key not in self._warmup_completed_configs:
             if self.signpost:
-                signpost(header="warmup_model")
-            profiler.start("warmup_model")
+                signpost(header=WARMUP_MODEL_SIGNPOST)
+            profiler.start(WARMUP_MODEL_SIGNPOST)
             self.warmup_model(min_token_len, max_token_len)
-            profiler.end("warmup_model")
+            profiler.end(WARMUP_MODEL_SIGNPOST)
             if self.signpost:
-                signpost(header="warmup_model")
+                signpost(header=WARMUP_MODEL_SIGNPOST)
 
             self._warmup_completed_configs.add(warmup_cache_key)
         else:
-            # Keep profiler timing for "warmup_model" even when warmup is skipped.
+            # Warmup already ran for this runtime configuration.
             logger.info(f"Skipping warmup_model; warmup already completed for cache key={warmup_cache_key}.")
 
         decode_steps_for_stats = 0
@@ -2893,7 +2906,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
         if self.signpost:
-            signpost(header="decode_trace_capture")
+            signpost(header=DECODE_TRACE_CAPTURE_SIGNPOST)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         # Only capture the rot_mats generation from rot_idxs (all ttnn ops, no from_torch)
@@ -2908,7 +2921,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         if self.signpost:
-            signpost(header="decode_trace_capture")
+            signpost(header=DECODE_TRACE_CAPTURE_SIGNPOST)
         logger.info("Decode trace capture complete.")
         self._trace_id = trace_id
 
@@ -2960,7 +2973,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
 
             if self.signpost:
-                signpost(header="decode_execute_trace")
+                signpost(header=DECODE_EXECUTE_TRACE_SIGNPOST)
 
             host_tokens = ttnn.from_torch(
                 torch_input,
@@ -3006,7 +3019,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             if sample_on_device:
                 # return trace output for sampling on device, no need to get logits on host
                 if self.signpost:
-                    signpost(header="decode_execute_trace_sample_on_device")
+                    signpost(header=DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST)
                 if self.profile_decode:
                     # trigger the profiler to read the device side data each iteration to not miss any data
                     ttnn.ReadDeviceProfiler(self.mesh_device)
@@ -3021,7 +3034,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 ),
             )
             if self.signpost:
-                signpost(header="decode_execute_trace")
+                signpost(header=DECODE_EXECUTE_TRACE_SIGNPOST)
             if self.profile_decode:
                 # trigger the profiler to read the device side data each iteration to not miss any data
                 ttnn.ReadDeviceProfiler(self.mesh_device)

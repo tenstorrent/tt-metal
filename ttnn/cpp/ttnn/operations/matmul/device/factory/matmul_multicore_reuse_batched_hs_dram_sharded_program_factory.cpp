@@ -15,8 +15,9 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
 using namespace tt;
 
@@ -394,13 +395,7 @@ create_program_batch_sharded(
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(get_defines(
-                fused_activation.value().op_type,
-                fused_activation.value().params,
-                "ACTIVATION",
-                "i",
-                tt_metal::dataformat_to_datatype_converter(output_data_format)));
+            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
         }
     }
     if (packer_l1_acc_en) {
@@ -517,6 +512,29 @@ create_program_batch_sharded(
                 {"cb_out", tt::CBIndex::c_4},
             }});
 
+    // Setup named compile args for compute kernel
+    std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_intermed0", tt::CBIndex::c_5},
+        {"cb_in0_intermediate", tt::CBIndex::c_8},
+        {"cb_in1_intermediate", tt::CBIndex::c_9},
+        {"cb_in0_transposed", tt::CBIndex::c_10},
+        {"bias_ntiles", per_core_N},
+    };
+
+    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+        using ttnn::operations::matmul::utilities::get_activation_params;
+        const auto& activation = fused_activation.value();
+        const auto params = get_activation_params(activation);
+        compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
+        compute_named_compile_args["activation_param0"] = params.param0;
+        compute_named_compile_args["activation_param1"] = params.param1;
+        compute_named_compile_args["activation_param2"] = params.param2;
+    }
+
     auto mm_kernel_compute_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
@@ -527,17 +545,7 @@ create_program_batch_sharded(
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
-            .named_compile_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in1", tt::CBIndex::c_1},
-                {"cb_bias", tt::CBIndex::c_3},
-                {"cb_out", tt::CBIndex::c_4},
-                {"cb_intermed0", tt::CBIndex::c_5},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
-                {"cb_in0_transposed", tt::CBIndex::c_10},
-                {"bias_ntiles", per_core_N},
-            }});
+            .named_compile_args = compute_named_compile_args});
 
     // Set runtime args - each core only gets SetRuntimeArgs called ONCE per kernel
     // Following the pattern from the mcast DRAM sharded factory

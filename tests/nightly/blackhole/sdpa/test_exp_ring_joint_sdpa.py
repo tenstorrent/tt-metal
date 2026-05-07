@@ -15,6 +15,8 @@ Perf tests are included but skipped on CI.
 
 import math
 import os
+from unittest import mock
+
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import ttnn
@@ -779,3 +781,88 @@ def test_exp_ring_joint_attention_create_perf_table(b, nh, total_seq, d, q_chunk
         print(f"  Total coordination: {ring_size} devices x {best['ccl_cores']} CCL cores each")
 
     print(f"{'='*190}\n")
+
+
+# === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
+# Symmetric +/- band — catches both regressions and unexpected speedups.
+EXP_RING_JOINT_PERF_MARGIN = 0.005
+
+EXP_RING_JOINT_PERF_CHECK_CONFIGS = [
+    # (ring_size_expected, max_payload_size, payload_id, expected_util)
+    # 4-device ring (QuietBox, 4xGalaxy analog)
+    (4, 4096, "4k", 65.1),
+    (4, 8192, "8k", 65.0),
+]
+
+
+@pytest.mark.skipif(
+    os.environ.get("SDPA_PERF_CHECKS") != "1",
+    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
+)
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "ring_size_expected, max_payload_size, payload_id, expected_util",
+    EXP_RING_JOINT_PERF_CHECK_CONFIGS,
+    ids=[f"ring{cfg[0]}-{cfg[2]}" for cfg in EXP_RING_JOINT_PERF_CHECK_CONFIGS],
+)
+def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_size, payload_id, expected_util):
+    """Measure exp ring joint SDPA math utilization via tracy and assert within +/- EXP_RING_JOINT_PERF_MARGIN."""
+    from tracy.process_model_log import run_device_profiler
+
+    num_devices = detect_devices_without_opening()
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+
+    if sp_size != ring_size_expected:
+        pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {sp_size}")
+
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size = TEST_CONFIGS[0]
+    config_id = TEST_CONFIG_IDS[0]
+    local_nh = nh // tp_size
+    local_seq_len = total_seq // sp_size
+
+    subdir = "ttnn_exp_ring_joint_sdpa_perf_check"
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::"
+        f"test_exp_ring_joint_attention_sdpa_sweep_perf_impl"
+        f"[{config_id}-bf16-{payload_id}]"
+    )
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+    )
+
+    assert (
+        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
+    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
+
+    measured_core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
+
+    # Match perf-table effective_cores rounding (ignore non-multiple-of-10 strays)
+    effective_cores = measured_core_count - measured_core_count % 10
+    assert (
+        effective_cores > 0
+    ), f"effective_cores=0 (measured_core_count={measured_core_count}) — profiler output incomplete"
+
+    utilization = compute_math_utilization(
+        local_seq_len, total_seq, d, d, local_nh, duration_ns, effective_cores, is_causal=False
+    )
+
+    lower = expected_util * (1 - EXP_RING_JOINT_PERF_MARGIN)
+    upper = expected_util * (1 + EXP_RING_JOINT_PERF_MARGIN)
+
+    logger.info(
+        f"Exp ring joint SDPA perf check ring{ring_size_expected}-{payload_id}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {EXP_RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )

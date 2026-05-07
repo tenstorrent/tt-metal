@@ -775,6 +775,63 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Validate KernelSpec::dfb_compute_self_loop_scopes entries.
+    // This is a niche advanced option that only applies to compute kernels that self-loop a DFB
+    // (bind it as both producer and consumer).
+    // All misapplications fail loudly here for the benefit of users (especially AI users).
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.dfb_compute_self_loop_scopes.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            kernel.is_compute_kernel(),
+            "KernelSpec '{}' specifies dfb_compute_self_loop_scopes, but is not a compute kernel. "
+            "This option applies only to compute kernels.",
+            kernel.unique_id);
+
+        std::unordered_set<DFBSpecName> seen_dfb_names;
+        for (const auto& entry : kernel.dfb_compute_self_loop_scopes) {
+            TT_FATAL(
+                seen_dfb_names.insert(entry.dfb_spec_name).second,
+                "KernelSpec '{}' has duplicate dfb_compute_self_loop_scopes entries for DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                collected.dfb_by_name.contains(entry.dfb_spec_name),
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry referencing unknown DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            bool has_producer_binding = false;
+            bool has_consumer_binding = false;
+            for (const auto& binding : kernel.dfb_bindings) {
+                if (binding.dfb_spec_name != entry.dfb_spec_name) {
+                    continue;
+                }
+                if (binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
+                    has_producer_binding = true;
+                } else if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                    has_consumer_binding = true;
+                }
+            }
+            TT_FATAL(
+                has_producer_binding && has_consumer_binding,
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry for DFB '{}', but the "
+                "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
+                "consumer). This option applies only to self-looped DFBs.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                entry.scope != KernelSpec::DFBComputeSelfLoopScope::Scope::INTER,
+                "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
+                "not yet supported by the runtime.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+        }
+    }
+
     // Data format must be valid for the architecture
     const tt::ARCH arch = get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
@@ -1247,6 +1304,26 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto producer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.producer_binding->access_pattern);
     auto consumer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.consumer_binding->access_pattern);
 
+    // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
+    // lower-layer DFB API requires an explicit scope.
+    // The user can declare it via KernelSpec::dfb_compute_self_loop_scopes:
+    //  - absence of an entry means we infer INTRA (the common case)
+    //  - user-specified INTRA is also fine
+    //  - user-specified INTER is not currently supported. This will have already failed validation.
+    std::optional<experimental::dfb::TensixScope> tensix_scope;
+    if (producer == consumer && producer->is_compute_kernel()) {
+        auto user_scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
+        for (const auto& entry : producer->dfb_compute_self_loop_scopes) {
+            if (entry.dfb_spec_name == dfb_spec->unique_id) {
+                user_scope = entry.scope;
+                break;
+            }
+        }
+        tensix_scope = (user_scope == KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA)
+                           ? experimental::dfb::TensixScope::INTRA
+                           : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
+    }
+
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
@@ -1258,7 +1335,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .cap = consumer_access_pattern,
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
-        .tile = dfb_spec->tile_format_metadata};
+        .tile = dfb_spec->tile_format_metadata,
+        .tensix_scope = tensix_scope};
 }
 
 // ----------------------------------------------------------------------------
@@ -1471,7 +1549,9 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // Public Entry Point
 // ============================================================================
 
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+    // The mesh_device argument is required for forthcoming work but is not yet consumed.
+    (void)mesh_device;
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)

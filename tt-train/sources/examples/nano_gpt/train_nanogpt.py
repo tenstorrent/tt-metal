@@ -2,19 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-featured NanoGPT training example.
+"""NanoGPT training example with optional DP / TP / DP+TP.
 
-This example provides a comprehensive Python implementation that mirrors the C++ nano_gpt example,
-including:
-- Full model training with GPT2/NanoGPT and Llama architectures
-- Gradient accumulation
-- Learning rate scheduling (identity, warmup_linear)
-- Optimizers (via create_optimizer from config)
-- Model checkpointing and resuming
-- Loss tracking and averaging
-- Configurable training parameters
-- Character tokenizer (via ttml.common.data.CharTokenizer)
-- Proper tensor shapes
+Reads ``device_config`` from YAML (``mesh_shape``, ``enable_ddp``, ``enable_tp``),
+opens a named device mesh, and runs the standard forward / backward / step
+loop with a dp-axis all-reduce on gradients when DDP is on. A 1x1 mesh is
+the degenerate single-device case; a 2D mesh with both DDP and TP enabled
+uses axis 0 for "dp" and axis 1 for "tp".
+
+Supported ``model_type``:
+
+- ``llama``    — any combination of DDP and TP (uses the ``"tp"`` mesh axis).
+- ``gpt2``     — DDP only; TP is rejected.
+- ``deepseek`` — single-device only.
+- ``qwen3``    — DDP only; TP is rejected.
 """
 
 import argparse
@@ -54,9 +55,14 @@ from ttml.models.qwen3 import (
     Qwen3Config,
     Qwen3RopeScalingConfig,
 )
-from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
-from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
+from ttml.common.utils import (
+    round_up_to_tile,
+    get_tt_metal_runtime_root,
+    create_optimizer,
+    get_loss_over_devices,
+    summary,
+)
+from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig, DeviceConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
 
@@ -271,6 +277,53 @@ def read_file_to_str(file_path: str) -> str:
         return f.read()
 
 
+def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
+    """Build a named device mesh from DeviceConfig.
+
+    Mirrors the C++ axis-assignment rule in autograd/auto_context.cpp:140-195
+    so that ttml.sync_gradients and mesh.axis_mapper("dp"|"tp", ...) bind to
+    the same physical axes the C++ trainer would.
+
+    Line topology (at most one mesh dim > 1): exactly one of enable_ddp /
+    enable_tp must be true; that name is assigned to the active (non-trivial)
+    axis.
+
+    2D mesh (both dims > 1): the number of enabled parallelisms must equal
+    the number of mesh dims, and assignment order is DP -> TP. CP/PP are
+    out of scope here.
+    """
+    shape = tuple(int(s) for s in device_config.mesh_shape)
+    n = len(shape)
+    nontrivial = [i for i, s in enumerate(shape) if s > 1]
+    is_line = len(nontrivial) <= 1
+    enabled = (
+        ("dp" if device_config.enable_ddp else None),
+        ("tp" if device_config.enable_tp else None),
+    )
+    enabled_names = tuple(name for name in enabled if name is not None)
+
+    axis_names = [f"_{i}" for i in range(n)]
+    if not enabled_names:
+        return ttml.Mesh(shape, tuple(axis_names))
+
+    if is_line:
+        if len(enabled_names) != 1:
+            raise ValueError(
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_tp; got enabled={enabled_names}"
+            )
+        active = nontrivial[0] if nontrivial else 0
+        axis_names[active] = enabled_names[0]
+    else:
+        if len(enabled_names) != n:
+            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
+        # enabled_names is ordered ("dp", "tp") by construction above, matching
+        # the C++ assignment order in auto_context.cpp.
+        for i, name in enumerate(enabled_names):
+            axis_names[i] = name
+
+    return ttml.Mesh(shape, tuple(axis_names))
+
+
 def create_warmup_linear_scheduler(optimizer, total_steps: int):
     """Create warmup + linear decay scheduler."""
     warmup_factor = 0.1
@@ -338,9 +391,14 @@ def create_dataset_from_text(
 def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
 
+    When the active mesh has a "dp" axis with size > 1, inputs and targets
+    are sharded along the batch dim across that axis (matches main.cpp:551-609
+    Shard{BATCH_DIM}). Otherwise the tensors replicate across whatever mesh
+    is open, which is the right behavior for TP-only and 1x1 cases.
+
     Args:
-        samples: List of (sequence, target) tuples
-        sequence_length: Sequence length
+        samples: List of (sequence, target) tuples.
+        sequence_length: Sequence length.
     """
     actual_batch_size = len(samples)
     data = []
@@ -352,11 +410,13 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     data_np = np.array(data, dtype=np.uint32).reshape(actual_batch_size, 1, 1, sequence_length)
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
-    # Create tensors directly from NumPy with correct shape (single host-to-device transfer)
-    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
-    targets_tensor = ttml.autograd.Tensor.from_numpy(
-        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+    mesh = ttml.mesh()
+    mapper = None
+    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
+        mapper = mesh.axis_mapper("dp", tdim=0)
+
+    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+    targets_tensor = ttml.autograd.Tensor.from_numpy(targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
 
     return data_tensor, targets_tensor
 
@@ -419,7 +479,16 @@ def train_step(
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
 
-    loss_float = get_loss_value(loss)
+    # Under DDP each rank produced loss on its own microbatch, so the
+    # printed/accumulated value must be the mean across the "dp" axis.
+    # get_loss_over_devices internally builds a concat_mesh_to_tensor
+    # composer and takes the mean, mirroring how the C++ trainer logs
+    # per-rank loss when DDP is on.
+    mesh = ttml.mesh()
+    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
+        loss_float = float(get_loss_over_devices(loss))
+    else:
+        loss_float = get_loss_value(loss)
 
     profiler_marker(None, "forward_pass_done")
 
@@ -450,8 +519,17 @@ def train_step(
     should_step = gradient_accumulator.should_step()
 
     if should_step:
-        # Gradient clipping
+        # All-reduce gradients across the "dp" axis (no-op when there is no
+        # mesh, no "dp" axis, or dp size == 1). Mirrors main.cpp:817-823.
+        ttml.sync_gradients(model.parameters())
+
+        # Gradient clipping. clip_grad_norm is incorrect under TP because
+        # parameters are sharded across the "tp" axis and the per-rank norm
+        # is not the global norm; mirror main.cpp:826-828 with a hard error.
         if use_clip_grad_norm:
+            mesh = ttml.mesh()
+            if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+                raise ValueError("Clip grad norm is not supported with TP")
             # Use ttml.core.clip_grad_norm which works with model parameters directly
             ttml.core.clip_grad_norm(
                 model.parameters(),
@@ -814,18 +892,27 @@ def sample_greedy(
     return generated_text
 
 
-def create_model_from_config(model_config: ModelConfig) -> Model:
+def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) -> Model:
     """Create a model from ModelConfig, dispatching on model_type.
 
     Converts universal ModelConfig field names to model-specific config fields.
+    When ``use_tp`` is True the named device mesh must already expose a "tp"
+    axis (set up by ``build_mesh`` from ``DeviceConfig.enable_tp``).
+
+    Only the Python Llama integrates with the named-mesh TP path; gpt2,
+    deepseek, and qwen3 hard-error on TP since they have no use_tp implementation here.
 
     Args:
-        model_config: Universal model configuration
+        model_config: Universal model configuration.
+        use_tp: Whether the active mesh has a "tp" axis the model should
+            shard across. Forwarded to ``LlamaConfig.use_tp``.
 
     Returns:
-        A NanoGPT, Llama, or DeepSeek model instance
+        A NanoGPT, Llama, DeepSeek, or Qwen3 model instance.
     """
     if model_config.model_type == "gpt2":
+        if use_tp:
+            raise ValueError("model_type=gpt2 has no TP path on the named-mesh API; use model_type=llama for DP+TP.")
         nanogpt_exp_config = NanoGPTExperimentalConfig(
             use_composite_layernorm=model_config.experimental.use_composite_layernorm,
         )
@@ -868,9 +955,14 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             runner_type=model_config.runner_type,
             weight_tying=model_config.weight_tying,
             rope_scaling=rope_scaling_config,
+            use_tp=use_tp,
         )
         return Llama(llama_config)
     elif model_config.model_type == "deepseek":
+        if use_tp:
+            raise ValueError(
+                "model_type=deepseek has no TP path on the named-mesh API; use model_type=llama for DP+TP."
+            )
         inter_dim = model_config.inter_dim
         if inter_dim is None:
             inter_dim = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
@@ -900,6 +992,8 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
         )
         return DeepSeek(deepseek_config)
     elif model_config.model_type == "qwen3":
+        if use_tp:
+            raise ValueError("model_type=qwen3 has no TP path on the named-mesh API; use model_type=llama for DP+TP.")
         head_dim = model_config.head_dim
         if head_dim is None:
             head_dim = model_config.embedding_dim // model_config.num_heads
@@ -1275,8 +1369,27 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Initialize device early (needed for both training and inference)
-    ttml.autograd.AutoContext.get_instance().open_device()
+    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp).
+    device_config = DeviceConfig(yaml_config)
+
+    # Mirrors main.cpp:447-451 and lora_llama: TP-sharded parameters cannot be
+    # round-tripped through the script's pickle checkpoint format, so refuse
+    # any save/resume request up front rather than failing partway through.
+    if device_config.enable_tp:
+        if args.model_save_path:
+            raise ValueError(
+                "--model_save_path is not supported with tensor parallelism (device_config.enable_tp=true)."
+            )
+        if args.resume:
+            raise ValueError("--resume is not supported with tensor parallelism (device_config.enable_tp=true).")
+
+    # Build a named mesh whose axis names match the C++ assignment order
+    # (auto_context.cpp:140-195) so ttml.sync_gradients and axis_mapper("dp"|"tp", ...)
+    # bind to the same physical axes the C++ trainer would.
+    mesh = build_mesh(device_config)
+    if device_config.enable_ddp or device_config.enable_tp:
+        print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
+    ttml.open_device_mesh(mesh, tuple(device_config.device_ids) if device_config.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
 
     # Start memory tracking if enabled
@@ -1442,8 +1555,10 @@ def main():
             print(f"    Runner type: {runner_type_str}")
             print(f"    Weight tying: {weight_tying_str}")
 
-            # Create model
-            model = create_model_from_config(model_config)
+            # Create model. Pass use_tp so Llama configures ColumnParallelLinear
+            # against the "tp" axis of the active mesh (no-op for non-Llama and
+            # an error for non-Llama with TP).
+            model = create_model_from_config(model_config, use_tp=device_config.enable_tp)
             if args.print_summary:
                 summary(model)
 
@@ -1528,11 +1643,14 @@ def main():
         gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
-        # Compute peak device TFLOPS for MFU calculation
+        # Compute peak mesh TFLOPS for MFU calculation. tps and flops_per_token
+        # are both global (whole-mesh) quantities, so peak must be scaled by the
+        # total device count to keep MFU = achieved/peak meaningful under DP/TP.
         peak_tflops = 0.0
         if flops_per_token > 0:
-            peak_tflops = get_device_peak_tflops_bf16()
-            print(f"  - Device peak: {peak_tflops:.1f} TFLOPS (bf16)")
+            num_devices = ttml.mesh().num_devices()
+            peak_tflops = get_device_peak_tflops_bf16() * num_devices
+            print(f"  - Mesh peak: {peak_tflops:.1f} TFLOPS (bf16, {num_devices} devices)")
 
         # Training loop
         start_time = time.time()
@@ -1603,7 +1721,11 @@ def main():
                     else:
                         print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, TPS: {tps:.0f}")
 
-                    if args.model_save_path and global_step % training_config.model_save_interval == 0:
+                    if (
+                        args.model_save_path
+                        and training_config.model_save_interval > 0
+                        and global_step % training_config.model_save_interval == 0
+                    ):
                         save_checkpoint(
                             f"{args.model_save_path}_step_{global_step}.pkl",
                             global_step,

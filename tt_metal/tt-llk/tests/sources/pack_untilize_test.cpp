@@ -155,11 +155,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_packer_wait_for_math_done_();
 #ifdef ARCH_BLACKHOLE
-            _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM, false, TILE_DST_CT_OFFSET>(
-                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+            _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM, false, TILE_DST_CT_OFFSET>(pack_addr_16B, params.num_faces, 0 /* tile_dst_rt_offset */);
 #else
             _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM, false, false, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+                pack_addr_16B, formats.pack_dst, FACE_R_DIM, 0 /* tile_dst_rt_offset */);
 #endif
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
