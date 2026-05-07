@@ -191,3 +191,7 @@ models:
     wh_n150: 10
     wh_llmbox_perf: 30
     wh_galaxy: 30
+
+umd:
+  unit:
+    wh_galaxy: 35

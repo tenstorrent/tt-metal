@@ -16,7 +16,7 @@
 - id: galaxy-umd-glx
   name: Galaxy UMD unit tests
   model: unit
-  team: runtime
+  team: umd
   # owner: see issue #29677
   auto_triage: true
   cmd: ./build/test/umd/galaxy/unit_tests_glx
@@ -27,7 +27,7 @@
 - id: galaxy-umd-api
   name: UMD API tests
   model: unit
-  team: runtime
+  team: umd
   auto_triage: true
   cmd: ./build/test/umd/api/api_tests
   skus:
