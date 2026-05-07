@@ -318,6 +318,13 @@ std::filesystem::path FileRenamer::generate_temp_path(const std::filesystem::pat
 FileRenamer::FileRenamer(const std::filesystem::path& target_path) :
     temp_path_(generate_temp_path(target_path)), target_path_(target_path) {}
 
+void FileRenamer::cancel() {
+    if (!temp_path_.empty()) {
+        tt::filesystem::safe_remove(temp_path_);
+    }
+    target_path_.clear();
+}
+
 FileRenamer::~FileRenamer() {
     if (target_path_.empty()) {
         return;

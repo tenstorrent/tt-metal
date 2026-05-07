@@ -375,15 +375,17 @@ void ElfFile::WriteImage(std::string const& path) {
                 if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
                 return false;
             }
-            const ssize_t n = ::write(f.fd, contents_.data(), contents_.size());
-            if (n != static_cast<ssize_t>(contents_.size())) {
-                const int e = errno;
+            const char* buf = reinterpret_cast<const char*>(contents_.data());
+            ssize_t remaining = static_cast<ssize_t>(contents_.size());
+            while (remaining > 0) {
+                const ssize_t n = ::write(f.fd, buf, static_cast<size_t>(remaining));
                 if (n < 0) {
+                    const int e = errno;
                     if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
-                } else {
-                    inner_ec = std::make_error_code(std::errc::io_error);
+                    return false;
                 }
-                return false;
+                buf += n;
+                remaining -= n;
             }
             return true;
         },

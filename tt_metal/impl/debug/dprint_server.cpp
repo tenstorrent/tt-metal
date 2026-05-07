@@ -480,8 +480,8 @@ void DevicePrintImpl::print_buffer_data(
                         static_cast<uint32_t>(processor_class),
                         processor_type_idx);
 
-                    risc_data.firmware_elf_path = firmware_elf_path;
-                    risc_data.firmware_elf_parser = DevicePrintParser::get_parser_for_elf(firmware_elf_path);
+                    risc_data.firmware_elf_path = firmware_elf_path.string();
+                    risc_data.firmware_elf_parser = DevicePrintParser::get_parser_for_elf(firmware_elf_path.string());
                 }
                 elf_parser = risc_data.firmware_elf_parser;
             }

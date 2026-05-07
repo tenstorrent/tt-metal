@@ -102,11 +102,13 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
 
     f.write(content.data(), static_cast<std::streamsize>(content.size()));
     if (!f) {
+        tmp.cancel();
         TT_THROW("Failed to write file: {}", path.string());
     }
 
     f.close();
     if (f.fail()) {
+        tmp.cancel();
         TT_THROW("Failed to finalize file: {}", path.string());
     }
 }

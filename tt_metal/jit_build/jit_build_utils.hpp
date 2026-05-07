@@ -53,6 +53,9 @@ public:
     ~FileRenamer();
 
     const std::filesystem::path& path() const { return temp_path_; }
+    // Prevent the destructor from renaming the temp file to the target.
+    // Also removes the temp file if it exists.
+    void cancel();
     static std::filesystem::path generate_temp_path(const std::filesystem::path& target_path);
 
 private:

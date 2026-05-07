@@ -65,7 +65,7 @@ void build_failure(
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         TT_THROW("{} build failed. Log: {}", target_name, log_contents);
     } else {
-        TT_THROW("Failed to open {} failure log file {}: {}", op, log_file, ec.message());
+        TT_THROW("Failed to open {} failure log file {}: {}", op, log_file.string(), ec.message());
     }
 }
 
@@ -142,7 +142,7 @@ void JitBuildEnv::init(
         }
     }
     if (!sfpi_found) {
-        TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
+        TT_THROW("sfpi not found at {} or {}", sfpi_roots[0].string(), sfpi_roots[1].string());
     }
 
     // Flags
@@ -488,7 +488,7 @@ bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) co
         log_debug(
             tt::LogBuildKernels,
             "Build state file not found or unreadable: {} (current hash={}, ec={})",
-            hash_path,
+            hash_path.string(),
             build_state_hash_,
             open_ec.message());
         return false;
@@ -500,7 +500,7 @@ bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) co
         log_debug(
             tt::LogBuildKernels,
             "Build state hash mismatch in {}: stored={}, current={}",
-            out_dir,
+            out_dir.string(),
             stored_hash,
             build_state_hash_);
     }
@@ -512,9 +512,18 @@ void JitBuildState::write_build_state_hash(const std::filesystem::path& out_dir)
     std::ofstream file;
     std::error_code ec;
     if (!tt::filesystem::safe_open(file, tmp.path(), ec)) {
-        TT_THROW("Failed to open build state hash temp file {}: {}", tmp.path(), ec.message());
+        TT_THROW("Failed to open build state hash temp file {}: {}", tmp.path().string(), ec.message());
     }
     file << build_state_hash_;
+    if (!file) {
+        tmp.cancel();
+        TT_THROW("Failed to write build state hash to {}", tmp.path().string());
+    }
+    file.close();
+    if (file.fail()) {
+        tmp.cancel();
+        TT_THROW("Failed to finalize build state hash file {}", tmp.path().string());
+    }
 }
 
 void JitBuildState::compile_one(
@@ -625,7 +634,7 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
             compiled.set(i);
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
-            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir.string(), this->objs_[i].string());
             BuildCacheTelemetry::inst().record_cache_hit();
         }
     }
@@ -699,7 +708,7 @@ void JitBuildState::link(
         log_warning(
             tt::LogBuildKernels,
             "Cannot cache JIT build, failed to open {} for writing: {}",
-            dephash_file.path(),
+            dephash_file.path().string(),
             dephash_open_ec.message());
         return;
     }
@@ -723,7 +732,9 @@ void JitBuildState::weaken(const std::filesystem::path& out_dir) const {
 
     // The output directory may differ from out_dir when firmware_binary_root_
     // points to a pre-compiled directory that lacks this target's subdirectory.
-    fs::create_directories(out_file.path().parent_path());
+    if (!tt::filesystem::safe_create_directories(out_file.path().parent_path())) {
+        TT_THROW("Failed to create directory: {}", out_file.path().parent_path().string());
+    }
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in.string());
@@ -802,6 +813,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                         "Failed to hard-link or copy {} to {}",
                         (out_dir / this->objs_[i]).string(),
                         temp_obj.string());
+                    continue;
                 }
                 ++reused_objs;
             }
@@ -839,12 +851,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 if (!tt::filesystem::safe_rename(src_path, dst_path)) {
                     tt::filesystem::safe_remove(src_path);
                     tt::filesystem::safe_remove(src_dephash_path);
-                    TT_THROW("Failed to publish JIT object {} to {}", src_path, dst_path);
+                    TT_THROW("Failed to publish JIT object {} to {}", src_path.string(), dst_path.string());
                 }
                 if (!tt::filesystem::safe_rename(src_dephash_path, dst_dephash_path)) {
                     tt::filesystem::safe_remove(src_dephash_path);
                     tt::filesystem::safe_remove(dst_path);
-                    TT_THROW("Failed to publish JIT dependency hash {} to {}", src_dephash_path, dst_dephash_path);
+                    TT_THROW("Failed to publish JIT dependency hash {} to {}", src_dephash_path.string(), dst_dephash_path.string());
                 }
             } else {
                 tt::filesystem::safe_remove(src_path);

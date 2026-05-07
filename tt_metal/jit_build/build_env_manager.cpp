@@ -257,7 +257,7 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
         log_info(
             tt::LogBuildKernels,
             "Using pre-compiled firmware from: {}",
-            build_env.build_env.get_firmware_binary_root());
+            build_env.build_env.get_firmware_binary_root().string());
         return;
     }
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
@@ -289,7 +289,7 @@ std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     std::vector<BuildEnvInfo> build_env_info;
     build_env_info.reserve(device_id_to_build_env_.size());
     for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_firmware_binary_root());
+        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_firmware_binary_root().string());
     }
     return build_env_info;
 }
