@@ -9,6 +9,8 @@ Run with:
     scripts/run_safe_pytest.sh models/tt_dit/tests/unit/test_yuv_conversion.py -s
 """
 
+import os
+
 import pytest
 import torch
 
@@ -178,6 +180,60 @@ class TestYUVConversion:
                     # All values must be valid uint8 (clamp ensures no wrap-around)
                     assert host.min().item() >= 0
                     assert host.max().item() <= 255
+        finally:
+            ttnn.close_device(device)
+
+
+_SWEEP_H = [2, 4, 6, 10, 32, 64, 180]
+_SWEEP_W = [2, 4, 6, 14, 32, 64, 160]
+_SWEEP_T = [1, 2, 3, 16, 31, 32, 33, 64, 81]
+_SWEEP_CASES = [pytest.param(H, W, T, id=f"{H}x{W}x{T}") for H in _SWEEP_H for W in _SWEEP_W for T in _SWEEP_T]
+
+
+@pytest.mark.skipif(os.getenv("CI") == "true", reason="Thorough sweep is too slow for CI")
+class TestYUVSweep:
+    """Exhaustive shape sweep for local validation.
+
+    Covers a wide grid of (H, W, T) combinations that stress different kernel
+    code paths: partial tiles, single/multi core splits, boundary conditions,
+    and large shapes.  Skipped in CI to keep pipeline times reasonable.
+    """
+
+    @pytest.mark.parametrize("H, W, T", _SWEEP_CASES)
+    def test_sweep_correctness(self, H, W, T):
+        gen = torch.Generator().manual_seed(H * 10000 + W * 100 + T)
+        cpu_bf16 = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+
+        ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(cpu_bf16)
+
+        device = _make_device()
+        try:
+            tt_in = ttnn.from_torch(cpu_bf16, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
+            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
+            ttnn.synchronize_device(device)
+
+            dev_Y = ttnn.to_torch(tt_Y).squeeze(0)
+            dev_Cb = ttnn.to_torch(tt_Cb).squeeze(0)
+            dev_Cr = ttnn.to_torch(tt_Cr).squeeze(0)
+
+            assert dev_Y.shape == ref_Y.shape, f"Y shape {dev_Y.shape} != {ref_Y.shape}"
+            assert dev_Cb.shape == ref_Cb.shape, f"Cb shape {dev_Cb.shape} != {ref_Cb.shape}"
+            assert dev_Cr.shape == ref_Cr.shape, f"Cr shape {dev_Cr.shape} != {ref_Cr.shape}"
+
+            diff_y = (dev_Y.int() - ref_Y.int()).abs()
+            diff_cb = (dev_Cb.int() - ref_Cb.int()).abs()
+            diff_cr = (dev_Cr.int() - ref_Cr.int()).abs()
+
+            assert diff_y.max().item() <= 1, f"Y max error {diff_y.max().item()}"
+            assert diff_cb.max().item() <= 2, f"Cb max error {diff_cb.max().item()}"
+            assert diff_cr.max().item() <= 2, f"Cr max error {diff_cr.max().item()}"
+
+            if diff_y.numel() > 100:
+                assert diff_y.float().mean().item() < 0.5, f"Y mean error {diff_y.float().mean().item()}"
+            if diff_cb.numel() > 100:
+                assert diff_cb.float().mean().item() < 0.5, f"Cb mean error {diff_cb.float().mean().item()}"
+                assert diff_cr.float().mean().item() < 0.5, f"Cr mean error {diff_cr.float().mean().item()}"
         finally:
             ttnn.close_device(device)
 
