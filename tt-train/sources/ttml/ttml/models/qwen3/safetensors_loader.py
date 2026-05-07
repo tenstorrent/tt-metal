@@ -194,7 +194,7 @@ def _is_norm_proj(hf_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def load_from_hf(model, safetensors_path, config) -> None:
+def load_from_safetensors(model, safetensors_path, config) -> None:
     """Load HuggingFace ``Qwen3ForCausalLM`` safetensors into a Python Qwen3 model.
 
     Args:
