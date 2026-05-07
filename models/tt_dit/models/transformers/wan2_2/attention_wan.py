@@ -23,13 +23,13 @@ from ....utils.tensor import bf16_tensor
 class WanAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
-        (False, 2, 4): (256, 256),
-        (False, 8, 4): (256, 256),
+        (False, 2, 4): (256, 512),
+        (False, 8, 4): (256, 512),
         (True, 2, 2): (128, 512),
         (True, 8, 4): (288, 512),
         (True, 32, 4): (224, 512),
     }
-    default_sdpa_chunk_size = (256, 256)
+    default_sdpa_chunk_size = (256, 512)
 
     def __init__(
         self,
