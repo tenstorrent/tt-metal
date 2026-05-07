@@ -15,14 +15,13 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-static constexpr uint32_t CHUNK_ELEMS = 32;
-static constexpr uint32_t BF16_CHUNK_BYTES = CHUNK_ELEMS * 2;  // 64
-static constexpr uint32_t U8_CHUNK_BYTES = CHUNK_ELEMS * 1;    // 32
+static constexpr uint32_t TILE_HW = 32 * 32;
 
-static uint32_t f32_bits(float v) {
-    uint32_t u;
-    std::memcpy(&u, &v, 4);
-    return u;
+// Convert a float to bf16 packed into the upper 16 bits of a uint32 (for generate_bcast_unary_scalar).
+static uint32_t f32_to_bf16_packed(float v) {
+    uint32_t bits;
+    std::memcpy(&bits, &v, 4);
+    return bits & 0xFFFF0000u;
 }
 
 YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::create(
@@ -45,72 +44,140 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
     uint32_t H = shape[1];
     uint32_t W = shape[2];
     uint32_t T = shape[3];
-
     uint32_t H2 = H / 2, W2 = W / 2;
+    uint32_t HW = H * W;
 
-    uint32_t partial_elems = T % CHUNK_ELEMS;
-    uint32_t num_full_chunks = T / CHUNK_ELEMS;
-    uint32_t partial_bytes = partial_elems * 2;
+    uint32_t num_t_tiles = (T + 31) / 32;
 
-    // --- Multicore work split --------------------------------------------
-    // Work unit = one "row group" (2 Y rows + 1 UV row). Total = H/2 groups.
+    // --- Multicore work split ------------------------------------------------
     uint32_t num_row_groups = H2;
-
     const CoreCoord grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, groups_per_core_g1, groups_per_core_g2] =
         split_work_to_cores(grid_size, num_row_groups, /*row_wise=*/true);
 
-    // --- Circular buffers ------------------------------------------------
-    constexpr uint32_t c_R = 0;
-    constexpr uint32_t c_G = 1;
-    constexpr uint32_t c_B = 2;
-    constexpr uint32_t c_out = tt::CBIndex::c_16;
-
+    // --- Data formats --------------------------------------------------------
     tt::DataFormat bf16_fmt = tt::DataFormat::Float16_b;
     tt::DataFormat u8_fmt = tt::DataFormat::UInt8;
 
-    const uint32_t staging_page_bytes = tt::align(BF16_CHUNK_BYTES, src_buf->alignment());
-    const uint32_t out_page_bytes = tt::align(U8_CHUNK_BYTES, y_buf->alignment());
+    uint32_t bf16_tile_size = tt::tile_size(bf16_fmt);  // 2048 for 32×32 bf16
+    uint32_t bf16_rm_page = 32 * 32 * 2;                // row-major 32×32 bf16 = 2048
 
-    for (uint32_t id : {c_R, c_G, c_B}) {
-        auto cfg = CircularBufferConfig(staging_page_bytes, {{id, bf16_fmt}}).set_page_size(id, staging_page_bytes);
+    // --- CB indices ----------------------------------------------------------
+    constexpr uint32_t cb_R_rm = 0;
+    constexpr uint32_t cb_G_rm = 1;
+    constexpr uint32_t cb_B_rm = 2;
+    constexpr uint32_t cb_tilized = 3;
+    constexpr uint32_t cb_partial = 4;
+    constexpr uint32_t cb_temp = 5;
+    constexpr uint32_t cb_wr = 6;
+    constexpr uint32_t cb_wg = 7;
+    constexpr uint32_t cb_wb = 8;
+    constexpr uint32_t cb_off = 9;
+    constexpr uint32_t cb_sum = 10;
+    constexpr uint32_t cb_out_rm = tt::CBIndex::c_16;
+    constexpr uint32_t cb_scratch = tt::CBIndex::c_17;
+
+    // --- Circular buffers ----------------------------------------------------
+    // Row-major channel input CBs (reader → compute): 4 pages for UV corners
+    for (uint32_t id : {cb_R_rm, cb_G_rm, cb_B_rm}) {
+        auto cfg = CircularBufferConfig(4 * bf16_rm_page, {{id, bf16_fmt}}).set_page_size(id, bf16_rm_page);
         CreateCircularBuffer(program, all_cores, cfg);
     }
+
+    // Tile-format scratch CBs for compute
+    for (uint32_t id : {cb_tilized, cb_partial, cb_temp, cb_sum}) {
+        auto cfg = CircularBufferConfig(bf16_tile_size, {{id, bf16_fmt}}).set_page_size(id, bf16_tile_size);
+        CreateCircularBuffer(program, all_cores, cfg);
+    }
+
+    // Scalar tile CBs (persistent, reader generates once per pass)
+    for (uint32_t id : {cb_wr, cb_wg, cb_wb, cb_off}) {
+        auto cfg = CircularBufferConfig(bf16_tile_size, {{id, bf16_fmt}}).set_page_size(id, bf16_tile_size);
+        CreateCircularBuffer(program, all_cores, cfg);
+    }
+
+    // Output CB: bf16 row-major tiles from compute → writer (double-buffered)
     {
-        auto cfg = CircularBufferConfig(2 * out_page_bytes, {{c_out, u8_fmt}}).set_page_size(c_out, out_page_bytes);
+        auto cfg =
+            CircularBufferConfig(2 * bf16_rm_page, {{cb_out_rm, bf16_fmt}}).set_page_size(cb_out_rm, bf16_rm_page);
         CreateCircularBuffer(program, all_cores, cfg);
     }
 
-    // --- Compile-time args (same for all cores) --------------------------
+    // Writer scratch CB: uint8, 32 bytes (one stick for bf16→uint8 conversion)
+    {
+        uint32_t scratch_size = tt::align(32u, y_buf->alignment());
+        auto cfg = CircularBufferConfig(scratch_size, {{cb_scratch, u8_fmt}}).set_page_size(cb_scratch, scratch_size);
+        CreateCircularBuffer(program, all_cores, cfg);
+    }
+
+    // --- Compile-time args ---------------------------------------------------
     std::vector<uint32_t> reader_ct_args = {
-        c_R,
-        c_G,
-        c_B,
-        c_out,
-        num_full_chunks,
-        (partial_elems > 0) ? 1u : 0u,
-        BF16_CHUNK_BYTES,
-        partial_bytes,
+        cb_R_rm,
+        cb_G_rm,
+        cb_B_rm,
+        cb_wr,
+        cb_wg,
+        cb_wb,
+        cb_off,
+        cb_out_rm,
+        num_t_tiles,
+        T,
         H,
         W,
-        T,
         H2,
         W2,
+        HW,
     };
     TensorAccessorArgs(*src_buf).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
-        c_out,
-        num_full_chunks,
-        (partial_elems > 0) ? 1u : 0u,
-        CHUNK_ELEMS,
-        partial_elems,
+        cb_out_rm,
+        cb_scratch,
+        num_t_tiles,
+        T,
     };
     TensorAccessorArgs(*y_buf).append_to(writer_ct_args);
     TensorAccessorArgs(*u_buf).append_to(writer_ct_args);
     TensorAccessorArgs(*v_buf).append_to(writer_ct_args);
 
-    // --- Kernel creation -------------------------------------------------
+    // Compute compile-time args don't depend on per-core work; num_y_tiles and
+    // num_uv_tiles are set per-core below via a helper, but since all cores in
+    // group 1 share the same value (and group 2 likewise), we create two compute
+    // kernels for the two groups, or pass them as runtime args.
+    // For simplicity, we use compile-time args for the CB indices and tile counts
+    // that are the same across all cores.  The tile counts differ per group, so
+    // we use two compute kernels (one per group).
+
+    auto make_compute_ct = [&](uint32_t y_count, uint32_t uv_count) {
+        uint32_t y_batches = (y_count + 31) / 32;
+        uint32_t uv_batches = (uv_count + 31) / 32;
+        uint32_t num_y_tiles = y_batches * num_t_tiles;
+        uint32_t num_uv_tiles_per_plane = uv_batches * num_t_tiles;
+        return std::vector<uint32_t>{
+            cb_R_rm,
+            cb_G_rm,
+            cb_B_rm,
+            cb_tilized,
+            cb_partial,
+            cb_temp,
+            cb_wr,
+            cb_wg,
+            cb_wb,
+            cb_off,
+            cb_sum,
+            cb_out_rm,
+            num_y_tiles,
+            num_uv_tiles_per_plane,
+            num_t_tiles,
+        };
+    };
+
+    uint32_t y_count_g1 = 2 * groups_per_core_g1 * W;
+    uint32_t uv_count_g1 = groups_per_core_g1 * W2;
+    uint32_t y_count_g2 = 2 * groups_per_core_g2 * W;
+    uint32_t uv_count_g2 = groups_per_core_g2 * W2;
+
+    // --- Kernel creation -----------------------------------------------------
     KernelHandle reader_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/dataflow/reader_yuv_chwt.cpp",
@@ -123,7 +190,23 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
-    // --- Per-core runtime args -------------------------------------------
+    // Compute kernel(s) — one per core group with different tile counts.
+    KernelHandle compute_id_g1 = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/compute/yuv_compute.cpp",
+        core_group_1,
+        ComputeConfig{.compile_args = make_compute_ct(y_count_g1, uv_count_g1)});
+
+    KernelHandle compute_id_g2{};
+    if (groups_per_core_g2 > 0) {
+        compute_id_g2 = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/compute/yuv_compute.cpp",
+            core_group_2,
+            ComputeConfig{.compile_args = make_compute_ct(y_count_g2, uv_count_g2)});
+    }
+
+    // --- Per-core runtime args -----------------------------------------------
     const auto& coeff = op_attrs.coefficients;
 
     auto cores_vec = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
@@ -137,24 +220,31 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
         uint32_t uv_start = group_idx * W2;
         uint32_t uv_count = num_groups * W2;
 
+        // Reader runtime args: src_addr, Y coeffs (bf16 packed), Cb coeffs (pre-scaled),
+        // Cr coeffs (pre-scaled), y_start, y_count, uv_start, uv_count.
+        // For UV, the weight coefficients are pre-multiplied by 0.25 so the compute
+        // kernel can skip the separate average step: sum * (wr * 0.25) = avg * wr.
         SetRuntimeArgs(
             program,
             reader_id,
             core,
             {
                 src_buf->address(),
-                f32_bits(coeff.y[0]),
-                f32_bits(coeff.y[1]),
-                f32_bits(coeff.y[2]),
-                f32_bits(coeff.y[3]),
-                f32_bits(coeff.cb[0]),
-                f32_bits(coeff.cb[1]),
-                f32_bits(coeff.cb[2]),
-                f32_bits(coeff.cb[3]),
-                f32_bits(coeff.cr[0]),
-                f32_bits(coeff.cr[1]),
-                f32_bits(coeff.cr[2]),
-                f32_bits(coeff.cr[3]),
+                // Y coefficients as bf16 packed
+                f32_to_bf16_packed(coeff.y[0]),
+                f32_to_bf16_packed(coeff.y[1]),
+                f32_to_bf16_packed(coeff.y[2]),
+                f32_to_bf16_packed(coeff.y[3]),
+                // Cb coefficients: wr*0.25, wg*0.25, wb*0.25, offset (not scaled)
+                f32_to_bf16_packed(coeff.cb[0] * 0.25f),
+                f32_to_bf16_packed(coeff.cb[1] * 0.25f),
+                f32_to_bf16_packed(coeff.cb[2] * 0.25f),
+                f32_to_bf16_packed(coeff.cb[3]),
+                // Cr coefficients: same pre-scaling
+                f32_to_bf16_packed(coeff.cr[0] * 0.25f),
+                f32_to_bf16_packed(coeff.cr[1] * 0.25f),
+                f32_to_bf16_packed(coeff.cr[2] * 0.25f),
+                f32_to_bf16_packed(coeff.cr[3]),
                 y_start,
                 y_count,
                 uv_start,
@@ -180,7 +270,17 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
 
     return cached_program_t{
         std::move(program),
-        {reader_id, writer_id, num_cores, core_group_1, core_group_2, groups_per_core_g1, groups_per_core_g2, W, W2}};
+        {reader_id,
+         writer_id,
+         compute_id_g1,
+         compute_id_g2,
+         num_cores,
+         core_group_1,
+         core_group_2,
+         groups_per_core_g1,
+         groups_per_core_g2,
+         W,
+         W2}};
 }
 
 void YUVConversionProgramFactory::override_runtime_arguments(
@@ -214,20 +314,18 @@ void YUVConversionProgramFactory::override_runtime_arguments(
         {
             auto& args = GetRuntimeArgs(program, sv.reader_kernel_id, core);
             args[0] = src_addr;
-            args[1] = f32_bits(coeff.y[0]);
-            args[2] = f32_bits(coeff.y[1]);
-            args[3] = f32_bits(coeff.y[2]);
-            args[4] = f32_bits(coeff.y[3]);
-            args[5] = f32_bits(coeff.cb[0]);
-            args[6] = f32_bits(coeff.cb[1]);
-            args[7] = f32_bits(coeff.cb[2]);
-            args[8] = f32_bits(coeff.cb[3]);
-            args[9] = f32_bits(coeff.cr[0]);
-            args[10] = f32_bits(coeff.cr[1]);
-            args[11] = f32_bits(coeff.cr[2]);
-            args[12] = f32_bits(coeff.cr[3]);
-            // y_start, y_count, uv_start, uv_count don't change across invocations
-            // with the same shape, but set them for completeness.
+            args[1] = f32_to_bf16_packed(coeff.y[0]);
+            args[2] = f32_to_bf16_packed(coeff.y[1]);
+            args[3] = f32_to_bf16_packed(coeff.y[2]);
+            args[4] = f32_to_bf16_packed(coeff.y[3]);
+            args[5] = f32_to_bf16_packed(coeff.cb[0] * 0.25f);
+            args[6] = f32_to_bf16_packed(coeff.cb[1] * 0.25f);
+            args[7] = f32_to_bf16_packed(coeff.cb[2] * 0.25f);
+            args[8] = f32_to_bf16_packed(coeff.cb[3]);
+            args[9] = f32_to_bf16_packed(coeff.cr[0] * 0.25f);
+            args[10] = f32_to_bf16_packed(coeff.cr[1] * 0.25f);
+            args[11] = f32_to_bf16_packed(coeff.cr[2] * 0.25f);
+            args[12] = f32_to_bf16_packed(coeff.cr[3]);
             args[13] = y_start;
             args[14] = y_count;
             args[15] = uv_start;

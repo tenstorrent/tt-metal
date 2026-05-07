@@ -2,220 +2,174 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Reader for CHWT bfloat16 input → YUV uint8 output (pure RISC-V, multicore).
+// Reader for tile-based YUV conversion (Strategy 2: 32-stick packed tiles).
 //
-// All color-space math (linear combination, clamp, uint8 cast) runs in
-// scalar float arithmetic on BRISC.  No compute kernel is needed.
+// Assembles 32 spatial sticks per tile into row-major bf16 CBs for each
+// channel (R, G, B).  Also generates scalar coefficient tiles.
 //
-// Each core handles a contiguous slice of spatial positions for all 3 planes.
-// Three sequential passes push uint8 chunks into cb_out:
-//   Y  — full resolution (per-core slice)
-//   Cb — half resolution with 2×2 spatial averaging (per-core slice)
-//   Cr — half resolution with 2×2 spatial averaging (per-core slice)
+// Three phases: Y, Cb, Cr.  For each phase, generates scalar tiles, then
+// fills channel data.  The compute kernel pops scalar tiles between phases,
+// so the reader blocks on cb_reserve_back until the compute is ready.
+//
+// Y pass:  for each batch of 32 Y positions, fills cb_R_rm/cb_G_rm/cb_B_rm
+//          with 32 rows × 32 columns of bf16 data (one T-tile at a time).
+// UV pass: for each UV tile, sends 4 corner pages per channel into the
+//          same channel CBs (compute accumulates them for 2×2 averaging).
 //
 // Compile-time args:
-//   [0] cb_R, [1] cb_G, [2] cb_B  — staging CBs (reader-only L1 scratch)
-//   [3] cb_out                     — output CB (shared with writer)
-//   [4] num_full_chunks, [5] has_partial
-//   [6] full_chunk_bytes, [7] partial_bytes
-//   [8] H, [9] W, [10] T, [11] H2, [12] W2
-//   [13..] TensorAccessorArgs for input
+//   [0] cb_R_rm, [1] cb_G_rm, [2] cb_B_rm  — row-major bf16 output CBs
+//   [3] cb_wr, [4] cb_wg, [5] cb_wb, [6] cb_off — scalar tile CBs
+//   [7] cb_out_rm  — unused by reader, listed for index consistency
+//   [8]  num_t_tiles  — ceil(T / 32)
+//   [9]  T
+//   [10] H, [11] W, [12] H2, [13] W2
+//   [14] HW  (= H * W)
+//   [15..] TensorAccessorArgs for input
 //
 // Runtime args:
-//   [0]     src_addr
-//   [1..4]  Y  coefficients: w_r, w_g, w_b, offset  (float32 bit patterns)
-//   [5..8]  Cb coefficients
-//   [9..12] Cr coefficients
-//   [13] y_start   — first Y spatial index for this core
-//   [14] y_count   — number of Y spatial positions
-//   [15] uv_start  — first UV spatial index for this core
-//   [16] uv_count  — number of UV spatial positions
+//   [0]  src_addr
+//   [1..4]   Y  coefficients as bf16 packed in upper 16 bits
+//   [5..8]   Cb coefficients (wr*0.25, wg*0.25, wb*0.25, offset)
+//   [9..12]  Cr coefficients (wr*0.25, wg*0.25, wb*0.25, offset)
+//   [13] y_start, [14] y_count, [15] uv_start, [16] uv_count
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
-static_assert(sizeof(float) == 4);
+constexpr uint32_t TILE_H = 32;
+constexpr uint32_t TILE_W = 32;
 
-inline float bf16_to_float(uint16_t b) {
-    uint32_t u = (uint32_t)b << 16;
-    float f;
-    __builtin_memcpy(&f, &u, 4);
-    return f;
+template <typename T>
+FORCE_INLINE void read_stick_into_row(
+    const T& src_accessor,
+    uint32_t src_row,
+    uint32_t byte_off,
+    uint32_t read_bytes,
+    uint32_t l1_base,
+    uint32_t row_idx) {
+    uint32_t dst = l1_base + row_idx * TILE_W * 2;
+    noc_async_read(src_accessor.get_noc_addr(src_row, byte_off), dst, read_bytes);
 }
 
-inline float arg_to_float(uint32_t idx) {
-    uint32_t bits = get_arg_val<uint32_t>(idx);
-    float f;
-    __builtin_memcpy(&f, &bits, 4);
-    return f;
+// Zero a full 2048-byte page.
+FORCE_INLINE void zero_page(uint32_t l1_base, uint32_t page_bytes) {
+    volatile uint32_t* p32 = reinterpret_cast<volatile uint32_t*>(l1_base);
+    for (uint32_t i = 0; i < page_bytes / 4; i++) {
+        p32[i] = 0;
+    }
 }
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
 
-    constexpr uint32_t cb_R = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_G = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_B = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(3);
-    constexpr uint32_t num_full_chunks = get_compile_time_arg_val(4);
-    constexpr uint32_t has_partial = get_compile_time_arg_val(5);
-    constexpr uint32_t full_chunk_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t partial_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t H = get_compile_time_arg_val(8);
-    constexpr uint32_t W = get_compile_time_arg_val(9);
-    constexpr uint32_t T = get_compile_time_arg_val(10);
-    constexpr uint32_t H2 = get_compile_time_arg_val(11);
-    constexpr uint32_t W2 = get_compile_time_arg_val(12);
-    constexpr auto src_tensor_args = TensorAccessorArgs<13>();
+    constexpr uint32_t cb_R_rm = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_G_rm = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_B_rm = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_wr = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_wg = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_wb = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_off = get_compile_time_arg_val(6);
+    constexpr uint32_t num_t_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t T = get_compile_time_arg_val(9);
+    constexpr uint32_t H = get_compile_time_arg_val(10);
+    constexpr uint32_t W = get_compile_time_arg_val(11);
+    constexpr uint32_t H2 = get_compile_time_arg_val(12);
+    constexpr uint32_t W2 = get_compile_time_arg_val(13);
+    constexpr uint32_t HW = get_compile_time_arg_val(14);
+    constexpr auto src_tensor_args = TensorAccessorArgs<15>();
 
-    constexpr uint32_t HW = H * W;
-    constexpr uint32_t num_chunks = num_full_chunks + has_partial;
-    constexpr uint32_t CHUNK_ELEMS = 32;
+    constexpr uint32_t FULL_TILE_BYTES = TILE_W * 2;  // 64 bytes per tile row
+    constexpr uint32_t last_tile_elems = T - (num_t_tiles - 1) * TILE_W;
+    constexpr uint32_t last_tile_bytes = last_tile_elems * 2;
+    constexpr uint32_t PAGE_BYTES = TILE_H * TILE_W * 2;  // 2048
 
     const auto src = TensorAccessor(src_tensor_args, src_addr);
 
-    // Decode coefficients from runtime args (float32 stored as uint32 bits).
-    float coeff_wr[3], coeff_wg[3], coeff_wb[3], coeff_off[3];
-    for (uint32_t p = 0; p < 3; p++) {
-        uint32_t base = 1 + p * 4;
-        coeff_wr[p] = arg_to_float(base + 0);
-        coeff_wg[p] = arg_to_float(base + 1);
-        coeff_wb[p] = arg_to_float(base + 2);
-        coeff_off[p] = arg_to_float(base + 3);
-    }
-
-    // Per-core work bounds.
     const uint32_t y_start = get_arg_val<uint32_t>(13);
     const uint32_t y_count = get_arg_val<uint32_t>(14);
     const uint32_t uv_start = get_arg_val<uint32_t>(15);
     const uint32_t uv_count = get_arg_val<uint32_t>(16);
 
-    // Reserve staging CB pages once and reuse their L1 addresses throughout.
-    // These CBs have no consumer — they are pure scratch for NOC reads.
-    cb_reserve_back(cb_R, 1);
-    uint32_t l1_r = get_write_ptr(cb_R);
-    cb_reserve_back(cb_G, 1);
-    uint32_t l1_g = get_write_ptr(cb_G);
-    cb_reserve_back(cb_B, 1);
-    uint32_t l1_b = get_write_ptr(cb_B);
-
     const uint32_t y_end = y_start + y_count;
     const uint32_t uv_end = uv_start + uv_count;
+    const uint32_t y_batches = (y_count + TILE_H - 1) / TILE_H;
 
-    // -------------------------------------------------------------------
-    // Y pass: full resolution (this core's slice)
-    // -------------------------------------------------------------------
-    {
-        const float wr = coeff_wr[0], wg = coeff_wg[0], wb = coeff_wb[0], off = coeff_off[0];
+    // ---- Phase 1: Y pass ----
+    // Generate Y scalar tiles.  Compute will wait_front, use them, then pop.
+    generate_bcast_unary_scalar(cb_wr, get_arg_val<uint32_t>(1));
+    generate_bcast_unary_scalar(cb_wg, get_arg_val<uint32_t>(2));
+    generate_bcast_unary_scalar(cb_wb, get_arg_val<uint32_t>(3));
+    generate_bcast_unary_scalar(cb_off, get_arg_val<uint32_t>(4));
 
-        for (uint32_t spatial = y_start; spatial < y_end; spatial++) {
-            const uint32_t r_row = 0 * HW + spatial;
-            const uint32_t g_row = 1 * HW + spatial;
-            const uint32_t b_row = 2 * HW + spatial;
+    for (uint32_t batch = 0; batch < y_batches; batch++) {
+        uint32_t base_spatial = y_start + batch * TILE_H;
+        uint32_t sticks_in_batch = (base_spatial + TILE_H <= y_end) ? TILE_H : (y_end - base_spatial);
 
-            for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-                const bool is_partial = has_partial && (chunk == num_full_chunks);
-                const uint32_t read_bytes = is_partial ? partial_bytes : full_chunk_bytes;
-                const uint32_t n_elems = read_bytes / 2;
-                const uint32_t byte_off = chunk * full_chunk_bytes;
+        for (uint32_t tt = 0; tt < num_t_tiles; tt++) {
+            const bool is_last = (tt == num_t_tiles - 1) && (last_tile_elems < TILE_W);
+            const uint32_t read_bytes = is_last ? last_tile_bytes : FULL_TILE_BYTES;
+            const uint32_t byte_off = tt * FULL_TILE_BYTES;
 
-                noc_async_read(src.get_noc_addr(r_row, byte_off), l1_r, read_bytes);
-                noc_async_read(src.get_noc_addr(g_row, byte_off), l1_g, read_bytes);
-                noc_async_read(src.get_noc_addr(b_row, byte_off), l1_b, read_bytes);
+            const uint32_t cb_ids[3] = {cb_R_rm, cb_G_rm, cb_B_rm};
+            for (uint32_t ch = 0; ch < 3; ch++) {
+                cb_reserve_back(cb_ids[ch], 1);
+                uint32_t l1_base = get_write_ptr(cb_ids[ch]);
+                zero_page(l1_base, PAGE_BYTES);
+
+                for (uint32_t s = 0; s < sticks_in_batch; s++) {
+                    uint32_t spatial = base_spatial + s;
+                    uint32_t src_row = ch * HW + spatial;
+                    read_stick_into_row(src, src_row, byte_off, read_bytes, l1_base, s);
+                }
                 noc_async_read_barrier();
-
-                const uint16_t* rp = reinterpret_cast<const uint16_t*>(l1_r);
-                const uint16_t* gp = reinterpret_cast<const uint16_t*>(l1_g);
-                const uint16_t* bp = reinterpret_cast<const uint16_t*>(l1_b);
-
-                cb_reserve_back(cb_out, 1);
-                uint8_t* out = reinterpret_cast<uint8_t*>(get_write_ptr(cb_out));
-
-                for (uint32_t i = 0; i < n_elems; i++) {
-                    float val = wr * bf16_to_float(rp[i]) + wg * bf16_to_float(gp[i]) + wb * bf16_to_float(bp[i]) + off;
-                    if (val < 0.0f) {
-                        val = 0.0f;
-                    }
-                    if (val > 255.0f) {
-                        val = 255.0f;
-                    }
-                    out[i] = (uint8_t)val;
-                }
-                for (uint32_t i = n_elems; i < CHUNK_ELEMS; i++) {
-                    out[i] = 0;
-                }
-                cb_push_back(cb_out, 1);
+                cb_push_back(cb_ids[ch], 1);
             }
         }
     }
 
-    // -------------------------------------------------------------------
-    // Cb and Cr passes: half resolution with 2×2 spatial averaging
-    // -------------------------------------------------------------------
-    for (uint32_t pass = 1; pass <= 2; pass++) {
-        const float wr = coeff_wr[pass], wg = coeff_wg[pass];
-        const float wb = coeff_wb[pass], off = coeff_off[pass];
+    // ---- Phases 2 & 3: Cb and Cr UV passes ----
+    for (uint32_t pass = 0; pass < 2; pass++) {
+        uint32_t coeff_base = 5 + pass * 4;
 
-        for (uint32_t uv_idx = uv_start; uv_idx < uv_end; uv_idx++) {
-            const uint32_t h_uv = uv_idx / W2, w_uv = uv_idx % W2;
-            const uint32_t h0 = 2 * h_uv, h1 = h0 + 1;
-            const uint32_t w0 = 2 * w_uv, w1 = w0 + 1;
+        // Push new scalar tiles for this UV plane.
+        // Compute will have popped the previous set, freeing space in these CBs.
+        generate_bcast_unary_scalar(cb_wr, get_arg_val<uint32_t>(coeff_base + 0));
+        generate_bcast_unary_scalar(cb_wg, get_arg_val<uint32_t>(coeff_base + 1));
+        generate_bcast_unary_scalar(cb_wb, get_arg_val<uint32_t>(coeff_base + 2));
+        generate_bcast_unary_scalar(cb_off, get_arg_val<uint32_t>(coeff_base + 3));
 
-            const uint32_t corner_rows[4] = {
-                h0 * W + w0,
-                h0 * W + w1,
-                h1 * W + w0,
-                h1 * W + w1,
-            };
+        uint32_t uv_batches = (uv_count + TILE_H - 1) / TILE_H;
 
-            for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-                const bool is_partial = has_partial && (chunk == num_full_chunks);
-                const uint32_t read_bytes = is_partial ? partial_bytes : full_chunk_bytes;
-                const uint32_t n_elems = read_bytes / 2;
-                const uint32_t byte_off = chunk * full_chunk_bytes;
+        for (uint32_t batch = 0; batch < uv_batches; batch++) {
+            uint32_t base_uv = uv_start + batch * TILE_H;
+            uint32_t sticks_in_batch = (base_uv + TILE_H <= uv_end) ? TILE_H : (uv_end - base_uv);
 
-                float avg_r[CHUNK_ELEMS] = {};
-                float avg_g[CHUNK_ELEMS] = {};
-                float avg_b[CHUNK_ELEMS] = {};
+            for (uint32_t tt = 0; tt < num_t_tiles; tt++) {
+                const bool is_last = (tt == num_t_tiles - 1) && (last_tile_elems < TILE_W);
+                const uint32_t read_bytes = is_last ? last_tile_bytes : FULL_TILE_BYTES;
+                const uint32_t byte_off = tt * FULL_TILE_BYTES;
 
-                for (uint32_t corner = 0; corner < 4; corner++) {
-                    const uint32_t base_row = corner_rows[corner];
+                // For each channel, send 4 corner pages.
+                const uint32_t cb_ids[3] = {cb_R_rm, cb_G_rm, cb_B_rm};
+                for (uint32_t ch = 0; ch < 3; ch++) {
+                    for (uint32_t corner = 0; corner < 4; corner++) {
+                        cb_reserve_back(cb_ids[ch], 1);
+                        uint32_t l1_base = get_write_ptr(cb_ids[ch]);
+                        zero_page(l1_base, PAGE_BYTES);
 
-                    noc_async_read(src.get_noc_addr(0 * HW + base_row, byte_off), l1_r, read_bytes);
-                    noc_async_read(src.get_noc_addr(1 * HW + base_row, byte_off), l1_g, read_bytes);
-                    noc_async_read(src.get_noc_addr(2 * HW + base_row, byte_off), l1_b, read_bytes);
-                    noc_async_read_barrier();
-
-                    const uint16_t* rp = reinterpret_cast<const uint16_t*>(l1_r);
-                    const uint16_t* gp = reinterpret_cast<const uint16_t*>(l1_g);
-                    const uint16_t* bp = reinterpret_cast<const uint16_t*>(l1_b);
-
-                    for (uint32_t i = 0; i < n_elems; i++) {
-                        avg_r[i] += bf16_to_float(rp[i]);
-                        avg_g[i] += bf16_to_float(gp[i]);
-                        avg_b[i] += bf16_to_float(bp[i]);
+                        for (uint32_t s = 0; s < sticks_in_batch; s++) {
+                            uint32_t uv_idx = base_uv + s;
+                            uint32_t h_uv = uv_idx / W2;
+                            uint32_t w_uv = uv_idx % W2;
+                            uint32_t h = 2 * h_uv + (corner >> 1);
+                            uint32_t w = 2 * w_uv + (corner & 1);
+                            uint32_t src_row = ch * HW + h * W + w;
+                            read_stick_into_row(src, src_row, byte_off, read_bytes, l1_base, s);
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_ids[ch], 1);
                     }
                 }
-
-                cb_reserve_back(cb_out, 1);
-                uint8_t* out = reinterpret_cast<uint8_t*>(get_write_ptr(cb_out));
-
-                for (uint32_t i = 0; i < n_elems; i++) {
-                    float r = avg_r[i] * 0.25f;
-                    float g = avg_g[i] * 0.25f;
-                    float b = avg_b[i] * 0.25f;
-                    float val = wr * r + wg * g + wb * b + off;
-                    if (val < 0.0f) {
-                        val = 0.0f;
-                    }
-                    if (val > 255.0f) {
-                        val = 255.0f;
-                    }
-                    out[i] = (uint8_t)val;
-                }
-                for (uint32_t i = n_elems; i < CHUNK_ELEMS; i++) {
-                    out[i] = 0;
-                }
-                cb_push_back(cb_out, 1);
             }
         }
     }
