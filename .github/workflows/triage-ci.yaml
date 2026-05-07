@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       job-name:
-        description: "Exact name of the job within that workflow to analyze"
+        description: "Job name or substring to match (e.g. 'tests' matches all matrix variants containing 'tests')"
         required: true
         type: string
       lookback-days:
@@ -183,7 +183,7 @@ jobs:
             # Only include jobs with non-null conclusion (completed) and countable conclusions
             echo "$JOBS" | jq -c --arg jn "$JOB_NAME" '
               .[]
-              | select(.name == $jn)
+              | select(.name | contains($jn))
               | select(.conclusion != null)
               | select(.conclusion == "success" or .conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required")
               | {runner_name: .runner_name, conclusion: .conclusion}
@@ -195,8 +195,8 @@ jobs:
 
           MATCHED_JOBS=$(wc -l < "$RESULTS_FILE")
           if [[ "$MATCHED_JOBS" -eq 0 ]]; then
-            echo "No completed jobs named '$JOB_NAME' found in any run."
-            echo "Check that the job-name input matches the exact job name in the workflow."
+            echo "No completed jobs matching '$JOB_NAME' found in any run."
+            echo "Check that job-name is a substring of the job name(s) in the workflow."
             rm -f "$RESULTS_FILE"
             exit 0
           fi
