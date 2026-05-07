@@ -68,8 +68,8 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
 
 // TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
-inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
+inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
+    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
@@ -82,7 +82,6 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
-    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
@@ -97,10 +96,8 @@ inline void llk_unpack_tilizeA_B_init(
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
-        narrow_tile,
         ct_dim,
         num_faces,
-        unpA_face_r_dim,
         unpB_face_r_dim
     );
 }
@@ -123,7 +120,6 @@ inline void llk_unpack_tilizeA_B(
 
     const std::uint32_t base_address_a =
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
-    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     const std::uint32_t base_address_b =
         get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
@@ -145,11 +141,9 @@ inline void llk_unpack_tilizeA_B(
     _llk_unpack_tilizeA_B_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
         face_r_dim,
-        narrow_tile,
         base_address_a,
         address_b,
         tile_index_a,
-        tile_index_b,
         block_ct_dim,
         num_faces
     );

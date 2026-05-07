@@ -17,6 +17,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 #include "params.h"
@@ -29,26 +30,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = params.num_faces;
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-    _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false);
 
     std::uint32_t read_offset = 0;
 
-#ifdef ARCH_BLACKHOLE
-    const std::uint32_t block_ct_dim = 0;
-#else
     const std::uint32_t block_ct_dim = params.BLOCK_CT_DIM;
-#endif
 
     for (std::uint32_t i = 0; i < params.BLOCK_RT_DIM; i++)
     {
         for (std::uint32_t j = 0; j < params.BLOCK_CT_DIM; j++)
         {
-#ifdef ARCH_BLACKHOLE
-            _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, formats.unpack_A_dst, FACE_R_DIM, num_faces, false);
-#else
-            _llk_unpack_tilize_(
+            _llk_unpack_tilize_wrapper_(
                 L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, FACE_R_DIM, num_faces, false);
-#endif
         }
         read_offset += params.BLOCK_CT_DIM;
     }
