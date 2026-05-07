@@ -13,6 +13,7 @@ import torch
 from transformers import SeamlessM4Tv2Config, SeamlessM4Tv2Model
 from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import (
     SeamlessM4Tv2TextToUnitForConditionalGeneration,
+    _compute_new_attention_mask,
 )
 
 
@@ -50,36 +51,6 @@ def load_pretrained_text_to_unit(
     return t2u, t2u.config
 
 
-def forward_t2u_logits(
-    t2u: SeamlessM4Tv2TextToUnitForConditionalGeneration,
-    inputs_embeds: torch.Tensor,
-    attention_mask: torch.Tensor,
-    char_input_ids: torch.Tensor,
-    char_count_per_id: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Run the text-to-unit model and return vocabulary logits ``[batch, unit_seq_len, t2u_vocab_size]``.
-
-    ``inputs_embeds`` feeds the **encoder** (see HF ``SeamlessM4Tv2TextToUnitModel.forward``):
-    shape ``[batch, encoder_seq_len, hidden_size]``.
-    """
-    p0 = next(t2u.parameters())
-    ie = inputs_embeds.to(device=p0.device, dtype=p0.dtype)
-    am = attention_mask.to(device=p0.device)
-    cid = char_input_ids.to(device=p0.device)
-    cc = char_count_per_id.to(device=p0.device)
-    with torch.no_grad():
-        out = t2u(
-            inputs_embeds=ie,
-            attention_mask=am,
-            char_input_ids=cid,
-            char_count_per_id=cc,
-            return_dict=True,
-        )
-    # HF names this field ``last_hidden_state`` but it holds LM logits for this head.
-    return out.last_hidden_state
-
-
 def forward_t2u_logits_and_padding(
     t2u: SeamlessM4Tv2TextToUnitForConditionalGeneration,
     inputs_embeds: torch.Tensor,
@@ -88,7 +59,8 @@ def forward_t2u_logits_and_padding(
     char_count_per_id: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Same forward as ``forward_t2u_logits``, but also returns HF ``padding_mask`` (float, 1 = valid).
+    Run the text-to-unit model: vocabulary logits ``[batch, unit_seq_len, t2u_vocab_size]`` and
+    HF ``padding_mask`` (float, 1 = valid). ``inputs_embeds`` is ``[batch, encoder_seq_len, hidden_size]``.
 
     With ``return_dict=True``, [`SeamlessM4Tv2TextToUnitOutput`] exposes up to eight optional fields;
     in the common case (no ``labels``, no hidden-state flags), the main tensors are **two**:
@@ -110,23 +82,37 @@ def forward_t2u_logits_and_padding(
     return out.last_hidden_state, out.padding_mask
 
 
-def forward_t2u_encoder_hidden(
+def hf_discrete_duration_counts_batch1(
     t2u: SeamlessM4Tv2TextToUnitForConditionalGeneration,
     inputs_embeds: torch.Tensor,
     attention_mask: torch.Tensor,
-) -> torch.Tensor:
+    char_input_ids: torch.Tensor,
+    char_count_per_id: torch.Tensor,
+) -> list[int]:
     """
-    Run ``SeamlessM4Tv2TextToUnitForConditionalGeneration.model.encoder`` only
-    (``inputs_embeds`` → encoder ``layer_norm``).
+    Hugging Face reference for per-character discrete durations (``dur_out`` in the HF decoder).
 
-    Use this as the PyTorch reference for PCC tests against [`TTSeamlessM4Tv2TextToUnitEncoder`].
+    Runs the encoder and the HF duration predictor path only (batch size 1). Intended for PCC tests
+    that need an exact unit length match while the TTNN duration stack is still being brought to parity.
     """
     p0 = next(t2u.parameters())
     ie = inputs_embeds.to(device=p0.device, dtype=p0.dtype)
     am = attention_mask.to(device=p0.device)
+    cid = char_input_ids.to(device=p0.device)
+    cc = char_count_per_id.to(device=p0.device)
     with torch.no_grad():
-        enc = t2u.model.encoder(inputs_embeds=ie, attention_mask=am, return_dict=True)
-    return enc.last_hidden_state
+        enc = t2u.model.encoder(inputs_embeds=ie, attention_mask=am, return_dict=True).last_hidden_state
+        dec = t2u.model.decoder
+        char_pad = _compute_new_attention_mask(cid, cc.sum(1))
+        ch = dec._hard_upsample(enc, cc)
+        char_h = (
+            dec.embed_char(cid) * dec.embed_scale
+            + dec.pos_emb_alpha_char * dec.embed_char_positions(inputs_embeds=ch)
+            + ch
+        )
+        log = dec.duration_predictor(char_h, padding_mask=char_pad)
+        dur = torch.clamp(torch.round(torch.expm1(log)), min=1).long().masked_fill(~char_pad.bool(), 0)
+    return [int(x) for x in dur[0].tolist()]
 
 
 def synthetic_t2u_inputs(
@@ -140,7 +126,7 @@ def synthetic_t2u_inputs(
     dtype: torch.dtype = torch.bfloat16,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Build a minimal valid batch for ``forward_t2u_logits`` (batch size 1 recommended).
+    Build a minimal valid batch for the T2U forward (batch size 1 recommended).
 
     ``char_count_per_id[b, t]`` controls upsampling from encoder frames to character positions;
     ``char_input_ids`` length must equal ``char_count_per_id[b].sum()``.
