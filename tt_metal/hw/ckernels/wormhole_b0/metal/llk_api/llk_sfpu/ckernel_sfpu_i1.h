@@ -17,11 +17,11 @@ namespace ckernel::sfpu {
 //
 // Two-region implementation, exploiting that i1 is odd: i1(-x) = -i1(x).
 //   |x| ≤ 10:  rational p(t)/q(t) on t = x², result = x · p(t)/q(t)
-//              BF16: n7/d6   → 0.02 BF16 ULP analytical
-//              FP32: n14/d14 → <0.001 FP32 ULP analytical
+//              BF16: 4 numer + 4 denom coeffs in t (= n7/d6 in x) → 0.02 BF16 ULP analytical
+//              FP32: 7 numer + 8 denom coeffs in t (= n13/d14 in x) → <0.001 FP32 ULP analytical
 //   |x| > 10:  asymptotic expansion
 //                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
-//              degree-4 minimax fit, max rel err ~1e-8 over [10, 88.5].
+//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 88.5].
 //
 // Code shape (chosen to relieve SFPI LRA budget):
 //   1. Compute polynomial result unconditionally and store to DST.
