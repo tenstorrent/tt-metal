@@ -2875,8 +2875,6 @@ public:
 
 class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
 class SDPrefetchRingbufferReadTestFixture : public SDPrefetchTestBase<PrefetcherRingbufferReadTestFixture> {};
-// SD paged DRAM write throughput: exercises the WRITE_PAGED dispatcher command path
-class SDPrefetchThroughputTestFixture : public SDPrefetchTestBase<PrefetcherThroughputTestFixture> {};
 
 // In this we, we test the terminate command by adding a linear write unicast
 // with a small payload followed by commands to terminate prefetcher and dispatcher.

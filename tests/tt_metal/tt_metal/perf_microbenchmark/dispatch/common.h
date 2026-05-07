@@ -1246,6 +1246,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
          std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD))},
         {"DEV_DISPATCH_PROGRESS_PTR",
          std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS))},
+        {"REALTIME_PROFILER_MSG_ADDR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG))},
         {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
         {"VIRTUALIZE_UNICAST_CORES", "0"},
         {"NUM_VIRTUAL_UNICAST_CORES", "0"},
