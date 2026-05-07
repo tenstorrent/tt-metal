@@ -41,15 +41,15 @@ void validate_mesh_coordinates(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-HostStorage::HostStorage(HostTensor tensor) : tensor(std::move(tensor)) {}
+HostStorage::HostStorage(HostTensor tensor) : tensor_(std::make_shared<HostTensor>(std::move(tensor))) {}
 
-const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(); }
+const DistributedHostBuffer& HostStorage::buffer() const { return tensor_->buffer(); }
 
-const HostTensor& HostStorage::host_tensor() const { return tensor; }
-HostTensor& HostStorage::host_tensor() { return tensor; }
+const HostTensor& HostStorage::host_tensor() const { return *tensor_; }
+HostTensor& HostStorage::host_tensor() { return *tensor_; }
 
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
-    return HostStorage(tensor.transform(callable));
+    return HostStorage(tensor_->transform(callable));
 }
 
 // MeshTensor lifetime holder:
@@ -106,6 +106,23 @@ struct DeviceStorage::MeshTensorHolder {
 };
 
 DeviceStorage::DeviceStorage() : mesh_tensor_holder_(std::make_shared<MeshTensorHolder>()) {}
+
+DeviceStorage::DeviceStorage(DeviceStorage&& other) noexcept :
+    mesh_tensor_holder_(std::move(other.mesh_tensor_holder_)),
+    coords_(std::move(other.coords_)),
+    root_mesh_tensor_holder_(std::move(other.root_mesh_tensor_holder_)) {
+    other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+}
+
+DeviceStorage& DeviceStorage::operator=(DeviceStorage&& other) noexcept {
+    if (this != &other) {
+        mesh_tensor_holder_ = std::move(other.mesh_tensor_holder_);
+        coords_ = std::move(other.coords_);
+        root_mesh_tensor_holder_ = std::move(other.root_mesh_tensor_holder_);
+        other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+    }
+    return *this;
+}
 
 DeviceStorage::DeviceStorage(MeshTensor mesh_tensor) :
     mesh_tensor_holder_(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor))),

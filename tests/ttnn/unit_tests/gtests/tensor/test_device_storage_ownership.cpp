@@ -82,6 +82,70 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerRestoredAfterCopyDestr
     EXPECT_TRUE(original_storage.is_sole_owner_of_device_memory());
 }
 
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveConstructorTransfersOwnership) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage original = tensor.device_storage();
+    EXPECT_TRUE(original.is_allocated());
+
+    DeviceStorage moved_into(std::move(original));
+
+    // Moved-into storage has the memory; moved-from is in DeallocatedDefaultConstructed state.
+    EXPECT_TRUE(moved_into.is_allocated());
+    EXPECT_FALSE(original.is_allocated());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveAssignmentTransfersOwnership) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage original = tensor.device_storage();
+    EXPECT_TRUE(original.is_allocated());
+
+    DeviceStorage moved_into;
+    moved_into = std::move(original);
+
+    // Moved-into storage has the memory; moved-from is in DeallocatedDefaultConstructed state.
+    EXPECT_TRUE(moved_into.is_allocated());
+    EXPECT_FALSE(original.is_allocated());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    ASSERT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
+
+    // Copying the storage increments the use-count — tensor is no longer sole owner.
+    {
+        DeviceStorage copy = tensor.device_storage();
+        EXPECT_FALSE(tensor.device_storage().is_sole_owner_of_device_memory());
+    }
+    // Copy destroyed — sole ownership restored.
+    EXPECT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
+
+    // Moving the storage does NOT increment the use-count: it transfers the
+    // existing slot.  After both the moved-from (temp) and moved-into objects
+    // are destroyed, tensor is the sole owner again — proving no extra reference
+    // was added by the move.
+    {
+        DeviceStorage temp = tensor.device_storage();  // copy: use_count = 2
+        DeviceStorage moved_into(std::move(temp));     // move: use_count stays 2, temp deallocated
+        EXPECT_FALSE(temp.is_allocated());
+    }
+    // temp and moved_into both gone — sole ownership restored.
+    EXPECT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MovedFromIsDestroyedSafely) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+
+    // Scope ensures moved-from DeviceStorage is destroyed before the tensor.
+    {
+        DeviceStorage original = tensor.device_storage();
+        DeviceStorage moved_into(std::move(original));
+        // original goes out of scope here — must not crash or double-free.
+        (void)moved_into;
+    }
+
+    EXPECT_TRUE(tensor.is_allocated());
+}
+
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewSharesOwnership) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
