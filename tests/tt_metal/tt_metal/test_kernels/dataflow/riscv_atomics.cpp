@@ -91,8 +91,13 @@ void test_compare_and_swap_atomic(atomic_type* l1_counter_ptr, const uint32_t in
 
 void kernel_main() {
     // Base L1 address shared by all DMs: used as a counter (add/CAS) or value + result slots (load/store)
+#ifdef ARCH_QUASAR
     atomic_type* l1_counter_ptr = reinterpret_cast<atomic_type*>(static_cast<uintptr_t>(get_vararg(0)));
     const uint32_t increment_times = get_vararg(1);
+#else
+    atomic_type* l1_counter_ptr = reinterpret_cast<atomic_type*>(get_arg_val<uint32_t>(0));
+    const uint32_t increment_times = get_arg_val<uint32_t>(1);
+#endif
 
 #if TEST_ATOMIC_LOAD_STORE
     atomic_type* shared_value_ptr = l1_counter_ptr;
