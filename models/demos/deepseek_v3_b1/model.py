@@ -206,7 +206,7 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
 
 def to_spec_input(
     token_id: int,
-    prefill_token_id: int | list[int],
+    prefill_token_ids: int | list[int],
     user_id: int,
     position_id: int,
     page_size_datums: int,
@@ -226,10 +226,10 @@ def to_spec_input(
     torch_padded[0, InputField.TEMPERATURE] = float_to_uint32(temperature)
     torch_padded[0, InputField.TOP_K] = top_k
     torch_padded[0, InputField.TOP_P] = float_to_uint32(top_p)
-    prefill_token_ids = (
-        [int(prefill_token_id)] if isinstance(prefill_token_id, int) else [int(value) for value in prefill_token_id]
+    prefill_ids = (
+        [int(prefill_token_ids)] if isinstance(prefill_token_ids, int) else [int(value) for value in prefill_token_ids]
     )
-    for idx, value in enumerate(prefill_token_ids[:MAX_SPECULATIVE_TOKENS]):
+    for idx, value in enumerate(prefill_ids[:MAX_SPECULATIVE_TOKENS]):
         torch_padded[0, InputField.PREFILL_TOKEN_IDS + idx] = value
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -381,7 +381,7 @@ class DeepSeekV3:
     def write_input(
         self,
         token_id: int,
-        prefill_token_id: int,
+        prefill_token_ids: int | list[int],
         user_id: int,
         position_id: int,
         token_type: TokenType,
@@ -393,7 +393,7 @@ class DeepSeekV3:
         """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
         input_tensor = to_spec_input(
             token_id,
-            prefill_token_id,
+            prefill_token_ids,
             user_id,
             position_id,
             self._page_size_datums,

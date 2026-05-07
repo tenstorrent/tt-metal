@@ -413,18 +413,18 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
     ), f"Mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={int(final_output_index.item())}"
 
 
-def _build_metadata_tensor(device, final_core, k: int, top_p: float, temperature: float):
+def _build_metadata_tensor(device, final_core, top_k: int, top_p: float, temperature: float):
     """
     Build a single-core L1 tensor matching the `DeepseekMetadata` struct layout
     (see models/demos/deepseek_v3_b1/metadata/metadata.hpp).
 
-    We pack everything into a 512B metadata tensor with the sampling-
+    We pack everything into a 256B metadata tensor with the sampling-
     relevant fields at indices 5/6/7. Remaining words are zeroed so the
     test can predict what the kernel will overwrite.
     """
     metadata_words = torch.zeros((1, _METADATA_U32_WORDS), dtype=torch.uint32)
     metadata_words[0, _METADATA_TEMPERATURE_WORD] = float_to_uint32(temperature)
-    metadata_words[0, _METADATA_TOP_K_WORD] = int(k)
+    metadata_words[0, _METADATA_TOP_K_WORD] = int(top_k)
     metadata_words[0, _METADATA_TOP_P_WORD] = float_to_uint32(top_p)
 
     final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
@@ -561,9 +561,9 @@ def _run_sampling_topk_single_device(
     # copy_probabilities requires the metadata tensor, so build one automatically
     # if the caller asked for probability copy-out but not explicit metadata input.
     if from_metadata or copy_probabilities:
-        ttnn_metadata = _build_metadata_tensor(device, final_core, k=k, top_p=p, temperature=temperature)
+        ttnn_metadata = _build_metadata_tensor(device, final_core, top_k=k, top_p=p, temperature=temperature)
         logger.info(
-            f"Metadata tensor populated: k={k}, top_p={p}, temperature={temperature}, "
+            f"Metadata tensor populated: top_k={k}, top_p={p}, temperature={temperature}, "
             f"l1_addr=0x{ttnn_metadata.buffer_address():x}"
         )
 
@@ -845,7 +845,7 @@ def _run_sampling_topk_mesh(
         )
         logger.info(
             f"Metadata tensor populated (replicated across {num_devices} devices): "
-            f"k={k}, top_p={p}, temperature={temperature}, l1_addr=0x{ttnn_metadata.buffer_address():x}"
+            f"top_k={k}, top_p={p}, temperature={temperature}, l1_addr=0x{ttnn_metadata.buffer_address():x}"
         )
     ttnn_results = []
     torch_metadata_results = []

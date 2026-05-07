@@ -865,7 +865,7 @@ void kernel_main() {
             //     invalidate_l1_cache();
             //     DPRINT << "MD_INPUT iter=" << iteration_count << " pos=" << md->position_id << " slot=" <<
             //     md->slot_id
-            //            << " tok=" << md->token_id << " k=" << md->k << ENDL();
+            //            << " tok=" << md->token_id << " top_k=" << md->top_k << ENDL();
             // }
 
             uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, metadata_output_l1_addr);
@@ -917,7 +917,7 @@ void kernel_main() {
         // Pre-sampling metadata barrier (single source of truth for both stages).
         // The exit-device input core unicasts the DeepseekMetadata struct and
         // increments `metadata_ready_semaphore_id` above. Sampling.hpp reads
-        // temperature / k / top_p off this struct on the
+        // temperature / top_k / top_p off this struct on the
         // base stage (enable_metadata=True), and the downstream `mtp` /
         // `update_speculative_state` lambdas read candidate/slot fields from it
         // unconditionally. Waiting + clearing here means neither downstream
@@ -1042,8 +1042,8 @@ void kernel_main() {
             uint32_t metadata_src_addr = get_read_ptr(rmsnorm_input_cb) + embedding_size_bytes;
             auto* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_src_addr);
-            uint32_t token_id = (metadata_ptr->prefill_token_id[0] != static_cast<uint32_t>(-1))
-                                    ? metadata_ptr->prefill_token_id[0]
+            uint32_t token_id = (metadata_ptr->prefill_token_ids[0] != static_cast<uint32_t>(-1))
+                                    ? metadata_ptr->prefill_token_ids[0]
                                     : *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
             cb_reserve_back(emb_cb, e_num_tiles);
             noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
