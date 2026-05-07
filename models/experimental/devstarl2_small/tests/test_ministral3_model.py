@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: Hugging Face ``Ministral3Model`` (text path) vs ``TtMinistral3Model`` on Devstral weights."""
+"""PCC: Hugging Face ``Ministral3Model`` (text path) vs ``TtMinistral3Model`` on Devstral weights.
+
+Patches ``Fp8Dequantize._dequantize_one`` at import for scalar FP8 scales (see ``demo_devstral2_tt_multimodal``).
+"""
 
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import types
 import pytest
 import torch
 from loguru import logger
+from transformers.integrations.finegrained_fp8 import Fp8Dequantize
 from transformers.masking_utils import create_causal_mask
 from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
 
@@ -20,6 +24,24 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
+
+_ORIGINAL_FP8_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
+
+
+def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
+    if scales.ndim == 0:
+        fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
+        if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
+            quantized_fp32 = self._unpack_fp4(quantized)
+        else:
+            quantized_fp32 = quantized.to(torch.float32)
+        out_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
+        scale = scales.to(torch.float32)
+        return (quantized_fp32 * scale).to(out_dtype)
+    return _ORIGINAL_FP8_DEQUANTIZE_ONE(self, quantized, scales)
+
+
+Fp8Dequantize._dequantize_one = _dequantize_one_compat
 
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
