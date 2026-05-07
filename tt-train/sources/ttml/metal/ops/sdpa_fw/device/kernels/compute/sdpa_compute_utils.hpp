@@ -22,6 +22,51 @@
 
 constexpr uint32_t onetile = 1U;
 
+// SFPU intrinsics for first-column-only operations.
+// Column vectors (from row-reduce) only have meaningful data in column 0,
+// so we process 4 SFPU iterations (half-face) instead of the standard 8,
+// saving ~75% of SFPU cycles.
+#ifdef TRISC_MATH
+void calculate_recip_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        if constexpr (DST_ACCUM_MODE) {
+            sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
+        } else {
+            sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, 0));
+        }
+        sfpi::dst_reg += 2;
+    }
+}
+
+void recip_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, (int)VectorMode::C);
+}
+
+// First-column exp with fused scale: exp(scale * x) on column 0 only.
+// Uses _ckernel_sfpu_exp_accurate_ — the same function behind exp_tile<false, true>,
+// so accuracy is identical to the full-tile version. Stride-2 access skips column 1.
+// Combined with VectorMode::C (2 faces instead of 4), this gives 4× fewer SFPU iterations
+// compared to exp_tile<false, true>(idx, VectorMode::RC).
+template <uint16_t scale_bf16>
+void calculate_exponential_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat result = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true, DST_ACCUM_MODE>(val, scale_bf16);
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg += 2;
+    }
+}
+
+template <uint16_t scale_bf16>
+void exp_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, (int)VectorMode::C);
+}
+#endif
+
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
 // The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
@@ -104,8 +149,8 @@ void update_cur_row_max_value(
 
 /* We process data by one tile, because we read only one row of K
  * Maybe we can read two rows of K and V and then process data by subblocks*/
-void apply_exp_inplace_and_find_exp_sum(
-    uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum, uint32_t scaler_bits) {
+template <uint32_t scaler_fp32>
+void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
     cb_wait_front(cb_attention_weights, onetile);
     cb_wait_front(cb_cur_max, onetile);
 
@@ -116,13 +161,10 @@ void apply_exp_inplace_and_find_exp_sum(
     sub_tiles_bcast_cols(
         cb_attention_weights, cb_cur_max, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
 
-    // Apply scale after max-subtraction: exp(scale * (score - max)).
-    // This gives better precision than scaling raw scores before finding max.
-    binop_with_scalar_tile_init();
-    mul_unary_tile(exp_dst_idx, scaler_bits);
-
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(exp_dst_idx);
+    // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
+    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
+    exp_tile_init</* approx */ false, scaler_fp32>();
+    exp_tile</* approx */ false, /* scale_en */ true>(exp_dst_idx, (int)VectorMode::RC, scaler_bf16);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -176,8 +218,8 @@ void matmul_qk_by_v(
     cb_push_back(cb_cur_mm_out, Wt);
 }
 
-void update_exp_max_diff(
-    uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t scaler_bits) {
+template <uint32_t scaler_fp32>
+void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff) {
     cb_wait_front(cb_prev_max_value, onetile);
     cb_wait_front(cb_cur_max_value, onetile);
 
@@ -194,12 +236,11 @@ void update_exp_max_diff(
         /* tile_idx */ 0,
         /* dst_reg_idx */ exp_max_diff_dst_idx);
 
-    // Max values are unscaled, so correction factor is exp(scale * (prev_max - cur_max))
-    binop_with_scalar_tile_init();
-    mul_unary_tile(exp_max_diff_dst_idx, scaler_bits);
-
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(exp_max_diff_dst_idx);
+    // First-column fused scale+exp: exp(scale * (prev_max - cur_max)).
+    // Both max values are column vectors, so the result is a column vector —
+    // only column 0 has data. Process 4× fewer SFPU iterations than full-tile exp.
+    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
+    MATH((exp_tile_first_column<scaler_bf16>(exp_max_diff_dst_idx)));
     tile_regs_commit();
 
     tile_regs_wait();
@@ -247,7 +288,8 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
     reconfig_data_format_srcb(cb_col_vec);
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_col_vec)));
-    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_col_vec)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(
+        cb_col_vec)));
 }
 
 // Scale prev_mm_out tiles by a column-broadcast factor and L1-accumulate onto cur_mm_out.
@@ -332,8 +374,7 @@ void recip_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_in_idx, cb_in_idx);
     copy_tile_init(cb_in_idx);
     copy_tile(cb_in_idx, /* tile_idx */ 0, dst_idx);
-    recip_tile_init();
-    recip_tile(dst_idx);
+    MATH((recip_tile_first_column(dst_idx)));
     tile_regs_commit();
 
     tile_regs_wait();

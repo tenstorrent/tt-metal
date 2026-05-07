@@ -124,6 +124,50 @@ class DeepseekMetadata:
         return words
 
 
+def _metadata_to_padded_uint32(metadata: DeepseekMetadata) -> torch.Tensor:
+    """Pack ``metadata`` into a 1-D uint32 tensor of length ``aligned_size_bytes()/4``.
+
+    The bit pattern matches the C++ ``DeepseekMetadata`` struct laid out in L1
+    immediately after the activation data, padded with zeros out to
+    ``aligned_size_bytes()``. Callers reinterpret/cast this buffer to whatever
+    dtype the destination tensor uses (bf16 for input shards, uint32 for the
+    standalone metadata tensor, etc.).
+    """
+    aligned_words = DeepseekMetadata.aligned_size_bytes() // DeepseekMetadata.FIELD_SIZE_BYTES
+    metadata_words = metadata.to_list()
+    assert len(metadata_words) <= aligned_words, (
+        f"DeepseekMetadata serialized to {len(metadata_words)} uint32 words, "
+        f"but only {aligned_words} fit in aligned_size_bytes()={DeepseekMetadata.aligned_size_bytes()} B"
+    )
+    padded_words = metadata_words + [0] * (aligned_words - len(metadata_words))
+    return torch.tensor(padded_words, dtype=torch.uint32)
+
+
+def append_metadata_tail(tensor: torch.Tensor, metadata: DeepseekMetadata) -> torch.Tensor:
+    """Return ``tensor`` with ``metadata``'s L1 tail bytes appended along the last dim.
+
+    The decoder/attention input shard reserves ``DeepseekMetadata.aligned_size_bytes()``
+    bytes immediately after the activation data. The upstream socket writes that
+    region in production; for unit tests without a socket we instead pack the
+    same bytes into the padded torch tensor that backs the input shard.
+
+    The metadata bytes are reinterpreted as ``tensor.dtype`` (e.g. bf16 yields
+    ``aligned_size_bytes()/2`` trailing elements per row), and broadcast across
+    any leading dims of ``tensor``.
+    """
+    metadata_bytes = DeepseekMetadata.aligned_size_bytes()
+    elem_bytes = tensor.element_size()
+    assert metadata_bytes % elem_bytes == 0, (
+        f"DeepseekMetadata size {metadata_bytes} B is not a multiple of "
+        f"tensor element size {elem_bytes} B (dtype={tensor.dtype})"
+    )
+    tail_elems = metadata_bytes // elem_bytes
+    tail = _metadata_to_padded_uint32(metadata).view(tensor.dtype)
+    leading_shape = tensor.shape[:-1]
+    tail = tail.reshape((1,) * len(leading_shape) + (tail_elems,)).expand(*leading_shape, tail_elems)
+    return torch.cat([tensor, tail], dim=-1)
+
+
 def create_metadata_tensor(
     mesh_device: ttnn.MeshDevice, grid: ttnn.CoreRangeSet, metadata: DeepseekMetadata
 ) -> ttnn.Tensor:
