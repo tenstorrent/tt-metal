@@ -68,23 +68,16 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
 }
 
 // Streaming compute v2 eligibility. Returns false for features the streaming kernel doesn't
-// support: user-provided mask, attention sink, sliding window, fp32_dest_acc. Also requires
-// at least 2 q_subblocks (Sq_chunk_t > qkt_subblock_h) — Phase 2's drain + SALAD overlap
-// assumes ≥1 q_subblock iteration in the main loop.
+// support: user-provided mask, attention sink, sliding window, fp32_dest_acc.
 bool can_use_streaming_compute(
     bool use_provided_mask,
     bool use_attention_sink,
     const std::optional<uint32_t>& sliding_window_size,
-    bool fp32_dest_acc_en,
-    uint32_t qk_out_subblock_h,
-    uint32_t Sq_chunk_t) {
+    bool fp32_dest_acc_en) {
     if (use_provided_mask || use_attention_sink) {
         return false;
     }
     if (sliding_window_size.value_or(0) != 0 || fp32_dest_acc_en) {
-        return false;
-    }
-    if (Sq_chunk_t / qk_out_subblock_h <= 1) {
         return false;
     }
     return true;
@@ -372,8 +365,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(
-        use_provided_mask, use_attention_sink, sliding_window_size, fp32_dest_acc_en, qk_out_subblock_h, Sq_chunk_t);
+    const bool use_streaming_compute =
+        can_use_streaming_compute(use_provided_mask, use_attention_sink, sliding_window_size, fp32_dest_acc_en);
 
     const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
     const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;

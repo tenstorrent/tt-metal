@@ -938,6 +938,16 @@ static void sdpa_inner_loop_step(
                     kt_sub * actual_sbw,
                     qkt_subblock_h,
                     actual_sbw);
+                // PACK-to-UNPACK barrier: sub_exp writes cb_qkt_im in-place via pack_tile<true>;
+                // V matmul UNPACK below reads the same positions and needs to see those writes.
+                // For q_num_subblocks==1 the cb_wait_front was already satisfied by Phase 1's
+                // cb_push_back_hold_wr_ptr, so it doesn't sync sub_exp's writes; explicit
+                // semaphore handshake required.
+                if constexpr (q_num_subblocks == 1) {
+                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                }
                 if (kt_sub == 0) {
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                     cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
@@ -952,7 +962,10 @@ static void sdpa_inner_loop_step(
                     if constexpr (!uniform_unpack_format) {
                         reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                     }
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, matmul_inner);
+                    // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
+                    // narrower logical width. Keep unpack init on the physical stride; inner_dim below
+                    // still limits how many V rows are multiplied.
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                     // Configure once before v_subblock loop; skip inside.
                     configure_row_pack_width(out_cb, qktv_subblock_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1069,7 +1082,9 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                 }
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
+                // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
+                // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
+                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
