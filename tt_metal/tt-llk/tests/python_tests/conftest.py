@@ -245,8 +245,6 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
-    TestConfig.TEST_TARGET.update_from_pytest_config(config)
-
     TestConfig.setup_mode(
         # Pass worker id here, so TestConfig can calculate Tensix tile it will run on
         getattr(config, "workerinput", {}).get("workerid", "master"),
@@ -258,6 +256,8 @@ def pytest_configure(config):
 
     # Create directories from all processes - lock in create_directories handles race
     TestConfig.create_build_directories()
+
+    TestConfig.TEST_TARGET.update_from_pytest_config(config)
 
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
 
