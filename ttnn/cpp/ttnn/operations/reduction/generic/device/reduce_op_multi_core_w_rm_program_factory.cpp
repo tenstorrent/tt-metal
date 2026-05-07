@@ -56,6 +56,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
 
     // Tilize must cover the full row-major page width (padded last dim).
     uint32_t Wt = (W_padded + tile_width - 1) / tile_width;
+    const uint32_t wt_tiles_per_chunk = std::min<uint32_t>(8, Wt);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
@@ -74,8 +75,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     const uint32_t src_rm_page_size = a.buffer()->page_size();
     uint32_t src_datum_size = tt::datum_size(src0_cb_data_format);
     const uint32_t logical_row_bytes = W_logical * src_datum_size;
-    const uint32_t tilize_row_bytes = Wt * tile_width * src_datum_size;
-    const uint32_t rm_staging_page_size = std::max(src_rm_page_size, tilize_row_bytes);
+    const uint32_t chunk_row_bytes = wt_tiles_per_chunk * tile_width * src_datum_size;
+    const uint32_t rm_staging_page_size = chunk_row_bytes;
     TT_FATAL(
         logical_row_bytes <= src_rm_page_size,
         "Dense RM reduce: logical row size {} bytes exceeds RM page size {} (W_logical={}, dtype)",
@@ -171,6 +172,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
         W_logical,
         src_datum_size,
         padding_identity_bits,
+        Wt,
+        wt_tiles_per_chunk,
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
@@ -204,7 +207,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     std::vector<uint32_t> compute_args_g1 = {
         num_rows_per_core_group_1,
         Wt,
-        1,
+        wt_tiles_per_chunk,
         post_mul_scaler_bits,
     };
 
@@ -227,7 +230,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
         std::vector<uint32_t> compute_args_g2 = {
             num_rows_per_core_group_2,
             Wt,
-            1,
+            wt_tiles_per_chunk,
             post_mul_scaler_bits,
         };
         KernelDescriptor d;
