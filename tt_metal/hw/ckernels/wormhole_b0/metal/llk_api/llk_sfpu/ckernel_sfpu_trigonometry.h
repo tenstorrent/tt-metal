@@ -295,14 +295,15 @@ inline void calculate_cosine() {
         sfpi::vFloat s = a * a;
         a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) ^ q);
 
+        sfpi::vFloat r;
         if constexpr (is_fp32_dest_acc_en) {
-            sfpi::vFloat r = C3 * s + C2;
+            r = C3 * s + C2;
             r = r * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
         } else {
-            sfpi::vFloat r = C2 * s + C1;
+            r = C2 * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
