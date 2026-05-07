@@ -17,6 +17,28 @@ def _require_ttnn():
     return ttnn
 
 
+def _to_numpy_host_array(x):
+    """
+    Normalize a host tensor/array to a numpy array.
+
+    Supports:
+    - numpy arrays (returned as-is)
+    - CPU torch tensors (converted to numpy; BF16 is upcast to FP32)
+    """
+    if isinstance(x, np.ndarray):
+        return x
+    try:
+        import torch  # optional dependency for some call sites
+
+        if isinstance(x, torch.Tensor):
+            if x.dtype == torch.bfloat16:
+                x = x.to(torch.float32)
+            return x.detach().cpu().numpy()
+    except Exception:
+        pass
+    return np.asarray(x)
+
+
 @dataclass(frozen=True)
 class AceStepDecoderConfigTTNN:
     hidden_size: int
@@ -298,8 +320,8 @@ class TtAceStepAttentionSDPA:
         self.wq, self.bq = as_w("q_proj"), as_b("q_proj")
         # Build a fused KV projection to guarantee K and V have identical (logical and padded) sequence length.
         # Some TTNN builds can produce mismatched seq lengths when running separate K and V linears.
-        wk_host = _maybe_get(state_dict, f"{base_address}.k_proj.weight")
-        wv_host = _maybe_get(state_dict, f"{base_address}.v_proj.weight")
+        wk_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.k_proj.weight"))
+        wv_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.v_proj.weight"))
         wkv_host = np.concatenate([wk_host, wv_host], axis=0)
         self.wkv = ttnn.as_tensor(
             wkv_host,
@@ -313,7 +335,9 @@ class TtAceStepAttentionSDPA:
         bk_host = state_dict.get(f"{base_address}.k_proj.bias", None)
         bv_host = state_dict.get(f"{base_address}.v_proj.bias", None)
         if bk_host is not None and bv_host is not None:
-            bkv_host = np.concatenate([bk_host, bv_host], axis=0).reshape(1, 1, 1, -1)
+            bk_np = _to_numpy_host_array(bk_host)
+            bv_np = _to_numpy_host_array(bv_host)
+            bkv_host = np.concatenate([bk_np, bv_np], axis=0).reshape(1, 1, 1, -1)
             self.bkv = ttnn.as_tensor(
                 bkv_host,
                 device=mesh_device,
