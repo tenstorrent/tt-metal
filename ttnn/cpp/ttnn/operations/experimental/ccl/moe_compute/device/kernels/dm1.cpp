@@ -332,7 +332,7 @@ void kernel_main() {
                 // In compute_only there's no consumer to wait for, so we explicitly flush previous chunk's
                 // writes before reissuing set_state for this chunk.
                 if constexpr (compute_only) {
-                    noc_async_posted_writes_flushed(/*noc=*/1);
+                    noc_async_writes_flushed(/*noc=*/1);  // non-posted in compute_only; use NON-posted flush API
                 } else {
                     noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
                 }
@@ -376,7 +376,15 @@ void kernel_main() {
                 }
             }
 
-            noc_async_posted_writes_flushed(1);
+            // Source CB recycle barrier: must wait for NIU to finish READING source L1 before
+            // cb_pop_front recycles those pages. compute_only path uses non-posted writes
+            // (kPostedWrite=false), so the posted-write counter is 0 → posted-flush is a no-op
+            // and cb_pop_front would race with in-flight reads → source clobber.
+            if constexpr (compute_only) {
+                noc_async_writes_flushed(/*noc=*/1);  // non-posted: flush issuer queue for non-posted writes
+            } else {
+                noc_async_posted_writes_flushed(/*noc=*/1);  // production: original posted flush
+            }
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
 
             // Signal to tilize cores that they can send another chunk of tiles
