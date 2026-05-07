@@ -142,7 +142,7 @@ def ref_basename_for_hf(hf_model_id: str) -> str:
 
 
 def load_reference_data(hf_model_id: str):
-    """Load reference tokens and top-5 predictions from ``.refpt`` (same tree as Llama demos)."""
+    """Load reference tensors and optional metadata from ``.refpt``."""
     name = ref_basename_for_hf(hf_model_id)
     ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
@@ -151,7 +151,9 @@ def load_reference_data(hf_model_id: str):
     ref_data = torch.load(ref_path, map_location="cpu")
     reference_tokens = ref_data["reference_tokens"]
     top5_tokens = ref_data["top5_tokens"]
-    return reference_tokens, top5_tokens
+    prompt_len = ref_data.get("prompt_len")
+    metadata = ref_data.get("metadata")
+    return reference_tokens, top5_tokens, prompt_len, metadata
 
 
 def load_input_prompts(batch_size: int):
@@ -231,7 +233,7 @@ def log_teacher_forcing_text(prompt_tokens, predicted_tokens_per_user, reference
 
 
 def select_teacher_forcing_top5_slice(
-    top5_tokens: torch.Tensor, reference_tokens: torch.Tensor, prompt_len: int
+    top5_tokens: torch.Tensor, reference_tokens: torch.Tensor, prompt_len: int, *, metadata_aligned: bool
 ) -> torch.Tensor:
     """Align ``top5_tokens`` with teacher-forcing targets across refpt conventions."""
     num_target = len(reference_tokens) - prompt_len
@@ -239,8 +241,16 @@ def select_teacher_forcing_top5_slice(
     if num_target <= 0:
         raise ValueError("prompt_len must be smaller than reference length")
 
+    if metadata_aligned and top5_tokens.shape[0] == num_target:
+        logger.info(
+            "Teacher-forcing top5 alignment: metadata-driven direct path "
+            f"(top5_len={top5_tokens.shape[0]}, target_len={num_target})"
+        )
+        return top5_tokens
+
     candidates = []
-    for start in (prompt_len - 1, prompt_len):
+    starts = (0, prompt_len - 1, prompt_len) if metadata_aligned else (prompt_len - 1, prompt_len)
+    for start in starts:
         end = start + num_target
         if start < 0 or end > top5_tokens.shape[0]:
             continue
@@ -276,10 +286,12 @@ def create_model(mesh_device, optimizations: str, cache_dir: Path, *, max_batch_
         wqkv_dtype = ttnn.bfloat16
         mlp_w_dtype = ttnn.bfloat16
         kv_cache_dtype = ttnn.bfloat16
+        lm_head_dtype = ttnn.bfloat16
     else:
         wqkv_dtype = ttnn.bfloat16
         mlp_w_dtype = ttnn.bfloat8_b
         kv_cache_dtype = ttnn.bfloat8_b
+        lm_head_dtype = ttnn.bfloat8_b
 
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 4:
@@ -298,6 +310,7 @@ def create_model(mesh_device, optimizations: str, cache_dir: Path, *, max_batch_
             wqkv_dtype=wqkv_dtype,
             mlp_w_dtype=mlp_w_dtype,
             kv_cache_dtype=kv_cache_dtype,
+            lm_head_dtype=lm_head_dtype,
             executor_mode=True,
         )
     except Exception as e:
@@ -356,14 +369,30 @@ def test_qwen25_7b(test_config, mesh_device, optimizations, tmp_path_factory):
 def _run_token_accuracy(model, mesh_device, expected):
     """Teacher-forcing token accuracy vs ``.refpt`` (HF-generated)."""
     hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-7B-Instruct")
-    reference_tokens, top5_tokens = load_reference_data(hf_model)
+    reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(hf_model)
     tokenizer = AutoTokenizer.from_pretrained(hf_model, trust_remote_code=True)
 
     if reference_tokens.dim() > 1:
         reference_tokens = reference_tokens.squeeze()
 
-    half = len(reference_tokens) // 2
-    prompt_tokens = reference_tokens[:half].unsqueeze(0)
+    has_prompt_len_metadata = prompt_len is not None
+    if has_prompt_len_metadata:
+        prompt_len = int(prompt_len)
+        logger.info(f"Using metadata-driven prompt_len={prompt_len} from reference artifact")
+    else:
+        prompt_len = len(reference_tokens) // 2
+        logger.warning(f"Reference missing prompt_len metadata; falling back to legacy half split={prompt_len}")
+
+    if metadata:
+        meta_summary = {
+            "hf_model_id": metadata.get("hf_model_id"),
+            "revision": metadata.get("revision"),
+            "generation_mode": metadata.get("generation_mode"),
+            "created_at": metadata.get("created_at"),
+        }
+        logger.info(f"Reference metadata summary: {meta_summary}")
+
+    prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
 
     executor = EagerQwenExecutor(model, mesh_device)
     ma = model.model_args
@@ -380,7 +409,12 @@ def _run_token_accuracy(model, mesh_device, expected):
     kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
-    target_top5 = select_teacher_forcing_top5_slice(top5_tokens, reference_tokens, half)
+    target_top5 = select_teacher_forcing_top5_slice(
+        top5_tokens,
+        reference_tokens,
+        prompt_len,
+        metadata_aligned=has_prompt_len_metadata,
+    )
     result = run_teacher_forcing(
         executor,
         prompt_tokens=prompt_tokens,
@@ -395,7 +429,7 @@ def _run_token_accuracy(model, mesh_device, expected):
     top5 = result.top5_accuracy() * 100
 
     logger.info(f"Token accuracy — top1: {top1:.1f}%, top5: {top5:.1f}%")
-    log_teacher_forcing_text(prompt_tokens, result.predicted_tokens_per_user, reference_tokens[half:], tokenizer)
+    log_teacher_forcing_text(prompt_tokens, result.predicted_tokens_per_user, reference_tokens[prompt_len:], tokenizer)
 
     if "top1" in expected:
         assert top1 >= expected["top1"] * (

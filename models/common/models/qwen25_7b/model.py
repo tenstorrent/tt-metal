@@ -256,6 +256,7 @@ class Qwen25_7BTTT(LightweightModule):
         wqkv_dtype: ttnn.DataType = ttnn.bfloat16,
         mlp_w_dtype: ttnn.DataType = ttnn.bfloat8_b,
         kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b,
         block_size: int = 32,
         executor_mode: bool = False,
     ) -> Qwen25_7BTTT:
@@ -548,6 +549,7 @@ class Qwen25_7BTTT(LightweightModule):
             lm_w,
             dim=dim,
             vocab_size=vocab,
+            dtype=lm_head_dtype,
             cache_dir=cache_path / "lm_head" if cache_path else None,
         )
         lm_head_core_grid = _dram_shard_core_grid(dim)
@@ -574,7 +576,7 @@ class Qwen25_7BTTT(LightweightModule):
                 mesh_device=mesh_device,
                 dim=dim,
                 max_batch_size=max_batch_size,
-                lm_head_dtype=ttnn.bfloat8_b,
+                lm_head_dtype=lm_head_dtype,
                 program_configs=lm_prog_configs,
                 compute_kernel_config=lm_head_compute_kernel_cfg,
                 input_memcfg=lm_input_memcfg,
