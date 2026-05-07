@@ -214,6 +214,8 @@ def _reset_device_state(device):
     pre-compiled ethernet dispatch kernel binaries and causes 'binary not
     found' fatals during CQ re-init.
     """
-    device.clear_loaded_sub_device_manager()
+    # Sub-device managers are unsupported in slow dispatch mode (ttsim).
+    if not os.environ.get("TT_METAL_SLOW_DISPATCH_MODE"):
+        device.clear_loaded_sub_device_manager()
     device.cache_entries_counter.reset()
     yield

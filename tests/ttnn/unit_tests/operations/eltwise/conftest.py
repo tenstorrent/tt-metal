@@ -239,6 +239,8 @@ def _reset_device_state(request, _device_manager):
         return
 
     if _device_manager.device is not None:
-        _device_manager.device.clear_loaded_sub_device_manager()
+        # Sub-device managers are unsupported in slow dispatch mode (ttsim).
+        if not os.environ.get("TT_METAL_SLOW_DISPATCH_MODE"):
+            _device_manager.device.clear_loaded_sub_device_manager()
         _device_manager.device.cache_entries_counter.reset()
     yield
