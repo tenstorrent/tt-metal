@@ -80,10 +80,9 @@ struct GatedReduce {
         uint32_t k_num_tiles;  // outer loop count (1 for shared, n_sram_active for SRAM)
         // Total expected pushes to out_cb per call. After the K loop pushes
         // k_num_tiles real tiles, we pad up to out_cb_total_pushes with empty
-        // metadata pushes so out_cb's wr_ptr always advances by the same fixed
-        // amount per iter — required for downstream consumers (mcast / matmul)
-        // to keep their rd/wr ptrs aligned across iters. Set to k_num_tiles
-        // when no padding is needed (shared path).
+        // pushes so the downstream mcast sender's CT src_num_pages always
+        // matches GR's per-iter push count. Set to k_num_tiles when no padding
+        // is needed (shared path).
         uint32_t out_cb_total_pushes;
     };
 
@@ -204,36 +203,14 @@ struct GatedReduce {
                 cb_push_back(args.out_cb, 1);
             }
 
-            // Pad out_cb pushes to a fixed per-iter count so the downstream
-            // mcast / matmul see a constant push size every iteration (keeps
-            // rd/wr ptrs aligned with CB capacity, avoids drift across iters).
+            // Pad out_cb pushes to out_cb_total_pushes so the downstream mcast
+            // sender's CT src_num_pages always matches GR's per-iter push count.
             // No-op when out_cb_total_pushes == k_num_tiles (shared path).
             const uint32_t padding =
                 (args.out_cb_total_pushes > k_num_tiles) ? (args.out_cb_total_pushes - k_num_tiles) : 0;
             if (padding > 0) {
                 cb_reserve_back(args.out_cb, padding);
                 cb_push_back(args.out_cb, padding);
-            }
-
-            // Drain-pop the garbage face pages on group1/group2_cb. Required for
-            // multi-iter correctness on the SRAM path: the gather sender writes at
-            // fixed L1 base offsets (ignoring wr_ptr), so the gather dst CBs MUST
-            // advance by full capacity each iter (push num_active × tiles_per_k,
-            // pop same) — otherwise rd_ptr drifts and iter 2+ reads stale data
-            // from iter 1's L1 region.
-            // The K-loop above popped k_num_tiles × tiles_per_k real pages; this
-            // drains the remaining (out_cb_total_pushes − k_num_tiles) × tiles_per_k.
-            // No-op when out_cb_total_pushes == k_num_tiles (shared path: padding=0).
-            //
-            // scalar_cb is NOT drained here: BRISC pushes only n_sram scalars per
-            // iter (compact TopK-SRAM-flagged order, GR reads in same order). Push
-            // and pop are variable but balanced. Multi-iter is safe AS LONG AS
-            // n_sram_active is constant across iters; for varying n_sram both BRISC
-            // and GR would need to push/pop num_active (full) — separate fix.
-            if (padding > 0) {
-                const uint32_t in_drain_pops = padding * tiles_per_k;
-                cb_pop_front(args.group1_cb, in_drain_pops);
-                cb_pop_front(args.group2_cb, in_drain_pops);
             }
 #endif
         }

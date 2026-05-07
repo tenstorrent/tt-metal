@@ -1277,9 +1277,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gated_reduce_out_cb"),
                 get_named_compile_time_arg_val("sram_gated_reduce_scalar_cb"),
                 /*k_num_tiles=*/0,  // runtime: set to n_sram_active before call
-                                    // out_cb_total_pushes = num_active_experts: pad mcast_src_cb
-                                    // pushes to full size each iter so the downstream mcast +
-                                    // SRAM down matmul see constant CB advances across iters.
                 /*out_cb_total_pushes=*/get_named_compile_time_arg_val("sram_gather_num_active_experts"),
             };
 
@@ -1738,30 +1735,20 @@ void kernel_main() {
                 sram_up_proj();
             }
 
-            // SRAM gather: receiver-side metadata advances by full capacity every
-            // iter so the dst CB's rd/wr ptrs wrap cleanly to L1 base (the gather
-            // sender NOC-writes at FIXED `receiver_data_addr + sender_idx*tile +
-            // e*expert_dst_stride` — ignoring wr_ptr — so the receiver MUST start
-            // each iter with rd_ptr at L1 base, which only happens when push
-            // count = capacity = num_active × pages_per_expert).
-            //
-            // Sender's `num_experts` stays at n_sram_active so we ONLY NOC the real
-            // data (no wasted NOC bytes for the (num_active − n_sram) garbage slots).
-            // The receiver's metadata still advances by full capacity; GR drain-pops
-            // the (num_active − n_sram) × tiles_per_k extra face pages after the K-loop.
-            // Slots n_sram..num_active−1 of the dst CB hold stale L1 contents which
-            // are never read (k_num_tiles = n_sram, and the drain-pop just advances
-            // metadata).
+            // SRAM gather: receiver-side metadata advances by full capacity
+            // (num_active × pages_per_expert) every iter to match GR's
+            // (out_cb_total_pushes-padded) push count downstream. Sender's
+            // num_experts stays at n_sram_active so we only NOC real data.
             constexpr uint32_t _sram_gather_pages_per_expert =
                 get_named_compile_time_arg_val("sram_gather_pages_per_expert");
             constexpr uint32_t _sram_gather_num_active =
                 get_named_compile_time_arg_val("sram_gather_num_active_experts");
             constexpr uint32_t _sram_gather_total_dst_pages = _sram_gather_num_active * _sram_gather_pages_per_expert;
 #if defined(COMPILE_FOR_BRISC)
-            moe.routed.sram_ag_args.num_experts = n_sram_active;  // NOC only real data
+            moe.routed.sram_ag_args.num_experts = n_sram_active;
             moe.routed.sram_bg_args.num_experts = n_sram_active;
 #elif defined(COMPILE_FOR_NCRISC)
-            moe.routed.sram_ag_args.dst_num_pages = _sram_gather_total_dst_pages;  // full metadata
+            moe.routed.sram_ag_args.dst_num_pages = _sram_gather_total_dst_pages;
             moe.routed.sram_bg_args.dst_num_pages = _sram_gather_total_dst_pages;
 #endif
             {
@@ -1798,20 +1785,9 @@ void kernel_main() {
             }
 
             // SRAM down Mcast: sender_core's GatedReduce output → 112 shared
-            // mcast receivers, into a DEDICATED sram_down_mcast_dst_cb.
-            //
-            // CT defaults: src_num_pages = num_active (full src_cb drain),
-            // dst_num_pages = num_active × pages_per_expert = 64 (full receiver
-            // metadata advance). GR pads its mcast_src_cb pushes to num_active
-            // per iter so this constant push count keeps every CB's rd/wr ptr
-            // aligned with capacity across iters.
-            //
-            // data_size_bytes (actual NOC byte count) is overridden at runtime
-            // to n_sram_active × per_expert_bytes — we only NOC the real data,
-            // not the (num_active − n_sram) garbage face tiles. Receiver metadata
-            // still advances by full capacity; SRAM down matmul's compact_in0=1
-            // path reads only sram_idx 0..n_sram−1, never touching the stale
-            // remainder.
+            // mcast receivers. CT defaults: src/dst num_pages = num_active.
+            // data_size_bytes overridden at runtime to NOC only n_sram bytes;
+            // num_pages stays full so receivers + matmul see consistent advance.
 #if defined(COMPILE_FOR_BRISC)
             {
                 constexpr uint32_t _per_expert_bytes =
