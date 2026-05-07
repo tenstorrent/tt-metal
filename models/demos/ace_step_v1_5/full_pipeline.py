@@ -224,8 +224,26 @@ class AceStepV15TTNNPipeline:
         temb = ttnn.add(temb_t, temb_r)  # [1,D]
         timestep_proj = ttnn.add(tp_t, tp_r)  # [1,6,D]
 
-        # Expand to batch: current bring-up assumes B==1; for B>1, replicate temb/timestep_proj.
-        # (This keeps device purity; user can extend with per-batch slicing later.)
+        # Expand to batch (needed for CFG where we run B=2 with [cond, uncond]).
+        B = int(hidden_states_btC.shape[0])
+        if B != 1:
+            if int(temb.shape[0]) != 1 or int(timestep_proj.shape[0]) != 1:
+                raise ValueError(
+                    f"Expected temb/timestep_proj to have batch==1 before replication, got "
+                    f"temb={tuple(temb.shape)} timestep_proj={tuple(timestep_proj.shape)}"
+                )
+
+            def _replicate_batch(x, batch: int):
+                if int(x.shape[0]) == batch:
+                    return x
+                xs = [x] * int(batch)
+                if hasattr(ttnn, "concat"):
+                    return ttnn.concat(xs, dim=0)
+                return ttnn.concatenate(xs, dim=0)
+
+            temb = _replicate_batch(temb, B)  # [B,D]
+            timestep_proj = _replicate_batch(timestep_proj, B)  # [B,6,D]
+
         patches_out = self.core(patches, timestep_proj, encoder_hidden_states_btd)
 
         acoustic = self.output_head.forward(patches_out, temb, meta)
