@@ -362,8 +362,6 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
 }
 
 std::vector<CoreCoord> RiscFirmwareInitializer::get_dram_fw_cores(tt::ChipId device_id) const {
-    constexpr CoreCoord kSkippedDramCore = {17, 12};
-
     const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
     auto num_dram_views = soc_d.get_num_dram_views();
     std::vector<CoreCoord> fw_cores;
@@ -377,16 +375,8 @@ std::vector<CoreCoord> RiscFirmwareInitializer::get_dram_fw_cores(tt::ChipId dev
         bool found = false;
         for (const auto& endpoint : endpoints) {
             if (endpoint != noc0_preferred && endpoint != noc1_preferred) {
+                fw_cores.push_back(endpoint);
                 found = true;
-                if (endpoint == kSkippedDramCore) {
-                    log_info(
-                        tt::LogMetal,
-                        "Skipping DRAM FW core {} (bank {}) - excluded from initialization",
-                        endpoint.str(),
-                        bank);
-                } else {
-                    fw_cores.push_back(endpoint);
-                }
                 break;
             }
         }
