@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op_device_operation.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 
 #include <optional>
 #include <string>
@@ -113,45 +114,99 @@ Tensor reduce(
     auto tilized_input = ttnn::tilize_with_val_padding(
         input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
 
+    // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
+    // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
+    // scalar after reduction via post-multiplication. See issue #40498. The flag also
+    // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
+    // min through reduce_min before reaching here.
+    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    const float reduce_scaler = use_post_mul ? 1.0f : scaler;
+    const float post_mul = use_post_mul ? scaler : 1.0f;
+
+    // External-negate fallback for the H step when the fused-negate kernel's
+    // CBs (reduce_h_neg.cpp uses Ht * lcm(Wt_g1, Wt_g2) tiles for both c_4 and
+    // c_5) won't fit in L1.  Computes -reduce(MAX, H, -x) using the regular
+    // reduce kernel.
+    auto h_reduce_with_external_negate =
+        [&](const Tensor& h_input, float h_scaler, float h_post_mul, tt::tt_metal::DataType h_out_dtype) {
+            // Keep neg_input in h_input's memory config (pass std::nullopt) so the
+            // pre-reduce negation stays in place; forcing output_mem_config here
+            // could trigger a reshard (DRAM↔L1, interleaved↔sharded) before the
+            // H-reduce.  Only the final neg enforces output_mem_config.
+            Tensor neg_input = ttnn::neg(h_input, std::nullopt, std::nullopt, sub_core_grids);
+            Tensor h_out = ttnn::prim::reduce(
+                neg_input,
+                reduce_math,
+                tt::tt_metal::ReduceOpDim::H,
+                h_scaler,
+                output_mem_config,
+                h_out_dtype,
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/h_post_mul);
+            return ttnn::neg(h_out, output_mem_config, std::nullopt, sub_core_grids);
+        };
+
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
     // scaler twice internally (once per dimension).  The host compensates with
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
-    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && scaler < 0)) {
-        // Multi-core HW reduction: first reduce W, then reduce H on the result
+    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
+        // Multi-core HW reduction: first reduce W, then reduce H on the result.
+        // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
+        const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
+        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
+
         const Tensor output_tensor = ttnn::prim::reduce(
             tilized_input,
             reduce_math,
             tt::tt_metal::ReduceOpDim::W,
             1.0f,
             output_mem_config,
-            output_dtype.value_or(input_tensor.dtype()),
+            out_w_dtype,
             config,
             sub_core_grids,
-            negate);
+            negate,
+            /*post_mul_scaler=*/1.0f);
+
+        if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
+            return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
+        }
 
         return ttnn::prim::reduce(
             output_tensor,
             reduce_math,
             tt::tt_metal::ReduceOpDim::H,
-            scaler,
+            reduce_scaler,
             output_mem_config,
-            output_dtype.value_or(input_tensor.dtype()),
+            out_final_dtype,
             config,
             sub_core_grids,
-            negate);
+            negate,
+            /*post_mul_scaler=*/post_mul);
     }
+
+    if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
+        !ttnn::prim::h_reduce_negate_fits_in_l1(tilized_input, sub_core_grids)) {
+        return h_reduce_with_external_negate(
+            tilized_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
+    }
+
     return ttnn::prim::reduce(
         tilized_input,
         reduce_math,
         reduce_dim,
-        scaler,
+        reduce_scaler,
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
         config,
         sub_core_grids,
-        negate);
+        negate,
+        /*post_mul_scaler=*/post_mul);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

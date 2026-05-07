@@ -6,8 +6,8 @@
 
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
+#include <tt-metalium/mesh_trace_id.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <optional>
@@ -67,12 +67,19 @@ private:
     static constexpr size_t kRuntimeEntriesCapacity = 8192;
     std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
     size_t runtime_entries_write_pos{0};
+    std::mutex trace_runtime_entries_mutex;
+    std::unordered_map<tt::tt_metal::distributed::MeshTraceId, std::vector<inspector::MeshWorkloadRuntimeEntry>>
+        trace_runtime_entries;
     // store dispatch core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_core_info;
     // store dispatch_s core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_s_core_info;
     // store prefetcher core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> prefetcher_core_info;
+
+    std::atomic<bool> kernel_path_collection_enabled{false};
+    std::mutex kernel_path_mutex;
+    std::unordered_map<int, std::string> kernel_id_to_path;
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;

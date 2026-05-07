@@ -43,8 +43,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
         (3200, 7168, 64, 2, 2),
     ],
@@ -222,7 +225,7 @@ def test_ttnn_dispatch_combine(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     num_links,
     topology,
     use_predictable_data,
@@ -242,17 +245,29 @@ def test_ttnn_dispatch_combine(
     ttnn.visualize_mesh_device(mesh_device)
 
     # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
 
     signpost(
         f"TTNN Dispatch+Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} "
         f"{seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} "
-        f"{capacity_factor=} {use_predictable_data=} {max_dispatched_tokens_per_expert=}"
+        f"{use_predictable_data=} {max_dispatch_buffer_token_size=} {max_dispatched_tokens_per_expert=}"
     )
 
-    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(
+        f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
+    )
 
     # Generate test inputs
     # For 2D mesh, generate different weights per EP rank
@@ -314,7 +329,7 @@ def test_ttnn_dispatch_combine(
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         cluster_axis=sp_axis,
@@ -337,9 +352,12 @@ def test_ttnn_dispatch_combine(
 
     # Run TtMoERoutingSetup for TTNN execution path
     tt_moe_routing_setup = TtMoERoutingSetup(
-        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+        mesh_device=mesh_device,
+        expert_dispatch_table=expert_dispatch_table,
+        num_links=num_links,
+        experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         seq_len_per_chip=seq_len_per_chip,
@@ -347,7 +365,7 @@ def test_ttnn_dispatch_combine(
     )
 
     # Compute gate outputs (offsets and token counts) for torch reference path
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -407,6 +425,7 @@ def test_ttnn_dispatch_combine(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
@@ -423,7 +442,9 @@ def test_ttnn_dispatch_combine(
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
+    torch_output = torch_combine_module(
+        torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts, expert_region_offsets
+    )
 
     # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
@@ -443,7 +464,7 @@ def test_ttnn_dispatch_combine(
 
     # Run TTNN combine
     logger.debug("Running TTNN combine...")
-    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts, tt_expert_region_offsets)
     ttnn.synchronize_device(mesh_device)
     logger.debug("Combine complete!")
 
@@ -505,6 +526,48 @@ def test_ttnn_dispatch_combine(
     logger.debug("✅ TTNN dispatch→combine round-trip matches input!")
 
 
+# ------------------------------------------------------------------------------
+# How the `indices` tensor is constructed
+# ------------------------------------------------------------------------------
+# Setup for this test (linear-8-1link):
+#   dispatch_group_size                = 8  (chips along SP axis)
+#   seq_len_per_chip                   = 256
+#   num_experts_per_tok                = 2
+#   num_routed_experts                 = 16
+#   experts_per_chip                   = 16 / 8 = 2
+#   expert -> chip mapping             = expert_id // 2
+#     => experts 14 and 15 both land on chip 7
+#   max_dispatched_tokens_per_expert   = 8 * 256 = 2048
+#   max_dispatch_buffer_token_size     = 2048 * 1 = 2048  (factor=1)
+#
+# Indices tensor shape: (dispatch_group_size, seq_len_per_chip, num_experts_per_tok) = (8, 256, 2)
+# indices[chip, token, k] is the expert ID chosen as the k-th top-k pick for a
+# given (chip, token) pair.
+#
+# Case "omit_last":
+#   indices[..., 0] = 14
+#   indices[..., 1] = 15
+#   Every (chip, token) picks (14, 15). Counts: expert 14 gets 2048 tokens,
+#   expert 15 gets 2048 tokens, both targeting chip 7's flat buffer.
+#   Chip 7's buffer (2048 slots) fills completely with expert 14 (slots 0..2047),
+#   so expert 15 starts at slot 2048 and is fully omitted (0 slots fit).
+#
+# Case "cut_short_last":
+#   split = int(0.6 * 256) = 153
+#   indices[:, :split, 0] = 14       # first 153 tokens per chip pick 14 as 1st
+#   indices[:, :split, 1] = 15       # first 153 tokens per chip pick 15 as 2nd
+#   indices[:, split:, 0] = 0        # remaining 103 tokens per chip pick 0
+#   indices[:, split:, 1] = 1        # remaining 103 tokens per chip pick 1
+#   Counts: expert 14 gets 8*153 = 1224, expert 15 gets 8*153 = 1224
+#           (both on chip 7); experts 0 and 1 get 8*103 = 824 each (on chip 0).
+#   Chip 7's buffer: expert 14 writes slots 0..1223 (1224 tokens, no overflow),
+#   expert 15 starts at slot 1224 wanting 1224 more, but only 2048-1224 = 824
+#   slots remain, so 400 of expert 15's tokens are dropped mid-expert.
+#   Chip 0's buffer: 824 + 824 = 1648 < 2048, no overflow (as expected).
+#
+# Why 0.6: needs to be in (0.5, 1.0). > 0.5 so A+B exceeds the buffer
+# (guarantees overflow); < 1.0 so A fits fully and the overflow lands inside B.
+# ------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -522,28 +585,27 @@ def test_ttnn_dispatch_combine(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize(
-    "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
-)
-def test_ttnn_dispatch_combine_overflow(
-    mesh_device,
-    num_links,
-    topology,
-    dispatched_buffer_layout,
-):
-    """Test that dispatch/combine hangs (or corrupts) when token count exceeds max_dispatched_tokens_per_expert.
+@pytest.mark.parametrize("overflow_mode", ["cut_short_last", "omit_last"])
+def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overflow_mode):
+    """Verify dispatch/combine does not hang when the flat dispatch buffer overflows.
 
-    This test fabricates indices that route ALL tokens to expert 0, causing a massive
-    overflow of the dispatch buffer. Before the device-side bounds check fix, this will
-    hang. After the fix, dispatch should complete (tokens silently dropped).
+    The dispatch buffer is a flat shared region sized
+    max_dispatched_tokens_per_expert * dispatch_buffer_capacity_factor, filled
+    sequentially across the experts on each chip.
+
+    - "cut_short_last": cumulative fill crosses the buffer boundary inside the
+      last expert's region on the target chip — its write is cut short mid-expert.
+    - "omit_last": buffer is already full before the last expert begins — its
+      tokens are entirely omitted.
+
+    Verifies completion only (no hang); output correctness is not checked.
     """
     seq_len_per_chip = 256
     emb_dim = 256
     num_routed_experts = 16
     num_experts_per_tok = 2
-    capacity_factor = 1
+    # factor=1 => flat buffer = one expert's max; two experts on the same chip overflow.
+    dispatch_buffer_capacity_factor = 1
 
     num_devices = mesh_device.get_num_devices()
     mesh_config = extract_mesh_config(mesh_device)
@@ -551,26 +613,45 @@ def test_ttnn_dispatch_combine_overflow(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
 
-    total_tokens_to_expert_0 = dispatch_group_size * seq_len_per_chip * num_experts_per_tok
-    logger.info(
-        f"[overflow test] max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}, "
-        f"tokens routed to expert 0={total_tokens_to_expert_0} "
-        f"(overflow ratio: {total_tokens_to_expert_0 / max_dispatched_tokens_per_expert:.0f}x)"
-    )
+    # Both land on the same (last) chip since experts_per_chip == 2.
+    target_expert_a = num_routed_experts - 2
+    target_expert_b = num_routed_experts - 1
 
-    # Fabricate inputs: route ALL tokens to expert 0 to cause overflow
     x = torch.randn((dispatch_group_size, seq_len_per_chip, emb_dim), dtype=torch.bfloat16)
     weights = torch.ones((dispatch_group_size, seq_len_per_chip, num_experts_per_tok), dtype=torch.bfloat16)
     weights = weights / weights.sum(dim=-1, keepdim=True)
-    indices = torch.full(
-        (dispatch_group_size, seq_len_per_chip, num_experts_per_tok), num_routed_experts - 1, dtype=torch.int32
+    indices = torch.empty((dispatch_group_size, seq_len_per_chip, num_experts_per_tok), dtype=torch.int32)
+
+    if overflow_mode == "omit_last":
+        indices[..., 0] = target_expert_a
+        indices[..., 1] = target_expert_b
+    else:  # cut_short_last
+        split = int(0.6 * seq_len_per_chip)
+        indices[:, :split, 0] = target_expert_a
+        indices[:, :split, 1] = target_expert_b
+        indices[:, split:, 0] = 0
+        indices[:, split:, 1] = 1
+
+    logger.info(
+        f"[overflow test / {overflow_mode}] "
+        f"buffer={max_dispatch_buffer_token_size}, per_expert_max={max_dispatched_tokens_per_expert}, "
+        f"target_experts=({target_expert_a}, {target_expert_b})"
     )
 
-    # Send to device
     mesh_mapper_dispatch_inputs = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
     tt_x = ttnn.from_torch(
         x,
@@ -594,7 +675,6 @@ def test_ttnn_dispatch_combine_overflow(
         dtype=ttnn.int32,
     )
 
-    # Create dispatch table and routing setup
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
@@ -602,16 +682,18 @@ def test_ttnn_dispatch_combine_overflow(
     )
 
     tt_moe_routing_setup = TtMoERoutingSetup(
-        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+        mesh_device=mesh_device,
+        expert_dispatch_table=expert_dispatch_table,
+        num_links=num_links,
+        experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 
-    # Initialize dispatch module
     tt_dispatch_module = TtDispatchModule(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
@@ -619,25 +701,22 @@ def test_ttnn_dispatch_combine_overflow(
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
     )
-
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
 
-    # Run dispatch - this will hang without the device-side bounds check fix
-    logger.info("[overflow test] Running dispatch with overflow indices...")
+    logger.info(f"[overflow test / {overflow_mode}] Running dispatch...")
     tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
         tt_x, tt_weights, tt_indices, tt_dispatch_offsets, tt_expert_dispatch_table
     )
     ttnn.synchronize_device(mesh_device)
-    logger.info("[overflow test] Dispatch completed (did not hang)")
+    logger.info(f"[overflow test / {overflow_mode}] Dispatch completed (did not hang)")
 
-    # Run combine
     tt_combine_module = TtCombineModule(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
@@ -650,13 +729,10 @@ def test_ttnn_dispatch_combine_overflow(
         topology=topology,
         init_zeros=True,
     )
-
-    logger.info("[overflow test] Running combine with overflow data...")
-
-    tt_dispatched_buffer = ttnn.to_layout(tt_dispatched_buffer, layout=dispatched_buffer_layout)
-    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    logger.info(f"[overflow test / {overflow_mode}] Running combine...")
+    tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts, tt_expert_region_offsets)
     ttnn.synchronize_device(mesh_device)
-    logger.info("[overflow test] Combine completed (did not hang)")
+    logger.info(f"[overflow test / {overflow_mode}] Combine completed (did not hang)")
 
 
 @pytest.mark.parametrize(
@@ -683,13 +759,16 @@ def test_ttnn_dispatch_combine_overflow(
 )
 def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched_buffer_layout):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
+    # dispatch_buffer_capacity_factor: ceil(N/2) of the most conservative integer
+    # N such that dgs*seq*N >= theoretical worst-case dispatch buffer. Real traffic
+    # never approaches the worst case, so half-capacity is sufficient.
     test_ttnn_dispatch_combine(
         mesh_device=mesh_device,
         seq_len_per_chip=1600,
         emb_dim=7168,
         num_routed_experts=64,
         num_experts_per_tok=4,
-        capacity_factor=2,
+        dispatch_buffer_capacity_factor=3,
         num_links=num_links,
         topology=topology,
         use_predictable_data=True,

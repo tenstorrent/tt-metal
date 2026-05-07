@@ -111,5 +111,14 @@ class EltwiseFpu(Fpu):
             f");\n"
         )
 
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        return "_llk_math_eltwise_binary_uninit_();\n"
+
     def __str__(self) -> str:
         return f"EltwiseFpu({self.operation})"

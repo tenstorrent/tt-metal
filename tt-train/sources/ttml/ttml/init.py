@@ -151,7 +151,8 @@ def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
     def uniform_init(shape, mapper=None):
-        return ttml.ops.rand(shape, a, b, mesh_mapper=mapper)
+        data = np.random.uniform(low=a, high=b, size=tuple(shape)).astype(np.float32)
+        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return uniform_init
 
@@ -160,7 +161,8 @@ def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
     def normal_init(shape, mapper=None):
-        return ttml.ops.randn(shape, mean, std, mesh_mapper=mapper)
+        data = np.random.normal(loc=mean, scale=std, size=tuple(shape)).astype(np.float32)
+        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return normal_init
 

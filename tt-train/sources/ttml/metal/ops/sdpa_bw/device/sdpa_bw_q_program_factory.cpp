@@ -254,7 +254,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     // Get tensor dimensions and extract heads from shapes
-    const auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
+    const auto [qB, qNH, qS, qEmbd] = query.padded_shape().to_array_4D();
     const auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
     const auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
 
@@ -268,12 +268,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const uint32_t heads_per_group =
         qNH / kv_heads;  // we read one group of K and V for every heads_per_group heads from Q
 
-    const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
+    const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in Q/K inner dim
     const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
-    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
+    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;  // num of tiles in V/dO/O inner dim
 
-    // Scale factor for attention computation
-    // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
+    // Scale factor from Q/K dimension (not V dimension)
     const float per_head_dim = static_cast<float>(qEmbd);
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
@@ -325,11 +324,21 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    [[maybe_unused]] auto cb_grad_output = create_circular_buffer( // CBIndex::c_0
-        program, all_cores, kGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+    [[maybe_unused]] auto cb_grad_output = create_circular_buffer(  // CBIndex::c_0
+        program,
+        all_cores,
+        kGradOutputCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        2 * vWt);
 
-    [[maybe_unused]] auto cb_attn_output = create_circular_buffer( // CBIndex::c_1
-        program, all_cores, kAttnOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+    [[maybe_unused]] auto cb_attn_output = create_circular_buffer(  // CBIndex::c_1
+        program,
+        all_cores,
+        kAttnOutputCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        2 * vWt);
 
     [[maybe_unused]] auto cb_query = create_circular_buffer( // CBIndex::c_2
         program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
@@ -471,10 +480,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,              // 0: query width in tiles (also used for K/V since qWt == kWt == vWt)
-        St,               // 1: sequence length in tiles
-        q_heads,          // 2: number of query heads
-        heads_per_group,  // 3: heads per group
+        qWt,              // 0: Q/K width in tiles
+        vWt,              // 1: V/dO/O width in tiles
+        St,               // 2: sequence length in tiles
+        q_heads,          // 3: number of query heads
+        heads_per_group,  // 4: heads per group
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(attn_output_buffer).append_to(reader_compile_args);
@@ -514,12 +524,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
         std::vector<uint32_t> compute_args = {
             max_pairs_per_core,  // 0: num_pairs (max pairs per core)
-            qWt,                 // 1: num tile in inner dim (qWt == kWt == vWt)
-            St,                  // 2: num_seq_len / TILE_H
-            scaler,              // 3: sqrt(Et) - sdpa scaler factor
-            minus_one,           // 4: used to transform mask from 1/0 to 0/-1
-            custom_inf,          // 5: used to transform mask from 0/-1 to 0/-inf
-            block_size           // 6: block size
+            qWt,                 // 1: Q/K inner dim in tiles
+            vWt,                 // 2: V/dO/O inner dim in tiles
+            St,                  // 3: num_seq_len / TILE_H
+            scaler,              // 4: sqrt(Et) - sdpa scaler factor
+            minus_one,           // 5: used to transform mask from 1/0 to 0/-1
+            custom_inf,          // 6: used to transform mask from 0/-1 to 0/-inf
+            block_size           // 7: block size
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -537,12 +548,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         // Group 1 compile-time arguments
         std::vector<uint32_t> compute_group_1_args = {
             num_rows_per_core_group_1,  // 0: per_core_block_cnt
-            qWt,                        // 1: num tile in inner dim (qWt == kWt == vWt)
-            St,                         // 2: num_seq_len / TILE_H
-            scaler,                     // 3: sqrt(Et) - sdpa scaler factor
-            minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-            custom_inf,                 // 5: used to transform mask from 0/-1 to 0/-inf
-            block_size                  // 6: block size
+            qWt,                        // 1: Q/K inner dim in tiles
+            vWt,                        // 2: V/dO/O inner dim in tiles
+            St,                         // 3: num_seq_len / TILE_H
+            scaler,                     // 4: sqrt(Et) - sdpa scaler factor
+            minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
+            custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
+            block_size                  // 7: block size
         };
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
             program,
@@ -560,12 +572,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         if (!core_group_2.ranges().empty()) {
             std::vector<uint32_t> compute_group_2_args = {
                 num_rows_per_core_group_2,  // 0: per_core_block_cnt
-                qWt,                        // 1: num tile in inner dim (qWt == kWt == vWt)
-                St,                         // 2: num_seq_len / TILE_H
-                scaler,                     // 3: sqrt(Et) - sdpa scaler factor
-                minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-                custom_inf,                 // 5: used to transform mask from 0/-1 to 0/-inf
-                block_size                  // 6: block size
+                qWt,                        // 1: Q/K inner dim in tiles
+                vWt,                        // 2: V/dO/O inner dim in tiles
+                St,                         // 3: num_seq_len / TILE_H
+                scaler,                     // 4: sqrt(Et) - sdpa scaler factor
+                minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
+                custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
+                block_size                  // 7: block size
             };
             kernels.compute_group_2 = tt::tt_metal::CreateKernel(
                 program,

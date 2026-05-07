@@ -50,7 +50,7 @@ struct DataMovementConfiguration {
 
     struct Gen2DataMovementConfig {
         // Currently, no configuration is needed for Gen2!
-        // Might want to revisit the API if so....
+        // The empty struct is still used to express a Gen2 DM kernel.
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
@@ -63,6 +63,23 @@ struct DataMovementConfiguration {
 // Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
+// A KernelSpec is a descriptor for a Tenstorrent kernel:
+// A single computational task compiled into one or more executable files that work
+// collaboratively on a single node.
+//
+// The KernelSpec describes the properties of a compute or data movement kernel:
+//  - Source code
+//  - Compiler options for generating the kernel binary/binaries
+//  - Resource bindings (access to DFBs, semaphores, etc.)
+//  - Kernel argument schema (for arguments specified when the Program is enqueued)
+//  - Kernel argument bindings (for compile-time constant arguments)
+//  - The configuration of any hardware resources controlled by the kernel
+//
+// Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
+// instance runs on each node where the kernel is placed, with its own runtime arguments.
+//
+// Placement: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+//
 struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     // Basic kernel info
@@ -72,8 +89,7 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // (Wrapper types disambiguate the string-constructible variant alternatives,
-    // ensuring compile-time enforcement.)
+    // (Force callers to choose explicitly between path and inline code.)
     struct SourceFilePath {
         std::filesystem::path path;
     };
@@ -82,17 +98,19 @@ struct KernelSpec {
     };
     std::variant<SourceFilePath, SourceCode> source;
 
-    // Target nodes
-    // The logical coordinates for the set of device nodes on which the kernel will run
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    Nodes target_nodes;
+    // NOTE: The kernel's target node set is a DERIVED property, based on the
+    //       WorkUnitSpec(s) that include this kernel.
 
-    // Threading
-    // Number of kernel threads (this can be specified globally or per-node)
+    // Kernel threading:
+    // Number of kernel threads
     uint8_t num_threads = 1;
-    // Optional per-node thread count specification (overrides global num_threads)
-    // This is currently unsupported, and an open question if we ever want to support it.
-    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
+
+    // (Optional) Per-node thread count specification
+    // The default threading is num_threads. However, you may override this on a per-node basis.
+    // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
+    //       Here as a placeholder; specifying it will trigger a runtime error.
+    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
+    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 
@@ -125,7 +143,7 @@ struct KernelSpec {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
         std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
         DFBEndpointType endpoint_type;    // producer, consumer, or relay
-        DFBAccessPattern access_pattern;  // strided, blocked, or contiguous
+        DFBAccessPattern access_pattern;  // strided, all, or blocked
     };
     std::vector<DFBBinding> dfb_bindings;
 
@@ -202,6 +220,34 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     using ConfigSpec = std::variant<DataMovementConfiguration, ComputeConfiguration>;
     ConfigSpec config_spec;
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options / niche use cases
+    //////////////////////////////////////////////////////////////////////////////
+
+    // Niche use case: Self-loop DFBs on compute kernels only
+    // This applies only to compute kernels that bind BOTH the producer and consumer
+    // endpoints of the same DFB (self-loop).
+    //
+    // The compute kernel threads can communicate via the DFB in two topologies:
+    //
+    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
+    //         (no cross-thread communication). This is the common case.
+    //   INTER (inter-thread): Within the kernel, some threads produce data for other
+    //          threads to consume.
+    //
+    // Only the INTRA case is currently supported. INTER will trigger a validation error.
+    // There are currently no known use cases for an INTER-thread self-loop. This option
+    // is present in the API for completeness, to surface any use cases that may arise.
+    //
+    struct DFBComputeSelfLoopScope {
+        DFBSpecName dfb_spec_name;
+        enum class Scope { INTRA, INTER };
+        Scope scope = Scope::INTRA;
+        // If the INTER case were enabled, we would need an additional field to describe
+        // the inter-thread communication pattern here.
+    };
+    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

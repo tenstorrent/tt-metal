@@ -51,7 +51,7 @@ inline void piecewise_exp_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& k_
 }
 
 inline sfpi::vFloat piecewise_exp_expand(sfpi::vFloat poly_result, sfpi::vInt k_int) {
-    return sfpi::setexp(poly_result, sfpi::exexp_nodebias(poly_result) + k_int);
+    return sfpi::setexp(poly_result, sfpi::exexp(poly_result, sfpi::ExponentMode::NoDebias) + k_int);
 }
 #endif
 
@@ -112,18 +112,18 @@ ALWI void piecewise_rational_eval_numer_denom(
     sfpi::vFloat denom = den_coeffs[DEN_DEGREE];
 
     if constexpr (NUM_DEGREE > DEN_DEGREE) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int i = NUM_DEGREE - 1; i >= static_cast<int>(DEN_DEGREE); i--) {
             numer = numer * x + num_coeffs[i];
         }
     } else if constexpr (DEN_DEGREE > NUM_DEGREE) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int i = DEN_DEGREE - 1; i >= static_cast<int>(NUM_DEGREE); i--) {
             denom = denom * x + den_coeffs[i];
         }
     }
 
-#pragma unroll
+#pragma GCC unroll 64
     for (int i = MIN_DEG - 1; i >= 0; i--) {
         numer = numer * x + num_coeffs[i];
         denom = denom * x + den_coeffs[i];
@@ -158,12 +158,12 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
     sfpi::vFloat denom = den_coeffs[DEN_TOP];
 
     if constexpr (NUM_STEPS > DEN_STEPS) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int k = 0; k < NUM_STEPS - DEN_STEPS; k++) {
             numer = numer * x2 + num_coeffs[NUM_TOP - 2 * (k + 1)];
         }
     } else if constexpr (DEN_STEPS > NUM_STEPS) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int k = 0; k < DEN_STEPS - NUM_STEPS; k++) {
             denom = denom * x2 + den_coeffs[DEN_TOP - 2 * (k + 1)];
         }
@@ -173,7 +173,7 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
     constexpr int NUM_POS = NUM_TOP - 2 * ((NUM_STEPS > DEN_STEPS) ? (NUM_STEPS - DEN_STEPS) : 0);
     constexpr int DEN_POS = DEN_TOP - 2 * ((DEN_STEPS > NUM_STEPS) ? (DEN_STEPS - NUM_STEPS) : 0);
 
-#pragma unroll
+#pragma GCC unroll 64
     for (int k = 1; k <= MIN_STEPS; k++) {
         numer = numer * x2 + num_coeffs[NUM_POS - 2 * k];
         denom = denom * x2 + den_coeffs[DEN_POS - 2 * k];
