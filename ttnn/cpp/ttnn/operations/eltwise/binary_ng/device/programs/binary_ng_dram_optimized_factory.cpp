@@ -444,6 +444,14 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
         return "Op is memory bound and not supported for DRAM optimized program";
     }
 
+    auto dram_optimal_cores =
+        CMAKE_UNIQUE_NAMESPACE::get_optimal_wh_dram_core_coords(operation_attributes.is_sfpu ? 3 : 1);
+    const auto& dispatch_cores = CoreRangeSet(tt::tt_metal::get_logical_dispatch_cores_on_user_chips());
+
+    if (dram_optimal_cores.intersects(dispatch_cores)) {
+        return "DRAM optimal cores are reserved as dispatch cores";
+    }
+
     if (operation_attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
         return "Subtile broadcast type is not supported for DRAM optimized program";
     }
