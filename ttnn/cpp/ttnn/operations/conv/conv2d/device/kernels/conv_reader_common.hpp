@@ -377,42 +377,40 @@ void load_config_tensor_if_in_dram(experimental::Noc noc, experimental::CB reade
 #endif
 }
 
-template <int window_height, int window_width>
+template <int window_height, int window_width, uint32_t conv_act_c_read_bytes>
 FORCE_INLINE void read_dilated_channels(
     experimental::Noc noc,
     uint32_t& l1_write_addr_act,
     const uint32_t act_l1_read_addr,
     const uint32_t reader_channel_idx,
-    const uint32_t conv_act_c_bytes,
     const uint32_t stride_h_bytes,
     const uint32_t stride_w_bytes) {
-    uint32_t src_addr = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
+    uint32_t src_addr = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
 #pragma GCC unroll(window_height)
     for (uint32_t outer = 0; outer < window_height; outer++) {
         uint32_t row_addr = src_addr;
 #pragma GCC unroll(window_width)
         for (uint32_t inner = 0; inner < window_width; inner++) {
-            experimental::read_with_state(noc, l1_write_addr_act, row_addr);
-            l1_write_addr_act += conv_act_c_bytes;
+            experimental::read_with_state<conv_act_c_read_bytes>(noc, l1_write_addr_act, row_addr);
+            l1_write_addr_act += conv_act_c_read_bytes;
             row_addr += stride_w_bytes;
         }
         src_addr += stride_h_bytes;
     }
 }
 
-template <int window_height>
+template <int window_height, uint32_t coalesced_read_bytes>
 FORCE_INLINE void read_channels(
     experimental::Noc noc,
     uint32_t& l1_write_addr_act,
     const uint32_t act_l1_read_addr,
     const uint32_t reader_channel_idx,
     const uint32_t conv_act_c_read_bytes,
-    const uint32_t coalesced_read_bytes,
     const uint32_t stride_h_bytes) {
     uint32_t src_addr = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
 #pragma GCC unroll(window_height)
     for (uint32_t inner = 0; inner < window_height; inner++) {
-        experimental::read_with_state(noc, l1_write_addr_act, src_addr);
+        experimental::read_with_state<coalesced_read_bytes>(noc, l1_write_addr_act, src_addr);
         l1_write_addr_act += coalesced_read_bytes;
         src_addr += stride_h_bytes;
     }
@@ -454,21 +452,19 @@ FORCE_INLINE void read_activation_data(
             uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 if constexpr (dilation_w == 1) {
-                    read_channels<weight_size_h>(
+                    read_channels<weight_size_h, coalesced_read_bytes>(
                         noc,
                         l1_write_addr_act,
                         act_l1_read_addr,
                         ind,
                         conv_act_c_read_bytes,
-                        coalesced_read_bytes,
                         stride_h_bytes);
                 } else {
-                    read_dilated_channels<weight_size_h, weight_size_w>(
+                    read_dilated_channels<weight_size_h, weight_size_w, conv_act_c_read_bytes>(
                         noc,
                         l1_write_addr_act,
                         act_l1_read_addr,
                         ind,
-                        conv_act_c_read_bytes,
                         stride_h_bytes,
                         stride_w_bytes);
                 }
