@@ -1804,6 +1804,33 @@ class TestGraphReportImport:
 
         conn.close()
 
+    def test_import_includes_git_sha_and_url_in_report_metadata(self, device, tmp_report_dir):
+        """Importer stamps report_metadata with tt-metal origin URL and HEAD SHA when available."""
+        report_path = tmp_report_dir / "report.json"
+        db_dir = tmp_report_dir / "db"
+
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        db_path = graph_report.import_report(report_path, db_dir)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM report_metadata WHERE key IN ('git_sha', 'git_url') ORDER BY key")
+        rows = dict(cursor.fetchall())
+        conn.close()
+
+        assert "git_sha" in rows and "git_url" in rows
+        git_meta = graph_report.get_tt_metal_git_report_metadata()
+        assert rows["git_sha"] == git_meta["git_sha"]
+        assert rows["git_url"] == git_meta["git_url"]
+        if git_meta["git_sha"]:
+            assert len(rows["git_sha"]) >= 7
+
 
 class TestReportVersion:
     """Tests for report version handling."""

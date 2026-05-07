@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
 import json
 import math
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Union
 
@@ -30,6 +31,41 @@ from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
 DATABASE_SCHEMA_VERSION = 2
+
+
+def get_tt_metal_git_report_metadata() -> dict[str, str]:
+    """Return ``git_url`` and ``git_sha`` for the tt-metal tree that contains this module.
+
+    Values are empty strings when git is unavailable (e.g. unpacked release). Used to populate
+    ``report_metadata`` in the visualizer database.
+    """
+    root = Path(__file__).resolve().parents[2]
+    out: dict[str, str] = {"git_url": "", "git_sha": ""}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode == 0:
+            out["git_sha"] = proc.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode == 0:
+            out["git_url"] = proc.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return out
 
 
 def _int_param(params, key):
@@ -1250,9 +1286,15 @@ def import_report(
             "svgs": 0,
         }
 
+        git_meta = get_tt_metal_git_report_metadata()
+
         for idx, rpath in enumerate(sorted(report_files)):
             with open(rpath, "r") as f:
                 report = json.load(f)
+
+            meta = report.setdefault("metadata", {})
+            for key, value in git_meta.items():
+                meta.setdefault(key, value)
 
             version = report.get("version", 0)
             if version != SUPPORTED_REPORT_VERSION:
