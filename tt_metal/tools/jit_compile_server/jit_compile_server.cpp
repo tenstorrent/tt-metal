@@ -17,6 +17,7 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "common/filesystem_utils.hpp"
 #include "impl/jit_server/jit_compile_server_controller.hpp"
@@ -85,14 +86,14 @@ fs::path g_server_cache_root = kDefaultServerCacheRoot;
 // empty strings.  Throws on violation.
 void validate_safe_relative_path(const std::string& path, const char* field_name) {
     if (path.empty()) {
-        throw std::runtime_error(fmt::format("Empty {} is not allowed", field_name));
+        TT_THROW("Empty {} is not allowed", field_name);
     }
     if (path[0] == '/') {
-        throw std::runtime_error(fmt::format("Absolute {} is not allowed: {}", field_name, path));
+        TT_THROW("Absolute {} is not allowed: {}", field_name, path);
     }
     for (const auto& component : fs::path(path)) {
         if (component == "..") {
-            throw std::runtime_error(fmt::format("{} must not contain '..' components: {}", field_name, path));
+            TT_THROW("{} must not contain '..' components: {}", field_name, path);
         }
     }
 }
@@ -125,8 +126,7 @@ fs::path firmware_cache_dir(std::uint64_t build_key, const std::string& target_n
 // If the server cache is cleared after upload, compile will fail until the client re-uploads.
 fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_metal::jit_server::TargetRecipe& target) {
     if (target.weakened_firmware_name.empty()) {
-        throw std::runtime_error(
-            fmt::format("Internal error: expected non-empty weakened_firmware_name for target {}", target.target_name));
+        TT_THROW("Internal error: expected non-empty weakened_firmware_name for target {}", target.target_name);
     }
     const fs::path firmware_file = fs::path(target.weakened_firmware_name).filename();
     const fs::path fw_dir = firmware_cache_dir(build_key, target.target_name);
@@ -135,23 +135,22 @@ fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_me
         return candidate;
     }
 
-    throw std::runtime_error(fmt::format(
+    TT_THROW(
         "Firmware artifact not found for build_key {} target {} file {}. "
         "Expected at {}. Ensure the client uploads firmware via uploadFirmware RPC before compiling.",
         build_key,
         target.target_name,
         firmware_file.string(),
-        candidate.string()));
+        candidate.string());
 }
 
 void build_failure(const std::string& target, const std::string& op, const std::string& cmd, const fs::path& log_file) {
     std::ifstream file{log_file};
     if (file.is_open()) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        throw std::runtime_error(fmt::format("{} {} failure -- cmd: {}\nLog: {}", target, op, cmd, log_contents));
+        TT_THROW("{} {} failure -- cmd: {}\nLog: {}", target, op, cmd, log_contents);
     }
-    throw std::runtime_error(
-        fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file.string()));
+    TT_THROW("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file.string());
 }
 
 bool need_compile(const fs::path& out_dir, const fs::path& obj) {
@@ -271,7 +270,7 @@ void build_target(
     const fs::path& out_dir,
     tt::tt_metal::jit_server::CompileResponse& response) {
     if (target.srcs.size() != target.objs.size()) {
-        throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
+        TT_THROW("srcs and objs must have the same size for target {}", target.target_name);
     }
 
     fs::create_directories(out_dir);
@@ -378,13 +377,13 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                 tt::jit_build::utils::FileRenamer tmp(target_path);
                 std::ofstream out(tmp.path(), std::ios::binary);
                 if (!out.is_open()) {
-                    throw std::runtime_error("Cannot create file: " + target_path.string());
+                    TT_THROW("Cannot create file: {}", target_path.string());
                 }
                 out.write(
                     reinterpret_cast<const char*>(file.content.data()),
                     static_cast<std::streamsize>(file.content.size()));
                 if (!out) {
-                    throw std::runtime_error("Failed to write file: " + target_path.string());
+                    TT_THROW("Failed to write file: {}", target_path.string());
                 }
             }
         }
@@ -426,10 +425,10 @@ tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
             std::string safe_file = fs::path(artifact.file_name).filename().string();
             if (safe_target.empty() || safe_file.empty() || safe_target.find("..") != std::string::npos ||
                 safe_file.find("..") != std::string::npos) {
-                throw std::runtime_error(fmt::format(
+                TT_THROW(
                     "Invalid firmware artifact names: target='{}' file='{}'",
                     artifact.target_name,
-                    artifact.file_name));
+                    artifact.file_name);
             }
 
             fs::path fw_dir = firmware_cache_dir(request.build_key, safe_target);
@@ -439,13 +438,13 @@ tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
             tt::jit_build::utils::FileRenamer tmp(target_path);
             std::ofstream out(tmp.path(), std::ios::binary);
             if (!out.is_open()) {
-                throw std::runtime_error("Cannot create firmware file: " + target_path.string());
+                TT_THROW("Cannot create firmware file: {}", target_path.string());
             }
             out.write(
                 reinterpret_cast<const char*>(artifact.data.data()),
                 static_cast<std::streamsize>(artifact.data.size()));
             if (!out) {
-                throw std::runtime_error("Failed to write firmware file: " + target_path.string());
+                TT_THROW("Failed to write firmware file: {}", target_path.string());
             }
 
             log_info(
