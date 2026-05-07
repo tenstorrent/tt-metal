@@ -1,0 +1,39 @@
+name: "[internal] Auto-retry failed jobs"
+
+on:
+  workflow_call:
+    inputs:
+      max_attempts:
+        description: "Maximum total run attempts (including the original). Set to 2 for one retry, 3 for two retries, etc."
+        type: number
+        default: 2
+    secrets:
+      RETRY_WORKFLOW_TOKEN:
+        required: true
+        description: "PAT with actions:write scope — github.token cannot rerun its own workflow"
+
+jobs:
+  retry-failed-jobs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check guards and rerun
+        env:
+          GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+        run: |
+          MAX_ATTEMPTS=${{ inputs.max_attempts }}
+          CURRENT_ATTEMPT=${{ github.run_attempt }}
+
+          echo "Run ID:           ${{ github.run_id }}"
+          echo "Current attempt:  ${CURRENT_ATTEMPT} / max ${MAX_ATTEMPTS}"
+          echo "Repository:       ${{ github.repository }}"
+
+          if [[ "$CURRENT_ATTEMPT" -ge "$MAX_ATTEMPTS" ]]; then
+            echo "::notice title=retry-skipped::Attempt ${CURRENT_ATTEMPT} >= max ${MAX_ATTEMPTS}. No more retries."
+            exit 0
+          fi
+
+          echo "::notice title=retry-triggered::Retrying failed jobs (attempt $((CURRENT_ATTEMPT + 1)) of ${MAX_ATTEMPTS})"
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/rerun-failed-jobs

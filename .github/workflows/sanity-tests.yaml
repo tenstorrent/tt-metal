@@ -187,7 +187,7 @@ on:
     branches: ["main"]
 
 permissions:
-  actions: read
+  actions: write
   contents: write
   pull-requests: write
   pages: write
@@ -426,3 +426,18 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
+
+  auto-retry-on-failure:
+    if: failure()
+    needs:
+      - ttnn-unit-tests
+      - models-unit-tests
+      - tt-train-cpp-unit-tests
+      - run-profiler-regression
+      - ops-unit-tests
+      - ttsim-integration-tests
+    uses: ./.github/workflows/_auto-retry-failed-jobs.yaml
+    secrets:
+      RETRY_WORKFLOW_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+    with:
+      max_attempts: 3
