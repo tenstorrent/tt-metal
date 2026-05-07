@@ -15,9 +15,12 @@ class TensorLayout;
 }  // namespace tt::tt_metal
 
 namespace test_utils {
+// All tests must pass an explicit device. The previous no-device overload silently called
+// MeshDevice::create_unit_mesh(0) per call, which defeats the suite-shared device pattern;
+// callers should derive from a *Shared fixture (e.g. TTNNUnitMeshCQSharedFixture) and pass
+// `device_` instead.
 void test_tensor_on_device(
     const ttnn::Shape& input_shape,
     const tt::tt_metal::TensorLayout& layout,
     tt::tt_metal::distributed::MeshDevice* device);
-void test_tensor_on_device(const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout);
 }  // namespace test_utils

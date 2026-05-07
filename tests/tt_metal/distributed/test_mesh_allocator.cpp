@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal::distributed::test {
 
-using MeshAllocatorTest = GenericMeshDeviceFixture;
+using MeshAllocatorTest = GenericMeshDeviceSharedFixture;
 
 TEST_F(MeshAllocatorTest, BasicAllocationSanityCheck) {
     const size_t allocation_size = 1024 * 8;  // 1KB

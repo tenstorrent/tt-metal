@@ -82,6 +82,106 @@ protected:
     void TearDown() override { device_->close(); }
 };
 
+// Suite-shared 2-CQ single-card mesh. Mirrors UnitMeshCQSingleCardSharedFixture's recovery
+// semantics but creates the unit mesh with num_cqs=2 (and ETH dispatch on T3K). Use only
+// for tests that do not mutate persistent device state across tests; multi-thread tests
+// that race on the 2-CQ lifecycle must keep using MultiCommandQueueSingleDeviceFixture.
+class TTNNUnitMesh2CQSingleCardSharedFixture : public TTNNFixtureBase {
+protected:
+    inline static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> shared_device_;
+    inline static bool device_valid_ = false;
+    inline static bool needs_recovery_ = false;
+
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+
+    static void SetUpTestSuite() {
+        if (!suite_can_create_device()) {
+            return;
+        }
+        try {
+            create_shared_device();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Failed to create shared 2-CQ single-card device: {}", e.what());
+            force_release_shared_device();
+        }
+    }
+
+    static void TearDownTestSuite() {
+        try {
+            destroy_shared_device();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "TearDownTestSuite: destroy_shared_device threw: {}. Force-releasing.", e.what());
+            force_release_shared_device();
+        }
+    }
+
+    void SetUp() override {
+        if (!check_dispatch_mode()) {
+            GTEST_SKIP() << "Skipping test, since it can only be run in Fast Dispatch Mode.";
+        }
+        if (needs_recovery_ || !device_valid_) {
+            try {
+                destroy_shared_device();
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest, "SetUp: destroy_shared_device threw during recovery: {}. Force-releasing.", e.what());
+                force_release_shared_device();
+            }
+            try {
+                create_shared_device();
+            } catch (const std::exception& e) {
+                log_warning(tt::LogTest, "SetUp: create_shared_device failed during recovery: {}.", e.what());
+                force_release_shared_device();
+            }
+        }
+        if (!shared_device_) {
+            GTEST_SKIP() << "Shared 2-CQ single-card device not available.";
+        }
+        device_ = shared_device_.get();
+    }
+
+    void TearDown() override {
+        if (HasFailure()) {
+            needs_recovery_ = true;
+        }
+    }
+
+private:
+    static bool suite_can_create_device() {
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+            return false;
+        }
+        return true;
+    }
+
+    static void create_shared_device() {
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const auto num_devices = GetNumAvailableDevices();
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
+        if (arch == tt::ARCH::WORMHOLE_B0 and num_devices != 1) {
+            dispatch_core_type = DispatchCoreType::ETH;
+        }
+        shared_device_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+            0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, DispatchCoreConfig{dispatch_core_type});
+        device_valid_ = static_cast<bool>(shared_device_);
+        needs_recovery_ = false;
+    }
+
+    static void destroy_shared_device() {
+        if (shared_device_) {
+            shared_device_->close();
+        }
+        shared_device_.reset();
+        device_valid_ = false;
+    }
+
+    static void force_release_shared_device() {
+        shared_device_.reset();
+        device_valid_ = false;
+        needs_recovery_ = false;
+    }
+};
+
 // Suite-level shared T3K meshes (8× unit mesh, 2 CQs, Ethernet dispatch). Mirrors recovery behavior of
 // UnitMeshCQSingleCardSharedFixture: one create per suite, recreate after failure, no per-test close.
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {

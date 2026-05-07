@@ -26,7 +26,7 @@
 
 namespace tt::tt_metal::distributed {
 
-using MeshSocketTest = MeshDevice2x4Fixture;
+using MeshSocketTest = MeshDevice2x4SharedFixture;
 using MeshSocketTest1DFabric = MeshDevice2x4Fabric1DFixture;
 using MeshSocketTest2DFabric = MeshDevice2x4Fabric2DFixture;
 

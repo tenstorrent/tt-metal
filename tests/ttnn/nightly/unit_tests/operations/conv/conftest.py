@@ -1,27 +1,23 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
+
 """
-Param-keyed session device fixture for fused tests.
+Param-keyed session device fixture for conv nightly tests.
 
-Replaces the previous stub: this conftest installs a session-scoped
-:class:`ParamKeyedDeviceManager` that auto-detects compatible runs across
-files in this directory.  Several files parametrize ``device_params``
-(test_group_norm.py, test_group_norm_DRAM.py, test_softmax.py,
-test_distributed_layernorm_exhaustive.py); the manager keeps the cached
-device when the key matches and reopens automatically when it changes.
+This is part of a phased rollout of the shared-device pattern across
+tests/ttnn/nightly/unit_tests/.  The session-scoped ParamKeyedDeviceManager
+auto-detects compatible runs across files in this subdirectory: tests
+that share device_params reuse the cached device automatically.
 
-Note: the ``parallel_sequential/`` subdirectory does NOT parametrize
-``device_params`` and is single-device, so it has its own
-module-scoped conftest (see ``parallel_sequential/conftest.py``).
+Conv tests parametrize ``device_params`` heavily (many ``l1_small_size``
+variants).  ``sort_items_by_device_params`` batches adjacent tests with
+the same key so the cached device survives across runs of the same
+config and only re-opens when the config actually changes.
 
-Several distributed-norm tests in this directory request ``mesh_device``
-rather than ``device``; those continue to flow through the root
-``mesh_device`` fixture and are unaffected by this conftest.
-
-Tests marked with ``@pytest.mark.requires_fresh_device`` still get a
-per-test fresh device; tests marked with ``@pytest.mark.manages_own_device``
-suspend the shared device while they manage their own handle.
+Tests marked @pytest.mark.requires_fresh_device still get a per-test
+fresh device; tests marked @pytest.mark.manages_own_device suspend the
+shared device while they manage their own handle.
 """
 import os
 import sys
@@ -29,9 +25,8 @@ from pathlib import Path
 
 import pytest
 
-# Bootstrap repo root on sys.path so we can import the helper module.
 _REPO_ROOT = Path(
-    os.environ.get("TT_METAL_HOME") or os.environ.get("TT_METAL_ROOT") or Path(__file__).resolve().parents[5]
+    os.environ.get("TT_METAL_HOME") or os.environ.get("TT_METAL_ROOT") or Path(__file__).resolve().parents[6]
 ).resolve()
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -56,7 +51,7 @@ def _device_manager(request):
     import ttnn
 
     device_id = resolve_device_id(request.config)
-    mgr = ParamKeyedDeviceManager(device_id, label="fused")
+    mgr = ParamKeyedDeviceManager(device_id, label="nightly_conv")
     yield mgr
     mgr.close()
 

@@ -53,8 +53,8 @@ static_assert(!std::is_copy_assignable_v<MeshBuffer>, "MeshBuffer should not be 
 static_assert(std::is_move_constructible_v<MeshBuffer>, "MeshBuffer should be move constructible");
 static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move assignable");
 
-using MeshBufferTest2x4 = MeshDevice2x4Fixture;
-using MeshBufferTestSuite = GenericMeshDeviceFixture;
+using MeshBufferTest2x4 = MeshDevice2x4SharedFixture;
+using MeshBufferTestSuite = GenericMeshDeviceSharedFixture;
 
 struct DeviceLocalShardedBufferTestConfig {
     Shape2D num_pages_per_core;

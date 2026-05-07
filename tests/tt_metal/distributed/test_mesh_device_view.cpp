@@ -175,7 +175,7 @@ TEST(MeshDeviceViewTest, GetLineCoordinatesRingPreferredButNotRequired) {
     // Function succeeds, ring formation is preferred but not required
 }
 
-using MeshDeviceView2x4Test = MeshDevice2x4Fixture;
+using MeshDeviceView2x4Test = MeshDevice2x4SharedFixture;
 
 TEST_F(MeshDeviceView2x4Test, MeshId) {
     const auto& view = mesh_device_->get_view();

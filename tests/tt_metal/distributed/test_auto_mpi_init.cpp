@@ -11,7 +11,7 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 // If MeshDevice is initialized, the distributed context is initialized through MetalContext
-using MeshDeviceAutoInitDistributedContextTest = GenericMeshDeviceFixture;
+using MeshDeviceAutoInitDistributedContextTest = GenericMeshDeviceSharedFixture;
 
 // Test that MetalContext constructor automatically initializes the distributed context
 TEST_F(MeshDeviceAutoInitDistributedContextTest, MetalContextInitializesDistributedContext) {

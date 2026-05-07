@@ -803,6 +803,11 @@ TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpEltwiseSFPU) {
 }
 
 TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpProgramCache) {
+    // This test exercises program-cache behaviour and therefore needs a known-empty cache
+    // at the start.  Clearing the cache also affects subsequent tests on the same shared
+    // device (they will see a cold cache for the next few entries) — the cost is bounded
+    // because subsequent tests just re-populate.  If this test ever moves to its own
+    // suite, prefer a `requires_fresh_device`-style guard over re-clearing every run.
     this->device_->disable_and_clear_program_cache();
     this->device_->enable_program_cache();
     const size_t initial_cache_entries = this->device_->num_program_cache_entries();

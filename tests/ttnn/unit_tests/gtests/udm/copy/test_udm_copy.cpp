@@ -280,7 +280,7 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy4D) {
 // Block-Sharded Tests (2x4 Mesh)
 // ============================================================================
 
-using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMFixture;
+using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMSharedFixture;
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy2D_Small) {
     // Small 2D tensor: (8, 16) tiles = (256, 512) elements

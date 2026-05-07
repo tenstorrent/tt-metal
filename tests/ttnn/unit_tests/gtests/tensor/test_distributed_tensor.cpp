@@ -34,8 +34,8 @@ int count_unique_buffers(const Tensor& tensor) {
     return buffer_addresses.size();
 }
 
-using TensorDistributionTest = GenericMeshDeviceFixture;
-using TensorDistribution2x4Test = MeshDevice2x4Fixture;
+using TensorDistributionTest = GenericMeshDeviceSharedFixture;
+using TensorDistribution2x4Test = MeshDevice2x4SharedFixture;
 
 TEST_F(TensorDistributionTest, DistributeToDevice) {
     Tensor input_tensor = Tensor::from_vector(

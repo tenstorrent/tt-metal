@@ -118,7 +118,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
 namespace tt::tt_metal::distributed::test {
 
-using MeshEndToEnd2x4Tests = MeshDevice2x4Fixture;
+using MeshEndToEnd2x4Tests = MeshDevice2x4SharedFixture;
 using ::testing::Each;
 using ::testing::Eq;
 using ::testing::Pointwise;

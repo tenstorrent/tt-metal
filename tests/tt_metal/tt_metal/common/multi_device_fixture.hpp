@@ -390,6 +390,16 @@ struct has_always_recover : std::false_type {};
 template <typename T>
 struct has_always_recover<T, std::void_t<decltype(T::always_recover())>> : std::true_type {};
 
+// Type trait to detect Traits::auto_enable_fabric() static method.  When defined on a Traits
+// type and returning true, the fixture is told that the runtime may auto-enable fabric (e.g.
+// T3K ETH dispatch flips FABRIC_1D on under the hood) even when Traits::config().fabric_config
+// is DISABLED.  When undefined or false, the fixture can compile-time short-circuit fabric
+// telemetry/drain entirely on DISABLED traits.
+template <typename T, typename = void>
+struct has_auto_enable_fabric : std::false_type {};
+template <typename T>
+struct has_auto_enable_fabric<T, std::void_t<decltype(T::auto_enable_fabric())>> : std::true_type {};
+
 // Snapshot of per-device, per-channel tx/rx heartbeats for stall detection (Mitigation 4).
 struct FabricHeartbeatSnapshot {
     // Key: device chip ID.  Value: vector of {tx_heartbeat, rx_heartbeat} per erisc channel.
@@ -400,10 +410,29 @@ struct FabricHeartbeatSnapshot {
 // Returns true if all routers are healthy; false if any router is in a non-Active state.
 // EDMStatus readback (Mitigation 2) requires FabricBuilderContext which is not accessible from
 // test code (internal header, not in public API).  Fall back to telemetry-only check.
+//
+// Performance short-circuits (no coverage loss):
+//   * If the runtime fabric config is DISABLED, the entire telemetry walk is skipped — there
+//     are no routers to check.
+//   * If a `before_snapshot` is provided AND the heartbeat counters did not advance vs the
+//     snapshot for any device, the test did not generate any router traffic.  The full erisc
+//     state walk is skipped for that device — a router that hasn't moved cannot have gone
+//     unhealthy in a way the test would have noticed.  Devices whose heartbeats DID advance
+//     still get the full walk so we never miss a real failure.
 inline bool check_fabric_routers_healthy(
-    const std::shared_ptr<::tt::tt_metal::distributed::MeshDevice>& mesh) {
+    const std::shared_ptr<::tt::tt_metal::distributed::MeshDevice>& mesh,
+    const FabricHeartbeatSnapshot* before_snapshot = nullptr) {
     if (!mesh) {
         return true;  // No mesh — nothing to check.
+    }
+    // Runtime short-circuit: when fabric is genuinely disabled there is no router state
+    // worth reading.  GetFabricConfig() is cheap (single static read in tt-fabric).
+    try {
+        if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::DISABLED) {
+            return true;
+        }
+    } catch (const std::exception&) {
+        // Fall through to the full check on error — better safe than sorry.
     }
     try {
         bool any_channel_checked = false;
@@ -411,6 +440,40 @@ inline bool check_fabric_routers_healthy(
         for (const auto chip_id : device_ids) {
             auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(chip_id);
             auto samples = tt::tt_fabric::read_fabric_telemetry(fabric_node_id);
+
+            // Heartbeat-delta short-circuit: if a SetUp snapshot is available AND this device's
+            // aggregate heartbeats did not advance, the test did not generate any router
+            // traffic.  Skip the per-erisc state walk for this device (a router that has not
+            // been used cannot have gone unhealthy in a way that affected the test).
+            bool skip_state_walk = false;
+            if (before_snapshot != nullptr) {
+                auto before_it = before_snapshot->snapshots.find(chip_id);
+                if (before_it != before_snapshot->snapshots.end()) {
+                    uint64_t after_tx_total = 0, after_rx_total = 0;
+                    for (const auto& sample : samples) {
+                        if (!sample.snapshot.dynamic_info.has_value()) {
+                            continue;
+                        }
+                        for (const auto& erisc : sample.snapshot.dynamic_info->erisc) {
+                            after_tx_total += erisc.tx_heartbeat;
+                            after_rx_total += erisc.rx_heartbeat;
+                        }
+                    }
+                    uint64_t before_tx_total = 0, before_rx_total = 0;
+                    for (const auto& [tx, rx] : before_it->second) {
+                        before_tx_total += tx;
+                        before_rx_total += rx;
+                    }
+                    if (after_tx_total == before_tx_total && after_rx_total == before_rx_total) {
+                        any_channel_checked = true;  // We did look at telemetry, just briefly.
+                        skip_state_walk = true;
+                    }
+                }
+            }
+            if (skip_state_walk) {
+                continue;
+            }
+
             for (const auto& sample : samples) {
                 if (!sample.snapshot.dynamic_info.has_value()) {
                     continue;  // No dynamic info — telemetry not enabled on this channel.
@@ -693,6 +756,10 @@ protected:
     inline static bool devices_valid_ = false;
     inline static bool needs_recovery_ = false;
     inline static fabric_health_detail::FabricHeartbeatSnapshot fabric_heartbeat_before_;
+    // Cached runtime fabric config (captured once in SetUpTestSuite after open_shared_mesh).
+    // Avoids paying the cost of tt_fabric::GetFabricConfig() once per test in fabric_enabled().
+    inline static tt_fabric::FabricConfig cached_runtime_fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    inline static bool runtime_fabric_config_cached_ = false;
 
     // Mitigation 3: Detect Traits::always_recover() if it exists, default to false.
     static constexpr bool traits_always_recover() {
@@ -703,24 +770,47 @@ protected:
         }
     }
 
-    // Returns true if fabric was explicitly requested by the trait config, OR if the runtime
-    // auto-enabled it (e.g. T3K ETH dispatch enables FABRIC_1D even when config says DISABLED).
-    // Only queries the runtime after a device has been opened (MetalContext initialized).
+    // Detect Traits::auto_enable_fabric() if it exists, default to false.  When false (and the
+    // trait's compile-time fabric_config is DISABLED) the fixture compile-time skips the
+    // telemetry/drain block entirely.
+    static constexpr bool traits_auto_enable_fabric() {
+        if constexpr (fabric_health_detail::has_auto_enable_fabric<Traits>::value) {
+            return Traits::auto_enable_fabric();
+        } else {
+            return false;
+        }
+    }
+
+    // Returns true if fabric was explicitly requested by the trait config, OR if the trait
+    // opts in to runtime auto-enable detection AND the cached runtime config says fabric is
+    // up.  This is the cheap per-test path: when the trait declares DISABLED at compile time
+    // and does not opt in to auto-enable detection, we skip the runtime config read entirely.
     static bool fabric_enabled() {
         if (Traits::config().fabric_config != tt_fabric::FabricConfig::DISABLED) {
             return true;
         }
-        if (!shared_mesh_) {
+        if constexpr (!fabric_health_detail::has_auto_enable_fabric<Traits>::value) {
+            // Compile-time short-circuit: trait has not opted in to auto-enable detection.
             return false;
+        } else {
+            if (!Traits::auto_enable_fabric()) {
+                return false;
+            }
+            if (!runtime_fabric_config_cached_) {
+                return false;  // No suite open yet.
+            }
+            return cached_runtime_fabric_config_ != tt_fabric::FabricConfig::DISABLED;
         }
-        // Mitigation — runtime detection: T3K auto-enables FABRIC_1D for ETH dispatch.
-        // Read the actual running config so telemetry health checks fire even for DISABLED-config
-        // fixtures that happen to be running on a fabric-capable machine.
+    }
+
+    // Cache tt_fabric::GetFabricConfig() so per-test fabric_enabled() is a single static read.
+    static void refresh_cached_runtime_fabric_config() {
         try {
-            return tt_fabric::GetFabricConfig() != tt_fabric::FabricConfig::DISABLED;
-        } catch (const std::exception& e) {
-            return false;
+            cached_runtime_fabric_config_ = tt_fabric::GetFabricConfig();
+        } catch (const std::exception&) {
+            cached_runtime_fabric_config_ = tt_fabric::FabricConfig::DISABLED;
         }
+        runtime_fabric_config_cached_ = true;
     }
 
     // Close the previous mesh (safely, even if close() throws on dead hardware), then open fresh.
@@ -741,6 +831,9 @@ protected:
         shared_mesh_ = mesh_device_shared_detail::mesh_fixture_open(cfg);
         devices_valid_ = static_cast<bool>(shared_mesh_);
         needs_recovery_ = false;
+        // Cache the runtime fabric config now that the mesh (and therefore MetalContext +
+        // tt-fabric) is initialised.  Subsequent fabric_enabled() calls use this cached value.
+        refresh_cached_runtime_fabric_config();
     }
 
     static void SetUpTestSuite() {
@@ -825,17 +918,22 @@ protected:
     }
 
     void TearDown() override {
-        // Mitigation 3: always_recover() trait override.
+        // Mitigation 3: always_recover() trait override.  We will recover unconditionally
+        // before the next test, so skip the entire telemetry/drain block — its only purpose
+        // is to decide whether to recover, and the answer is already yes.
         if (HasFailure() || traits_always_recover()) {
             needs_recovery_ = true;
             return;
         }
 
         // Mitigations 1+2: Telemetry-based fabric router health check.
-        // fabric_enabled() now includes runtime detection so this also fires for fixtures
-        // whose trait config says DISABLED but whose device auto-enabled fabric (T3K).
+        // fabric_enabled() consults the cached runtime config (refreshed in open_shared_mesh)
+        // so per-test cost is a single static read on DISABLED traits without auto-enable.
+        // The check itself receives the SetUp heartbeat snapshot so devices that did no
+        // fabric work this test skip the per-erisc state walk (still a per-test check, but
+        // a much cheaper one for the dominant idle-fabric case).
         if (fabric_enabled() && shared_mesh_ && !needs_recovery_) {
-            if (!fabric_health_detail::check_fabric_routers_healthy(shared_mesh_)) {
+            if (!fabric_health_detail::check_fabric_routers_healthy(shared_mesh_, &fabric_heartbeat_before_)) {
                 // Mitigation 5: attempt a lightweight PAUSE/DRAIN/RUN cycle before falling
                 // back to a full mesh re-open.  This avoids the erisc-core degradation that
                 // repeated SetFabricConfig reinit cycles cause on T3K.
@@ -847,8 +945,10 @@ protected:
                     needs_recovery_ = true;
                 }
                 // Whether drain succeeded or not, re-check health.  If drain fixed it we
-                // carry on; if not, needs_recovery_ is already set.
-                if (!needs_recovery_ && !fabric_health_detail::check_fabric_routers_healthy(shared_mesh_)) {
+                // carry on; if not, needs_recovery_ is already set.  Pass nullptr for the
+                // snapshot here — after a drain the heartbeats are deliberately disturbed
+                // and the snapshot-based skip would mask a genuine failure.
+                if (!needs_recovery_ && !fabric_health_detail::check_fabric_routers_healthy(shared_mesh_, nullptr)) {
                     needs_recovery_ = true;
                 }
                 if (needs_recovery_) {
@@ -951,13 +1051,67 @@ using MeshDevice2x4Fabric2DUDMSharedFixture =
 // does not call SetFabricConfig — this is intentional so that tests that do not need fabric
 // can run without paying the full fabric teardown/reinit cost on every test.
 // HasFailure() in TearDown still triggers mesh re-open before the next test.
+//
+// Declares auto_enable_fabric() = true so the per-test fabric health check still fires on
+// T3K (where ETH dispatch auto-enables FABRIC_1D under the hood).  On non-T3K machines
+// the runtime config will read DISABLED and the fast-path short-circuit kicks in.
 struct GenericMeshDeviceSharedTraits {
     static MeshDeviceFixtureConfig config() {
         return MeshDeviceFixtureConfig{
             .num_cqs = 1,
         };
     }
+    static constexpr bool auto_enable_fabric() { return true; }
 };
 using GenericMeshDeviceSharedFixture = MeshDeviceConfigSharedFixture<GenericMeshDeviceSharedTraits>;
+
+// 1x2 shared mesh, 1 CQ, no fabric. Replacement for per-test MeshDevice1x2Fixture.
+// Two chips on T3K do not auto-enable fabric (multi-chip ETH dispatch only kicks in for
+// the full 8-chip mesh), so we leave auto_enable_fabric() at its default of false.
+struct MeshDevice1x2SharedTraits {
+    static MeshDeviceFixtureConfig config() {
+        return MeshDeviceFixtureConfig{
+            .mesh_shape = ::tt::tt_metal::distributed::MeshShape{1, 2},
+            .num_cqs = 1,
+            .fabric_config = tt_fabric::FabricConfig::DISABLED,
+        };
+    }
+};
+using MeshDevice1x2SharedFixture = MeshDeviceConfigSharedFixture<MeshDevice1x2SharedTraits>;
+
+// 2x4 shared mesh, 1 CQ, no fabric. Replacement for per-test MeshDevice2x4Fixture in
+// suites that do not require fabric and do not mutate persistent device state across tests.
+// On T3K the runtime auto-enables FABRIC_1D for ETH dispatch, so opt in to detection.
+struct MeshDevice2x4SharedTraits {
+    static MeshDeviceFixtureConfig config() {
+        return MeshDeviceFixtureConfig{
+            .mesh_shape = ::tt::tt_metal::distributed::MeshShape{2, 4},
+            .num_cqs = 1,
+            .fabric_config = tt_fabric::FabricConfig::DISABLED,
+        };
+    }
+    static constexpr bool auto_enable_fabric() { return true; }
+};
+using MeshDevice2x4SharedFixture = MeshDeviceConfigSharedFixture<MeshDevice2x4SharedTraits>;
+
+// 4x8 shared mesh, 1 CQ, no fabric. Replacement for per-test MeshDevice4x8Fixture used by
+// Galaxy distributed tests.
+//
+// Recovery strategy: standard `HasFailure()`-driven recovery (inherited from
+// MeshDeviceConfigSharedFixture). If Galaxy stability requires it, override with
+// `static constexpr bool always_recover() { return true; }` to force unconditional
+// re-open before every test. We start without that override and revisit if the
+// recovery rate proves too low to keep the mesh healthy across a full suite.
+struct MeshDevice4x8SharedTraits {
+    static MeshDeviceFixtureConfig config() {
+        return MeshDeviceFixtureConfig{
+            .mesh_shape = ::tt::tt_metal::distributed::MeshShape{4, 8},
+            .num_cqs = 1,
+            .fabric_config = tt_fabric::FabricConfig::DISABLED,
+        };
+    }
+    static constexpr bool auto_enable_fabric() { return true; }
+};
+using MeshDevice4x8SharedFixture = MeshDeviceConfigSharedFixture<MeshDevice4x8SharedTraits>;
 
 }  // namespace tt::tt_metal

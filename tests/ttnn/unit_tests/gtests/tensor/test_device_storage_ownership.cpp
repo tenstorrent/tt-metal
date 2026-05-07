@@ -21,12 +21,12 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::DeviceStorage;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
-using tt::tt_metal::MeshDevice1x2Fixture;
+using tt::tt_metal::MeshDevice1x2SharedFixture;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
 
-using DeviceStorageOwnershipTest = MeshDevice1x2Fixture;
+using DeviceStorageOwnershipTest = MeshDevice1x2SharedFixture;
 
 TensorSpec make_test_tensor_spec() {
     return TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));

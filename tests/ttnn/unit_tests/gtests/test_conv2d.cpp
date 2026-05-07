@@ -41,6 +41,17 @@ struct Conv2DParam {
 // fails (e.g. ETH/fabric hardware is degraded on T3K), setup_failed_ is set and
 // every test in the suite is skipped rather than propagating the failure into
 // per-test device creates that corrupt MetalContext.
+//
+// Why this fixture is NOT inherited from UnitMeshCQSingleCardSharedFixture
+// (which would let conv2d share the same single device with the rest of the
+// unit_tests_ttnn binary): conv2d requires `l1_small_size = 16384` at device
+// open time, but the shared single-card fixture currently uses
+// `DEFAULT_L1_SMALL_SIZE` (which is 0 — see hostdevcommon/common_values.hpp).
+// Bumping the shared fixture's L1 small reservation to 16384 to enable sharing
+// is a wider change with cross-suite implications and is tracked separately;
+// for now, conv2d keeps its own static suite-scoped device.  Within the
+// Conv2D suite itself the device IS shared across all parametrized cases,
+// which is the dominant per-test win.
 class Conv2DFixture : public ::testing::Test, public testing::WithParamInterface<Conv2DParam> {
 public:
     inline static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> fixture_device_;

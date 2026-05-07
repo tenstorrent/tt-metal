@@ -40,7 +40,7 @@
 namespace tt::tt_metal {
 namespace {
 
-using MultiCommandQueueSingleDeviceFixture = ::ttnn::MultiCommandQueueSingleDeviceFixture;
+using MultiCommandQueueSingleDeviceFixture = ::ttnn::TTNNUnitMesh2CQSingleCardSharedFixture;
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     auto* device = this->device_;

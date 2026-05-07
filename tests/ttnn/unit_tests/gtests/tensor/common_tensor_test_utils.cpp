@@ -63,9 +63,9 @@ void test_tensor_on_device(
     tensor.deallocate();
 }
 
-void test_tensor_on_device(const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout) {
-    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
-    test_tensor_on_device(input_shape, layout, device.get());
-}
+// The no-device overload was removed: it implicitly called MeshDevice::create_unit_mesh(0)
+// per call, opening and closing a fresh device for every parametrized case, which defeats
+// the suite-shared device pattern.  Callers must now derive their fixture from a *Shared
+// fixture (e.g. TTNNUnitMeshCQSharedFixture) and pass `device_` explicitly.
 
 }  // namespace test_utils

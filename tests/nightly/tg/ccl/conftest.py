@@ -2,17 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-Session-scoped ``mesh_device`` for single-host CCL.
+Session-scoped ``mesh_device`` for TG (Galaxy) CCL nightly.
 
 Mirrors tests/nightly/t3000/ccl/conftest.py: a single mesh is opened
 once per (mesh_shape, device_params) configuration and reused across
 adjacent tests that share that config.  Configs change → mesh is closed
 and reopened.
 
-Scope: applies to tests/ttnn/unit_tests/operations/ccl/ and any non-BH
-subdirectory.  The blackhole_CI/ subtrees override this conftest with
-their own per-directory conftests because their tests consume
-``bh_1d_mesh_device`` / ``bh_2d_mesh_device`` rather than ``mesh_device``.
+Applies to tests/nightly/tg/ccl/ and the moe/ subdirectory (pytest
+parent-conftest semantics).  All tests in this tree consume the
+``mesh_device`` fixture.
 """
 import os
 import sys
@@ -21,7 +20,7 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(
-    os.environ.get("TT_METAL_HOME") or os.environ.get("TT_METAL_ROOT") or Path(__file__).resolve().parents[5]
+    os.environ.get("TT_METAL_HOME") or os.environ.get("TT_METAL_ROOT") or Path(__file__).resolve().parents[4]
 ).resolve()
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -40,7 +39,7 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def _mesh_device_manager():
-    mgr = ParamKeyedMeshDeviceManager(label="ccl_single_host")
+    mgr = ParamKeyedMeshDeviceManager(label="tg_ccl")
     yield mgr
     mgr.close()
 

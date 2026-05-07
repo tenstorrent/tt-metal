@@ -30,7 +30,7 @@ using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::StorageType;
 using ::tt::tt_metal::TensorMemoryLayout;
 
-using MultiDeviceTensorCreationTest = GenericMeshDeviceFixture;
+using MultiDeviceTensorCreationTest = GenericMeshDeviceSharedFixture;
 
 TEST_F(MultiDeviceTensorCreationTest, Empty) {
     MeshDevice* mesh_device = this->mesh_device_.get();

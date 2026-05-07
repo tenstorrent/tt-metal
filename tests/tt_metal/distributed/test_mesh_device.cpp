@@ -44,8 +44,8 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     });
 }
 
-using MeshDevice2x4Test = MeshDevice2x4Fixture;
-using MeshDeviceTest = GenericMeshDeviceFixture;
+using MeshDevice2x4Test = MeshDevice2x4SharedFixture;
+using MeshDeviceTest = GenericMeshDeviceSharedFixture;
 
 TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
     auto& sys = MetalContext::instance().get_system_mesh();

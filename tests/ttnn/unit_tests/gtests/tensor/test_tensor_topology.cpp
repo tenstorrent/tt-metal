@@ -19,8 +19,8 @@ using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
 using tt::tt_metal::distributed::MeshMapperConfig;
 
-using TensorTopologyTest = GenericMeshDeviceFixture;
-using TensorTopology2x4Test = MeshDevice2x4Fixture;
+using TensorTopologyTest = GenericMeshDeviceSharedFixture;
+using TensorTopology2x4Test = MeshDevice2x4SharedFixture;
 
 TEST_F(TensorTopologyTest, SingleDevice) {
     const auto tensor_spec =

@@ -179,9 +179,9 @@ void validate_sems(
     }
 }
 
-using MeshWorkloadTest2x4 = MeshDevice2x4Fixture;
-using MeshWorkloadTest4x8 = MeshDevice4x8Fixture;
-using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
+using MeshWorkloadTest2x4 = MeshDevice2x4SharedFixture;
+using MeshWorkloadTest4x8 = MeshDevice4x8SharedFixture;
+using MeshWorkloadTestSuite = GenericMeshDeviceSharedFixture;
 
 // Parameterized: runs once with either submesh (index 0 or 1) executing the program.
 class MeshWorkloadTestSuiteSubmeshFixture : public MeshWorkloadTestSuite, public ::testing::WithParamInterface<int> {};

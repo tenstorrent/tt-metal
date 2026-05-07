@@ -2,26 +2,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-Session-scoped ``mesh_device`` for single-host CCL.
+Session-scoped mesh fixtures for BH galaxy nightly CCL.
 
 Mirrors tests/nightly/t3000/ccl/conftest.py: a single mesh is opened
 once per (mesh_shape, device_params) configuration and reused across
 adjacent tests that share that config.  Configs change → mesh is closed
 and reopened.
 
-Scope: applies to tests/ttnn/unit_tests/operations/ccl/ and any non-BH
-subdirectory.  The blackhole_CI/ subtrees override this conftest with
-their own per-directory conftests because their tests consume
-``bh_1d_mesh_device`` / ``bh_2d_mesh_device`` rather than ``mesh_device``.
+Tests in this directory consume ``bh_2d_mesh_device`` (NOT the generic
+``mesh_device``).  It is overridden here to route through the shared
+session-scoped manager, following the same shape logic as the
+root-conftest fixture (``(4, 2)`` for 8 devices, ``(4, 8)`` for 32,
+else ``(n, 1)``).
 """
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 _REPO_ROOT = Path(
-    os.environ.get("TT_METAL_HOME") or os.environ.get("TT_METAL_ROOT") or Path(__file__).resolve().parents[5]
+    os.environ.get("TT_METAL_HOME") or os.environ.get("TT_METAL_ROOT") or Path(__file__).resolve().parents[8]
 ).resolve()
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -34,13 +36,28 @@ from tests.ttnn.conftest_helpers import (
 )
 
 
+_SUPPORTED_DEVICE_COUNTS = (1, 2, 4, 8, 32)
+
+
+def _bh_2d_shape(num_devices: int) -> tuple:
+    if num_devices == 8:
+        return (4, 2)
+    if num_devices == 32:
+        return (4, 8)
+    return (num_devices, 1)
+
+
+def _synthetic_request(request, shape):
+    return SimpleNamespace(param=shape, node=request.node, config=request.config)
+
+
 def pytest_configure(config):
     register_mesh_device_markers(config)
 
 
 @pytest.fixture(scope="session")
 def _mesh_device_manager():
-    mgr = ParamKeyedMeshDeviceManager(label="ccl_single_host")
+    mgr = ParamKeyedMeshDeviceManager(label="bh_galaxy_nightly")
     yield mgr
     mgr.close()
 
@@ -51,6 +68,17 @@ def mesh_device(request, silicon_arch_name, device_params, _mesh_device_manager)
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     yield _mesh_device_manager.get(device_params, request)
+
+
+@pytest.fixture(scope="function")
+def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params, _mesh_device_manager):
+    import ttnn
+
+    if ttnn.get_num_devices() not in _SUPPORTED_DEVICE_COUNTS:
+        pytest.skip()
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    shape = _bh_2d_shape(ttnn.get_num_devices())
+    yield _mesh_device_manager.get(device_params, _synthetic_request(request, shape))
 
 
 @pytest.fixture(autouse=True)

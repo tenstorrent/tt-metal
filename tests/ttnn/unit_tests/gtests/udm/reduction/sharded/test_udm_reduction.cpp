@@ -513,7 +513,7 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Large) {
 // ============================================================================
 // 2x4 Mesh Tests - Height sharded across 2 devices, width across 4 devices
 // ============================================================================
-using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMFixture;
+using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMSharedFixture;
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReduction2D_Small) {
     // Small 2D tensor: (16, 16) tiles = (512, 512) elements
