@@ -282,6 +282,10 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    /// When true, topology mapping prefers the SAT backend (same rule as TT_TOPOLOGY_SOLVER_ENGINE / Auto in
+    /// solve_topology_mapping). Set from env at RunTimeOptions construction.
+    bool topology_mapping_use_sat_engine_ = false;
+
     // Enable channel trimming resource usage capture
     bool enable_channel_trimming_capture = false;
 
@@ -681,6 +685,8 @@ public:
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_bw_telemetry() const { return enable_fabric_bw_telemetry; }
+
+    bool get_topology_mapping_use_sat_engine() const { return topology_mapping_use_sat_engine_; }
     void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
@@ -722,15 +728,23 @@ public:
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
-    // Set mock cluster descriptor from filename (prepends base path automatically)
+    // Set mock cluster descriptor from a filename.
+    // Searches the tt-metal custom mock cluster descriptors directory first
+    // (these take precedence when the same filename exists in both locations),
+    // then falls back to the UMD cluster_descriptor_examples directory.
     // NOTE: Must be called before Cluster is created (e.g., in MetalContext constructor).
-    // Path depends on UMD's cluster_descriptor_examples directory structure.
     void set_mock_cluster_desc(const std::string& filename) {
         if (filename.empty()) {
             return;
         }
-        mock_cluster_desc_path =
-            get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+        auto custom_path = std::filesystem::path(get_root_dir()) /
+                           "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors" / filename;
+        std::error_code ec;
+        mock_cluster_desc_path = std::filesystem::exists(custom_path, ec) && !ec
+                                     ? custom_path.string()
+                                     : (std::filesystem::path(get_root_dir()) /
+                                        "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename)
+                                           .string();
         // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
         // request for a fully mocked environment, so libttsim must not be used even if
         // TT_METAL_SIMULATOR is set in the environment.

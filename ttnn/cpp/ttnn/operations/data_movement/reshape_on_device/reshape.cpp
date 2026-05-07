@@ -30,15 +30,13 @@ static Tensor manual_insertion(
         logical_shape.volume(),
         input_tensor.logical_volume());
     auto cpu_tensor = input_tensor.cpu();
-    auto output =
-        Tensor(
-            cpu_tensor.host_storage(),
-            TensorSpec(
-                logical_shape,
-                TensorLayout::fromPaddedShape(
-                    DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)),
-            cpu_tensor.tensor_topology())
-            .to_layout(Layout::ROW_MAJOR);
+    auto output_spec = TensorSpec(
+        logical_shape,
+        TensorLayout::fromPaddedShape(
+            DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));
+    auto output = Tensor(tt::tt_metal::HostTensor(
+                             cpu_tensor.host_storage().buffer(), std::move(output_spec), cpu_tensor.tensor_topology()))
+                      .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
     }

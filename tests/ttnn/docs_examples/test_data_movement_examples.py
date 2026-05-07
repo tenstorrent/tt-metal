@@ -265,5 +265,5 @@ def test_sort(device):
 
 def test_narrow(device):
     input_tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
-    narrowed_tensor = ttnn.narrow(input_tensor, 0, 12, 8)
+    narrowed_tensor = ttnn.narrow(input_tensor, 0, 0, 12)
     logger.info("Narrowed Tensor Shape:", narrowed_tensor.shape)

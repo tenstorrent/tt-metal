@@ -30,7 +30,7 @@ namespace ckernel::sfpu
 sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val)
 {
     sfpi::vInt exp = sfpi::exexp(val);
-    sfpi::vInt man = sfpi::exman8(val); // get mantissa with implicit bit (man in [1; 2])
+    sfpi::vInt man = sfpi::exman(val, sfpi::MantissaMode::ImplicitOne); // get mantissa with implicit bit (man in [1; 2])
     man            = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
     return man;
 }
@@ -79,8 +79,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val)
 
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z)); // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vInt fractional_part  = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract mantissa ( = leftover part, in [0; 1])
+    sfpi::vInt exponential_part = exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias); // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));                   // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
 
@@ -226,7 +226,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat val)
         // ldexp(p, k_int) = p * 2^k
         // We do this by adding k_int to the exponent of p
         // Get the current exponent of p (without bias)
-        sfpi::vInt p_exp = sfpi::exexp_nodebias(p);
+        sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
         // Add k_int to get the new exponent
         sfpi::vInt new_exp = p_exp + k_int;
 

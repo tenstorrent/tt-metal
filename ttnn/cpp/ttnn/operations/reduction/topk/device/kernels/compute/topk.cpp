@@ -210,12 +210,12 @@ void kernel_main() {
         // Main processing loop: refactored into single loop to fit TRISC2 memory constraints
         uint32_t input_take = 2;  // First iteration processes 2 tiles, subsequent iterations process 1
         for (uint32_t count = 1; count < Wt; count++) {
-            cb_reserve_back(transposed_val_cb_index, input_take);
-            cb_reserve_back(transposed_ind_cb_index, input_take);
-
             // Transpose input tiles from WH to HW format and pack to intermediate buffers
 
             for (uint32_t i = 0; i < input_take; i++) {
+                cb_reserve_back(transposed_val_cb_index, 1);
+                cb_reserve_back(transposed_ind_cb_index, 1);
+
                 cb_wait_front(input_val_cb_index, 1);
                 cb_wait_front(input_ind_cb_index, 1);
 
@@ -240,11 +240,11 @@ void kernel_main() {
 
                 cb_pop_front(input_val_cb_index, 1);
                 cb_pop_front(input_ind_cb_index, 1);
-            }
 
-            // Store transposed tiles for insertion sort processing
-            cb_push_back(transposed_val_cb_index, input_take);
-            cb_push_back(transposed_ind_cb_index, input_take);
+                // Store each transposed tile separately so a push can wrap at the CB boundary.
+                cb_push_back(transposed_val_cb_index, 1);
+                cb_push_back(transposed_ind_cb_index, 1);
+            }
 
             // Insertion sort into result preparation buffer
             // Process each output tile position for insertion sort
@@ -257,18 +257,24 @@ void kernel_main() {
                 uint32_t cb2 = transposed_val_cb_index;   // Destination buffer for values
                 uint32_t cb3 = transposed_ind_cb_index;   // Destination buffer for indices
                 uint32_t in_cb_offset = incr;             // Input buffer offset
+                bool first_sort_from_transposed = false;
 
                 // CASE A: FIRST SORT - Process initial two tiles
                 if (ktiles_saved == 0) {
                     incr = output_tiles;             // Jump to next buffer half
-                    transposed_offset = 1;           // Use second transposed tile
+                    transposed_offset = 0;           // The second transposed tile becomes front after popping the first
                     cb0 = transposed_val_cb_index;   // Source: transposed values
                     cb1 = transposed_ind_cb_index;   // Source: transposed indices
-                    cb2 = result_prep_val_cb_index;  // Dest: result prep values
-                    cb3 = result_prep_ind_cb_index;  // Dest: result prep indices
-                    ktiles_saved += 2;               // Mark 2 tiles as processed
+                    if constexpr (output_tiles > 1) {
+                        cb2 = result_prep_val_cb_index;  // Dest: result prep values
+                        cb3 = result_prep_ind_cb_index;  // Dest: result prep indices
+                        ktiles_saved += 2;               // Mark both sorted tiles as processed
+                    } else {
+                        ktiles_saved = 1;  // Keep only the top tile; discard the bottom tile after this iteration.
+                    }
                     index = output_tiles;            // Exit loop after this iteration
                     in_cb_offset = input_take;       // Use both input tiles
+                    first_sort_from_transposed = true;
 
                     // CASE B: GROWING PHASE - Buffer not yet full, insert at next position
                 } else if ((index >= (ktiles_saved - 1)) && (ktiles_saved < output_tiles)) {
@@ -307,6 +313,13 @@ void kernel_main() {
                 copy_tile_to_dst_init_short_with_dt(cb0, cb1);
                 copy_tile(cb1, 0, DST_IND);
 
+                if (first_sort_from_transposed) {
+                    // Avoid indexed reads across the CB wrap boundary: once tile 0 is in DST,
+                    // pop it so the second staged tile can be read as tile 0.
+                    cb_pop_front(transposed_val_cb_index, 1);
+                    cb_pop_front(transposed_ind_cb_index, 1);
+                }
+
                 // Load new input values into dest reg 1
                 copy_tile_to_dst_init_short_with_dt(transposed_ind_cb_index, transposed_val_cb_index);
                 copy_tile(transposed_val_cb_index, transposed_offset, 1);
@@ -331,8 +344,13 @@ void kernel_main() {
                 pack_results(result_prep_ind_cb_index, cb3, 2);  // Store corresponding indices
 
                 // Clean up source buffers
-                cb_pop_front(cb0, in_cb_offset);
-                cb_pop_front(cb1, in_cb_offset);
+                if (first_sort_from_transposed) {
+                    cb_pop_front(transposed_val_cb_index, 1);
+                    cb_pop_front(transposed_ind_cb_index, 1);
+                } else {
+                    cb_pop_front(cb0, in_cb_offset);
+                    cb_pop_front(cb1, in_cb_offset);
+                }
 
                 // Advance result prep buffer pointers
                 cb_push_back(result_prep_val_cb_index, incr);
@@ -341,7 +359,7 @@ void kernel_main() {
                 release_dst();
 
                 // Clean up transposed buffers if we consumed from them
-                if (transposed_offset == 0) {
+                if ((transposed_offset == 0) && !first_sort_from_transposed) {
                     cb_pop_front(transposed_val_cb_index, 1);
                     cb_pop_front(transposed_ind_cb_index, 1);
                 }

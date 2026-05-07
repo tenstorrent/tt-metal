@@ -530,6 +530,36 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
     }
     return names;
 }
+
+void ProgramImpl::register_tensor_parameter(const std::string& name, const TensorSpec& spec) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(name, spec);
+    TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
+}
+
+const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->tensor_parameter_layouts.size());
+        for (const auto& [name, spec] : metal2_registry_->tensor_parameter_layouts) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
 // ============================================================================
 
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {

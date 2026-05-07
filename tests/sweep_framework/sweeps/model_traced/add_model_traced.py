@@ -75,7 +75,6 @@ def run(
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     arg1=None,  # May contain scalar value from V2 traced configs
-    use_legacy=None,  # Legacy mode flag from V2 traced configs
     memory_config=None,  # Alternative memory_config parameter from V2 traced configs
     dtype=None,  # Output dtype from V2 traced configs
     *,
@@ -88,6 +87,17 @@ def run(
     scalar = kwargs.get("scalar", arg1)
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+
+    # Parse memory_config dicts from validation vectors into ttnn.MemoryConfig
+    # objects. Without this, sharded mem-configs (WIDTH_SHARDED + L1) silently
+    # degrade to DRAM_INTERLEAVED in create_tensor_on_mesh / from_torch, which
+    # causes a hash drift vs the master trace.
+    if isinstance(input_a_memory_config, dict):
+        input_a_memory_config = parse_dict_value("input_a_memory_config", input_a_memory_config)
+    if isinstance(input_b_memory_config, dict):
+        input_b_memory_config = parse_dict_value("input_b_memory_config", input_b_memory_config)
+    if isinstance(output_memory_config, dict):
+        output_memory_config = parse_dict_value("output_memory_config", output_memory_config)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
