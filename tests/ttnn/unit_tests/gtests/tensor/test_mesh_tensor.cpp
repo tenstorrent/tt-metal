@@ -6,8 +6,12 @@
 #include <gmock/gmock.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <numeric>
 #include <set>
+#include <vector>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
@@ -24,7 +28,13 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt_stl/aligned_allocator.hpp>
+
+#include "tt_metal/distributed/pinned_memory_cache.hpp"
 
 namespace ttnn::distributed::test {
 namespace {
@@ -579,6 +589,29 @@ using tt::tt_metal::MeshTensor;
 using tt::tt_metal::TensorTopology;
 namespace tensor_impl = tt::tt_metal::tensor_impl;
 
+constexpr int kPinnedMemoryTestAlignment = 64;
+constexpr size_t kPinnedWriteThresholdBytesForTest = 32 * 1024 * 1024;
+
+using AlignedUInt32Vector = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, kPinnedMemoryTestAlignment>>;
+
+HostBuffer make_aligned_host_buffer(size_t num_words, uint32_t fill) {
+    auto data = std::make_shared<AlignedUInt32Vector>(num_words, fill);
+    return HostBuffer(tt::stl::Span<uint32_t>(data->data(), data->size()), tt::tt_metal::MemoryPin(data));
+}
+
+HostTensor make_full_coverage_aligned_host_tensor(
+    const ttnn::Shape& shape, const distributed::MeshShape& mesh_shape, const std::vector<uint32_t>& shard_fills) {
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto dhb = DistributedHostBuffer::create(mesh_shape);
+    distributed::MeshCoordinateRange range(mesh_shape);
+    std::vector<distributed::MeshCoordinate> coords(range.begin(), range.end());
+    dhb.emplace_shards(coords, [&, idx = size_t{0}](const distributed::MeshCoordinate&) mutable {
+        return make_aligned_host_buffer(static_cast<size_t>(shape.volume()), shard_fills.at(idx++));
+    });
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_shape);
+    return HostTensor(std::move(dhb), spec, topology);
+}
+
 // Helper: create a HostTensor with a single shard at [0,0].
 HostTensor make_single_shard_host_tensor(const ttnn::Shape& shape, uint32_t fill) {
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -744,6 +777,149 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
     enqueue_read_tensor(cq, device_tensor, result);
 
     expect_host_tensors_eq(host_tensor, result);
+}
+
+TEST_F(MeshTensorTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries) {
+    auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+
+    const size_t shard_count = mesh_device_->shape().mesh_size();
+    if (static_cast<size_t>(pinning_params.max_pins) < shard_count) {
+        GTEST_SKIP() << "Requires enough pin slots to keep one cache entry per tensor shard";
+        return;
+    }
+
+    // 1024 * 8193 * 4 bytes per shard exceeds the 32 MiB pinned-write threshold even on a 1x1 mesh.
+    const ttnn::Shape shape{1, 1, 1024, 8193};
+    const size_t total_size_bytes = static_cast<size_t>(shape.volume()) * sizeof(uint32_t) * shard_count;
+    ASSERT_GT(total_size_bytes, kPinnedWriteThresholdBytesForTest);
+    if (pinning_params.max_total_pin_size != 0 && pinning_params.max_total_pin_size < total_size_bytes) {
+        GTEST_SKIP() << "Pinned memory budget is too small for the test tensor";
+        return;
+    }
+
+    std::vector<uint32_t> shard_fills(shard_count);
+    std::iota(shard_fills.begin(), shard_fills.end(), 1u);
+    auto host_tensor = make_full_coverage_aligned_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
+
+    const size_t entries_before = cache.num_entries();
+    enqueue_write_tensor(cq, host_tensor, device_tensor);
+    cq.finish();
+    EXPECT_EQ(cache.num_entries(), entries_before + shard_count);
+
+    const auto first_coord = *distributed::MeshCoordinateRange(mesh_device_->shape()).begin();
+    auto first_shard = host_tensor.buffer().get_shard(first_coord);
+    ASSERT_TRUE(first_shard.has_value());
+    auto first_coord_range =
+        distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(first_coord, first_coord));
+    auto first_pin = cache.try_pin(*mesh_device_, first_coord_range, *first_shard, /*map_to_noc=*/true);
+    ASSERT_TRUE(first_pin);
+    std::weak_ptr<tt::tt_metal::experimental::PinnedMemory> first_weak = first_pin;
+    first_pin.reset();
+
+    enqueue_write_tensor(cq, host_tensor, device_tensor);
+    cq.finish();
+
+    EXPECT_EQ(cache.num_entries(), entries_before + shard_count);
+    EXPECT_FALSE(first_weak.expired());
+}
+
+TEST_F(MeshTensorTest, HostTensorCopyKeepsPinnedMemoryCacheEntriesUntilLastPinRelease) {
+    auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+
+    const size_t shard_count = mesh_device_->shape().mesh_size();
+    if (static_cast<size_t>(pinning_params.max_pins) < shard_count) {
+        GTEST_SKIP() << "Requires enough pin slots to keep one cache entry per tensor shard";
+        return;
+    }
+
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills(shard_count);
+    std::iota(shard_fills.begin(), shard_fills.end(), 1u);
+
+    const size_t entries_before = cache.num_entries();
+    std::unique_ptr<HostTensor> copied_host_tensor;
+    {
+        auto host_tensor = make_full_coverage_aligned_host_tensor(shape, mesh_device_->shape(), shard_fills);
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+            auto shard = host_tensor.buffer().get_shard(coord);
+            ASSERT_TRUE(shard.has_value());
+            auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+            auto pinned = cache.try_pin(*mesh_device_, coord_range, *shard, /*map_to_noc=*/true);
+            ASSERT_TRUE(pinned);
+            pinned.reset();
+        }
+        ASSERT_EQ(cache.num_entries(), entries_before + shard_count);
+        copied_host_tensor = std::make_unique<HostTensor>(host_tensor);
+    }
+
+    EXPECT_EQ(cache.num_entries(), entries_before + shard_count);
+    copied_host_tensor.reset();
+    EXPECT_EQ(cache.num_entries(), entries_before);
+}
+
+TEST_F(MeshTensorTest, UniformCopyToHost_ReusesPinnedMemoryCacheEntries) {
+    auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+
+    const size_t shard_count = mesh_device_->shape().mesh_size();
+    if (static_cast<size_t>(pinning_params.max_pins) < shard_count) {
+        GTEST_SKIP() << "Requires enough pin slots to keep one cache entry per tensor shard";
+        return;
+    }
+
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills(shard_count);
+    std::iota(shard_fills.begin(), shard_fills.end(), 10u);
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
+    }
+    HostTensor result(std::move(result_dhb), spec, TensorTopology{});
+
+    const size_t entries_before = cache.num_entries();
+    enqueue_read_tensor(cq, device_tensor, result);
+    cq.finish();
+    EXPECT_EQ(cache.num_entries(), entries_before + shard_count);
+
+    const auto first_coord = *distributed::MeshCoordinateRange(mesh_device_->shape()).begin();
+    auto first_shard = result.buffer().get_shard(first_coord);
+    ASSERT_TRUE(first_shard.has_value());
+    auto first_coord_range =
+        distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(first_coord, first_coord));
+    auto first_pin = cache.try_pin(*mesh_device_, first_coord_range, *first_shard, /*map_to_noc=*/true);
+    ASSERT_TRUE(first_pin);
+    std::weak_ptr<tt::tt_metal::experimental::PinnedMemory> first_weak = first_pin;
+    first_pin.reset();
+
+    enqueue_read_tensor(cq, device_tensor, result);
+    cq.finish();
+
+    EXPECT_EQ(cache.num_entries(), entries_before + shard_count);
+    EXPECT_FALSE(first_weak.expired());
 }
 
 // Verifies the user-facing contract: in a HEIGHT_SHARDED tensor with one shard per core, applying
@@ -1015,6 +1191,33 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_ThrowsOnInterleavedLayout) {
     copy_to_device(host_a, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     EXPECT_ANY_THROW(ttnn::experimental::core_subset_write::copy_to_device_filtered(host_b, device_tensor, filter));
+}
+
+// ---------------------------------------------------------------------------
+//  Large write roundtrip (exceeds pinned-memory threshold)
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorTest, LargeWriteRoundtrip_PinnedMemoryPath) {
+    // 1024 * 9216 * 4 bytes = 36 MB, above the 32 MB pinned-write threshold.
+    const ttnn::Shape shape{1, 1, 1024, 9216};
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    auto dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed::MeshCoordinateRange range(mesh_device_->shape());
+    std::vector<distributed::MeshCoordinate> coords(range.begin(), range.end());
+    dhb.emplace_shards(coords, [&](const distributed::MeshCoordinate&) {
+        std::vector<uint32_t> data(shape.volume());
+        std::iota(data.begin(), data.end(), 0);
+        return HostBuffer(std::move(data));
+    });
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
+    HostTensor host_tensor(std::move(dhb), spec, topology);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
+
+    expect_host_tensors_eq(host_tensor, result);
 }
 
 }  // namespace
