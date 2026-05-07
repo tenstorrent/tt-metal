@@ -92,6 +92,7 @@ enum class SfpuType : std::uint32_t
     abs,
     fill,
     swiglu
+    where
 };
 
 enum class DstSync : std::uint8_t

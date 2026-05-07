@@ -224,28 +224,36 @@ class PackerReluType(Enum):
     Relu activation function types for packer operations.
     """
 
-    NoRelu = 0
-    ZeroRelu = 1
-    MinThresholdRelu = 2
-    MaxThresholdRelu = 3
+    NoRelu = "NO_RELU"
+    ZeroRelu = "ZERO_RELU"
+    MinThresholdRelu = "MIN_THRESHOLD_RELU"
+    MaxThresholdRelu = "MAX_THRESHOLD_RELU"
 
-    def __str__(self):
-        match self:
-            case PackerReluType.NoRelu:
-                return "NO_RELU"
-            case PackerReluType.ZeroRelu:
-                return "ZERO_RELU"
-            case PackerReluType.MinThresholdRelu:
-                return "MIN_THRESHOLD_RELU"
-            case PackerReluType.MaxThresholdRelu:
-                return "MAX_THRESHOLD_RELU"
-            case _:
-                raise ValueError(f"Unsupported PackerReluType: {self!r}")
+    @property
+    def cpp_enum_value(self):
+        return f"ReluType::{self.value}"
+
+    @property
+    def bits(self) -> int:
+        return _PACKER_RELU_BITS[self.value]
+
+    @classmethod
+    def from_bits(cls, bits: int) -> "PackerReluType":
+        return cls(_PACKER_RELU_BITS_INV[bits])
+
+
+_PACKER_RELU_BITS = {
+    "NO_RELU": 0,
+    "ZERO_RELU": 1,
+    "MIN_THRESHOLD_RELU": 2,
+    "MAX_THRESHOLD_RELU": 3,
+}
+_PACKER_RELU_BITS_INV = {v: k for k, v in _PACKER_RELU_BITS.items()}
 
 
 def pack_relu_config(mode: "PackerReluType", threshold_bits: int) -> int:
     """Pack ReLU mode (2 bits) and threshold (16 bits) into a 32-bit config word."""
-    return (mode.value & 0x3) | ((threshold_bits & 0xFFFF) << 16)
+    return (mode.bits & 0x3) | ((threshold_bits & 0xFFFF) << 16)
 
 
 class Haloize(Enum):
