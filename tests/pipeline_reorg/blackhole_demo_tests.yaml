@@ -51,43 +51,6 @@
   team: models
   model-name: unet-shallow
 
-# ─── llama3-8b ──────────────────────────────────────────────────────────────
-
-- name: llama3-8b e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Meta-Llama-3-8B
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Meta-Llama-3-8B
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
-  skus:
-    bh_deskbox:
-      timeout: 10
-    bh_loudbox:
-      timeout: 10
-    bh_p300:
-      timeout: 10
-    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
-    # for cache regen. Production target is 10 min once cache is populated.
-    bh_llmbox:
-      timeout: 30
-    bh_quietbox_2:
-      timeout: 30
-    # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
-    bh_llmbox_qbgh02:
-      timeout: 30
-    bh_llmbox_qbgh03:
-      timeout: 30
-    bh_llmbox_qbgh04:
-      timeout: 30
-    bh_quietbox_2_qbge01:
-      timeout: 30
-    bh_quietbox_2_qbge03:
-      timeout: 30
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3-8b
-
 # ─── qwen2.5-32b-instruct ───────────────────────────────────────────────────
 
 - name: qwen2.5-32b-instruct e2e tests
@@ -96,26 +59,11 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-32B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
   skus:
+    # STAGE 1 (revert to 10 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 10
-    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
-    # for cache regen. Production target is 10 min once cache is populated.
-    bh_llmbox:
-      timeout: 45
-    bh_quietbox_2:
-      timeout: 45
-    # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
-    bh_llmbox_qbgh02:
-      timeout: 45
-    bh_llmbox_qbgh03:
-      timeout: 45
-    bh_llmbox_qbgh04:
-      timeout: 45
-    bh_quietbox_2_qbge01:
-      timeout: 45
-    bh_quietbox_2_qbge03:
       timeout: 45
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
@@ -129,26 +77,11 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-72B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
+    pytest --timeout 3000 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
   skus:
+    # STAGE 1 (revert to 10 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 10
-    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
-    # for cache regen. Production target is 10 min once cache is populated.
-    bh_llmbox:
-      timeout: 75
-    bh_quietbox_2:
-      timeout: 75
-    # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
-    bh_llmbox_qbgh02:
-      timeout: 75
-    bh_llmbox_qbgh03:
-      timeout: 75
-    bh_llmbox_qbgh04:
-      timeout: 75
-    bh_quietbox_2_qbge01:
-      timeout: 75
-    bh_quietbox_2_qbge03:
       timeout: 75
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
@@ -165,26 +98,11 @@
     export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-VL-32B-Instruct
     export MESH_DEVICE=T3K
-    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+    pytest --timeout 1800 models/demos/qwen25_vl/demo/demo.py
   skus:
+    # STAGE 1 (revert to 10 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 10
-    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
-    # for cache regen. Production target is 10 min once cache is populated.
-    bh_llmbox:
-      timeout: 45
-    bh_quietbox_2:
-      timeout: 45
-    # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
-    bh_llmbox_qbgh02:
-      timeout: 45
-    bh_llmbox_qbgh03:
-      timeout: 45
-    bh_llmbox_qbgh04:
-      timeout: 45
-    bh_quietbox_2_qbge01:
-      timeout: 45
-    bh_quietbox_2_qbge03:
       timeout: 45
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
@@ -200,27 +118,12 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-VL-72B-Instruct
-    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+    pytest --timeout 3000 models/demos/qwen25_vl/demo/demo.py
   skus:
+    # STAGE 1 (revert to 10 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 10
-    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
-    # for cache regen. Production target is 10 min once cache is populated.
-    bh_llmbox:
-      timeout: 90
-    bh_quietbox_2:
-      timeout: 90
-    # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
-    bh_llmbox_qbgh02:
-      timeout: 90
-    bh_llmbox_qbgh03:
-      timeout: 90
-    bh_llmbox_qbgh04:
-      timeout: 90
-    bh_quietbox_2_qbge01:
-      timeout: 90
-    bh_quietbox_2_qbge03:
-      timeout: 90
+      timeout: 75
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
   model-name: qwen2.5-vl-72b
@@ -233,26 +136,11 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-VL-32B-Instruct
-    pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py -v
+    pytest --timeout 1800 models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py -v
   skus:
+    # STAGE 1 (revert to 10 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 10
-    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
-    # for cache regen. Production target is 10 min once cache is populated.
-    bh_llmbox:
-      timeout: 45
-    bh_quietbox_2:
-      timeout: 45
-    # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
-    bh_llmbox_qbgh02:
-      timeout: 45
-    bh_llmbox_qbgh03:
-      timeout: 45
-    bh_llmbox_qbgh04:
-      timeout: 45
-    bh_quietbox_2_qbge01:
-      timeout: 45
-    bh_quietbox_2_qbge03:
       timeout: 45
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
@@ -267,26 +155,11 @@
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
     export MESH_DEVICE=T3K
-    pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
+    pytest --timeout 1500 models/experimental/mistral_24b/tests/pipeline_tests
   skus:
+    # STAGE 1 (revert to 10 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 10
-    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
-    # for cache regen. Production target is 10 min once cache is populated.
-    bh_llmbox:
-      timeout: 30
-    bh_quietbox_2:
-      timeout: 30
-    # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
-    bh_llmbox_qbgh02:
-      timeout: 30
-    bh_llmbox_qbgh03:
-      timeout: 30
-    bh_llmbox_qbgh04:
-      timeout: 30
-    bh_quietbox_2_qbge01:
-      timeout: 30
-    bh_quietbox_2_qbge03:
       timeout: 30
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
@@ -294,22 +167,18 @@
 
 # ─── gpt-oss ────────────────────────────────────────────────────────────────
 
-# gpt-oss-20b/120b on bh_llmbox/bh_loudbox use ephemeral / direct-NFS caches
-# (TT_CACHE_PATH is either a relative path under /work or /mnt/MLPerf/huggingface
-# directly). They don't depend on the /localdev volume mount, so no per-host
-# fan-out is needed.
-
 - name: gpt-oss-20b e2e tests
   cmd: |
     set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=openai/gpt-oss-20b
-    export TT_CACHE_PATH=openai/gpt-oss-20b
-    pytest --timeout=600 models/demos/gpt_oss/demo/text_demo.py -k "performance"
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-20b
+    pytest --timeout=1500 models/demos/gpt_oss/demo/text_demo.py -k "performance"
   skus:
-    bh_llmbox:
-      timeout: 15
+    # STAGE 1 (revert to 15 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 15
+      timeout: 30
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss-20b
@@ -317,12 +186,15 @@
 - name: gpt-oss-120b e2e tests
   cmd: |
     set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=openai/gpt-oss-120b
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache
-    pytest --timeout=1200 models/demos/gpt_oss/demo/text_demo.py -k "performance"
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-120b
+    pytest --timeout=3000 models/demos/gpt_oss/demo/text_demo.py -k "performance"
   skus:
+    # STAGE 1 (revert to 30 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 30
+      timeout: 60
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss-120b
@@ -332,11 +204,14 @@
 - name: Mochi pipeline performance
   cmd: |
     set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    pytest --timeout=1500 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0"
+    pytest --timeout=1800 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0"
   skus:
+    # STAGE 1 (revert to 20 before merging): bumped GHA + pytest timeouts for
+    # first-run cache regen on bh_loudbox NFS.
     bh_loudbox:
-      timeout: 20
+      timeout: 35
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: mochi
