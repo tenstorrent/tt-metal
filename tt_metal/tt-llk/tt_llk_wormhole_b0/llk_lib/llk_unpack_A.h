@@ -216,8 +216,7 @@ inline void _llk_unpack_A_init_(
     const std::uint32_t face_r_dim                  = FACE_R_DIM,
     const std::uint32_t num_faces                   = 4,
     const std::uint32_t unpack_src_format           = 0,
-    const std::uint32_t unpack_dst_format           = 0,
-    const bool partial_face                         = true)
+    const std::uint32_t unpack_dst_format           = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
@@ -235,6 +234,7 @@ inline void _llk_unpack_A_init_(
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
+    const bool partial_face         = (face_r_dim < FACE_R_DIM);
     if constexpr ((BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) && unpack_to_dest) // ROW and SCALAR bcast will only unpack a single row
     {
         config_unpacker_x_end<UNP_SEL>(1);
