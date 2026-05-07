@@ -340,7 +340,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
     // The token instance is emitted by host codegen into kernel_bindings_generated.h,
-    // based on the information in the users's host code (ProgramSpec).
+    // based on the information in the user's host code (ProgramSpec).
     // Delegates to the legacy TensorAccessorArgs ctor.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :

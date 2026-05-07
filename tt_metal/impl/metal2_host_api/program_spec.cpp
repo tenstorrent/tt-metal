@@ -18,6 +18,7 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
@@ -1345,7 +1346,6 @@ std::vector<uint32_t> ResolveTensorParameterStaticCTAs(
 // Per-kernel resolved tensor binding data:
 //  - All the kernel's TensorBindingHandle (type is defined in kernel.hpp)
 //  - The positional CTAs to append to the kernel's (unnamed) CTAs
-// (TensorBindingHandle type is
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
@@ -1756,7 +1756,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
             kernel_spec, resolved_binding_ctas, /*base_named_crta_count=*/user_named_crtas.size());
 
-        // Create TensorBingingHandles for this kernel
+        // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
 
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to

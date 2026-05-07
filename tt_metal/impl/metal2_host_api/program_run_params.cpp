@@ -4,7 +4,6 @@
 
 #include <cstring>
 #include <limits>
-#include <string_view>
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
