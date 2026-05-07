@@ -7,6 +7,9 @@
 #include <functional>
 #include <unordered_set>
 
+#include "host_tensor_impl.hpp"
+#include "mesh_tensor_impl.hpp"
+
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
@@ -39,7 +42,7 @@ bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevi
 // ======================================================================================
 
 HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
-    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     auto& device = device_tensor.device();
 
     auto distributed_host_buffer = DistributedHostBuffer::create(device.get_view());
@@ -89,9 +92,9 @@ void enqueue_read_tensor(
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
 
-    cq.enqueue_read(mesh_buffer, host_tensor.buffer(), /*shards=*/std::nullopt, blocking);
+    cq.enqueue_read(mesh_buffer, host_tensor.impl().buffer(), /*shards=*/std::nullopt, blocking);
     host_tensor.update_tensor_topology(device_tensor.tensor_topology());
 }
 
@@ -106,7 +109,7 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    const auto& mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
 
     // Uniform H2D copy.
     cq.enqueue_write(mesh_buffer, host_tensor.buffer(), /*blocking=*/false);
@@ -131,7 +134,7 @@ void enqueue_read_tensor(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer_invariant_breaking(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.impl().raw_mesh_buffer(), blocking);
 }
 
 void enqueue_write_tensor(
@@ -144,7 +147,7 @@ void enqueue_write_tensor(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(device_tensor.mesh_buffer_invariant_breaking(), shard_data_transfers, false);
+    queue.enqueue_write_shards(device_tensor.impl().raw_mesh_buffer(), shard_data_transfers, false);
 }
 
 // ======================================================================================
@@ -208,7 +211,7 @@ void enqueue_read_tensor(
     }
 
     std::unordered_set<distributed::MeshCoordinate> shard_set(coords.begin(), coords.end());
-    cq.enqueue_read(device_tensor.mesh_buffer_invariant_breaking(), dst_distributed_host_buffer, shard_set, blocking);
+    cq.enqueue_read(device_tensor.impl().raw_mesh_buffer(), dst_distributed_host_buffer, shard_set, blocking);
 
     host_tensor = HostTensor(
         std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
@@ -248,7 +251,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         input_size_bytes,
         expected_packed_buffer_size_bytes);
 
-    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
 
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
@@ -281,7 +284,7 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
         return {range.begin(), range.end()};
     }
 
-    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     cq.enqueue_write(mesh_buffer, host_tensor.buffer(), /*blocking=*/false);
 
     // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
