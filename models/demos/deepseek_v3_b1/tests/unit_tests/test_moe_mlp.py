@@ -69,6 +69,8 @@ class RoutedExpertTensors(NamedTuple):
     sram_gate_proj_out_tensor: Any  # SRAM matmul output, sharded on 64 cores (read for PCC)
     sram_up_proj_weights: Any  # T L1-resident CTs (None when no SRAM placement)
     sram_up_proj_out_tensor: Any  # SRAM up_proj output, sharded on 64 cores
+    sram_down_proj_weights: Any  # T L1-resident CTs (None when no SRAM placement)
+    sram_down_proj_out_tensor: Any  # SRAM down_proj accumulated output, sharded on 112 cores
     sram_ag_dummy_tensor: Any  # SRAM gate gather dst, sender-resident
     sram_bg_dummy_tensor: Any  # SRAM up gather dst, sender-resident
     sram_mcast_src_dummy_tensor: Any  # SRAM extended GatedReduce output, sender-resident
@@ -524,6 +526,8 @@ def create_routed_expert_tensors(
     sram_gate_proj_out_tensor = None
     sram_up_proj_weights = None
     sram_up_proj_out_tensor = None
+    sram_down_proj_weights = None
+    sram_down_proj_out_tensor = None
     sram_ag_dummy_tensor = None
     sram_bg_dummy_tensor = None
     sram_mcast_src_dummy_tensor = None
@@ -576,6 +580,55 @@ def create_routed_expert_tensors(
             sram_k_per_core=(_RE.K // 32) // 8,
             sram_n_parallel=8,
             sram_per_core_N=_sram_per_core_N,
+        )
+
+        # SRAM down_proj weights: per-expert (K=GATE_PROJ_N=2048, N=K=7168). Mesh
+        # layout mirrors shared_down: shard dim 0 by mesh_rows (K_per_dev = 256),
+        # full N replicated per device. Width-shard 64 N elements per core across
+        # 112 mcast receiver cores.
+        from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp as _SEO_dn  # noqa
+
+        K_per_dev_down = _RE.GATE_PROJ_N // moe_tp  # 256
+        full_torch_per_device_down = {
+            eid: [
+                down_proj_weights_dict[eid]
+                .reshape(_RE.GATE_PROJ_N, _RE.K)[d * K_per_dev_down : (d + 1) * K_per_dev_down, :]
+                .contiguous()
+                for d in range(moe_tp)
+            ]
+            for eid in sram_expert_ids
+        }
+        sram_down_core_grid = DownProj.build_matmul_core_grid()  # 112 cores
+        _sram_down_per_core_N = (_RE.K // 32) // DownProj.NUM_MATMUL_CORES  # 7168 / 32 / 112 = 2 tiles
+        sram_down_proj_weights = build_sram_expert_weights(
+            sram_expert_ids=sram_expert_ids,
+            full_torch_weights_per_device=full_torch_per_device_down,
+            assigner=CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"]),
+            mesh_device=device,
+            core_grid=sram_down_core_grid,
+            sram_k_per_core=K_per_dev_down // 32,  # 8 tiles
+            sram_n_parallel=DownProj.NUM_MATMUL_CORES,  # all 112 cores in same K-slice
+            sram_per_core_N=_sram_down_per_core_N,  # 2 tiles
+        )
+
+        # SRAM down_proj output tensor — WIDTH_SHARDED on the 112 mcast receiver
+        # cores, per-core holds out_w=2 1×32 bf16 tiles (= 64 elements per core,
+        # mirrors shared_down_matmul_out's per-core layout). Replicated across mesh.
+        _sram_down_out_per_core = _sram_down_per_core_N * 32  # 64 elements
+        _sram_down_out_total = _sram_down_out_per_core * DownProj.NUM_MATMUL_CORES  # 7168
+        sram_down_out_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(sram_down_core_grid, [1, _sram_down_out_per_core], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        sram_down_proj_out_tensor = ttnn.from_torch(
+            torch.zeros((1, _sram_down_out_total), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sram_down_out_mem,
+            tile=ttnn.Tile([1, 32]),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
         # SRAM gate_proj output tensor — WIDTH_SHARDED on 64 cores, per core
@@ -693,6 +746,8 @@ def create_routed_expert_tensors(
         sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
         sram_up_proj_weights=sram_up_proj_weights,
         sram_up_proj_out_tensor=sram_up_proj_out_tensor,
+        sram_down_proj_weights=sram_down_proj_weights,
+        sram_down_proj_out_tensor=sram_down_proj_out_tensor,
         sram_ag_dummy_tensor=sram_ag_dummy_tensor,
         sram_bg_dummy_tensor=sram_bg_dummy_tensor,
         sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
@@ -1290,6 +1345,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         sram_gate_proj_out_tensor=r.sram_gate_proj_out_tensor,
         sram_up_proj_weights_tensor=r.sram_up_proj_weights,
         sram_up_proj_out_tensor=r.sram_up_proj_out_tensor,
+        sram_down_proj_weights_tensor=r.sram_down_proj_weights,
+        sram_down_proj_out_tensor=r.sram_down_proj_out_tensor,
         sram_ag_dummy_tensor=r.sram_ag_dummy_tensor,
         sram_bg_dummy_tensor=r.sram_bg_dummy_tensor,
         sram_mcast_src_dummy_tensor=r.sram_mcast_src_dummy_tensor,
@@ -1485,6 +1542,43 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
                 passing_gr, pcc_gr = comp_pcc(expected, gr_out.float(), 0.97)
                 logger.info(f"SRAM gated-reduce dev={dev_idx} eid={eid} slot={slot_idx} PCC: {pcc_gr}")
                 assert passing_gr, f"SRAM gated-reduce dev={dev_idx} eid={eid} slot={slot_idx} failed: {pcc_gr}"
+
+    # ── SRAM down_proj PCC ──
+    # Per-device partial output: for each SRAM-flagged TopK winner e,
+    #   silu(normed @ gate_w_d[e]) * scale[e] * (normed @ up_w_d[e]) @ down_w_d[e]
+    # where gate/up_w_d is the N-slice (d*256 : (d+1)*256) and down_w_d is the
+    # K-slice (d*256 : (d+1)*256, :, full N=7168). Sum across SRAM experts.
+    # Output is WIDTH_SHARDED on 112 cores: per-device (1, 7168) total.
+    if r.sram_down_proj_out_tensor is not None and sram_expert_ids:
+        _x_dn = r.torch_input.float()
+        _var_dn = _x_dn.pow(2).mean(-1, keepdim=True)
+        _normed_dn = ((_x_dn * torch.rsqrt(_var_dn + 1e-6)) * r.torch_rmsnorm_gamma.float()).bfloat16().float()
+        _N_per_dev_dn = RoutedExpert.GATE_PROJ_N // num_devices  # 256 (also = K_per_dev for down)
+        device_gate_scores_dn = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+        scores_top8_dn = device_gate_scores_dn[0].flatten()[:8].float()
+        for dev_idx, sram_dn_dev in enumerate(ttnn.get_device_tensors(r.sram_down_proj_out_tensor)):
+            sram_dn_torch = ttnn.to_torch(sram_dn_dev)  # shape (1, 7168) WIDTH_SHARDED
+            sram_dn_flat = sram_dn_torch.view(1, -1).float()
+            expected = torch.zeros((1, RoutedExpert.K), dtype=torch.float32)
+            for slot_idx, eid in enumerate(sram_expert_ids):
+                k_pos_arr = (tt_top8_decoded == eid).nonzero(as_tuple=True)[0]
+                if k_pos_arr.numel() == 0:
+                    continue  # eid not a TopK winner — SRAM kernel skips
+                k_pos = k_pos_arr.item()
+                scale = scores_top8_dn[k_pos].item()
+                gate_w_full = r.expert_weights_dict[eid].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
+                up_w_full = r.up_proj_weights_dict[eid].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
+                down_w_full = r.down_proj_weights_dict[eid].reshape(RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
+                gate_w = gate_w_full[:, dev_idx * _N_per_dev_dn : (dev_idx + 1) * _N_per_dev_dn].float()
+                up_w = up_w_full[:, dev_idx * _N_per_dev_dn : (dev_idx + 1) * _N_per_dev_dn].float()
+                down_w = down_w_full[dev_idx * _N_per_dev_dn : (dev_idx + 1) * _N_per_dev_dn, :].float()
+                gate_proj = (_normed_dn @ gate_w).bfloat16().float()
+                up_proj = (_normed_dn @ up_w).bfloat16().float()
+                intermed = (torch.nn.functional.silu(gate_proj) * scale * up_proj).bfloat16().float()
+                expected = expected + intermed @ down_w
+            passing_dn, pcc_dn = comp_pcc(expected, sram_dn_flat, 0.95)
+            logger.info(f"SRAM down_proj dev={dev_idx} PCC: {pcc_dn}")
+            assert passing_dn, f"SRAM down_proj dev={dev_idx} failed: {pcc_dn}"
 
     # --- Reference model comparison ---
     num_experts_in_state_dict = sum(1 for k in state_dict if ".mlp.experts." in k and "gate_proj" in k)

@@ -372,6 +372,22 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_k_per_core"),
                 get_named_compile_time_arg_val("sram_up_proj_k_offset")>;
 
+            // SRAM down_proj Matmul Expert (reader, NCRISC) — runs on the 112
+            // shared mcast receiver cores with accum_experts=1 + compact_in0=1.
+            using SramDownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ReaderCTArgs<
+                get_named_compile_time_arg_val("sram_down_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_down_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_down_proj_out_w"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_in0_num_pages"),
+                get_named_compile_time_arg_val("sram_down_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_down_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_down_proj_k_offset")>;
+
             // SRAM extended GatedReduce (NCRISC no-op).
             using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ReaderCTArgs;
             deepseek_b1_ops::GatedReduce::ReaderArgs sram_gated_reduce_args{};
@@ -541,6 +557,10 @@ void kernel_main() {
         // SRAM up_proj weights are L1-resident on the 64 shared up cores.
         if constexpr (Core::Shared::is_up_compute_core) {
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_up_proj_cb_in1"), 1);
+        }
+        // SRAM down_proj weights are L1-resident on the 112 shared mcast receiver cores.
+        if constexpr (Core::Shared::is_mcast_receiver_core) {
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_down_proj_cb_in1"), 1);
         }
     };
 #ifndef RECONFIG_MOE_CBS
@@ -736,6 +756,8 @@ void kernel_main() {
             using SramGateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
             // SRAM up_proj Matmul Expert (writer — empty, BRISC is no-op).
             using SramUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
+            // SRAM down_proj Matmul Expert (writer — empty, BRISC is no-op).
+            using SramDownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
 
             // SRAM extended GatedReduce (BRISC: per-expert scalar copy).
             using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs<
@@ -1216,6 +1238,29 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_up_proj_cb_out_sram")>;
 
+            // SRAM down_proj Matmul Expert (compute, TRISC) — accum_experts=1 +
+            // compact_in0=1 path. Reads compact mcast dst (n_sram_active face
+            // tiles back-to-back), iterates SRAM-flagged TopK winners, accumulates
+            // into a single per-core out tile (out_w=2 N-tiles).
+            using SramDownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
+                get_named_compile_time_arg_val("sram_down_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_down_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_down_proj_out_w"),
+                get_named_compile_time_arg_val("sram_down_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_down_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_base_addrs_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_meta_words_per_expert"),
+                get_named_compile_time_arg_val("sram_down_proj_in0_page_size"),
+                get_named_compile_time_arg_val("sram_down_proj_accum_experts"),
+                get_named_compile_time_arg_val("sram_down_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_down_proj_k_offset"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_out_sram"),
+                get_named_compile_time_arg_val("sram_down_proj_compact_in0")>;
+
             // SRAM extended GatedReduce (compute, sender_core only).
             // tiles_per_k = 8 K-partial faces per output face. k_num_tiles is
             // a runtime field, set to n_sram_active before the call.
@@ -1228,6 +1273,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gated_reduce_out_cb"),
                 get_named_compile_time_arg_val("sram_gated_reduce_scalar_cb"),
                 /*k_num_tiles=*/0,  // runtime: set to n_sram_active before call
+                                    // out_cb_total_pushes = num_active_experts: pad mcast_src_cb
+                                    // pushes to full size each iter so the downstream mcast +
+                                    // SRAM down matmul see constant CB advances across iters.
+                /*out_cb_total_pushes=*/get_named_compile_time_arg_val("sram_gather_num_active_experts"),
             };
 
             // Eltwise Add (compute)
@@ -1702,23 +1751,11 @@ void kernel_main() {
             }
 
             // SRAM down Mcast: sender_core's GatedReduce output → 112 shared
-            // mcast receivers, into a DEDICATED sram_down_mcast_dst_cb (separate
-            // L1 region from down_proj_mcast_dst_cb so SRAM and DRAM mcasts don't
-            // collide). data_size / num_pages overridden at runtime to compact
-            // (n_sram_active × per_expert_bytes / pages).
-#if defined(COMPILE_FOR_BRISC)
-            {
-                constexpr uint32_t _per_expert_bytes =
-                    get_named_compile_time_arg_val("down_proj_mcast_per_expert_bytes");
-                constexpr uint32_t _per_expert_pages =
-                    get_named_compile_time_arg_val("down_proj_mcast_per_expert_pages");
-                auto& s = moe.routed.sram_down_mcast_args.sender;
-                auto& r = moe.routed.sram_down_mcast_args.receiver;
-                s.data_size_bytes = n_sram_active * _per_expert_bytes;
-                s.src_num_pages = n_sram_active;
-                r.dst_num_pages = n_sram_active * _per_expert_pages;
-            }
-#endif
+            // mcast receivers, into a DEDICATED sram_down_mcast_dst_cb. CT
+            // defaults are full size (num_active × face = 4096 B; receiver
+            // pushes 64 1×32 pages). GR pads its mcast_src_cb pushes to
+            // num_active per iter so this constant push count keeps every
+            // CB's rd/wr ptr aligned with capacity across iters.
             {
                 DeviceZoneScopedN("SRAM_DOWN_MCAST");
                 deepseek_b1_ops::Mcast::Op<
@@ -1730,6 +1767,29 @@ void kernel_main() {
                     /*ReceiverOnBrisc=*/true>
                     sram_down_mcast;
                 sram_down_mcast(moe.routed.sram_down_mcast_args);
+            }
+
+            // SRAM down_proj on the 112 shared mcast receiver cores.
+            //   in0 = sram_down_mcast_dst_cb (n_sram_active face tiles compact).
+            //   in1 = per-core SRAM weight slab (T expert (K=8 × N=2 bfp4 tiles)).
+            //   out = sram_down_proj_out_cb (1×32 bf16, out_w=2 tiles per core).
+            // accum_experts=1 + compact_in0=1: kernel sums across SRAM-flagged
+            // TopK winners, indexing cb_in0 by sram_idx (compact) instead of
+            // exp_i (expanded — would skip past nonexistent DRAM slots).
+            // pop_in0=true: drain mcast dst CB so multi-iter starts clean.
+            // pop_index=false: index reused later by DRAM down_proj.
+            // pop_in1=false: cb_in1 is overlay-backed (per-core L1 slabs) — never popped.
+            {
+                DeviceZoneScopedN("SRAM_DOWN_PROJ");
+                deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                    Moe::Routed::SramDownProjCTArgs,
+                    Core::Shared::is_mcast_receiver_core,
+                    /*pop_in0=*/true,
+                    /*pop_in1=*/false,
+                    /*pop_index=*/false,
+                    /*pop_out=*/false>
+                    sram_down_proj;
+                sram_down_proj();
             }
         }
 #endif  // ENABLE_ROUTING

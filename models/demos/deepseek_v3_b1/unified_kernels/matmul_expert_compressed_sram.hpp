@@ -78,7 +78,8 @@ struct MatmulExpertCompressedSRAM {
         uint32_t accum_experts_ = 0,
         uint32_t sram_k_per_core_ = 0,
         uint32_t sram_k_offset_ = 0,
-        uint32_t cb_out_sram_ = 0>
+        uint32_t cb_out_sram_ = 0,
+        uint32_t compact_in0_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -96,6 +97,11 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t sram_k_per_core = sram_k_per_core_;
         static constexpr uint32_t sram_k_offset = sram_k_offset_;
         static constexpr uint32_t cb_out_sram = cb_out_sram_;
+        // compact_in0: when true, cb_in0 holds num_sram_experts × num_tiles_k tiles
+        // (compact, indexed by sram_idx) instead of num_active_experts × num_tiles_k
+        // (expanded, indexed by exp_i). Used by SRAM down_proj where the mcast
+        // dst CB only carries the SRAM-flagged TopK experts' GR outputs.
+        static constexpr bool compact_in0 = compact_in0_ != 0;
     };
 
     struct WriterCTArgs {};
@@ -154,6 +160,12 @@ struct MatmulExpertCompressedSRAM {
 
             reconfig_data_format<false, true>(cb_in1, cb_in0);
             pack_reconfig_data_format<true>(cb_out);
+            // cb_in0 metadata always advances by the full num_active_experts ×
+            // num_tiles_k pages per iter (producer pads if data is compact). This
+            // keeps rd/wr ptrs aligned with the CB capacity across iters — any
+            // partial advance would drift the wraparound point and corrupt next
+            // iter's reads. compact_in0 only changes which OFFSET we read from
+            // within that fixed-size window.
             if constexpr (CTArgs::accum_experts) {
                 cb_wait_front(cb_in0, num_tiles_k * num_active_experts);
             } else {
@@ -186,11 +198,17 @@ struct MatmulExpertCompressedSRAM {
                         uint32_t slot = expert_slot(raw_idx);
                         uint32_t expert_base = sram_base_addrs[slot];
                         uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base + slot * meta_words_per_expert);
+                        // compact_in0=1: cb_in0 metadata is full-size (num_active_experts ×
+                        // num_tiles_k pages, padded by the producer) but the actual data is
+                        // packed compactly at offsets 0..num_sram_experts-1. So index by
+                        // the running sram_idx (compact) instead of exp_i (TopK slot, which
+                        // has DRAM gaps).
+                        const uint32_t in0_slot_idx = CTArgs::compact_in0 ? sram_idx : exp_i;
 
                         UNPACK(({
                             unified_kernels::override_cb_rd_ptr(cb_in1, expert_base);
                             unified_kernels::override_cb_rd_ptr(
-                                cb_in0, in0_base + (k_offset + exp_i * num_tiles_k) * in0_page_size);
+                                cb_in0, in0_base + (k_offset + in0_slot_idx * num_tiles_k) * in0_page_size);
                         }));
 
                         if (++sram_idx < num_sram_experts) {

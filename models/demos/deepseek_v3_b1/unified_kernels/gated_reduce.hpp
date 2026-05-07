@@ -73,6 +73,13 @@ struct GatedReduce {
         uint32_t out_cb;       // output CB (1 tile per iteration)
         uint32_t scalar_cb;    // SRAM scale CB (1 tile per iter, bf16 at [0,0]); 0 = scale disabled
         uint32_t k_num_tiles;  // outer loop count (1 for shared, n_sram_active for SRAM)
+        // Total expected pushes to out_cb per call. After the K loop pushes
+        // k_num_tiles real tiles, we pad up to out_cb_total_pushes with empty
+        // metadata pushes so out_cb's wr_ptr always advances by the same fixed
+        // amount per iter — required for downstream consumers (mcast / matmul)
+        // to keep their rd/wr ptrs aligned across iters. Set to k_num_tiles
+        // when no padding is needed (shared path).
+        uint32_t out_cb_total_pushes;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -190,6 +197,17 @@ struct GatedReduce {
 
                 cb_pop_front(args.intermed_cb, 2);
                 cb_push_back(args.out_cb, 1);
+            }
+
+            // Pad out_cb pushes to a fixed per-iter count so the downstream
+            // mcast / matmul see a constant push size every iteration (keeps
+            // rd/wr ptrs aligned with CB capacity, avoids drift across iters).
+            // No-op when out_cb_total_pushes == k_num_tiles (shared path).
+            const uint32_t padding =
+                (args.out_cb_total_pushes > k_num_tiles) ? (args.out_cb_total_pushes - k_num_tiles) : 0;
+            if (padding > 0) {
+                cb_reserve_back(args.out_cb, padding);
+                cb_push_back(args.out_cb, padding);
             }
 #endif
         }
