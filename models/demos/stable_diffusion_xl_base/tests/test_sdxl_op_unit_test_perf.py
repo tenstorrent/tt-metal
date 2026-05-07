@@ -283,7 +283,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1042330  # Measured: 1.04ms for Conv2D SDXL block sharded
+    expected_duration_ns = 1025369  # Measured: ~1.03ms for Conv2D SDXL block sharded (updated after PR #43570 firmware semaphore change)
 
     # Log the performance result
     print(
