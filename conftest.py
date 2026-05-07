@@ -8,6 +8,11 @@ import torch
 import random
 import os
 import numpy as np
+
+# Nanobind prints noisy "leaked types/functions" at interpreter exit when ttnn is imported
+# but the full device/session teardown path did not run (common in pytest). The ttnn module
+# reads this before enabling leak warnings. Use TTNN_SUPPRESS_NANOBIND_LEAK_WARNINGS=0 to keep them.
+os.environ.setdefault("TTNN_SUPPRESS_NANOBIND_LEAK_WARNINGS", "1")
 from functools import partial
 from operator import contains, eq, getitem
 from pathlib import Path

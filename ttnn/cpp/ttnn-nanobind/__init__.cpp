@@ -5,6 +5,7 @@
 #include "ttnn-nanobind/operations/__init__.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 
 #include <nanobind/nanobind.h>
 
@@ -79,10 +80,24 @@
 
 namespace nb = nanobind;
 
+namespace {
+
+// When TTNN_SUPPRESS_NANOBIND_LEAK_WARNINGS=1, disable nanobind's process-exit leak report.
+// Those reports are often false positives (interpreter teardown order, static bindings).
+bool ttnn_nanobind_leak_warnings_enabled() {
+    const char* suppress = std::getenv("TTNN_SUPPRESS_NANOBIND_LEAK_WARNINGS");
+    if (suppress != nullptr && suppress[0] == '1' && suppress[1] == '\0') {
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 namespace ttnn::operations {
 
 void py_module(nb::module_& mod) {
-    nb::set_leak_warnings(true);
+    nb::set_leak_warnings(ttnn_nanobind_leak_warnings_enabled());
 
     auto m_core = mod.def_submodule("core", "core operations");
     core::py_module_types(m_core);

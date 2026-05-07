@@ -1,0 +1,5 @@
+# Mistral Small 4 / Mistral4 modeling lives in Transformers 5.5+ (see also models/demos/gemma4).
+# Install with the tt-metal venv interpreter (plain `pip` may hit the system Python and PEP 668):
+#   cd /path/to/tt-metal
+#   ./python_env/bin/python3 -m pip install -r models/demos/mistral_small_4_119B/requirements.txt
+transformers==5.5.0
