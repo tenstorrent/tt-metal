@@ -107,11 +107,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
-    // Get the tensor binding handles from the settings callback.
-    // Unlike DFB/semaphore handles (sourced from unordered_map and sorted above), tensor binding
-    // handles are sourced from a std::vector populated in user-specified order, so iteration order
-    // is already deterministic. No sort needed. Kernel::compute_hash hashes them in the same
-    // order; the two must stay in lockstep.
+    // Get the tensor binding handles from the settings callback
+    // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed
+    // (Kernel::compute_hash also hashes them in the same order; the two must stay the same.)
     struct TaEntry {
         string name;
         uint32_t cta_offset;
@@ -135,8 +133,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     //       We are starting simple and can adjust later if problems arise.
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
-    //       TensorBindings are the first accessor category to use implicit CRTAs: each binding's
-    //       per-enqueue base address rides a reserved-prefix named CRTA filled by SetProgramRunParameters
+    //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
+    //       Each binding's tensor base address is specified per-enqueue.
+    //       It rides on a reserved-prefix named CRTA filled by SetProgramRunParameters
     //       from the corresponding TensorArg. The static layout metadata (rank, shape, bank coords,
     //       etc.) still flows through CTAs, packed by the host into the kernel's positional CTA buffer.
     ostringstream content;
@@ -206,6 +205,15 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const vector<string>& rta_names = settings.get_named_runtime_args();
     const vector<string>& crta_names = settings.get_named_common_runtime_args();
 
+    // TensorBinding addresses occupy a structurally-separate, position-indexed section appended
+    // immediately after the user-named CRTAs in the kernel's CRTA buffer. We don't emit them
+    // into the `args::` namespace (they live in `ta::` via kernel_bindings_generated.h), but
+    // we need to know how many there are so the vararg helpers below skip past the binding
+    // section to land at the first user vararg.
+    uint32_t tensor_binding_count = 0;
+    settings.process_tensor_binding_handles(
+        [&tensor_binding_count](const std::string&, uint32_t, uint32_t) { ++tensor_binding_count; });
+
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
     // We sort them to ensure the file output is deterministic for the JIT build cache
@@ -240,19 +248,12 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             rta_offset += sizeof(uint32_t);
         }
         // Named CRTAs
-        // Implicit reserved-prefix CRTAs (e.g., __ta_addr_<name> for TensorBindings)
-        // co-exist in the dispatch layout but are NOT exposed in `args::` — they're surfaced
-        // through their owning binding's namespace instead (`ta::`). The offset still advances
-        // for them so dispatch and codegen stay in lockstep on the layout.
+        // The TensorBinding address section follows immediately after these slots in the CRTA
+        // buffer (see vararg-offset computation below); those slots are surfaced through
+        // `ta::` via kernel_bindings_generated.h, not here.
         uint32_t crta_offset = 0;
         for (const auto& name : crta_names) {
-            const bool is_implicit =
-                name.size() >= tt::tt_metal::kTensorAccessorAddrCrtaPrefix.size() &&
-                std::string_view(name).substr(0, tt::tt_metal::kTensorAccessorAddrCrtaPrefix.size()) ==
-                    tt::tt_metal::kTensorAccessorAddrCrtaPrefix;
-            if (!is_implicit) {
-                content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
-            }
+            content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
             crta_offset += sizeof(uint32_t);
         }
         // Named CTAs
@@ -269,8 +270,10 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
     // around get_arg_val / get_common_arg_val.
+    // CRTA-side note: the kernel's CRTA buffer holds [user-named CRTAs, TensorBinding
+    // address section, varargs]. The vararg base must skip past the binding section as well.
     const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
-    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size());
+    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size()) + tensor_binding_count;
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("

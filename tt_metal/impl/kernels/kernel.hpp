@@ -96,16 +96,15 @@ using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
-// TensorParameter name so the dispatch path can fill the implicit base-address CRTA from
-// TensorArg at enqueue time.
+// TensorParameter name so SetProgramRunParameters can fill the binding's base-address slot
+// from the corresponding TensorArg at enqueue time.
 struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
-    uint32_t addr_crta_offset;  // byte offset of the implicit base-address CRTA within the kernel's CRTA section
+    uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+                                // (binding addresses live in their own section appended after user-named CRTAs)
 };
-
-// kTensorAccessorAddrCrtaPrefix is defined in jit_build_settings.hpp.
 
 class Kernel : public JitBuildSettings {
 public:

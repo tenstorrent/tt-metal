@@ -518,7 +518,8 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 // Proves that the Metal 2.0 TensorAccessor binding feature works end-to-end on real WH/BH:
 //   1. Spec → MakeProgramFromSpec resolves the binding's TensorSpec into a correct CTA payload
 //      (page size, args_config, bank coords, alignment).
-//   2. Implicit __ta_addr_<name> CRTAs are filled with MeshTensor::address() at enqueue.
+//   2. Each binding's slot in the kernel's TensorBinding address section is filled with
+//      MeshTensor::address() at enqueue.
 //   3. kernel_bindings_generated.h emits a `ta::` namespace with a working type alias + token.
 //   4. TensorAccessor(ta::name) constructs an accessor whose get_noc_addr returns
 //      addresses that NoC reads/writes actually use correctly.

@@ -2183,7 +2183,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
     // Positive baseline: a program with one TensorParameter bound to one kernel constructs
     // successfully. Exercises CollectSpecData validation, the host-side resolution helper
     // (TensorSpec → CTA payload using mesh_device.allocator() + virtual_core_from_logical_core),
-    // implicit __ta_addr_ CRTA injection, kernel ctor plumbing, and ProgramImpl registration.
+    // TensorBinding address slot assignment, kernel ctor plumbing, and ProgramImpl registration.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};

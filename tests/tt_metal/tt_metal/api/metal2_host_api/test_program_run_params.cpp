@@ -1109,24 +1109,5 @@ TEST_F(ProgramRunParamsTestGen1, TensorSpecMismatchFails) {
             "TensorArg for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
 
-TEST_F(ProgramRunParamsTestGen1, ReservedPrefixUserCRTANameFails) {
-    // User supplies a CRTA whose name starts with the reserved __ta_addr_ prefix. Even with
-    // no TensorParameters declared, the prefix is reserved for the binding machinery and must
-    // not appear in user input. Validates that the reordered-prefix-check fires.
-    NodeCoord node{0, 0};
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // no tensor bindings
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-
-    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
-    // Inject a reserved-prefix CRTA into the DM kernel's named_common_runtime_args.
-    params.kernel_run_params[0].named_common_runtime_args = {{"__ta_addr_smuggled", 42}};
-
-    EXPECT_THAT(
-        [&] { SetProgramRunParameters(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("named CRTA '__ta_addr_smuggled' uses a reserved prefix")));
-}
-
 }  // namespace
 }  // namespace tt::tt_metal::experimental::metal2_host_api

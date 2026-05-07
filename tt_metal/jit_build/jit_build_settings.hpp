@@ -13,14 +13,6 @@
 
 namespace tt::tt_metal {
 
-// Reserved CRTA name prefix for the implicit per-tensor base-address CRTA used by Metal 2.0
-// TensorAccessor bindings. Named CRTAs starting with this prefix are managed by the binding
-// machinery: emitted into the `ta::` namespace as part of each binding's token (not into the
-// user-facing `args::` namespace), and filled at dispatch from the corresponding TensorArg
-// entry (not from user-supplied named_common_runtime_args).
-// User-supplied CRTA names with this prefix are rejected by validation.
-inline constexpr std::string_view kTensorAccessorAddrCrtaPrefix = "__ta_addr_";
-
 // Abstract base class for kernel specialization
 // Higher levels of the SW derive from this and fill in build details not known to the build system
 // (eg, API specified settings)
