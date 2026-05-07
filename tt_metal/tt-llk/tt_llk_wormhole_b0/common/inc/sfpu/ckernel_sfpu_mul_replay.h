@@ -10,8 +10,6 @@
 
 namespace ckernel
 {
-// namespace sfpu
-// {
 
 // ---------------------------------------------------------------------------
 // Replay-buffer based SFPU integer multiplication: INT32 / UINT32 / UINT16.
@@ -240,28 +238,21 @@ ALWI void _init_replay_binary_sfpu_mul_uint16_()
 //                                    the SFPLOADMACRO unit is unavailable.
 //     is_fp32_dest_acc_en = true  : SFPLOAD x2 + SFPMUL + SFPNOP + SFPSTORE
 //                                   + INCRWC = 6
-//     is_fp32_dest_acc_en = false : + SFP_STOCH_RND
-//                                   + 2 * (SFPSETCC + SFPMOV + SFPENCC) = 13
+//     is_fp32_dest_acc_en = false : software RNE FP32 -> BF16
+//                                   + zero clamp = 20
 //
-//   DISABLE_SFPLOADMACRO undefined -> SFPLOADMACRO fuses LD + MAD (+ optional
-//                                     STOCH_RND) (+ optional STORE) into a
-//                                     single instruction driven by Macro
-//                                     Sequence Register 0. RHS is pre-loaded
-//                                     into LREG[0] via a regular SFPLOAD;
-//                                     LHS is loaded by SFPLOADMACRO into
-//                                     LREG[1], where the macro's MAD
-//                                     overwrites it with LREG[0]*LREG[1].
+//   DISABLE_SFPLOADMACRO undefined -> FP32 keeps the SFPLOADMACRO fused
+//                                     LD + MAD + STORE path. BF16 uses the
+//                                     discrete software-RNE body because it
+//                                     matches the FPU path bit-exactly.
 //     is_fp32_dest_acc_en = true  : SFPLOAD + SFPLOADMACRO + INCRWC = 3
 //                                   (macro pipeline does LD + MAD + STORE)
-//     is_fp32_dest_acc_en = false : 2*SFPLOAD + SFPLOADMACRO
-//                                   + 2 * (SFPSETCC + SFPMOV + SFPENCC)
-//                                   + SFPSTORE + INCRWC = 11
-//                                   (macro pipeline does LD + MAD + STOCH_RND;
-//                                    zero-clamp and STORE are issued manually)
+//     is_fp32_dest_acc_en = false : use the same discrete software-RNE body
+//                                   as the DISABLE_SFPLOADMACRO path = 20
 #ifdef DISABLE_SFPLOADMACRO
-constexpr std::uint32_t SFPU_BINARY_MUL_REPLAY_LEN = DST_ACCUM_MODE ? 6 : 13;
+constexpr std::uint32_t SFPU_BINARY_MUL_REPLAY_LEN = DST_ACCUM_MODE ? 6 : 20;
 #else
-constexpr std::uint32_t SFPU_BINARY_MUL_REPLAY_LEN = DST_ACCUM_MODE ? 3 : 11;
+constexpr std::uint32_t SFPU_BINARY_MUL_REPLAY_LEN = DST_ACCUM_MODE ? 3 : 20;
 #endif
 
 // A 32x32 tile occupies 64 rows in dest.
@@ -297,34 +288,20 @@ inline void _init_replay_binary_sfpu_mul_float_()
     //                 = RHS * LHS = LHS * RHS
     TTI_SFPMAD(p_sfpu::LREG0, 0, p_sfpu::LCONST_0, 13, 0);
 
-    if constexpr (!is_fp32_dest_acc_en)
-    {
-        // Programmable Macro Instruction Template 2 (mux 6): SFP_STOCH_RND
-        //   lreg_dest = 14 selects backdoor-load into template 2.
-        //   When triggered with round_bits bit 7 = 0 and bit 6 = 0, this
-        //   stochastic-rounds the loaded LREG (the MAD result, FP32) into
-        //   FP16B in place. This mirrors the original SFP_STOCH_RND on LREG[2]
-        //   in the discrete-instruction implementation.
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    }
-
     // Macro Sequence Register 0:
     //   simple slot: disabled
     //   MAD slot   : template 1 (SFPMAD) at delay 0; bit 7 = 1 selects loaded
     //                LREG as srcB; bit 6 = 0 writes the result back to the
     //                loaded LREG (no staging).
-    //   round slot : FP32 mode -> disabled.
-    //                BF16 mode -> template 2 (SFP_STOCH_RND) at delay 2,
-    //                writes FP16B back to the loaded LREG.
+    //   round slot : disabled. BF16 does not use this macro sequence.
     //   store slot : FP32 mode -> fixed STORE (mux 3) at delay 2. Reads the
     //                loaded LREG (= MAD result) and writes it to the LD's
     //                dest_reg_addr. This replaces the discrete SFPSTORE.
-    //                BF16 mode -> disabled. The post-macro zero-clamp logic
-    //                must run before the store, so we issue SFPSTORE manually.
+    //                BF16 mode -> disabled.
     {
         constexpr std::uint32_t simple_bits = 0;
         constexpr std::uint32_t mad_bits    = 0x80 | 0x00 | (0 << 3) | (4 + 1);
-        constexpr std::uint32_t round_bits  = is_fp32_dest_acc_en ? 0u : (0x00u | 0x00u | (2u << 3) | (4u + 2u));
+        constexpr std::uint32_t round_bits  = 0;
         constexpr std::uint32_t store_bits  = is_fp32_dest_acc_en ? (0x00u | 0x00u | (2u << 3) | 3u) : 0u;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
@@ -363,58 +340,79 @@ inline void _init_replay_binary_sfpu_mul_float_()
 
     if constexpr (!is_fp32_dest_acc_en)
     {
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        // Bitwise RNE FP32 -> BF16: (bits + 0x7fff + ((bits >> 16) & 1)) & 0xffff0000.
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 2);
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT_MOD1_SHIFT_LREGC);
+        TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, 1);
+        TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG3, 0);
+        TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, 0x7FFF);
+        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0xFFFF);
+        TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG4, 0);
 
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
-
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
+        // Match the FPU multiply convention: zero if either input is zero.
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+        TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     }
 
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
+    }
+    else
+    {
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
+    }
 #else
     // -----------------------------------------------------------------------
     // SFPLOADMACRO-fused implementation.
     // -----------------------------------------------------------------------
-    // Pre-load operand B (RHS) at offset 64 into LREG[0]. The MAD template
-    // installed above uses LREG[0] as srcA, so this value participates in the
-    // multiply executed inside the SFPLOADMACRO pipeline.
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 1 * SFPU_BINARY_MUL_DST_TILE_ROWS);
-
     if constexpr (!is_fp32_dest_acc_en)
     {
-        // BF16 also needs the original LHS value to drive the post-mul zero
-        // clamp (the macro's MAD overwrites LREG[1] with the product, so we
-        // can no longer test LHS against zero from there).
+        // BF16 uses the same discrete body as the DISABLE_SFPLOADMACRO path so
+        // software RNE consumes the SFPMUL result with the same instruction timing.
         TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 1 * SFPU_BINARY_MUL_DST_TILE_ROWS);
+        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+        TTI_SFPNOP;
+
+        // Bitwise RNE FP32 -> BF16: (bits + 0x7fff + ((bits >> 16) & 1)) & 0xffff0000.
+        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG1, 2);
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT_MOD1_SHIFT_LREGC);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 1);
+        TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x7FFF);
+        TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0xFFFF);
+        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+
+        // Match the FPU multiply convention: zero if either input is zero.
+        TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+        TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
     }
-
-    // Issue SFPLOADMACRO: macro_idx = 0, loaded LREG = LREG[1], offset = 0.
-    //   FP32 : LD LHS -> LREG[1]; MAD LREG[0]*LREG[1] -> LREG[1]; STORE LREG[1] to offset 0.
-    //   BF16 : LD LHS -> LREG[1]; MAD LREG[0]*LREG[1] -> LREG[1]; STOCH_RND fp32->fp16b on LREG[1].
-    TTI_SFPLOADMACRO((0 << 2) | 1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
-
-    if constexpr (!is_fp32_dest_acc_en)
+    else
     {
-        // Bit-exact match for the FPU's BF16 multiply when an operand is 0:
-        // stochastic rounding can otherwise leave a non-zero LSB on 0*x or x*0.
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
+        // Pre-load operand B (RHS) at offset 64 into LREG[0]. The MAD template
+        // installed above uses LREG[0] as srcA, so this value participates in the
+        // multiply executed inside the SFPLOADMACRO pipeline.
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 1 * SFPU_BINARY_MUL_DST_TILE_ROWS);
 
-        TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPENCC(0, 0, 0, 0);
-
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
+        // Issue SFPLOADMACRO: macro_idx = 0, loaded LREG = LREG[1], offset = 0.
+        //   FP32 : LD LHS -> LREG[1]; MAD LREG[0]*LREG[1] -> LREG[1]; STORE LREG[1] to offset 0.
+        TTI_SFPLOADMACRO((0 << 2) | 1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_DST_TILE_ROWS);
     }
 #endif // DISABLE_SFPLOADMACRO
 
     TTI_INCRWC(0, sfpi::SFP_DESTREG_STRIDE, 0, 0);
 }
 
-// } // namespace sfpu
 } // namespace ckernel
