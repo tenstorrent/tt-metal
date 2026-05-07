@@ -21,9 +21,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors, encode_expert_indices
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
     SramCompressedExpertSlots,
     SramExpertCoreGrids,
@@ -878,3 +880,111 @@ def test_compute_expert_l1_bytes_bspm():
     logger.info(
         f"BSPM expert L1 cost: {computed:,} bytes " f"(all-bfp8: {all_bfp8_cost:,}, all-bfp4: {all_bfp4_cost:,})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Disk-cache round-trip for prepare_compressed_sram_slots
+#
+# Mirrors the BSPM round-trip in test_prepare_weights.py but for the SRAM
+# hot-expert post-pack byte cache (Option H): cold miss writes one
+# shards.bin + metadata.json per (expert, projection); a warm second pass
+# rebuilds the slots from disk without touching the BFP packer or growing
+# the on-disk artifact set.
+# ---------------------------------------------------------------------------
+
+
+def _sram_cache_context() -> CacheContext:
+    """CacheContext for the single-device SRAM round-trip (mesh_shape=(1,1))."""
+    return CacheContext(
+        schema_version=1,
+        hf_model_id="deepseek-v3-test",
+        hf_revision="rev-sram-roundtrip",
+        mesh_shape=(1, 1),
+    )
+
+
+@requires_hybrid_allocator
+def test_prepare_compressed_sram_slots_cache_roundtrip(device, tmp_path):
+    """TensorCache round-trip for prepare_compressed_sram_slots.
+
+    - Cold miss: each (expert, projection) writes its own ``shards.bin`` +
+      ``metadata.json`` under ``objects/<id[:2]>/<id>/``.
+    - Warm hit: same call returns the same set of slots without writing
+      anything new on disk.
+    - Reconstructed CompressedTensors agree with the cold pack on shape
+      and per-tile assignment codes (byte-equivalent assignment).
+
+    Gated on ``TT_METAL_ALLOCATOR_MODE_HYBRID=1`` because the slots are
+    per-core L1 ``CompressedTensor`` objects; without hybrid mode the
+    allocator throws TT_FATAL deep inside ``ttnn.from_torch``.
+    """
+    layer_idx = 7
+    expert_indices = [0, 5, 10]
+    sd = _make_state_dict(layer_idx, expert_indices, K=K, N=N)
+    core_grid = _build_sram_core_grid(device, NUM_CORES)
+    assigner = _make_assigner()
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_sram_cache_context())
+
+    # --- Cold miss ----------------------------------------------------------
+    slots_miss = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
+        assigner=assigner,
+        move_to_device=True,
+        cache_config=cache_config,
+        **_no_trim_budget(device),
+    )
+    assert slots_miss.num_slots == len(expert_indices)
+    assert slots_miss.slot_experts == expert_indices
+
+    objects_dir = tmp_path / "objects"
+    shards_after_miss = sorted(objects_dir.rglob("shards.bin"))
+    metas_after_miss = sorted(objects_dir.rglob("metadata.json"))
+    expected_artifacts = len(expert_indices) * 3  # gate, up, down per expert
+    assert len(shards_after_miss) == expected_artifacts, (
+        f"Expected {expected_artifacts} shards.bin (one per expert/projection) "
+        f"after cold miss, found {len(shards_after_miss)}"
+    )
+    assert len(metas_after_miss) == expected_artifacts
+    for path in shards_after_miss:
+        assert path.stat().st_size > 0, f"empty shards.bin at {path}"
+
+    # --- Warm hit -----------------------------------------------------------
+    slots_hit = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
+        assigner=assigner,
+        move_to_device=True,
+        cache_config=cache_config,
+        **_no_trim_budget(device),
+    )
+    assert slots_hit.num_slots == slots_miss.num_slots
+    assert slots_hit.slot_experts == slots_miss.slot_experts
+
+    shards_after_hit = sorted(objects_dir.rglob("shards.bin"))
+    metas_after_hit = sorted(objects_dir.rglob("metadata.json"))
+    assert shards_after_hit == shards_after_miss, "warm hit must not write new shards.bin files"
+    assert metas_after_hit == metas_after_miss, "warm hit must not write new metadata.json files"
+
+    # --- Per-projection assignment must round-trip byte-for-byte ------------
+    for proj_name, miss_cts, hit_cts in [
+        ("gate", slots_miss.gate_proj, slots_hit.gate_proj),
+        ("up", slots_miss.up_proj, slots_hit.up_proj),
+        ("down", slots_miss.down_proj, slots_hit.down_proj),
+    ]:
+        assert len(miss_cts) == len(hit_cts) == len(expert_indices)
+        for slot_idx, (ct_miss, ct_hit) in enumerate(zip(miss_cts, hit_cts)):
+            assert isinstance(ct_miss, CompressedTensor)
+            assert isinstance(ct_hit, CompressedTensor)
+            assert (
+                ct_miss.shape == ct_hit.shape
+            ), f"{proj_name}[slot={slot_idx}] shape mismatch miss={ct_miss.shape} hit={ct_hit.shape}"
+            assert np.array_equal(
+                ct_miss._assignment_flat, ct_hit._assignment_flat
+            ), f"{proj_name}[slot={slot_idx}] assignment_flat differs between cold pack and warm load"

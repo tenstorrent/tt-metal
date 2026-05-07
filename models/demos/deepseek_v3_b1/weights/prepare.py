@@ -40,9 +40,15 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     Shard2dMeshMapper,
     ShardMeshMapper,
     SourceTensorSelection,
+    SramCompressedTensorTarget,
     TensorTarget,
 )
 from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert
+from models.demos.deepseek_v3_b1.weights.cache.sram_compressed_cache import (
+    assigner_fingerprint,
+    get_or_create_sram_compressed_expert,
+    to_canonical_mesh_mapper,
+)
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.overlap.spec import _core_list
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
@@ -1353,6 +1359,85 @@ def prepare_moe_routed_experts_bspm(
 # ---------------------------------------------------------------------------
 
 
+def _route_l1_compressed_tensor(
+    weight: torch.Tensor,
+    *,
+    memory_config,
+    per_core_allocation: bool,
+    mesh_mapper_config,
+    assigner: CompressedTensorAssigner | None = None,
+    assignment: np.ndarray | None = None,
+    device,
+    tile_hw: int,
+    cache_config: CacheConfig | None,
+    sram_cache_target_name: str | None,
+    sram_cache_source_keys: tuple[str, ...] | None,
+) -> CompressedTensor:
+    """Build one per-core L1 CompressedTensor, optionally routing through the SRAM disk cache.
+
+    When ``cache_config`` is a :class:`TensorCache`-backed config and a
+    cache target name + source keys are provided, the call is dispatched to
+    :func:`get_or_create_sram_compressed_expert` — warm runs hydrate the
+    CompressedTensor from a content-addressed object on disk and skip the
+    BFP pack pipeline entirely.  Otherwise, falls back to the legacy direct
+    construction (``CompressedTensor.from_torch`` / ``from_bspm``) so
+    behaviour is unchanged when no cache is wired in.
+    """
+    assert (assigner is None) != (assignment is None), "Provide exactly one of assigner / assignment"
+    use_cache = cache_config is not None and sram_cache_target_name is not None and sram_cache_source_keys is not None
+    if not use_cache:
+        # Direct cold construction — preserves pre-cache behaviour for
+        # callers that don't wire in a CacheConfig (unit tests, ephemeral
+        # paths).  Mirrors the original ``_build_l1_compressed_tensor*``
+        # branches; the BSPM path here historically does **not** request
+        # ``per_core_allocation`` / ``mesh_mapper_config`` (TP=1 only),
+        # so we keep that quirk here.
+        if assigner is not None:
+            return CompressedTensor.from_torch(
+                weight.float(),
+                assigner,
+                device=device,
+                memory_config=memory_config,
+                per_core_allocation=per_core_allocation,
+                mesh_mapper_config=mesh_mapper_config,
+            )
+        return CompressedTensor.from_bspm(
+            weight.float(),
+            assignment,
+            device=device,
+            memory_config=memory_config,
+        )
+
+    target = SramCompressedTensorTarget(
+        name=sram_cache_target_name,
+        tensor_shape=tuple(int(d) for d in weight.shape),
+        tile_hw=tile_hw,
+        memory_config=memory_config,
+        per_core_allocation=per_core_allocation,
+        mesh_mapper_config=to_canonical_mesh_mapper(mesh_mapper_config),
+        assigner_fingerprint=assigner_fingerprint(assigner) if assigner is not None else "",
+        assignment_hash=hashlib.sha256(np.ascontiguousarray(assignment).tobytes()).hexdigest()[:16]
+        if assignment is not None
+        else "",
+    )
+    fp = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=tuple(sram_cache_source_keys)),
+        target=target,
+    )
+    return get_or_create_sram_compressed_expert(
+        cache_config.cache,
+        fp,
+        device,
+        weight_provider=lambda w=weight: w,
+        assigner=assigner,
+        assignment=assignment,
+        memory_config=memory_config,
+        per_core_allocation=per_core_allocation,
+        mesh_mapper_config=mesh_mapper_config,
+        tile_hw=tile_hw,
+    )
+
+
 def _build_l1_compressed_tensor(
     weight: torch.Tensor,
     core_grid: ttnn.CoreRangeSet,
@@ -1362,6 +1447,9 @@ def _build_l1_compressed_tensor(
     device=None,
     mesh_mapper_config=None,
     tile_hw: int = 32,
+    cache_config: CacheConfig | None = None,
+    sram_cache_target_name: str | None = None,
+    sram_cache_source_keys: tuple[str, ...] | None = None,
 ) -> CompressedTensor:
     """Create a single per-core L1 CompressedTensor for one expert projection.
 
@@ -1404,20 +1492,21 @@ def _build_l1_compressed_tensor(
     shard_spec = ttnn.ShardSpec(core_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    if assigner is not None:
-        return CompressedTensor.from_torch(
-            weight.float(),
-            assigner,
-            device=device,
-            memory_config=mem_config,
-            per_core_allocation=True,
-            mesh_mapper_config=mesh_mapper_config,
-        )
-    return CompressedTensor.from_bspm(
-        weight.float(),
-        assignment,
-        device=device,
+    return _route_l1_compressed_tensor(
+        weight,
         memory_config=mem_config,
+        # WIDTH_SHARDED on N: per_core_allocation is on for the assigner path
+        # (mixed-precision needs per-core sizing) and off for the BSPM path
+        # (legacy single-device behaviour).
+        per_core_allocation=(assigner is not None),
+        mesh_mapper_config=mesh_mapper_config if assigner is not None else None,
+        assigner=assigner,
+        assignment=assignment,
+        device=device,
+        tile_hw=tile_hw,
+        cache_config=cache_config,
+        sram_cache_target_name=sram_cache_target_name,
+        sram_cache_source_keys=sram_cache_source_keys,
     )
 
 
@@ -1431,6 +1520,9 @@ def _build_l1_compressed_tensor_height_sharded(
     device=None,
     mesh_mapper_config=None,
     tile_hw: int = 32,
+    cache_config: CacheConfig | None = None,
+    sram_cache_target_name: str | None = None,
+    sram_cache_source_keys: tuple[str, ...] | None = None,
 ) -> CompressedTensor:
     """Per-core L1 HEIGHT_SHARDED CompressedTensor for gate/up projections.
 
@@ -1486,20 +1578,18 @@ def _build_l1_compressed_tensor_height_sharded(
     shard_spec = ttnn.ShardSpec(core_range_set, [sh, sw], ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    if assigner is not None:
-        return CompressedTensor.from_torch(
-            preprocessed_weight.float(),
-            assigner,
-            device=device,
-            memory_config=mem_config,
-            per_core_allocation=True,
-            mesh_mapper_config=mesh_mapper_config,
-        )
-    return CompressedTensor.from_bspm(
-        preprocessed_weight.float(),
-        assignment,
-        device=device,
+    return _route_l1_compressed_tensor(
+        preprocessed_weight,
         memory_config=mem_config,
+        per_core_allocation=(assigner is not None),
+        mesh_mapper_config=mesh_mapper_config if assigner is not None else None,
+        assigner=assigner,
+        assignment=assignment,
+        device=device,
+        tile_hw=tile_hw,
+        cache_config=cache_config,
+        sram_cache_target_name=sram_cache_target_name,
+        sram_cache_source_keys=sram_cache_source_keys,
     )
 
 
@@ -1524,6 +1614,9 @@ def _build_l1_compressed_tensor_width_sharded_shared_down(
     device=None,
     mesh_mapper_config=None,
     tile_hw: int = 32,
+    cache_config: CacheConfig | None = None,
+    sram_cache_target_name: str | None = None,
+    sram_cache_source_keys: tuple[str, ...] | None = None,
 ) -> CompressedTensor:
     """Per-core L1 WIDTH_SHARDED CompressedTensor for the down projection.
 
@@ -1573,20 +1666,18 @@ def _build_l1_compressed_tensor_width_sharded_shared_down(
     shard_spec = ttnn.ShardSpec(core_range_set, [sh, sw], ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    if assigner is not None:
-        return CompressedTensor.from_torch(
-            preprocessed_weight.float(),
-            assigner,
-            device=device,
-            memory_config=mem_config,
-            per_core_allocation=True,
-            mesh_mapper_config=mesh_mapper_config,
-        )
-    return CompressedTensor.from_bspm(
-        preprocessed_weight.float(),
-        assignment,
-        device=device,
+    return _route_l1_compressed_tensor(
+        preprocessed_weight,
         memory_config=mem_config,
+        per_core_allocation=(assigner is not None),
+        mesh_mapper_config=mesh_mapper_config if assigner is not None else None,
+        assigner=assigner,
+        assignment=assignment,
+        device=device,
+        tile_hw=tile_hw,
+        cache_config=cache_config,
+        sram_cache_target_name=sram_cache_target_name,
+        sram_cache_source_keys=sram_cache_source_keys,
     )
 
 
@@ -1909,6 +2000,7 @@ def prepare_compressed_sram_slots(
     assignment_provider: Callable[[int, int], np.ndarray] | None = None,
     move_to_device: bool = True,
     tile_hw: int = 32,
+    cache_config: CacheConfig | None = None,
 ) -> SramCompressedExpertSlots:
     """Allocate SRAM hot expert slots as per-core L1 CompressedTensors.
 
@@ -2130,6 +2222,13 @@ def prepare_compressed_sram_slots(
             break
 
         _t_phase = time.perf_counter()
+        # Per-projection SRAM disk-cache identity: each (layer, expert,
+        # projection) pair gets its own fingerprint, sourced from the
+        # exact HF state-dict tensor name(s) it consumes.  The name
+        # doubles as a human-friendly cache label.
+        gate_cache_name = f"sram_layer{layer_idx}_expert{expert_idx}_gate_proj"
+        up_cache_name = f"sram_layer{layer_idx}_expert{expert_idx}_up_proj"
+        down_cache_name = f"sram_layer{layer_idx}_expert{expert_idx}_down_proj"
         if use_shared_expert_gate_up:
             # Shared-expert-style HEIGHT_SHARDED gate/up: reshuffle +
             # TP-stack once per expert, then build CTs for both projections
@@ -2143,6 +2242,9 @@ def prepare_compressed_sram_slots(
                     assigner=assigner,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
+                    cache_config=cache_config,
+                    sram_cache_target_name=gate_cache_name,
+                    sram_cache_source_keys=(gate_key,),
                 )
             )
             up_cts.append(
@@ -2153,6 +2255,9 @@ def prepare_compressed_sram_slots(
                     assigner=assigner,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
+                    cache_config=cache_config,
+                    sram_cache_target_name=up_cache_name,
+                    sram_cache_source_keys=(up_key,),
                 )
             )
         else:
@@ -2166,6 +2271,9 @@ def prepare_compressed_sram_slots(
                     assignment=assignment_provider(expert_idx, 0) if assignment_provider is not None else None,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
+                    cache_config=cache_config,
+                    sram_cache_target_name=gate_cache_name,
+                    sram_cache_source_keys=(gate_key,),
                 )
             )
             up_cts.append(
@@ -2176,6 +2284,9 @@ def prepare_compressed_sram_slots(
                     assignment=assignment_provider(expert_idx, 1) if assignment_provider is not None else None,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
+                    cache_config=cache_config,
+                    sram_cache_target_name=up_cache_name,
+                    sram_cache_source_keys=(up_key,),
                 )
             )
 
@@ -2211,6 +2322,9 @@ def prepare_compressed_sram_slots(
                     assigner=assigner,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
+                    cache_config=cache_config,
+                    sram_cache_target_name=down_cache_name,
+                    sram_cache_source_keys=(down_key,),
                 )
             )
         else:
@@ -2223,6 +2337,9 @@ def prepare_compressed_sram_slots(
                     assignment=assignment_provider(expert_idx, 2) if assignment_provider is not None else None,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
+                    cache_config=cache_config,
+                    sram_cache_target_name=down_cache_name,
+                    sram_cache_source_keys=(down_key,),
                 )
             )
         t_build += time.perf_counter() - _t_phase
@@ -2271,6 +2388,12 @@ def prepare_compressed_sram_slots(
     # ``CompressedTensor.from_torch`` / ``from_bspm`` calls.  Stats are
     # populated by `_pack_single_device` / `_pack_multi_device` and the
     # per-core upload helpers in ``compressed_tensor.compressed_tensor``.
+    # ``pack`` is decomposed by ``_compress_shard`` into ``gather`` (numpy
+    # slice into the per-format flat buffer), ``cpp_pack`` (the C++
+    # ``_PACK_FN`` call itself), and ``scatter`` (slicing the packed
+    # output back to per-tile slots), so the ratio ``cpp_pack / pack``
+    # tells us whether packing is actually CPU-bound in the C++ packer
+    # or in the surrounding Python work.
     build_stats = get_build_timing_stats()
     logger.info(
         "  SRAM build sub-phases (layer {}): pack={:.3f}s upload={:.3f}s " "(from_torch+from_bspm calls={})",
@@ -2278,6 +2401,17 @@ def prepare_compressed_sram_slots(
         build_stats["pack_s"],
         build_stats["upload_s"],
         build_stats["n_calls"],
+    )
+    logger.info(
+        "  SRAM pack split (layer {}): gather={:.3f}s cpp_pack={:.3f}s scatter={:.3f}s " "(pack_residual={:.3f}s)",
+        layer_idx,
+        build_stats["gather_s"],
+        build_stats["cpp_pack_s"],
+        build_stats["scatter_s"],
+        max(
+            0.0,
+            build_stats["pack_s"] - build_stats["gather_s"] - build_stats["cpp_pack_s"] - build_stats["scatter_s"],
+        ),
     )
     return SramCompressedExpertSlots(
         num_slots=num_slots,
@@ -2958,6 +3092,7 @@ def prepare_moe_layer_weights(
             boundary_addr=boundary_addr,
             initial_lowest_addr=attn_lowest_addr,
             l1_top_addr=l1_top_addr,
+            cache_config=cache_config,
         )
         result = _dataclass_replace(result, sram_slots=sram_slots)
 
