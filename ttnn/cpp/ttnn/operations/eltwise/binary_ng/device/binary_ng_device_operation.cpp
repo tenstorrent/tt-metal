@@ -8,7 +8,6 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <bit>
 #include <cmath>
 
 using namespace tt::tt_metal;
@@ -230,8 +229,6 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 
 ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
     // TODO: a more generalized way to skip the hashing of an EltwiseUnaryWithParam?
-    // Don't hash the quantization scale, otherwise we build the kernel for each different scale.
-    // Only equal_nan selects a compile-time template specialization and therefore must be hashed.
     auto base_hash = ttsl::hash::hash_objects_with_default_seed(
         binary_op_type,
         lhs_activations,
@@ -248,7 +245,7 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         input_layout_a,
         input_layout_b,
         output_layout);
-    if (binary_op_type == BinaryOpType::ISCLOSE) {
+    if (binary_op_type == BinaryOpType::) {
         base_hash = ttsl::hash::hash_objects(base_hash, equal_nan);
     }
     return base_hash;
@@ -494,47 +491,11 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 
     TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
-    // Per design (see test_ng_cache_reuse_different_logical_shapes), most binary_ng ops
-    // intentionally exclude logical_shape from the hash — the slow-path adapter rebuilds
-    // runtime args on every cache hit, so different shapes share one cached program.
-    //
-    // ISCLOSE is the exception.  Its compute pipeline (in-kernel TYPECAST(INT32->FP32)
-    // for both_int32 + threshold compare `|x-y| <= rtol*|y| + atol` with bf16-precision
-    // SFPU intermediates) is sensitive enough that reusing a smaller-shape program for
-    // a larger-shape call produces borderline tolerance miscomputations on TTSim — i.e.
-    // a cached program created for [1,1,32,32] then re-bound to [1,1,768,456] flips a
-    // single element where |x-y| ≈ rtol*|y| + atol.  Forcing a per-shape cache entry
-    // for ISCLOSE keeps add/sub/mul/etc. on the original cache-sharing fast path while
-    // giving ISCLOSE the freshly-built program it needs.
-    const bool is_isclose = attributes.binary_op_type == BinaryOpType::ISCLOSE;
-    auto shape_hw = [](const Tensor& t) -> std::pair<uint32_t, uint32_t> {
-        const auto& s = t.logical_shape();
-        return {s.rank() >= 2 ? s[-2] : 1u, s[-1]};
-    };
-
     if (input_tensor_b.has_value()) {
         TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
-
-        if (is_isclose) {
-            const auto [a_h, a_w] = shape_hw(input_tensor_a);
-            const auto [b_h, b_w] = shape_hw(*input_tensor_b);
-            return operation::hash_operation<BinaryNgDeviceOperation>(
-                attributes,
-                input_tensor_a.dtype(),
-                input_tensor_a.memory_config(),
-                input_tensor_b->dtype(),
-                input_tensor_b->memory_config(),
-                input_tensor_a.padded_shape().volume(),
-                input_tensor_b->padded_shape().volume(),
-                a_h,
-                a_w,
-                b_h,
-                b_w,
-                shard_volumes);
-        }
 
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
@@ -543,17 +504,6 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
             input_tensor_b->dtype(),
             input_tensor_b->memory_config(),
             shard_volumes);
-    }
-
-    if (is_isclose) {
-        const auto [a_h, a_w] = shape_hw(input_tensor_a);
-        return operation::hash_operation<BinaryNgDeviceOperation>(
-            attributes,
-            input_tensor_a.dtype(),
-            input_tensor_a.memory_config(),
-            input_tensor_a.padded_shape().volume(),
-            a_h,
-            a_w);
     }
 
     return operation::hash_operation<BinaryNgDeviceOperation>(
@@ -704,8 +654,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         is_sfpu_op,
         is_quant_op,
         is_where_op,
-        /*rtol=*/1e-5f,
-        /*atol=*/1e-8f,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
         /*equal_nan=*/false,
         input_tensor_a.layout(),
         input_tensor_b.layout(),
@@ -776,8 +726,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         is_sfpu_op,
         is_quant_op,
         false,
-        /*rtol=*/1e-5f,
-        /*atol=*/1e-8f,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
         /*equal_nan=*/false,
         input_tensor_a.layout(),
         Layout::INVALID,

@@ -46,10 +46,6 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
     return result;
 }
 
-// ∣input−other∣≤ atol+rtol×∣other∣
-//
-// Implemented as a single LLK SFPU kernel (BinaryOpType::ISCLOSE).
-// INT32 inputs are promoted to FLOAT32 inside invoke_binary_ng_isclose.
 Tensor isclose(
     const Tensor& input_a,
     const Tensor& input_b,

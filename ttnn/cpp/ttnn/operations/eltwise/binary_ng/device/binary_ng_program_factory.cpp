@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_utils.hpp"
-#include "binary_ng_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -13,8 +12,6 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <algorithm>
-#include <cmath>
-#include <cstdio>
 using namespace tt::tt_metal;
 
 namespace {
@@ -432,13 +429,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
-    // For isclose: rtol and atol are passed as runtime args (IEEE-754 bit-patterns) so that
-    // a single cached kernel binary handles all tolerance values.  Only equal_nan is a
-    // compile-time template parameter because it controls distinct code paths.
     // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits.
-    // ISCLOSE_RT_ARG_PARAMS / ISCLOSE_RT_ARG_FWD inject `rtol_bits` and `atol_bits`
-    // as parameters of the inlined process_tile helpers; `#if ISCLOSE_OP` branches
-    // at the kernel call sites then forward those locals into the 5-arg macro below.
     if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
         compute_kernel_defines["ISCLOSE_OP"] = "1";
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";
@@ -451,9 +442,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // Track post-activation dtypes so the c_3 / c_4 intermediate CBs can be
     // sized and formatted to match the data the in-kernel TYPECAST produces.
-    // For ops without a TYPECAST in their activation chain these stay equal to
-    // the input dtype, preserving the legacy `is_sfpu_op ? a_data_format : ...`
-    // behaviour.
     DataType a_post_activation_dtype = a_dtype;
     DataType b_post_activation_dtype = b_dtype;
 
@@ -502,36 +490,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             });
         }
 
-        // Walk the (now finalized) activation chains backwards looking for the
-        // last TYPECAST.  For an in-kernel TYPECAST(src,dst) the data leaving
-        // DST and packed into the c_3 / c_4 intermediate CB is in `dst`
-        // format, not the original input format.  Capturing the post-activation
-        // dtype here lets the intermediate CB descriptors below match what
-        // PREPROCESS actually writes — without this, ISCLOSE on INT32 inputs
-        // (which uses TYPECAST(INT32->FLOAT32) activations) ends up with
-        // INT32 intermediate CBs and the packer corrupts the float bit pattern
-        // on TTSim, producing all-zero tiles after the first.
-        auto extract_typecast_output_dtype = [](ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-                                                DataType fallback) -> DataType {
-            for (auto it = activations.rbegin(); it != activations.rend(); ++it) {
-                if (it->type() != unary::UnaryOpType::TYPECAST) {
-                    continue;
-                }
-                if (const auto p = it->get_param_if<float>(1)) {
-                    return static_cast<DataType>(static_cast<int>(*p));
-                }
-                if (const auto p = it->get_param_if<std::int32_t>(1)) {
-                    return static_cast<DataType>(*p);
-                }
-                if (const auto p = it->get_param_if<std::uint32_t>(1)) {
-                    return static_cast<DataType>(*p);
-                }
-            }
-            return fallback;
-        };
-        a_post_activation_dtype = extract_typecast_output_dtype(lhs_activations, a_dtype);
-        b_post_activation_dtype = extract_typecast_output_dtype(rhs_activations, b_dtype);
-
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
 
@@ -575,6 +533,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             // SFPU kernel should handle 4, but for unknown reason, only 2 works
             // no document and example to show why 4 does not work, need further investigation
             num_tiles_per_cycle = 2;
+            // NOTE: ISCLOSE is an SFPU op that uses TYPECAST(INT32->FLOAT32) activations.
+            // The intermediate CB sizes below (c_3/c_4) are computed from
+            // a_post_activation_data_format * num_tiles_per_cycle.
         }
     }
 
@@ -1062,8 +1023,15 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     std::array<uint32_t, 12> dummy_writer{0};
                     writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
                 }
-                std::array<uint32_t, 4> dummy_compute{0};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
+                if (op_type == BinaryOpType::ISCLOSE) {
+                    std::array<uint32_t, 5> dummy_compute{0};
+                    compute_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
+                } else {
+                    std::array<uint32_t, 4> dummy_compute{0};
+                    compute_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
+                }
                 continue;
             }
 
@@ -1155,13 +1123,23 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     freq = 1;
                     counter = 0;
                 }
-                std::vector<uint32_t> compute_runtime_args = {compute_tiles, freq, counter, compute_scalar_value};
                 if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
-                    compute_runtime_args[3] = std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.rtol));
-                    compute_runtime_args.push_back(
-                        std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.atol)));
+                    const std::array<uint32_t, 5> compute_runtime_args = {
+                        compute_tiles,
+                        freq,
+                        counter,
+                        std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.rtol)),
+                        std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.atol))};
+                    compute_desc.runtime_args.emplace_back(
+                        core,
+                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                } else {
+                    const std::array<uint32_t, 4> compute_runtime_args = {
+                        compute_tiles, freq, counter, compute_scalar_value};
+                    compute_desc.runtime_args.emplace_back(
+                        core,
+                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
                 }
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             } else {
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);

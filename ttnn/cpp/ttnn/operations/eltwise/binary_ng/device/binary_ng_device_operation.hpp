@@ -47,8 +47,8 @@ struct BinaryNgDeviceOperation {
         bool is_sfpu = false;
         bool is_quant_op = false;
         bool is_where_op = false;
-        float rtol = 1e-5f;
-        float atol = 1e-8f;
+        float rtol = 0.0f;
+        float atol = 0.0f;
         bool equal_nan = false;
         Layout input_layout_a = Layout::TILE;
         Layout input_layout_b = Layout::TILE;
@@ -114,8 +114,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Overload for isclose: carries rtol, atol and equal_nan as attributes so the
-// program factory can inject them as compile-time kernel defines.
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng_isclose(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
