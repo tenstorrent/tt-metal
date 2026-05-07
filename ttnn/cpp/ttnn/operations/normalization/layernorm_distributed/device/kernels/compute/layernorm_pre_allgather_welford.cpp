@@ -61,8 +61,9 @@ void kernel_main() {
         constexpr uint32_t dst2 = 2;
 
 #ifdef FUSE_PRE_ADD
-        // Per-tile pre-add: cb_in0 + cb_res -> cb_inp (streamed, one tile at a time
-        // to keep cb_inp small; welford pops it tile-by-tile below).
+        // Pre-add: cb_in0 + cb_res -> cb_inp. All Wt tiles are produced into cb_inp
+        // before the welford pass below begins consuming them; the two passes cannot
+        // run interleaved, so cb_inp must be sized to hold the full Wt.
         reconfig_data_format(cb_in0, cb_res);
         pack_reconfig_data_format(cb_inp);
         add_tiles_init(cb_in0, cb_res);

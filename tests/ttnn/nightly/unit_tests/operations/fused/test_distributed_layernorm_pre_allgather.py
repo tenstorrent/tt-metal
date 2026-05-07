@@ -712,14 +712,19 @@ def _create_recip_tensor(device, w):
     ids=["bf16_inp_bf16_stats", "fp32_inp_fp32_stats"],
 )
 def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype, stats_dtype):
-    """Welford pre_all_gather with residual: two assertions per parameterization.
+    """Welford pre_all_gather, both FUSE_PRE_ADD and no-residual paths.
 
-    1. Fused-pre-add output vs torch reference for variance. The fp32 case uses a tolerance
-       tight enough to catch e.g. the welford finalize buffer (cb_x2) being held in bfloat16
-       rather than desired float32; the bf16 case is loosened to the bf16 noise floor.
-    2. Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs
-       that might be hidden under the bf16 torch tolerance (the shared kernel/quantization
-       noise cancels between the two paths).
+    Both paths go through LayerNormPreAllGatherWelfordProgramFactory. The fp32 tolerance is
+    tight enough to catch e.g. the welford finalize buffer (cb_x2) being held in bfloat16
+    rather than desired float32; the bf16 tolerance is loosened to the bf16 noise floor.
+
+    1. Fused-pre-add output (input, residual) vs torch reference for mean and variance.
+    2. No-residual output (manually-pre-added input) vs the same torch reference. Independently
+       exercises the welford path without FUSE_PRE_ADD set, so a regression isolated to either
+       the residual CB plumbing or the welford-only CBs (e.g., cb_x2 width/format) is caught.
+    3. Fused-pre-add output vs manually-pre-added output, tight against each other. Catches
+       fused-add-specific bugs whose magnitude is below the bf16 torch tolerance, since the
+       shared kernel/quantization noise cancels between the two paths.
     """
     torch.manual_seed(0)
 
@@ -795,20 +800,27 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     combined_mean = out_combined[..., 0]
     combined_var = out_combined[..., 32]
 
-    # Fused-pre-add path (input + residual) vs torch reference for both welford outputs.
+    # Tolerance is tight enough in fp32 to catch welford CB width/format regressions
+    # (e.g., cb_x2 held in bfloat16 in fp32-dest-acc mode); loosened to the bf16 noise floor
+    # for bf16 stats.
     if stats_dtype == ttnn.float32:
         atol = 0.002
         rtol = 0.002
     else:
         atol = 0.01
         rtol = 0.01
+    # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference.
     assert_numeric_metrics(torch_mean, fused_mean, rtol=rtol, atol=atol, pcc_threshold=0.999)
     assert_numeric_metrics(torch_var, fused_var, rtol=rtol, atol=atol, pcc_threshold=0.999)
+    # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Independently
+    # exercises the welford path without the in-kernel add, so a regression isolated to
+    # either side is caught.
+    assert_numeric_metrics(torch_mean, combined_mean, rtol=rtol, atol=atol, pcc_threshold=0.999)
+    assert_numeric_metrics(torch_var, combined_var, rtol=rtol, atol=atol, pcc_threshold=0.999)
 
-    # Additionally, assert fused-pre-add output equals manually-pre-added output. This
-    # catches fused-add-specific bugs whose magnitude is below the bf16 torch tolerance
-    # above - the kernel/quantization noise that limits the bf16 torch tolerance cancels
-    # out between fused and combined since both share it.
+    # Fused-pre-add output vs manually-pre-added output, tight against each other. Catches
+    # fused-add-specific bugs whose magnitude is below the bf16 torch tolerance: the shared
+    # kernel/quantization noise that limits that tolerance cancels between the two paths.
     assert_numeric_metrics(combined_mean, fused_mean, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
     assert_numeric_metrics(combined_var, fused_var, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
 

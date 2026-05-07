@@ -19,18 +19,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::create_descriptor(
     const LayerNormPreAllGatherParams& operation_attributes,
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-
     const auto& a = tensor_args.input;
     const auto& b = tensor_args.residual_input_tensor;
     const bool fuse_pre_add = b.has_value();
@@ -256,8 +248,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
                 .page_size = single_tile_size}}}});
     }
 
-    // LN and RMS shared intermediates
-    // c_intermed0 -> x^2 (CB 1)
+    // c_1 -> x^2 (welford finalize buffer; layernorm-only since RMSNorm+Welford is rejected above)
     program_descriptor.cbs.push_back(CBDescriptor{
         .total_size = in0_tiles * single_tile_size,
         .core_ranges = all_cores,

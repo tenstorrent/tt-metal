@@ -45,22 +45,6 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
-    if (tensor_args.residual_input_tensor.has_value()) {
-        const auto& b = tensor_args.residual_input_tensor.value();
-        TT_FATAL(b.layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.layout());
-        TT_FATAL(
-            input.logical_shape() == b.logical_shape(),
-            "Input and residual logical shapes must match, got input: {} vs residual: {}",
-            input.logical_shape(),
-            b.logical_shape());
-        TT_FATAL(
-            b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Residual tensor must be interleaved.");
-        TT_FATAL(b.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-        TT_FATAL(b.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_FATAL(input.device() == b.device(), "Input and residual tensors must be on same device");
-    }
-
     // Additional validation for Welford - requires recip_tensor
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
@@ -120,6 +104,26 @@ Tensor layer_norm_pre_all_gather(
     const LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
+
+    // Validate the residual before fill_implicit_tile_padding so a malformed residual surfaces
+    // a clear error here instead of crashing inside the fill helper. The device op's
+    // validate_on_program_cache_miss runs after launch, which is too late once fill has run.
+    if (residual_input_tensor.has_value()) {
+        const auto& b = residual_input_tensor.value();
+        TT_FATAL(b.layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.layout());
+        TT_FATAL(
+            input.logical_shape() == b.logical_shape(),
+            "Input and residual logical shapes must match, got input: {} vs residual: {}",
+            input.logical_shape(),
+            b.logical_shape());
+        TT_FATAL(
+            b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Residual tensor must be interleaved.");
+        TT_FATAL(b.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+        TT_FATAL(b.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(input.device() == b.device(), "Input and residual tensors must be on same device");
+    }
+
     auto input_padded = ttnn::fill_implicit_tile_padding(input, 0.0f);
     // Also zero residual's implicit tile padding so it doesn't contaminate the kernel-fused
     // a + b that gets fed into the per-row stats.
