@@ -1619,7 +1619,9 @@ def test_demo_text(
                     )
                     ci_targets_for_verify = None
                 if ci_targets_for_verify:
-                    logger.info(f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}")
+                    logger.info(
+                        f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}"
+                    )
                     verify_perf(
                         measurements,
                         ci_targets_for_verify,
