@@ -67,21 +67,28 @@ jobs:
           echo "Min runs threshold: $MIN_RUNS"
           echo ""
 
-          # --- Validate workflow exists ---
-          WORKFLOW_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          # --- Validate workflow exists and is active ---
+          WORKFLOW_INFO=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "${API_BASE}/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}")
-          if [[ "$WORKFLOW_STATUS" == "404" ]]; then
+          WORKFLOW_STATE=$(echo "$WORKFLOW_INFO" | jq -r '.state // "not_found"')
+          WORKFLOW_NAME=$(echo "$WORKFLOW_INFO" | jq -r '.name // ""')
+
+          if [[ "$WORKFLOW_STATE" == "not_found" || -z "$WORKFLOW_NAME" ]]; then
             echo "ERROR: Workflow '$WORKFLOW_FILE' not found in $REPO"
             echo ""
-            echo "Available workflows:"
+            echo "Active workflows available:"
             curl -s \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "${API_BASE}/repos/${REPO}/actions/workflows?per_page=100" \
-              | jq -r '.workflows[] | "  " + (.path | split("/") | last)'
+              | jq -r '.workflows[] | select(.state == "active") | "  " + (.path | split("/") | last) + "  (" + .name + ")"'
             exit 1
+          elif [[ "$WORKFLOW_STATE" != "active" ]]; then
+            echo "WARNING: Workflow '$WORKFLOW_FILE' is '$WORKFLOW_STATE' — it may have no recent runs"
+          else
+            echo "Workflow: $WORKFLOW_NAME (state: $WORKFLOW_STATE)"
           fi
 
           # --- Helper: paginated GitHub API GET ---
