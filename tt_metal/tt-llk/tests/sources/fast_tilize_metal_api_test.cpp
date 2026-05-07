@@ -90,7 +90,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_unpack_fast_tilize_reinit_xdim_(chunk);
                     prev_chunk = chunk;
                 }
-                _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[row * BLOCK_CT_DIM]), 0, formats.unpack_A_src, chunk, 4, col_offset);
+                const std::uint32_t col_datum_offset = col_offset * TILE_C_DIM;
+                const std::uint32_t chunk_base = L1_ADDRESS(buffer_A[row * BLOCK_CT_DIM]) + (SCALE_DATUM_SIZE(formats.unpack_A_src, col_datum_offset) >> 4);
+                _llk_unpack_fast_tilize_block_(chunk_base, 0, formats.unpack_A_src, chunk, 4);
                 col_offset += chunk;
             }
         }

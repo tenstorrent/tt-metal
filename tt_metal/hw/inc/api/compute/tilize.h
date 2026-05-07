@@ -321,9 +321,8 @@ ALWI void fast_tilize_block(
     }
     ASSERT(block > 1);
 
-    // BH fast-tilize: row streaming on both unpack and pack.
-    // Unpack: acquire context once per call, stream all chunk MOPs, release once.
-    // Pack: program output L1 destination once per call; replay advances per tile.
+    // BH fast-tilize: each row chunk calls llk_unpack_fast_tilize_block directly.
+    // Pack programs output L1 destination once per call; replay advances per tile.
     {
         input_tile_index = input_tile_index % block + (input_tile_index / block) * block * TILE_R_DIM;
 
@@ -331,7 +330,6 @@ ALWI void fast_tilize_block(
         // Always program the current unit dim at block entry.
         uint32_t prev_chunk = 0;
 
-        UNPACK((llk_unpack_fast_tilize_row_begin(icb, input_tile_index)));
         PACK((llk_pack_fast_tilize_row_begin(ocb, output_tile_index)));
 
         while (tiles_done < block) {
@@ -349,7 +347,7 @@ ALWI void fast_tilize_block(
                 PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
                 prev_chunk = chunk;
             }
-            UNPACK((llk_unpack_fast_tilize_row_chunk(tiles_done)));
+            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
             MATH((llk_math_fast_tilize_block_(0, icb, 4)));
             PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
 
@@ -359,7 +357,6 @@ ALWI void fast_tilize_block(
             tiles_done += chunk;
         }
 
-        UNPACK((llk_unpack_fast_tilize_row_end()));
         PACK((llk_pack_fast_tilize_row_end()));
     }
 #else

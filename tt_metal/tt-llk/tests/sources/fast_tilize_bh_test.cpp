@@ -141,13 +141,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // Row streaming: acquire context once per row, run all chunks, release once.
-            // Eliminates (units_per_row - 1) context-switch sequences per row.
             std::uint32_t prev_chunk = unit_dims[0];
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_fast_tilize_row_begin_(L1_ADDRESS(buffer_A[0]));
-
                 std::uint32_t col_offset = 0;
                 for (std::uint32_t u = 0; u < units_per_row; u++)
                 {
@@ -157,11 +153,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_unpack_fast_tilize_reinit_xdim_(chunk);
                         prev_chunk = chunk;
                     }
-                    _llk_unpack_fast_tilize_row_chunk_(col_offset);
+                    const std::uint32_t col_datum_offset = col_offset * TILE_C_DIM;
+                    const std::uint32_t chunk_base       = L1_ADDRESS(buffer_A[0]) + (SCALE_DATUM_SIZE(formats.unpack_A_src, col_datum_offset) >> 4);
+                    _llk_unpack_fast_tilize_block_(chunk_base, 0, formats.unpack_A_src, chunk, 4);
                     col_offset += chunk;
                 }
-
-                _llk_unpack_fast_tilize_row_end_();
             }
         }
     }
