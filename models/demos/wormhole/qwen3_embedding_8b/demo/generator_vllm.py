@@ -134,14 +134,7 @@ class Qwen3ForEmbedding:
             f"Initializing Qwen3-Embedding-8B for vLLM: " f"max_batch_size={max_batch_size}, max_seq_len={max_seq_len}"
         )
 
-        # When vLLM wraps the class, it requires vllm_config to be passed
         if vllm_config is not None:
-            # Mark this as an embedding model in plugin_config for KV cache allocation
-            # This flag is used by get_num_available_blocks_tt to allocate sufficient blocks
-            if getattr(vllm_config, "plugin_config", None) is None:
-                vllm_config.plugin_config = {}
-            vllm_config.plugin_config.setdefault("tt", {})["is_embedding_model"] = True
-
             return cls(
                 device=mesh_device,
                 model_location_generator=model_location_generator,

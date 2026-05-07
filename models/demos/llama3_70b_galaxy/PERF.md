@@ -43,7 +43,7 @@ Similarly, if you want to run a different input prompt file with different lengt
 
 ### vLLM Runs
 
-For vLLM runs, you'll need to install [Tenstorrent's vLLM fork](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
+For vLLM runs, you'll need to install [Tenstorrent's vLLM fork and TT plugin](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/docs/tt_metal/README.md).
 
 vLLM offline run command:
 ```

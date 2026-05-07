@@ -119,6 +119,7 @@ Ensure you follow these guidelines to successfully run the Llama3-70B demo.
     cd vllm
     git checkout TT_VLLM_COMMIT_SHA_OR_TAG
     VLLM_TARGET_DEVICE=empty pip install -e .
+    pip install -e plugins/vllm-tt-plugin
     cd ..
     ```
 

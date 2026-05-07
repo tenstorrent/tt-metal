@@ -223,6 +223,7 @@ install_vllm() {
         pushd vllm >/dev/null
         git checkout "${TT_VLLM_COMMIT_SHA_OR_TAG}"
         VLLM_TARGET_DEVICE=empty pip install -e .
+        pip install -e plugins/vllm-tt-plugin
         popd >/dev/null
     else
         echo "🔔 vLLM already installed. Skipping install."

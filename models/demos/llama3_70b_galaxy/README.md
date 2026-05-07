@@ -165,7 +165,7 @@ Ensure first you have a proper TT-Metal installation. (Optional check: `python -
 
 vLLM can be install from the TT fork over at https://github.com/tenstorrent/vllm/tree/dev (make sure you're at `dev` branch).
 
-Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md) for the latest instructions on how to build vLLM.
+Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/docs/tt_metal/README.md) for the latest instructions on how to build vLLM and install the TT plugin.
 
 #### Running the vLLM server
 To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
