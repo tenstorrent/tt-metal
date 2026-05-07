@@ -185,9 +185,6 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
 
         # Inherit parent's layer filter if not explicitly overridden
         child_num_layers = self._num_layers if num_layers is None else num_layers
-        logger.debug(
-            f"LazyStateDict view created: base_prefix='{self._base_prefix}', add_prefix='{prefix}', combined='{combined_prefix}', num_layers={child_num_layers}"
-        )
 
         return LazyStateDict(
             self._model_path,
