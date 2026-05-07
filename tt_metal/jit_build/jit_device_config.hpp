@@ -60,9 +60,16 @@ struct JitDeviceConfig {
 // configuration files alone. Because of this, the device must be accessible at
 // call time.
 //
-// `context_id` selects which MetalContext instance to query. This must match the
-// context that owns `device_id`; passing the wrong (or default) id causes the
-// silicon context to be implicitly initialized when only a mock context exists.
+// `context_id` selects which MetalContext instance to query. It MUST match the
+// context that owns `device_id`. Passing the wrong id (including the default id
+// when `device_id` is owned by a non-default context) does NOT fail loudly:
+// MetalContext::instance(context_id) resolves to whichever context happens to
+// occupy that slot, and the no-arg fallback returns any existing context if the
+// requested slot is empty. The returned JitDeviceConfig is then a snapshot of
+// the wrong cluster's arch / topology / dispatch layout, and downstream queries
+// against `device_id` silently misbehave (mismatched harvesting masks, dispatch
+// cores in the wrong place, kernel build cache hits across clusters). Callers
+// must thread through the same ContextId they used to create the device.
 JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id);
 
 // TODO: Add a factory method to create JitDeviceConfig from a YAML profile

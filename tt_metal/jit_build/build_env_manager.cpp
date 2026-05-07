@@ -25,12 +25,25 @@ namespace tt::tt_metal {
 
 BuildEnvManager& BuildEnvManager::get_instance() {
     // BuildEnvManager is a process-wide singleton initialized once with a HAL reference. The
-    // HAL is consulted only for arch-derived layout counts (programmable core types, processor
-    // classes, fw binary counts), all of which depend on the architecture and not on whether the
-    // cluster is mock or silicon. Using any already-existing MetalContext's HAL avoids implicitly
-    // initializing the silicon default context when only a mock context exists (e.g. forge's
-    // mock-only flow). If no context exists yet, fall back to the legacy behavior, which will
-    // create the default silicon context on demand.
+    // constructor sizes kernel_build_state_indices_ / firmware_build_state_indices_ from that
+    // HAL's programmable-core-type, processor-class, and fw-binary counts.
+    //
+    // For the common case (silicon + mock of the same arch) those counts are arch-derived and
+    // stable, so seeding from any existing context's HAL is safe. We use
+    // find_any_existing_instance() to avoid implicitly opening the silicon DEFAULT context
+    // when only a mock context exists (forge's mock-only flow); if no context exists yet, the
+    // no-arg instance() is the legacy fallback and will create the default silicon context.
+    //
+    // PRE-EXISTING LIMITATION (not introduced by this PR, but surfaced once contexts can
+    // genuinely coexist in-process): HAL layout can also be modulated by rtoptions -- e.g.
+    // simulator mode, Blackhole DRAM programmable cores, 2-erisc mode -- so two contexts on
+    // the same arch with disagreeing rtoptions can produce different layout counts. Whichever
+    // HAL initializes this singleton first wins; the other context will index build states
+    // through a table sized for the wrong layout, leading to wrong indices or asserts. This is
+    // a property of the singleton design, not of the context selection done here.
+    // TODO(#TBD): key BuildEnvManager by a stable HAL signature (arch + relevant rtoptions),
+    // or move the index computation into per-device DeviceBuildEnv so each device carries its
+    // own mapping.
     static BuildEnvManager instance([]() -> const Hal& {
         if (auto* existing = MetalContext::find_any_existing_instance()) {
             return existing->hal();

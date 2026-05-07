@@ -82,8 +82,12 @@ void PerformDeviceWork(
 
     auto program = CreateProgram();
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    auto core_grid = mesh_device->compute_with_storage_grid_size();
-    auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+    // Use a single worker core. Spanning the full compute_with_storage grid hits worker-dispatch
+    // cores under fast-dispatch + WORKER dispatch (e.g. wh_n150 CI runners), and program-compile
+    // rejects kernels placed on dispatch cores. (0,0) is universally a worker compute core under
+    // every tt-metal dispatch configuration. A no-op kernel only needs to validate the
+    // create / JIT / dispatch pipeline, so one core is sufficient.
+    auto core_range = CoreRange({0, 0}, {0, 0});
 
     std::string kernel_src = "void kernel_main() {\n    // " + kernel_identifier + "\n}";
 
@@ -231,8 +235,8 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
-        auto core_grid = mock_device->compute_with_storage_grid_size();
-        auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+        // Single worker core; see comment in RunChildWithVisibleDevices above.
+        auto core_range = CoreRange({0, 0}, {0, 0});
 
         CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
 
@@ -280,8 +284,8 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
     auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
-        auto core_grid = target.compute_with_storage_grid_size();
-        auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+        // Single worker core; see comment in RunChildWithVisibleDevices above.
+        auto core_range = CoreRange({0, 0}, {0, 0});
 
         CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
 
@@ -330,8 +334,8 @@ TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
     auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
-        auto core_grid = target.compute_with_storage_grid_size();
-        auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+        // Single worker core; see comment in RunChildWithVisibleDevices above.
+        auto core_range = CoreRange({0, 0}, {0, 0});
 
         CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
 
