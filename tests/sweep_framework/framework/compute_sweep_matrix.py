@@ -42,7 +42,6 @@ from matrix_runner_config import (
     get_mesh_test_group_map,
     get_runner_config,
     get_test_group_name_for_hardware_group,
-    is_model_traced_ccl_module,
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
@@ -238,25 +237,12 @@ def compute_lead_models_matrix(modules, batch_size):
     for test_group_name in lead_models_group_order:
         label_meshes = [mesh for mesh, group in mesh_test_groups.items() if group == test_group_name]
         batch_label = "+".join(label_meshes) if label_meshes else test_group_name
-        all_mods = routed_modules.get(test_group_name, [])
-        ccl_mods, non_ccl_mods = _split_ccl_modules(all_mods)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             batch_label,
-            non_ccl_mods,
-            test_group_name,
-            batch_size,
-            LEAD_MODELS_SUITE_NAME,
-            LEAD_MODELS_BATCH_POLICY.get(test_group_name),
-        )
-        _append_routed_group(
-            include_entries,
-            batches,
-            log_groups,
-            f"ccl {batch_label}",
-            ccl_mods,
+            routed_modules.get(test_group_name, []),
             test_group_name,
             batch_size,
             LEAD_MODELS_SUITE_NAME,
@@ -273,13 +259,6 @@ def compute_lead_models_matrix(modules, batch_size):
     _log_module_groups("Lead models run", modules, log_groups)
 
     return include_entries, batches
-
-
-def _split_ccl_modules(modules):
-    """Partition modules into (ccl, non_ccl) lists."""
-    ccl = [m for m in modules if is_model_traced_ccl_module(m)]
-    non_ccl = [m for m in modules if not is_model_traced_ccl_module(m)]
-    return ccl, non_ccl
 
 
 def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=None):
@@ -302,24 +281,12 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
             "model_traced",
             "wormhole-n150-sweeps",
         )
-        ccl_mods, non_ccl_mods = _split_ccl_modules(mods)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             f"mesh {mesh_shape}",
-            non_ccl_mods,
-            test_group_name,
-            batch_size,
-            suite_name,
-            MODEL_TRACED_BATCH_POLICY.get(test_group_name),
-        )
-        _append_routed_group(
-            include_entries,
-            batches,
-            log_groups,
-            f"ccl mesh {mesh_shape}",
-            ccl_mods,
+            mods,
             test_group_name,
             batch_size,
             suite_name,
@@ -332,24 +299,12 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
 
     for hw_group, mods in grouped:
         hw_test_group = get_test_group_name_for_hardware_group(hw_group)
-        ccl_mods, non_ccl_mods = _split_ccl_modules(mods)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             f"hardware {_hw_label(hw_group)}",
-            non_ccl_mods,
-            hw_test_group,
-            batch_size,
-            suite_name,
-            MODEL_TRACED_BATCH_POLICY.get(hw_test_group),
-        )
-        _append_routed_group(
-            include_entries,
-            batches,
-            log_groups,
-            f"ccl hardware {_hw_label(hw_group)}",
-            ccl_mods,
+            mods,
             hw_test_group,
             batch_size,
             suite_name,
