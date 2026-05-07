@@ -34,6 +34,7 @@ import ttnn
 
 from .assigner import CompressedTensorAssigner
 from .tile_utils import (
+    _PACK_FN,
     BFP_MANT_BITS,
     COMPRESSED_FORMATS,
     DEFAULT_TILE_HW,
@@ -1122,15 +1123,78 @@ class CompressedTensor:
 
     @staticmethod
     def _compress_shard(data_np, page_indices, assignment_flat, tiles_w, tile_hw):
-        """Compress all tiles for one shard. Returns (tile_data_list, tile_format_list, total_bytes)."""
-        tile_data_list, tile_format_list, total_bytes = [], [], 0
-        for page_idx in page_indices:
-            tile_data, tile_format = CompressedTensor._compress_tile(
-                data_np, page_idx, assignment_flat, tiles_w, tile_hw
+        """Compress all tiles for one shard. Returns (tile_data_list, tile_format_list, total_bytes).
+
+        Tiles are grouped by their assigned format (mantissa bits) and each
+        format group is packed in a single batched ``pack_as_bfpN_tiles``
+        call.  The C++ packer (``tt_metal/impl/data_format/blockfloat_common.cpp``)
+        accepts an arbitrary-length flat float32 buffer, processes one tile
+        at a time internally, and emits the packed bytes in tile-major
+        order at exactly ``bfp_tile_packed_size(fmt)`` bytes per tile.
+        Splitting that output back into per-tile chunks reproduces the
+        original per-tile ``pack_bfp_tile`` output byte-for-byte while
+        collapsing one Python↔C++ crossing per tile down to one per
+        (shard, format) group — typically 1× for single-format SRAM hot
+        experts, ≤4× for mixed-format BSPM.
+        """
+        n = len(page_indices)
+        tile_data_list: list = [None] * n
+        tile_format_list: list = [None] * n
+        total_bytes = 0
+        tile_elems = tile_hw * tile_hw
+
+        # Group slots by tile format (mantissa bits).
+        by_fmt: dict[int, list[tuple[int, int]]] = {}
+        for slot, page_idx in enumerate(page_indices):
+            fmt = _FMT_IDX_TO_MANT_BITS[int(assignment_flat[page_idx])]
+            by_fmt.setdefault(fmt, []).append((slot, int(page_idx)))
+
+        for fmt, members in by_fmt.items():
+            if fmt == 0:
+                # bfp0: zero-byte tile; no pack needed.
+                empty = np.array([], dtype=np.uint8)
+                for slot, _ in members:
+                    tile_data_list[slot] = empty
+                    tile_format_list[slot] = 0
+                continue
+
+            # Stack tiles into one (n_tiles * tile_hw * tile_hw,) flat
+            # float32 buffer in row-major-per-tile order.  ``data_np`` is
+            # already float32 (from ``_to_2d``) so no dtype conversion is
+            # needed here.
+            n_tiles = len(members)
+            tiles_flat = np.empty(n_tiles * tile_elems, dtype=np.float32)
+            for k, (_, page_idx) in enumerate(members):
+                tr = page_idx // tiles_w
+                tc = page_idx % tiles_w
+                tiles_flat[k * tile_elems : (k + 1) * tile_elems] = data_np[
+                    tr * tile_hw : (tr + 1) * tile_hw,
+                    tc * tile_hw : (tc + 1) * tile_hw,
+                ].ravel()
+
+            # One batched C++ pack call for all tiles of this format.
+            pack_fn = _PACK_FN[fmt]
+            packed_u32 = np.asarray(pack_fn(tiles_flat, row_major_input=True))
+            packed_bytes = packed_u32.view(np.uint8)
+            per_tile_bytes = bfp_tile_packed_size(fmt)
+            assert packed_bytes.size == per_tile_bytes * n_tiles, (
+                f"Batched pack size mismatch: got {packed_bytes.size} bytes, "
+                f"expected {per_tile_bytes * n_tiles} ({n_tiles} tiles × {per_tile_bytes})"
             )
-            tile_data_list.append(tile_data)
-            tile_format_list.append(tile_format)
-            total_bytes += len(tile_data)
+
+            # Slice the batched output and assign per-tile views back at
+            # the original slots.  The slices share memory with
+            # ``packed_u32``; numpy keeps the base array alive via the
+            # views' ``base`` chain, so the C++-allocated buffer stays
+            # valid for the lifetime of any slice referenced by the
+            # caller.  Downstream consumers (``_concat_shards_padded``,
+            # ``_create_per_core_tensors``) iterate or concatenate these
+            # arrays and don't require independently-owned memory.
+            for k, (slot, _) in enumerate(members):
+                tile_data_list[slot] = packed_bytes[k * per_tile_bytes : (k + 1) * per_tile_bytes]
+                tile_format_list[slot] = fmt
+                total_bytes += per_tile_bytes
+
         return tile_data_list, tile_format_list, total_bytes
 
     @staticmethod
