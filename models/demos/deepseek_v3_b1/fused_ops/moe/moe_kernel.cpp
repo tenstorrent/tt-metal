@@ -57,6 +57,7 @@
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
 #include "../../unified_kernels/gated_reduce.hpp"
 #include "../../unified_kernels/residual_add.hpp"
+#include "../../unified_kernels/eltwise_add_or_copy.hpp"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
@@ -391,6 +392,10 @@ void kernel_main() {
             // SRAM extended GatedReduce (NCRISC no-op).
             using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ReaderCTArgs;
             deepseek_b1_ops::GatedReduce::ReaderArgs sram_gated_reduce_args{};
+
+            // SRAM down merge (NCRISC no-op).
+            using SramDownMergeCTArgs = deepseek_b1_ops::EltwiseAddOrCopy::ReaderCTArgs;
+            deepseek_b1_ops::EltwiseAddOrCopy::ReaderArgs sram_down_merge_args{};
 
             // SRAM gate gather (A) receiver (NCRISC) — sender_core only.
             // dst_num_pages init=0; set at runtime to n_sram_active * total_cores.
@@ -766,6 +771,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gather_sender_index_l1_addr"),
                 get_named_compile_time_arg_val("sram_gather_num_active_experts")>;
             deepseek_b1_ops::GatedReduce::WriterArgs sram_gated_reduce_args{};
+
+            // SRAM down merge (BRISC no-op).
+            using SramDownMergeCTArgs = deepseek_b1_ops::EltwiseAddOrCopy::WriterCTArgs;
+            deepseek_b1_ops::EltwiseAddOrCopy::WriterArgs sram_down_merge_args{};
 
             // SRAM gate gather (A) sender (BRISC). num_experts init=0; set at
             // runtime to n_sram_active. src_page_size=64 (1 tile),
@@ -1279,6 +1288,15 @@ void kernel_main() {
                 /*out_cb_total_pushes=*/get_named_compile_time_arg_val("sram_gather_num_active_experts"),
             };
 
+            // SRAM down merge (compute): eltwise_add when n_sram>0 else copy(in1→out).
+            // do_add is set at runtime from n_sram_active.
+            using SramDownMergeCTArgs = deepseek_b1_ops::EltwiseAddOrCopy::ComputeCTArgs<
+                get_named_compile_time_arg_val("sram_down_merge_in0"),
+                get_named_compile_time_arg_val("sram_down_merge_in1"),
+                get_named_compile_time_arg_val("sram_down_merge_out"),
+                get_named_compile_time_arg_val("sram_down_merge_num_tiles")>;
+            deepseek_b1_ops::EltwiseAddOrCopy::ComputeArgs sram_down_merge_args{/*do_add=*/0};
+
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
                 get_named_compile_time_arg_val("add_cb_in0"),
@@ -1549,6 +1567,13 @@ void kernel_main() {
 #endif
 #endif
 
+        // n_sram_active is computed inside the ENABLE_ROUTING block (post mcast_index
+        // scan on a/b cores + 112 mcast receivers). Declared here so SRAM_DOWN_MERGE
+        // (which lives outside the routing ifdef, since shared_down always runs)
+        // can read it. Stays 0 in the dense MLP path (no routing) → merge defaults
+        // to copy(shared_down → merged).
+        uint32_t n_sram_active = 0;
+
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
         {
@@ -1615,8 +1640,8 @@ void kernel_main() {
         // ─── Pre-mcast scan on sender_core ───────────────────────────────────
         // sender_core has gate_output_indices_cb populated by the gate kernel
         // before mcast_index pops it. Receivers don't have it yet — they
-        // scan after the mcast (below).
-        uint32_t n_sram_active = 0;
+        // scan after the mcast (below). n_sram_active is declared at outer scope
+        // (above the ENABLE_ROUTING ifdef) so SRAM_DOWN_MERGE can read it.
         if constexpr (Core::Shared::is_gated_reduce_core) {
             n_sram_active = scan_n_sram_active<
                 get_named_compile_time_arg_val("gate_output_indices_cb"),
@@ -1902,6 +1927,24 @@ void kernel_main() {
                 /*pop_in1=*/false>
                 shared_down_matmul;
             shared_down_matmul(moe.shared.down_matmul_args);
+        }
+
+        // 9b'. SRAM_DOWN_MERGE — combine SRAM down output with shared down output.
+        //   n_sram_active > 0 : merged = sram_down + shared_down (eltwise add)
+        //   n_sram_active == 0: merged = shared_down (copy passthrough)
+        // Runs on the 112 mcast receiver cores (same as shared_down_matmul). Output
+        // CB merged_down_out_cb feeds residual_add (replaces shared_down_matmul_out
+        // as the residual_add input). Always runs — copy path keeps the wiring
+        // uniform for dense MLP / no-routing.
+        {
+            DeviceZoneScopedN("SRAM_DOWN_MERGE");
+#if defined(COMPILE_FOR_TRISC)
+            moe.routed.sram_down_merge_args.do_add = (n_sram_active > 0) ? 1u : 0u;
+#endif
+            deepseek_b1_ops::EltwiseAddOrCopy::
+                Op<Moe::Routed::SramDownMergeCTArgs, Core::Shared::is_mcast_receiver_core>
+                    sram_down_merge;
+            sram_down_merge(moe.routed.sram_down_merge_args);
         }
 
         // 9c. Shared: Residual Add — matmul_out + shard(residual) on 112 cores

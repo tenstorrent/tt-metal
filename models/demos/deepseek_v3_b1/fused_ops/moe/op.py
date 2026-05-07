@@ -353,6 +353,12 @@ class _MoeRoutedExpertContext:
     sram_down_proj_cb_in1_descriptors_per_device: Any = None
     sram_down_proj_cb_out_descriptor: Any = None
 
+    # Merged down output CB — receives either eltwise_add(sram_down, shared_down)
+    # when n_sram_active > 0, or a copy of shared_down_matmul_out when n_sram_active = 0.
+    # Replaces shared_down_matmul_out_cb as residual_add's in0.
+    merged_down_out_cb: int = 0
+    merged_down_out_cb_descriptor: Any = None
+
     # SRAM routed gate/up gather (step 3 of separate-pipeline plan).
     # Each of the 64 a_cores (gate) / b_cores (up) sends num_active_experts
     # tiles to the sender core. Dst CB is on sender, sized 8 experts × 64 tiles
@@ -1521,6 +1527,11 @@ class MoeRoutedExpertOp:
         # cb_out: 1×32 bf16, per_core_n=2 tiles per core (mirrors shared_down_matmul_out).
         sram_down_proj_cb_in1 = cb_id_context.get_cb_id(ttnn.bfloat4_b, TD_32x32_bfp4)
         sram_down_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Merged down output CB — feeds residual_add, holds either
+        #   shared_down + sram_down  (n_sram_active > 0)  or
+        #   shared_down              (n_sram_active == 0, copy path)
+        # Replaces shared_down_matmul_out_cb as residual_add's in0.
+        merged_down_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -2531,6 +2542,8 @@ class MoeRoutedExpertOp:
             sram_down_proj_params=sram_down_proj_params,
             sram_down_proj_cb_in1_descriptors_per_device=sram_down_proj_cb_in1_descriptors_per_device,
             sram_down_proj_cb_out_descriptor=sram_down_proj_cb_out_descriptor,
+            # Merged down output CB (eltwise_add or copy → residual_add input).
+            merged_down_out_cb=merged_down_out_cb,
             # SRAM gate/up gather (always-allocated CB IDs; data only when SRAM enabled).
             # Dummy tensors are caller-provided (see test fixture).
             sram_group1_cb=sram_group1_cb,
@@ -3316,6 +3329,9 @@ class MoeRoutedExpertOp:
         # SRAM down mcast dst CB (kv_buf-overlaid on the 112 mcast receiver cores).
         if ctx.sram_down_mcast_dst_cb_descriptor is not None:
             descriptors.append(ctx.sram_down_mcast_dst_cb_descriptor)
+        # Merged down output CB (kv_buf-overlaid on the 112 mcast receiver cores).
+        if ctx.merged_down_out_cb_descriptor is not None:
+            descriptors.append(ctx.merged_down_out_cb_descriptor)
 
         if ctx.enable_routing:
             descriptors.append(ctx.gate_proj_cb_index_descriptor)
@@ -4236,7 +4252,7 @@ class MoeSharedExpertOp:
         )
 
     @staticmethod
-    def _build_compile_time_args(shared_ctx, rmsnorm_mcast_dst_cb, rmsnorm_mcast_params):
+    def _build_compile_time_args(shared_ctx, rmsnorm_mcast_dst_cb, rmsnorm_mcast_params, routed_ctx):
         """
         Build shared expert compile-time args to append to routed expert args.
 
@@ -4244,6 +4260,7 @@ class MoeSharedExpertOp:
             shared_ctx: _MoeSharedExpertContext
             rmsnorm_mcast_dst_cb: The CB index for the rmsnorm mcast destination (shared with routed)
             rmsnorm_mcast_params: RMSNorm mcast params (reuse NOC coords for residual mcast)
+            routed_ctx: _MoeRoutedExpertContext (for SRAM down merge wiring)
 
         Returns:
             (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
@@ -4344,12 +4361,21 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_k_num_tiles", shared_ctx.down_matmul_params["k_num_tiles"]),
             ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
             ("shared_down_matmul_weights_cb_addr", shared_ctx.down_matmul_params["weights_cb_addr"]),
-            # Residual add
-            ("shared_residual_add_in0", shared_ctx.down_matmul_params["out_cb"]),  # matmul output
+            # Residual add — reads from merged_down_out_cb (= shared_down + sram_down
+            # when n_sram_active>0, or copy of shared_down when n_sram_active=0).
+            # The shared+sram merge or copy happens between shared_down_matmul and
+            # residual_add in the kernel order (see moe_kernel.cpp SRAM_DOWN_MERGE).
+            ("shared_residual_add_in0", routed_ctx.merged_down_out_cb),
             ("shared_residual_add_in1", shared_ctx.residual_cb),  # residual (pre-loaded bias)
             ("shared_residual_add_out", shared_ctx.residual_add_params["out_cb"]),
             ("shared_residual_add_out_w", shared_ctx.down_matmul_params["out_w"]),
             ("shared_residual_add_total_in1_tiles", shared_ctx.residual_add_params["total_in1_tiles"]),
+            # Sram down merge (eltwise_add when n_sram_active>0, copy when 0).
+            # Both paths read from shared_down_matmul_out + maybe sram_down → merged_down_out.
+            ("sram_down_merge_in0", routed_ctx.sram_down_proj_out_cb),  # SRAM down output
+            ("sram_down_merge_in1", shared_ctx.down_matmul_params["out_cb"]),  # shared down output
+            ("sram_down_merge_out", routed_ctx.merged_down_out_cb),  # merged → residual_add
+            ("sram_down_merge_num_tiles", shared_ctx.down_matmul_params["out_w"]),  # 2 tiles per core
         ]
         return ncrisc_args, brisc_args, trisc_args
 
@@ -5465,6 +5491,27 @@ class MoeOp:
         shared_ctx.down_matmul_params["output_cb_descriptor"] = cb36_desc
         kv_offset += cb36_total_size
 
+        # CB merged_down_out: feeds residual_add (replaces shared_down_matmul_out_cb).
+        # Holds shared_down + sram_down (or just shared_down when n_sram=0). Same
+        # layout/size as cb36 — 2 1×32 tiles per core on the 112 mcast receivers.
+        merged_cb_id = routed_ctx.merged_down_out_cb
+        merged_total_size = 128
+        merged_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            merged_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=merged_total_size,
+        )
+        merged_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=merged_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        merged_desc.format_descriptors = [merged_fmt]
+        routed_ctx.merged_down_out_cb_descriptor = merged_desc
+        kv_offset += merged_total_size
+
         # CB 37: shared_residual_add_out (total_size=128, page_size=64, tile=1x32, bfloat16)
         cb37_cb_id = shared_ctx.residual_add_params["out_cb"]
         cb37_total_size = 128
@@ -6428,7 +6475,10 @@ class MoeOp:
 
         rmsnorm_mcast_dst_cb = self.ctx.routed_ctx.rmsnorm_mcast_params["dst_cb"]
         shared_ncrisc, shared_brisc, shared_trisc = MoeSharedExpertOp._build_compile_time_args(
-            self.ctx.shared_ctx, rmsnorm_mcast_dst_cb, self.ctx.routed_ctx.rmsnorm_mcast_params
+            self.ctx.shared_ctx,
+            rmsnorm_mcast_dst_cb,
+            self.ctx.routed_ctx.rmsnorm_mcast_params,
+            self.ctx.routed_ctx,
         )
         ncrisc_args += shared_ncrisc
         brisc_args += shared_brisc
