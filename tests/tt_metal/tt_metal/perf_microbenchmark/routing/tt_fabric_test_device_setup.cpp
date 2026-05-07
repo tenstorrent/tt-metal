@@ -210,7 +210,6 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
     const CoreCoord& core,
     TestWorkerType worker_type,
     const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
-    const std::shared_ptr<IRouteManager>& route_manager,
     const FabricNodeId& fabric_node_id,
     tt::tt_metal::Program& program_handle) const {
     std::vector<uint32_t> rt_args;
@@ -799,7 +798,7 @@ void TestDevice::create_sync_kernel() {
     std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
 
     auto sync_connection_args = sync_connection_manager.generate_connection_args_for_core(
-        sync_core, TestWorkerType::SYNC, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
+        sync_core, TestWorkerType::SYNC, device_info_provider_, fabric_node_id_, program_handle_);
     rt_args.insert(rt_args.end(), sync_connection_args.begin(), sync_connection_args.end());
 
     // Local args (all the rest go to local args buffer)
@@ -931,7 +930,7 @@ void TestDevice::create_sender_kernels() {
 
         // Add all connection args via FabricConnectionManager
         auto connection_args = connection_manager_.generate_connection_args_for_core(
-            core, TestWorkerType::SENDER, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
+            core, TestWorkerType::SENDER, device_info_provider_, fabric_node_id_, program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
 
         // Local args for traffic configs (existing logic)
@@ -1051,7 +1050,7 @@ void TestDevice::create_receiver_kernels() {
 
         // Add all connection args via FabricConnectionManager (for credit return)
         auto connection_args = connection_manager_.generate_connection_args_for_core(
-            core, TestWorkerType::RECEIVER, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
+            core, TestWorkerType::RECEIVER, device_info_provider_, fabric_node_id_, program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
 
         // Build traffic config to credit connection mapping (same as sender side)

@@ -174,7 +174,6 @@ public:
         const CoreCoord& core,
         TestWorkerType worker_type,
         const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
-        const std::shared_ptr<IRouteManager>& route_manager,
         const FabricNodeId& fabric_node_id,
         tt::tt_metal::Program& program_handle) const;
 
