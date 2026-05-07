@@ -63,6 +63,5 @@ void kernel_main() {
             compute_kernel_lib::NoOp{}
 #endif
         );
-        (void)row;
     }
 }
