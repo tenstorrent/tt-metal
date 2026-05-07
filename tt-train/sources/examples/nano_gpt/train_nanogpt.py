@@ -473,8 +473,17 @@ def train_step(
     # When mask is None, SDPA kernel uses native causal masking (AttentionMaskType::Causal)
     logits = model(input_tokens, mask)
 
-    # Compute loss
-    loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
+    # Compute loss.  When TP is enabled the LM head returns vocab-sharded
+    # logits ([B,1,S,V/tp_size] per device), so route through the C++
+    # vocab_parallel_cross_entropy_loss to avoid the full-vocab all-gather.
+    # Mirrors main.cpp:798-801.
+    mesh = ttml.mesh()
+    if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+        loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+            logits, target_tokens, cluster_axis=mesh.axis_index("tp")
+        )
+    else:
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
 
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
@@ -484,7 +493,6 @@ def train_step(
     # get_loss_over_devices internally builds a concat_mesh_to_tensor
     # composer and takes the mean, mirroring how the C++ trainer logs
     # per-rank loss when DDP is on.
-    mesh = ttml.mesh()
     if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
         loss_float = float(get_loss_over_devices(loss))
     else:
