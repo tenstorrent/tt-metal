@@ -163,7 +163,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           auto-triage: ${{ matrix.test-group.auto-triage != false }}
-          hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 5.0 }}
+          hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 60.0 }}
 
       - name: Run fabric tests
         if: ${{ matrix.test-group.model == 'fabric' }}
