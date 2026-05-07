@@ -523,7 +523,7 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     std::string tensor_filename = (temp_dir / (test_case.name + ".tensorbin")).string();
 
     // Use tt-metal's dump_tensor_flatbuffer to write tensor to file
-    tt::tt_metal::dump_tensor_flatbuffer(tensor_filename, tensor);
+    ttnn::dump_tensor_flatbuffer(tensor_filename, tensor);
 
     // Store metadata in FlatBufferFile for reference
     serializer.put(test_case.name + "/tensor_file", std::string_view(tensor_filename));
@@ -590,7 +590,7 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     // For HOST tensors, pass nullptr to load as CPU tensor
     // For DEVICE tensors, pass device to load and then move to device
     auto* load_device = (test_case.storage_type == ttnn::StorageType::DEVICE) ? device : nullptr;
-    ASSERT_NO_THROW(read_tensor = tt::tt_metal::load_tensor_flatbuffer(tensor_filename_read, load_device));
+    ASSERT_NO_THROW(read_tensor = ttnn::load_tensor_flatbuffer(tensor_filename_read, load_device));
 
     // Restore original layout if needed
     tt::tt_metal::Layout original_layout = test_case.layout;

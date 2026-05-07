@@ -205,7 +205,7 @@ void FlatBufferFile::serialize(std::string_view file_path) {
         ttnn::Tensor cpu_tensor = tensor.cpu();
 
         // Write tensor to file using tt-metal's dump function
-        tt::tt_metal::dump_tensor_flatbuffer(tensor_file.string(), cpu_tensor);
+        ttnn::dump_tensor_flatbuffer(tensor_file.string(), cpu_tensor);
     }
 
     // Build KeyValuePair for each entry in m_data (strings and vectors only)
@@ -566,7 +566,7 @@ void FlatBufferFile::deserialize(std::string_view filename) {
                         }
 
                         // Load tensor from file using tt-metal's load function
-                        ttnn::Tensor tensor = tt::tt_metal::load_tensor_flatbuffer(tensor_file.string(), nullptr);
+                        ttnn::Tensor tensor = ttnn::load_tensor_flatbuffer(tensor_file.string(), nullptr);
                         m_tensors[key] = tensor;
                     }
                 }
