@@ -9,16 +9,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
-from models.experimental.tt_symbiote.core.utils import tree_map, flat_map_bypass
 from tracy import signpost
 
 import ttnn
 from models.experimental.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
     compare_fn_outputs,
+    flat_map_bypass,
     torch_dtype_to_ttnn_dtype,
+    tree_map,
     ttnn_dtype_to_torch_dtype,
 )
+from models.experimental.tt_symbiote.models.qwen_omni import distributed_config as _qwen_omni_distributed_config
+
+DistributedTensorConfig = _qwen_omni_distributed_config.DistributedTensorConfig
+DistributedConfig = _qwen_omni_distributed_config.DistributedConfig
 
 
 @contextlib.contextmanager
