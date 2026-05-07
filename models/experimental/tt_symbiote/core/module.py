@@ -337,6 +337,7 @@ class DeviceArch(Enum):
     P150x4 = "p150x4"
     P150x8 = "p150x8"
     BHGLX = "bhglx"
+    QB2 = "qb2"  # 4× Blackhole p300c QuietBox (1×4 mesh)
 
 
 MeshShapeToDeviceArch = {
@@ -349,6 +350,7 @@ MeshShapeToDeviceArch = {
     "P150x4": DeviceArch.P150x4,
     "P150x8": DeviceArch.P150x8,
     "BHGLX": DeviceArch.BHGLX,
+    "QB2": DeviceArch.QB2,
 }
 
 

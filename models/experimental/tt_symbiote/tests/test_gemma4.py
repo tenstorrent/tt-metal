@@ -45,6 +45,7 @@ MESH_DEVICE_MAP = {
     "P150x4": (1, 4),
     "P150x8": (1, 8),
     "BHGLX": (8, 4),
+    "QB2": (1, 4),  # 4× Blackhole p300c QuietBox
 }
 
 

@@ -845,9 +845,15 @@ void calculate_exponential_first_column() {
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = ckernel::sfpu::
-                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                    val, scale_bf16);
+            // Inline the exact logic of _calculate_exponential_piecewise_<true,true,true> without
+            // calling it as a named function.  The named function causes GCC 15 LTO to emit a
+            // constprop specialization that overflows the Blackhole SFPU register file
+            // (sfpi.h:766 cannot-write-sfpu-vector-to-memory).  Writing the same code inline
+            // avoids the separate function, so no constprop is generated.
+            sfpi::vFloat scaled = val * sfpi::s2vFloat16b(scale_bf16);
+            sfpi::vFloat result = 0.0f;
+            v_if(scaled >= -42) { result = ckernel::sfpu::_calculate_exponential_approx_(scaled); }
+            v_endif;
             sfpi::dst_reg[0] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
@@ -940,12 +946,19 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         // Exponentials of differences
         sfpi::vFloat exp_prev, exp_worker;
         if constexpr (SDPA_EXP_APPROX_MODE) {
-            exp_prev =
-                ckernel::sfpu::_calculate_exponential_piecewise_<true, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                    diff_prev, scale_bf16);
-            exp_worker =
-                ckernel::sfpu::_calculate_exponential_piecewise_<true, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                    diff_worker, scale_bf16);
+            // Inline the exact logic of _calculate_exponential_piecewise_<true,true,true> without
+            // calling it as a named function — avoids GCC 15 LTO constprop that overflows SFPU
+            // registers on Blackhole (sfpi.h:766 cannot-write-sfpu-vector-to-memory).
+            // diff_prev and diff_worker are always <= 0 (cur_max = max of the two maxima),
+            // so SKIP_POSITIVE_CHECK=true is correct; only the lower clamp at -42 is needed.
+            sfpi::vFloat scaled_prev = diff_prev * sfpi::s2vFloat16b(scale_bf16);
+            sfpi::vFloat scaled_worker = diff_worker * sfpi::s2vFloat16b(scale_bf16);
+            exp_prev = 0.0f;
+            exp_worker = 0.0f;
+            v_if(scaled_prev >= -42) { exp_prev = ckernel::sfpu::_calculate_exponential_approx_(scaled_prev); }
+            v_endif;
+            v_if(scaled_worker >= -42) { exp_worker = ckernel::sfpu::_calculate_exponential_approx_(scaled_worker); }
+            v_endif;
         } else {
             sfpi::vFloat scaled_prev = diff_prev * sfpi::s2vFloat16b(scale_bf16);
             sfpi::vFloat scaled_worker = diff_worker * sfpi::s2vFloat16b(scale_bf16);

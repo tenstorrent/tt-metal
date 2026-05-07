@@ -842,7 +842,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         )
         return ttnn_module
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, hidden_states):
         hidden_states = TorchTTNNTensor(hidden_states)
         residuals = hidden_states
@@ -1160,7 +1160,7 @@ class TTNNExperts(TTNNModule):
             packer_l1_acc=True,
         )
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(
         self, x: ttnn.Tensor, topk_experts_indices: ttnn.Tensor, topk_experts_weights: ttnn.Tensor
     ) -> ttnn.Tensor:
@@ -1414,7 +1414,7 @@ class TTNNMoE(TTNNModule):
         self._gate_weight_tt = ttnn.to_device(self._gate_weight_tt, self.device)
         super().move_weights_to_device_impl()
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass: all-gather → gate → experts (handles dispatch/combine) → reduce-scatter → add shared.

@@ -35,11 +35,69 @@ from models.experimental.tt_symbiote.modules.linear import (
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNLocalRMSNorm
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.module import DeviceArch, MeshShapeToDeviceArch
 
 try:
     from transformers.cache_utils import Cache
 except ImportError:
     Cache = object
+
+
+class CompatNlpCreateQkvHeadsDecode:
+    """Architecture-aware wrapper for ``ttnn.experimental.nlp_create_qkv_heads_decode``.
+
+    On Wormhole (T3K, etc.) the original kernel is correct and is invoked directly.
+
+    On Blackhole (QB2) the kernel drops every odd-indexed head (PCC=0 at heads
+    1, 3, 5, ... while heads 0, 2, 4, ... remain at PCC=0.9999), causing model
+    decode output to collapse to multilingual gibberish.  We sidestep the bug by
+    splitting the fused QKV tensor with ``ttnn.slice`` + ``ttnn.reshape``, which
+    are both correct on Blackhole.
+
+    Output interface matches the original op: HEIGHT_SHARDED tensors with shape
+    ``[1, B, num_heads, head_dim]`` (Q) and ``[1, B, num_kv_heads, head_dim]`` (K, V).
+    """
+
+    @staticmethod
+    def _current_arch() -> DeviceArch | None:
+        return MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
+
+    @staticmethod
+    def split(qkv_4d: ttnn.Tensor, num_heads: int, num_kv_heads: int, memory_config):
+        """Run the original op on Wormhole, manual slice+reshape on Blackhole."""
+        arch = CompatNlpCreateQkvHeadsDecode._current_arch()
+        if arch == DeviceArch.QB2:
+            return CompatNlpCreateQkvHeadsDecode._manual_split(qkv_4d, num_heads, num_kv_heads, memory_config)
+        return ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv_4d,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            memory_config=memory_config,
+        )
+
+    @staticmethod
+    def _manual_split(qkv_4d: ttnn.Tensor, num_heads: int, num_kv_heads: int, memory_config):
+        # qkv_4d shape: (1, 1, B, fused_size) where fused_size == (num_heads + 2*num_kv_heads) * head_dim
+        batch_size = qkv_4d.shape[2]
+        fused_size = qkv_4d.shape[3]
+        head_dim = fused_size // (num_heads + 2 * num_kv_heads)
+        q_size = num_heads * head_dim
+        kv_size = num_kv_heads * head_dim
+
+        q = ttnn.slice(qkv_4d, [0, 0, 0, 0], [1, 1, batch_size, q_size])
+        k = ttnn.slice(qkv_4d, [0, 0, 0, q_size], [1, 1, batch_size, q_size + kv_size])
+        v = ttnn.slice(qkv_4d, [0, 0, 0, q_size + kv_size], [1, 1, batch_size, q_size + 2 * kv_size])
+
+        q = ttnn.reshape(q, (1, batch_size, num_heads, head_dim))
+        k = ttnn.reshape(k, (1, batch_size, num_kv_heads, head_dim))
+        v = ttnn.reshape(v, (1, batch_size, num_kv_heads, head_dim))
+
+        # Convert to the requested HEIGHT_SHARDED memory_config so callers see the
+        # same output layout the original op produces.
+        q = ttnn.to_memory_config(q, memory_config)
+        k = ttnn.to_memory_config(k, memory_config)
+        v = ttnn.to_memory_config(v, memory_config)
+        return q, k, v
 
 
 @trace_enabled
@@ -385,7 +443,7 @@ class TTNNGemma4Attention(TTNNModule):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            q, k, v = CompatNlpCreateQkvHeadsDecode.split(
                 qkv_4d,
                 num_heads=self.num_attention_heads,
                 num_kv_heads=self.num_key_value_heads,

@@ -129,7 +129,7 @@ class TTNNGemma4TextModel(TTNNModule):
         from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
         config = self.model.config
-        max_seq_len = min(getattr(config, "max_position_embeddings", 8192), 16384)
+        max_seq_len = min(getattr(config, "max_position_embeddings", 8192), 131072)
         mesh_device = self.device
         replicate = ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None
 
