@@ -39,6 +39,24 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+// Mock devices reuse the on-disk firmware sources of a real arch's package.
+// We only ship sources for Wormhole and Blackhole today; Quasar mock has
+// no `tt-2xx/trisc.cc` etc. installed at the expected path, so calling
+// build_firmware() against a Quasar mock blows up in cc1plus with
+// "No such file or directory". Real silicon devices always have sources
+// available and bypass this check.
+bool mock_firmware_sources_available_for(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0:
+        case tt::ARCH::BLACKHOLE: return true;
+        default: return false;
+    }
+}
+
+}  // namespace
+
 RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
     const GetControlPlaneFn& get_control_plane,
@@ -137,13 +155,18 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
             BuildEnvManager::get_instance().add_build_env(
                 device_id, num_hw_cqs_, descriptor_->metal_context().get_context_id());
-            // Build firmware ELFs unconditionally (mock and emulated included). The build is purely
-            // a compile/link step that does not touch hardware, but the resulting firmware ELFs
-            // export symbols (e.g. __fw_export_text_end) that the kernel linker scripts depend on.
-            // Without these symbols available as link inputs, JIT-compiling kernels on a mock
-            // device fails with "non constant or forward reference address expression". The actual
-            // firmware launch and launch-message clearing remain gated on real hardware below.
-            BuildEnvManager::get_instance().build_firmware(device_id);
+            // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
+            // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
+            // depend on -- without them, JIT-compiling kernels on a mock device fails with
+            // "non constant or forward reference address expression". So we run it for mock as
+            // well as real devices, EXCEPT when the mock arch has no firmware sources packaged
+            // (currently Quasar): there cc1plus would fatal on missing source files. Kernel JIT
+            // on Quasar mock is not yet supported and would require a separate sources fix.
+            const bool skip_fw_build =
+                cluster_.is_mock_or_emulated() && !mock_firmware_sources_available_for(cluster_.arch());
+            if (!skip_fw_build) {
+                BuildEnvManager::get_instance().build_firmware(device_id);
+            }
             if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
