@@ -26,7 +26,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
-from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, append_metadata_tail
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
@@ -61,7 +61,6 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     validate_debug_tensors: bool = False,
     torch_input=None,
-    forward_metadata=False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -268,13 +267,9 @@ def create_decoder_block_tensors(
                 mesh_mapper=mesh_mapper,
             )
 
-    if forward_metadata:
-        padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
-        padded_shape = (1, K + padding)
-        padded_input = torch.nn.functional.pad(torch_input, (0, padding), value=0)
-    else:
-        padded_shape = shape
-        padded_input = torch_input
+    padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
+    padded_shape = (1, K + padding)
+    padded_input = append_metadata_tail(torch_input, metadata)
     # Attention input/intermediate/output mesh tensors
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     shard_spec = ttnn.ShardSpec(
@@ -282,13 +277,14 @@ def create_decoder_block_tensors(
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
+    zero_input = torch.zeros_like(padded_input)
     device_tensors = []
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if row == sender_row and col == sender_col:
                 device_tensors.append(padded_input)
             else:
-                device_tensors.append(torch.zeros_like(padded_input))
+                device_tensors.append(zero_input)
 
     input_tensor_mesh = ttnn.from_torch(
         torch.cat(device_tensors, dim=0),
@@ -364,12 +360,6 @@ def create_decoder_block_tensors(
         tile=trans_tile,
         mesh_mapper=mesh_mapper,
     )
-
-    # Metadata / position IDs
-    metadata_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-    )
-    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
     # KV cache (ND sharded DRAM)
     program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
@@ -640,7 +630,6 @@ def create_decoder_block_tensors(
         "ttnn_krope_sin": ttnn_krope_sin,
         "ttnn_kv_cache": ttnn_kv_cache,
         "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
-        "ttnn_metadata_tensor": ttnn_metadata_tensor,
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
@@ -674,7 +663,6 @@ def create_decoder_block_tensors(
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
         "mcast_grid": mcast_grid,
-        "forward_metadata": forward_metadata,
         # Intermediate CPU tensors (for golden-reference builders)
         "torch_input": torch_input,
         "torch_kv_cache": torch_kv_cache,
@@ -719,7 +707,6 @@ class DecoderStage(StageKind):
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
-        forward_metadata: bool = True,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
@@ -744,7 +731,6 @@ class DecoderStage(StageKind):
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
-        self._forward_metadata = forward_metadata
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
         self._host_loopback = host_loopback
@@ -772,10 +758,8 @@ class DecoderStage(StageKind):
 
         exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
 
-        if self._forward_metadata:
-            page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-        else:
-            page_size = ACTIVATION_PAGE_SIZE_BYTES
+        # The decoder always forwards activation + metadata as a single payload.
+        page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         upstream_fifo_size = activation_fifo_size_bytes(page_size, self._upstream_fifo_pages)
         downstream_fifo_size = activation_fifo_size_bytes(page_size, self._downstream_fifo_pages)
 
@@ -789,7 +773,7 @@ class DecoderStage(StageKind):
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=exit_upstream_page_size,
-            forward_metadata=self._forward_metadata,
+            forward_metadata=True,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
@@ -833,7 +817,6 @@ class DecoderStage(StageKind):
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache"],
-            d["ttnn_metadata_tensor"],
             d["scale"],
             d["sdpa_kv_cache_buffer"],
             d["sdpa_out_interm_buffer"],
@@ -882,7 +865,6 @@ class DecoderStage(StageKind):
             persistent_mode=self._persistent_mode,
             termination_semaphore=self._state.get("termination_semaphore"),
             is_torus=self._is_torus,
-            forward_metadata=self._forward_metadata,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -918,7 +900,6 @@ class DecoderStage(StageKind):
                 weights=self._weights,
                 metadata=self._metadata,
                 num_slots=self._num_slots,
-                forward_metadata=self._forward_metadata,
             )
         else:
             d = create_decoder_block_tensors(
@@ -934,7 +915,6 @@ class DecoderStage(StageKind):
                 metadata=self._metadata,
                 num_slots=self._num_slots,
                 is_moe=False,
-                forward_metadata=self._forward_metadata,
             )
         ttnn.synchronize_device(mesh_device)
 
@@ -986,7 +966,6 @@ class MoEDecoderStage(DecoderStage):
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
-        forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
@@ -1003,7 +982,6 @@ class MoEDecoderStage(DecoderStage):
             num_routed_experts=num_routed_experts,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
-            forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
             host_loopback=host_loopback,
@@ -1027,7 +1005,6 @@ class DenseDecoderStage(DecoderStage):
         num_slots: int = 64,
         persistent_mode: bool = True,
         is_torus: bool = True,
-        forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
@@ -1044,7 +1021,6 @@ class DenseDecoderStage(DecoderStage):
             num_routed_experts=0,
             use_hardcoded_expert_index=False,
             enable_routing=False,
-            forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
             host_loopback=host_loopback,
