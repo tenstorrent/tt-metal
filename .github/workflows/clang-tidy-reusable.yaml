@@ -53,7 +53,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Check Redis credentials
+      - name: Check ccache credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -76,7 +76,7 @@ jobs:
           )
           CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          echo "CCACHE_REMOTE_STORAGE: (set)"
 
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
@@ -114,6 +114,7 @@ jobs:
                   aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
                   aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
                   region_name=os.environ["AWS_DEFAULT_REGION"],
+                  config=botocore.config.Config(s3={"addressing_style": "path"}),
               )
               s3.head_bucket(Bucket="ctcache")
               print("ctcache Garage S3 connection OK")
@@ -223,13 +224,14 @@ jobs:
           } >> $GITHUB_STEP_SUMMARY
 
           python3 - << 'PYEOF'
-          import boto3, os
+          import boto3, botocore, os
           try:
               s3 = boto3.client("s3",
                   endpoint_url=os.environ["AWS_ENDPOINT_URL"],
                   aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
                   aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
                   region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+                  config=botocore.config.Config(s3={"addressing_style": "path"}),
               )
               folder = os.environ.get("CTCACHE_S3_FOLDER", "")
               prefix = f"{folder}/" if folder else ""
