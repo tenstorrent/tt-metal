@@ -682,10 +682,6 @@ PhysicalSystemDescriptor run_physical_system_discovery(
             remove_unresolved_nodes(psd);
             generate_cross_host_connections(psd);
             validate_graphs(psd);
-
-            // With multi-rank (size > 1), run_local_discovery uses hostname_rank keys from the start,
-            // so asic_connectivity_graph, exit_node_connection_table, and host_connectivity_graph
-            // already have the correct keys. No rename needed.
         }
         exchange_metadata(psd, distributed_context, false);
     }
