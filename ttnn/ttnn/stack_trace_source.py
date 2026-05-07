@@ -188,15 +188,18 @@ def normalize_existing_source_file_path(file_path: str | None) -> str | None:
 
 
 def read_source_file(normalized_path: str) -> str | None:
-    """Read UTF-8 text from *normalized_path* only.
+    """Read UTF-8 text from disk for a stack-trace source path.
 
-    Caller must pass a path previously returned by :func:`normalize_existing_source_file_path`
-    (avoids repeating normalization and keeps stack-trace read logic in one place).
+    Always runs :func:`normalize_existing_source_file_path` before ``open`` (realpath,
+    regular-file check, prefix allowlist) so reads never use a raw path string alone.
     """
     if not normalized_path:
         return None
+    safe_path = normalize_existing_source_file_path(normalized_path)
+    if safe_path is None:
+        return None
     try:
-        with open(normalized_path, encoding="utf-8", errors="replace") as handle:
+        with open(safe_path, encoding="utf-8", errors="replace") as handle:
             return handle.read()
     except OSError:
         return None
