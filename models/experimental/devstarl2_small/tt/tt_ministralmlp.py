@@ -22,6 +22,10 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
 class TtMinistralMLP(LightweightModule):
+    # Prefill FF1/FF3: factory ``ttnn.linear`` + reuse-mcast program blows L1 on 5k×32k-class matmuls.
+    # Chunk activations (cap below) and run **minimal_matmul** on non-Galaxy (same idea as FF2 for long seq).
+    _PREFILL_MLP_M_CAP = 32
+
     def __init__(
         self,
         mesh_device,
@@ -117,7 +121,7 @@ class TtMinistralMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        seq_len = x.shape[-2]
+        full_seq_len = int(x.shape[-2])
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
@@ -127,39 +131,70 @@ class TtMinistralMLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
-        if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:
-            x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
+        cfg_seq = full_seq_len
+        if mode == Mode.PREFILL:
+            max_chunk = min(int(self.args.prefill_len_cutoff), int(self._PREFILL_MLP_M_CAP))
+            max_chunk = max(max_chunk, 1)
+            chunk = max_chunk
+            while chunk > 1 and full_seq_len % chunk != 0:
+                chunk -= 1
+            if full_seq_len > chunk:
+                x = ttnn.reshape(x, [1, full_seq_len // chunk, chunk, -1])
+                cfg_seq = chunk
 
-        pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
-        pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
-        pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
+        pc_2 = self.args.get_mlp_ff2_prg_config(mode, cfg_seq, self.prefetcher)
 
-        w1_out = ttnn.linear(
-            x,
-            self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
+        # ``ttnn.linear`` + reuse-mcast program config blows L1 on wide (~5k × ~32k) prefill matmuls.
+        # Use the same minimal matmul path as FF2 for long prefills (smaller static CBs); Galaxy keeps linear.
+        if mode == Mode.PREFILL and not TG:
+            grid = self.args.mlp1_3_grid(cfg_seq)
+            mmc_ff13 = ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+            )
+            w1_out = ttnn.experimental.minimal_matmul(
+                x,
+                self.w1,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                config=mmc_ff13,
+            )
+            w3_out = ttnn.experimental.minimal_matmul(
+                x,
+                self.w3,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                config=mmc_ff13,
+            )
+        else:
+            pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, cfg_seq, self.prefetcher)
+            pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, cfg_seq, self.prefetcher)
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_1,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_3,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
         ttnn.deallocate(x)
 
         if TG:
@@ -258,7 +293,7 @@ class TtMinistralMLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if seq_len > 128 and mode != Mode.DECODE:
+        if cfg_seq > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
                 self.w2,
