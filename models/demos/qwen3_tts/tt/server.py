@@ -2869,7 +2869,9 @@ def run_inference(
             "cp_prefill": 0.0,
             "cp_decode": 0.0,
             "build_emb": 0.0,
-            "talker": 0.0,
+            "talker_launch": 0.0,
+            "codec0_d2h": 0.0,
+            "codec0_cpu": 0.0,
         }
         _phase_n = 0
 
@@ -3008,15 +3010,19 @@ def run_inference(
             cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
             # Get next code 0 from trace output (on-device argmax for greedy)
-            token_0 = sample_from_tt_vocab_logits(
-                trace_codec_logits_out,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                greedy=config.greedy,
-                repetition_penalty=config.repetition_penalty,
-                generated_tokens=generated_code0_tokens,
+            _t_before_codec0_d2h = time.time()
+            _codec0_logits_torch = ttnn.to_torch(trace_codec_logits_out, dtype=torch.float32)
+            _t_after_codec0_d2h = time.time()
+            token_0 = sample_token(
+                _codec0_logits_torch.flatten(),
+                config.temperature,
+                config.top_k,
+                config.greedy,
+                config.repetition_penalty,
+                generated_code0_tokens,
             )
             generated_code0_tokens.append(token_0)
+            _t_after_codec0_cpu = time.time()
 
             if token_0 == config.codec_eos_id:
                 print(f"  EOS at step {step + 1}")
@@ -3034,7 +3040,9 @@ def run_inference(
                 _phase_acc["cp_prefill"] += (_t_after_cp_prefill - _t_after_restore) * 1000
                 _phase_acc["cp_decode"] += (_t_after_cp_decode - _t_after_cp_prefill) * 1000
                 _phase_acc["build_emb"] += (_t_after_build_emb - _t_after_cp_decode) * 1000
-                _phase_acc["talker"] += (t_step_end - _t_after_build_emb) * 1000
+                _phase_acc["talker_launch"] += (t_talker_end - _t_after_build_emb) * 1000
+                _phase_acc["codec0_d2h"] += (_t_after_codec0_d2h - _t_before_codec0_d2h) * 1000
+                _phase_acc["codec0_cpu"] += (_t_after_codec0_cpu - _t_after_codec0_d2h) * 1000
                 _phase_n += 1
 
             if (step + 1) % 20 == 0:
