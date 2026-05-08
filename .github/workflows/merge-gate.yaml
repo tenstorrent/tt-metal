@@ -546,4 +546,3 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
           owner: "U0AK4BVCFM0,S0985AN7TC5"
-
