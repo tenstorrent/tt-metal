@@ -1098,18 +1098,29 @@ class TestOlmoE2EPCC:
                 v_at_pos = v_block_cpu[:, 0, offset_in_block, :]  # [8, 128]
                 logger.info(f"  K_cache_at_{start_pos}: max_abs={k_at_pos.abs().max():.4f}  std={k_at_pos.std():.4f}")
                 logger.info(f"  V_cache_at_{start_pos}: max_abs={v_at_pos.abs().max():.4f}  std={v_at_pos.std():.4f}")
+
+                # TT stores K in Meta-interleaved layout [r0,i0,r1,i1,...,r63,i63] while ref
+                # uses HF split-half [r0,...,r63,i0,...,i63]. Convert TT→HF before compare so
+                # cos_sim measures actual numeric agreement, not layout difference.
+                def _tt_to_hf_layout(tt_k_interleaved):
+                    even = tt_k_interleaved[..., 0::2]  # [r0, r1, ..., r63]
+                    odd = tt_k_interleaved[..., 1::2]  # [i0, i1, ..., i63]
+                    return torch.cat([even, odd], dim=-1)
+
                 if ref_kr is not None:
                     for r in range(8):
-                        tt_k = k_at_pos[r]
+                        tt_k_raw = k_at_pos[r]
+                        tt_k = _tt_to_hf_layout(tt_k_raw)
                         ref_k = ref_kr[0, 0, r, :].float()
                         if tt_k.abs().max() < 1e-4:
                             logger.info(f"    K_cache head{r}: <<ZERO>> write FAILED!")
                         else:
                             cos_sim = F_nn.cosine_similarity(tt_k.unsqueeze(0), ref_k.unsqueeze(0)).item()
                             max_err = (tt_k - ref_k).abs().max().item()
+                            ratio = tt_k.std().item() / max(ref_k.std().item(), 1e-9)
                             logger.info(
                                 f"    K_cache head{r}: cos_sim={cos_sim:.4f} max_err={max_err:.4f} "
-                                f"tt_max={tt_k.abs().max():.4f} ref_max={ref_k.abs().max():.4f}"
+                                f"std_ratio={ratio:.4f}  tt_std={tt_k.std():.4f} ref_std={ref_k.std():.4f}"
                             )
                 if v_cap is not None and ref_v_raw is not None:
                     for r in range(8):
@@ -1970,12 +1981,16 @@ class TestOlmoE2EPCC:
 
     @torch.no_grad()
     def test_e2e_pcc_1layer(self, mesh_device, reset_seeds, ensure_gc):
-        """E2E PCC: prefill + decode with 1 layer, compare token generation vs CPU."""
+        """E2E PCC: prefill + decode with N layers, compare token generation vs CPU.
+
+        Override depth via N_LAYERS_E2E env var to also run at full 64L for cumulative
+        prefill-KV-cache drift checks.
+        """
         hf_model_path = os.environ.get("HF_MODEL")
         if not hf_model_path:
             pytest.skip("HF_MODEL not set")
 
-        n_layers = 1
+        n_layers = int(os.environ.get("N_LAYERS_E2E", "1"))
         max_seq_len = 256
         batch_size = 1
         n_decode_tokens = 10
@@ -2027,8 +2042,10 @@ class TestOlmoE2EPCC:
         logger.info("Building TTNN model (1 layer)...")
         state_dict = model_args.load_state_dict()
 
-        # Use paged attention (required for prefill) with a proper page table for decode too
-        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=4096)
+        # Use paged attention (required for prefill) with a proper page table for decode too.
+        # Shrink max_num_blocks for deep stacks to fit DRAM (4096 × 64L OOMs).
+        _max_blocks = 128 if n_layers >= 32 else 4096
+        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=_max_blocks)
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
@@ -2107,6 +2124,114 @@ class TestOlmoE2EPCC:
         ttnn.synchronize_device(mesh_device)
         tt_first_token = int(tt_first_tok_result[0])
         logger.info(f"TTNN first token: {tt_first_token} ({tokenizer.decode([tt_first_token])})")
+
+        # ── KV cache comparison after prefill ──
+        # Ref Attention.cache_k/cache_v are populated for positions 0..padded_len-1.
+        # TT paged KV cache is populated for the same positions on user 0.
+        # Compare per-position, per-head: cos_sim, std-ratio, max-err.
+        # K is in Meta-interleaved layout in TT; convert to HF split-half before compare.
+        logger.info("=" * 60)
+        logger.info(f"KV cache state after prefill (n_layers={n_layers}, user 0)")
+        logger.info("=" * 60)
+
+        def _tt_to_hf_layout(tt_tensor):
+            """[r0,i0,r1,i1,...,r63,i63] → [r0,r1,...,r63,i0,i1,...,i63]"""
+            even = tt_tensor[..., 0::2]
+            odd = tt_tensor[..., 1::2]
+            return torch.cat([even, odd], dim=-1)
+
+        # Sample multiple layers to see if cumulative residual drift biases deep-layer K writes
+        if n_layers >= 32:
+            sample_layers = sorted(set([0, n_layers // 4, n_layers // 2, 3 * n_layers // 4, n_layers - 1]))
+        else:
+            sample_layers = [0]
+
+        for li in sample_layers:
+            logger.info(f"--- Layer {li} ---")
+            ref_attn_l = ref_model.layers[li].attention
+            ref_K_full = ref_attn_l.cache_k[0, :padded_len, :, :].float()
+            ref_V_full = ref_attn_l.cache_v[0, :padded_len, :, :].float()
+
+            tt_kv_l = tt_model.layers[li].attention.layer_past
+            tt_K_paged = tt_kv_l[0]
+            tt_V_paged = tt_kv_l[1]
+
+            # Slice only the blocks user 0 uses (saves memory)
+            block_size_cfg = paged_attention_config.block_size
+            head_dim = ref_K_full.shape[2]  # 128
+            sample_positions = list(range(0, min(padded_len, 128), 16))
+            if (padded_len - 1) not in sample_positions:
+                sample_positions.append(padded_len - 1)
+
+            cos_sims_k = []
+            cos_sims_v = []
+            for pos in sample_positions:
+                page_idx = pos // block_size_cfg
+                offset = pos % block_size_cfg
+                block_for_u0 = int(page_table[0, page_idx])
+                try:
+                    k_block = ttnn.slice(
+                        tt_K_paged,
+                        [block_for_u0, 0, 0, 0],
+                        [block_for_u0 + 1, 1, block_size_cfg, head_dim],
+                    )
+                    v_block = ttnn.slice(
+                        tt_V_paged,
+                        [block_for_u0, 0, 0, 0],
+                        [block_for_u0 + 1, 1, block_size_cfg, head_dim],
+                    )
+                    k_block_cpu = ttnn.to_torch(
+                        k_block,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device, dims=(0, 1), mesh_shape=model_args.cluster_shape
+                        ),
+                    ).float()
+                    v_block_cpu = ttnn.to_torch(
+                        v_block,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device, dims=(0, 1), mesh_shape=model_args.cluster_shape
+                        ),
+                    ).float()
+                    ttnn.deallocate(k_block)
+                    ttnn.deallocate(v_block)
+                    tt_k_at_pos = k_block_cpu[:, 0, offset, :]
+                    tt_v_at_pos = v_block_cpu[:, 0, offset, :]
+                    tt_k_hf = _tt_to_hf_layout(tt_k_at_pos)
+                    ref_k_at_pos = ref_K_full[pos]
+                    ref_v_at_pos = ref_V_full[pos]
+
+                    k_flat_tt = tt_k_hf.flatten()
+                    k_flat_ref = ref_k_at_pos.flatten()
+                    v_flat_tt = tt_v_at_pos.flatten()
+                    v_flat_ref = ref_v_at_pos.flatten()
+                    if k_flat_ref.std() < 1e-6:
+                        continue
+                    k_cos = F.cosine_similarity(k_flat_tt.unsqueeze(0), k_flat_ref.unsqueeze(0)).item()
+                    v_cos = F.cosine_similarity(v_flat_tt.unsqueeze(0), v_flat_ref.unsqueeze(0)).item()
+                    k_max_err = (k_flat_tt - k_flat_ref).abs().max().item()
+                    v_max_err = (v_flat_tt - v_flat_ref).abs().max().item()
+                    k_std_ratio = k_flat_tt.std().item() / max(k_flat_ref.std().item(), 1e-9)
+                    v_std_ratio = v_flat_tt.std().item() / max(v_flat_ref.std().item(), 1e-9)
+                    cos_sims_k.append(k_cos)
+                    cos_sims_v.append(v_cos)
+                    logger.info(
+                        f"  pos={pos:3d}: K cos={k_cos:.6f} std_ratio={k_std_ratio:.4f} max_err={k_max_err:.4f}  "
+                        f"V cos={v_cos:.6f} std_ratio={v_std_ratio:.4f} max_err={v_max_err:.4f}"
+                    )
+                except Exception as e:
+                    logger.warning(f"  pos={pos}: KV cache read failed: {e}")
+            if cos_sims_k:
+                import statistics
+
+                logger.info(
+                    f"  L{li} K cos_sim: min={min(cos_sims_k):.6f} "
+                    f"median={statistics.median(cos_sims_k):.6f} max={max(cos_sims_k):.6f}"
+                )
+                logger.info(
+                    f"  L{li} V cos_sim: min={min(cos_sims_v):.6f} "
+                    f"median={statistics.median(cos_sims_v):.6f} max={max(cos_sims_v):.6f}"
+                )
+        logger.info("=" * 60)
 
         # Compare prefill
         prefill_match = ref_first_token == tt_first_token
