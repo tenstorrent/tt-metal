@@ -4,11 +4,11 @@
 
 # Phase 1 of the SFPU reduce plan (issue #43736) for the int32 reduction work
 # tracked in issue #26726 enables MAX over Int32 along REDUCE_W and REDUCE_H.
-#
-# This module is the gate for Phase 1: it includes the verbatim repro from
-# issue #21071 (shape=(1,1,32,32), dim=-1) and extends it across additional
-# tile-aligned shapes and the H axis. Multi-axis (HW) reduction is intentionally
-# out of scope for Phase 1.
+# INT32 HW (REDUCE_SCALAR) is not supported directly, so we use the same
+# two-step W-then-H strategy for both single-core and multi-core cases.
+# The test includes the verbatim repro from issue #21071
+# (shape=(1,1,32,32), dim=-1) and extends it across additional shapes and
+# the H axis + Multi-axis (HW) reduction.
 # https://github.com/tenstorrent/tt-metal/issues/21071
 
 import pytest
@@ -32,7 +32,7 @@ INT32_INFO = torch.iinfo(torch.int32)
         (2, 3, 64, 64),  # multi-batch, NC>1
     ],
 )
-@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("dim", [-1, -2, (-1, -2), None])
 def test_max_int32(device, input_shape, dim):
     torch.manual_seed(0)
 
