@@ -35,8 +35,9 @@ KV Cache:
 - Drops O(n²) → O(n) for generation.
 """
 
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -1417,13 +1418,25 @@ def generate_codes_ttnn(
     )
     _wu_codec_logits = model.talker.get_codec_logits(_wu_th)
 
-    # On-device argmax (greedy path): allocate output token tensors once outside
-    # any trace; argmax inside each trace writes the index here in-place each call.
-    # Hot loop then D2H's just the int (4B) instead of the full [vocab] logits.
-    talker_codec0_token_tt = _alloc_token_buf(device, shape=(1, 1, 1))
+    # On-device codec0 sampling/argmax — emit token id from the trace so the
+    # hot loop only D2H's an int (4B) instead of the full vocab logits.
+    #
+    #   greedy=True               → _argmax_into (existing fast path)
+    #   greedy=False & DS env on  → _DeviceSampler (topk + ttnn.sampling)
+    #   greedy=False & DS env off → no in-trace sampling; loop falls back to
+    #                                full-logits D2H + host sample.
+    _device_sampling = bool(int(os.environ.get("TT_QWEN3_DEVICE_SAMPLING", "0")))
+    talker_codec0_sampler: Optional[_DeviceSampler] = None
+    if _device_sampling and not config.greedy:
+        talker_codec0_sampler = _DeviceSampler(device, top_k=config.top_k, top_p=1.0, temperature=config.temperature)
+        talker_codec0_token_tt = talker_codec0_sampler.alloc_token_buf()
+    else:
+        talker_codec0_token_tt = _alloc_token_buf(device, shape=(1, 1, 1)) if config.greedy else None
     cp_prefill_token_tt = _alloc_token_buf(device, shape=(1, 1, 2))
     if config.greedy:
         _argmax_into(_wu_codec_logits, talker_codec0_token_tt)
+    elif talker_codec0_sampler is not None:
+        talker_codec0_sampler.append_sampling(_wu_codec_logits, talker_codec0_token_tt)
     ttnn.synchronize_device(device)
 
     print("  Capturing Talker decode trace (includes codec_head)...")
@@ -1442,6 +1455,8 @@ def generate_codes_ttnn(
         trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
         if config.greedy:
             _argmax_into(trace_codec_logits_out, talker_codec0_token_tt)
+        elif talker_codec0_sampler is not None:
+            talker_codec0_sampler.append_sampling(trace_codec_logits_out, talker_codec0_token_tt)
     finally:
         ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
     ttnn.synchronize_device(device)
@@ -1714,6 +1729,7 @@ def generate_codes_ttnn(
             trace_mask_tt=trace_mask_tt,
             trace_hidden_out=trace_hidden_out,
             trace_codec_logits_out=trace_codec_logits_out,
+            talker_codec0_token_tt=talker_codec0_token_tt,
             talker_cos_h2d=talker_cos_h2d,
             talker_sin_h2d=talker_sin_h2d,
             talker_mask_h2d=talker_mask_h2d,
@@ -2096,6 +2112,10 @@ class TTSServerContext:
     _talker_num_heads: int
     _cp_num_heads: int
 
+    # Optional device-sampling output buffers (per-bucket) — populated only when
+    # TT_QWEN3_DEVICE_SAMPLING=1; greedy/host-sampling paths leave these empty.
+    trace_decode_codec0_token_tt_by_bucket: Dict[int, object] = field(default_factory=dict)
+
 
 def init_server_context(device, model, config, main_weights: dict) -> "TTSServerContext":
     """
@@ -2407,6 +2427,18 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     trace_decode_mask_tt_by_bucket = {}
     trace_decode_codec_logits_out_by_bucket = {}
     trace_decode_hidden_out_by_bucket = {}
+    trace_decode_codec0_token_tt_by_bucket: Dict[int, object] = {}
+
+    # Optional on-device codec0 sampling (TT_QWEN3_DEVICE_SAMPLING=1): bake
+    # topk + ttnn.sampling into each bucket's Talker decode trace so the
+    # codec0 token comes back as a small int D2H instead of a full vocab D2H
+    # blocking on Talker exec. Eliminates the per-frame codec0_d2h wait.
+    _device_sampling = bool(int(os.environ.get("TT_QWEN3_DEVICE_SAMPLING", "0")))
+    talker_sampler = (
+        _DeviceSampler(device, top_k=config.top_k, top_p=1.0, temperature=config.temperature)
+        if _device_sampling and not config.greedy
+        else None
+    )
 
     for _bucket in TRACE_DECODE_BUCKETS:
         _max_talker_seq_len = (((_bucket + config.max_new_tokens + 16) + _TILE - 1) // _TILE) * _TILE
@@ -2442,6 +2474,10 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Per-bucket codec0 token output buffer for on-device sampling
+        # (only allocated when the optional device-sampling path is on).
+        _codec0_token_tt = talker_sampler.alloc_token_buf() if talker_sampler is not None else None
+
         # Untraced warmup so program cache is hot before begin_trace_capture
         # (writes are not allowed during trace capture).
         _wu_h, _ = model.talker.forward_from_hidden(
@@ -2454,7 +2490,9 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
             decode_attn_mask=_mask,
             mode="decode",
         )
-        _ = model.talker.get_codec_logits(_wu_h)
+        _wu_logits = model.talker.get_codec_logits(_wu_h)
+        if talker_sampler is not None:
+            talker_sampler.append_sampling(_wu_logits, _codec0_token_tt)
         ttnn.synchronize_device(device)
 
         # Capture trace.
@@ -2471,6 +2509,8 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
                 mode="decode",
             )
             _logits_out = model.talker.get_codec_logits(_hidden)
+            if talker_sampler is not None:
+                talker_sampler.append_sampling(_logits_out, _codec0_token_tt)
         finally:
             ttnn.end_trace_capture(device, _trace_id, cq_id=0)
         ttnn.synchronize_device(device)
@@ -2486,7 +2526,12 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         trace_decode_mask_tt_by_bucket[_bucket] = _mask
         trace_decode_codec_logits_out_by_bucket[_bucket] = _logits_out
         trace_decode_hidden_out_by_bucket[_bucket] = _hidden
-        print(f"    bucket={_bucket}: max_talker_seq={_max_talker_seq_len}, trace captured")
+        if _codec0_token_tt is not None:
+            trace_decode_codec0_token_tt_by_bucket[_bucket] = _codec0_token_tt
+        print(
+            f"    bucket={_bucket}: max_talker_seq={_max_talker_seq_len}, trace captured"
+            f"{' (with on-device codec0 sampling)' if _codec0_token_tt is not None else ''}"
+        )
 
     # Capture SE-block traces for ECAPA. Without these, on-device
     # ``extract_speaker_embedding`` calls after run_inference's trace exec
@@ -2522,6 +2567,7 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         trace_decode_mask_tt_by_bucket=trace_decode_mask_tt_by_bucket,
         trace_decode_codec_logits_out_by_bucket=trace_decode_codec_logits_out_by_bucket,
         trace_decode_hidden_out_by_bucket=trace_decode_hidden_out_by_bucket,
+        trace_decode_codec0_token_tt_by_bucket=trace_decode_codec0_token_tt_by_bucket,
         talker_trans_mat=talker_trans_mat,
         cp_trans_mat=cp_trans_mat,
         talker_cos_table=talker_cos_table,
@@ -2709,6 +2755,7 @@ def run_inference(
             trace_mask_tt=trace_mask_tt,
             trace_hidden_out=trace_hidden_out,
             trace_codec_logits_out=trace_codec_logits_out,
+            talker_codec0_token_tt=ctx.trace_decode_codec0_token_tt_by_bucket.get(padded_seq_len),
             talker_cos_h2d=talker_cos_h2d,
             talker_sin_h2d=talker_sin_h2d,
             talker_mask_h2d=talker_mask_h2d,

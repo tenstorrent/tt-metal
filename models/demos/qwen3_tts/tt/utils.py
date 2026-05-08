@@ -353,9 +353,14 @@ def ar_decode_loop(
         state.cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
         # Get next code 0 from Talker trace output.
+        # Device-sampling fast path: when state.talker_codec0_token_tt is
+        # populated, the Talker decode trace already produced the sampled
+        # token (via the in-trace topk + ttnn.sampling pipeline). We just
+        # need a small int D2H instead of a full vocab D2H blocking on the
+        # async Talker exec.
         _c0_sp: dict = {}
         _t_before_codec0 = time.perf_counter()
-        if config.greedy and config.repetition_penalty == 1.0 and state.talker_codec0_token_tt is not None:
+        if state.talker_codec0_token_tt is not None:
             _t_c00 = time.perf_counter()
             token_0 = _read_device_token(state.talker_codec0_token_tt, index=0)
             _c0_sp["device_logits"] = time.perf_counter() - _t_c00
