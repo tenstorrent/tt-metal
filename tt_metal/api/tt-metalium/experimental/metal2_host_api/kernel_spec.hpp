@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
@@ -138,6 +139,8 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////
 
     // DFB bindings
+    // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
     enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
@@ -148,11 +151,22 @@ struct KernelSpec {
     std::vector<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
+    // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via SemaphoreAccessor(sem::<local_accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
+
+    // Tensor bindings
+    // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
+    struct TensorBinding {
+        TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
+        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+    };
+    std::vector<TensorBinding> tensor_bindings;
 
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings
@@ -220,6 +234,34 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     using ConfigSpec = std::variant<DataMovementConfiguration, ComputeConfiguration>;
     ConfigSpec config_spec;
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options / niche use cases
+    //////////////////////////////////////////////////////////////////////////////
+
+    // Niche use case: Self-loop DFBs on compute kernels only
+    // This applies only to compute kernels that bind BOTH the producer and consumer
+    // endpoints of the same DFB (self-loop).
+    //
+    // The compute kernel threads can communicate via the DFB in two topologies:
+    //
+    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
+    //         (no cross-thread communication). This is the common case.
+    //   INTER (inter-thread): Within the kernel, some threads produce data for other
+    //          threads to consume.
+    //
+    // Only the INTRA case is currently supported. INTER will trigger a validation error.
+    // There are currently no known use cases for an INTER-thread self-loop. This option
+    // is present in the API for completeness, to surface any use cases that may arise.
+    //
+    struct DFBComputeSelfLoopScope {
+        DFBSpecName dfb_spec_name;
+        enum class Scope { INTRA, INTER };
+        Scope scope = Scope::INTRA;
+        // If the INTER case were enabled, we would need an additional field to describe
+        // the inter-thread communication pattern here.
+    };
+    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

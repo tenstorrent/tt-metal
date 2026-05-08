@@ -77,6 +77,10 @@ private:
     // store prefetcher core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> prefetcher_core_info;
 
+    std::atomic<bool> kernel_path_collection_enabled{false};
+    std::mutex kernel_path_mutex;
+    std::unordered_map<int, std::string> kernel_id_to_path;
+
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;
     friend class tt::tt_metal::Inspector;

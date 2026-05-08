@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
+from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
@@ -439,6 +440,29 @@ class DEST_INDEX(RuntimeParameter):
 
 
 @dataclass
+class SFPU_TILE_INDICES(RuntimeParameter):
+    src0_tile_idx: int = 0
+    src1_tile_idx: int = 1
+    dst_tile_idx: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr int SRC0_TILE_IDX = {self.src0_tile_idx};",
+            f"constexpr int SRC1_TILE_IDX = {self.src1_tile_idx};",
+            f"constexpr int DST_TILE_IDX = {self.dst_tile_idx};",
+        ]
+        return "\n".join(lines)
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        lines = [
+            "int SRC0_TILE_IDX;",
+            "int SRC1_TILE_IDX;",
+            "int DST_TILE_IDX;",
+        ]
+        return "\n".join(lines), "iii"
+
+
+@dataclass
 class L1_ACC(RuntimeParameter):
     l1_acc: L1Accumulation = L1Accumulation.No
 
@@ -846,3 +870,11 @@ class HOST_IS_STREAM_CONSUMER(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool HOST_IS_STREAM_CONSUMER;", "?"
+
+
+@dataclass
+class FILL_INT_FORMAT(TemplateParameter):
+    data_format: DataFormat = DataFormat.Int32
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
