@@ -33,7 +33,7 @@ class KokoroTtFull(nn.Module):
         mesh_device: ttnn.MeshDevice,
         *,
         repo_id: str = KokoroConfig.repo_id,  # type: ignore[attr-defined]
-        disable_complex: bool = True,
+        disable_complex: bool = False,
         weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -114,12 +114,11 @@ class KokoroTtFull(nn.Module):
             speed=speed,
         )
 
-        audio = self.tt_vocoder(
-            asr=pred["asr"],
-            f0_pred=pred["F0_pred"],
-            n_pred=pred["N_pred"],
-            ref_s=ref_s,
-        )
+        # High-accuracy fallback: move predictor outputs to host for torch vocoder.
+        asr_torch = ttnn.to_torch(pred["asr"]).to(torch.float32)
+        f0_torch = ttnn.to_torch(pred["F0_pred"]).to(torch.float32).squeeze(1)
+        n_torch = ttnn.to_torch(pred["N_pred"]).to(torch.float32).squeeze(1)
+        audio = self.tt_vocoder(asr=asr_torch, f0_pred=f0_torch, n_pred=n_torch, ref_s=ref_s)
 
         if not return_intermediates:
             return KokoroFullOutput(audio=audio.squeeze().cpu(), pred_dur=torch.zeros((1,), dtype=torch.long))

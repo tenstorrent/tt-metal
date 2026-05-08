@@ -54,7 +54,8 @@ def preprocess_custom_istft(
         out_channels=1,
         kernel_size=n_fft,
         stride=1,
-        padding=0,
+        # conv_transpose1d(output_len=(T-1)*hop + n_fft) == conv1d(zero_insert, padding=n_fft-1, flip(kernel))
+        padding=n_fft - 1,
         groups=1,
     )
     conv_i = Conv1dParams(
@@ -64,7 +65,7 @@ def preprocess_custom_istft(
         out_channels=1,
         kernel_size=n_fft,
         stride=1,
-        padding=0,
+        padding=n_fft - 1,
         groups=1,
     )
     return CustomIstftParams(
@@ -124,9 +125,8 @@ def custom_istft_inverse(
 
     if params.center:
         pad = params.n_fft // 2
-        wave_bt = ttnn.slice(
-            wave_bt, (0, pad), (wave_bt.shape[0], wave_bt.shape[1] - pad), memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        end = int(wave_bt.shape[1]) - pad
+        wave_bt = ttnn.slice(wave_bt, (0, pad), (wave_bt.shape[0], end), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if length is not None:
         wave_bt = ttnn.slice(wave_bt, (0, 0), (wave_bt.shape[0], length), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return wave_bt

@@ -22,7 +22,20 @@ from models.demos.kokoro.reference import KokoroConfig, load_predictor_from_hugg
 from models.demos.kokoro.tt.ttnn_kokoro_predictor import TtKokoroPredictor, preprocess_predictor_full
 
 
-def _match_last_dim(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def _to_torch(x):
+    if isinstance(x, ttnn.Tensor):
+        return ttnn.to_torch(x).to(torch.float32)
+    return x
+
+
+def _match_last_dim(a, b) -> tuple[torch.Tensor, torch.Tensor]:
+    a = _to_torch(a)
+    b = _to_torch(b)
+    # Predictor heads can be [B,L] in torch but [B,1,L] in TTNN.
+    if a.ndim == 2 and b.ndim == 3 and b.shape[1] == 1:
+        b = b.squeeze(1)
+    if b.ndim == 2 and a.ndim == 3 and a.shape[1] == 1:
+        a = a.squeeze(1)
     assert a.ndim == b.ndim
     min_len = min(a.shape[-1], b.shape[-1])
     if min_len != a.shape[-1]:
@@ -66,14 +79,14 @@ def test_ttnn_predictor_full_matches_torch(device):
     )
 
     en_ref, en_tt = _match_last_dim(out_ref.en, out_tt["en"])
-    ok_en, pcc_en = comp_pcc(en_ref, en_tt, pcc=0.80)
+    ok_en, pcc_en = comp_pcc(en_ref, en_tt, pcc=0.90)
     assert ok_en, f"en PCC low: {pcc_en}"
     f0_ref, f0_tt = _match_last_dim(out_ref.F0_pred, out_tt["F0_pred"])
-    ok_f0, pcc_f0 = comp_pcc(f0_ref, f0_tt, pcc=0.70)
+    ok_f0, pcc_f0 = comp_pcc(f0_ref, f0_tt, pcc=0.90)
     assert ok_f0, f"F0 PCC low: {pcc_f0}"
     n_ref, n_tt = _match_last_dim(out_ref.N_pred, out_tt["N_pred"])
-    ok_n, pcc_n = comp_pcc(n_ref, n_tt, pcc=0.70)
+    ok_n, pcc_n = comp_pcc(n_ref, n_tt, pcc=0.90)
     assert ok_n, f"N PCC low: {pcc_n}"
     asr_ref, asr_tt = _match_last_dim(out_ref.asr, out_tt["asr"])
-    ok_asr, pcc_asr = comp_pcc(asr_ref, asr_tt, pcc=0.80)
+    ok_asr, pcc_asr = comp_pcc(asr_ref, asr_tt, pcc=0.90)
     assert ok_asr, f"asr PCC low: {pcc_asr}"

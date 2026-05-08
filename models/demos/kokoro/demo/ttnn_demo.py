@@ -42,11 +42,7 @@ def main() -> int:
     if not results:
         logger.error("Pipeline produced no chunks.")
         return 3
-    phonemes = results[0].phonemes
     pack = pipe.load_voice(args.voice)
-    ref_s = pack[len(phonemes) - 1].to("cpu")
-    if ref_s.dim() == 1:
-        ref_s = ref_s.unsqueeze(0)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,9 +50,24 @@ def main() -> int:
     mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
     try:
         model = KokoroTtFull(mesh_device, repo_id=KokoroConfig.repo_id)
+        wave_chunks: list[torch.Tensor] = []
         torch.manual_seed(0)
-        out = model(phonemes=phonemes, ref_s=ref_s, speed=args.speed)
-        audio = out.audio.detach().cpu().numpy()
+        for chunk_idx, result in enumerate(results):
+            phonemes = result.phonemes
+            if not phonemes:
+                logger.warning(f"Skipping empty phonemes chunk index={chunk_idx}")
+                continue
+            ref_s = pack[len(phonemes) - 1].to("cpu")
+            if ref_s.dim() == 1:
+                ref_s = ref_s.unsqueeze(0)
+            out = model(phonemes=phonemes, ref_s=ref_s, speed=args.speed)
+            wave_chunks.append(out.audio.detach().cpu().flatten())
+            logger.info(f"Chunk {chunk_idx}: phoneme_len={len(phonemes)} samples={wave_chunks[-1].numel()}")
+
+        if not wave_chunks:
+            logger.error("No audio produced from pipeline chunks.")
+            return 3
+        audio = torch.cat(wave_chunks, dim=0).numpy()
     finally:
         ttnn.close_mesh_device(mesh_device)
 

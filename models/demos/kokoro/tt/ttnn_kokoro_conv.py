@@ -76,7 +76,10 @@ def conv1d_nlc(
             except Exception:
                 pass
     if compute_config is None:
-        compute_config = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4)
+        # Wormhole: prefer HiFi3 when using fp32 accumulation (HiFi4 can be worse due to HW bug).
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
+        )
 
     y, out_len = ttnn.conv1d(
         input_tensor=x_nlc,
@@ -145,7 +148,9 @@ def conv_transpose1d_nlc(
     if conv_config is None:
         conv_config = ttnn.Conv2dConfig(weights_dtype=params.weight.dtype)
     if compute_config is None:
-        compute_config = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4)
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
+        )
 
     y, out_hw = ttnn.conv_transpose2d(
         input_tensor=x,

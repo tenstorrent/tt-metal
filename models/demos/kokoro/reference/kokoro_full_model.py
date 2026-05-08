@@ -150,7 +150,9 @@ def load_full_reference_from_huggingface(
     device: Optional[str] = None,
     disable_complex: bool = False,
 ) -> KokoroFullReference:
-    return KokoroFullReference(repo_id=repo_id, device=device, disable_complex=disable_complex)
+    model = KokoroFullReference(repo_id=repo_id, device=device, disable_complex=disable_complex)
+    # print(model)
+    return model
 
 
 load_full_reference_model = load_full_reference_from_huggingface
