@@ -48,7 +48,7 @@ using prefetch_q_entry_type = uint32_t;
 // invalidate the DM core's L1 D$/L2; reading via the uncached L1 alias bypasses that hazard.
 // On non-Quasar archs the helpers are no-ops.
 
-#define ENABLE_PREFETCH_DPRINTS 1
+#define ENABLE_PREFETCH_DPRINTS 0
 
 // Use named defines instead of get_compile_time_arg_val indices
 constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
@@ -440,8 +440,9 @@ FORCE_INLINE uint32_t read_from_pcie(
         }
 
 #if ENABLE_PREFETCH_DPRINTS
-        DPRINT << "read_from_pcie: WRAP cmddat_q fence=" << fence << " -> " << cmddat_q_base
-               << " (needed_bytes=" << needed_bytes << " avail_begin=" << available_bytes_at_beginning << ")" << ENDL();
+        // DPRINT << "read_from_pcie: WRAP cmddat_q fence=" << fence << " -> " << cmddat_q_base
+        //        << " (needed_bytes=" << needed_bytes << " avail_begin=" << available_bytes_at_beginning << ")" <<
+        //        ENDL();
         DEVICE_PRINT(
             "read_from_pcie: WRAP cmddat_q fence={} -> {} (needed_bytes={} avail_begin={})\n",
             fence,
@@ -455,7 +456,7 @@ FORCE_INLINE uint32_t read_from_pcie(
     // Wrap pcie/hugepage
     if (pcie_read_ptr + size > pcie_base + pcie_size) {
 #if ENABLE_PREFETCH_DPRINTS
-        DPRINT << "read_from_pcie: WRAP pcie pcie_read_ptr=" << pcie_read_ptr << " -> " << pcie_base << ENDL();
+        // DPRINT << "read_from_pcie: WRAP pcie pcie_read_ptr=" << pcie_read_ptr << " -> " << pcie_base << ENDL();
         DEVICE_PRINT("read_from_pcie: WRAP pcie pcie_read_ptr={} -> {}\n", pcie_read_ptr, pcie_base);
 #endif
         pcie_read_ptr = pcie_base;
@@ -837,9 +838,8 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 continue;
             } else {
                 // Nothing to fetch, nothing pending, nothing available, stall on host
-                // DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr << " val=" <<
-                // *prefetch_q_rd_ptr
-                //        << ENDL();
+                DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr << " val=" << *prefetch_q_rd_ptr
+                       << ENDL();
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
                 while ((fetch_size = *prefetch_q_rd_ptr) == 0U) {

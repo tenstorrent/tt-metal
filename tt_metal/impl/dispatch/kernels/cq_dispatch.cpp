@@ -300,7 +300,7 @@ void process_write_host_h() {
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint64_t wlength = cmd->write_linear_host.length;
     bool is_event = cmd->write_linear_host.is_event;
-    // DPRINT << "process_write_host_h: " << length << ENDL();
+    DPRINT << "process_write_host_h: " << wlength << ENDL();
     // DEVICE_PRINT("process_write_host_h: length {}\n", length);
     uintptr_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
@@ -509,9 +509,9 @@ void process_write_linear(uint32_t num_mcast_dests) {
     uint64_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint64_t length = cmd->write_linear.length;
     uintptr_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
-    // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index
-    //        << ", dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr
-    //        << ", num_mcast_dests:" << DEC() << num_mcast_dests << ENDL();
+    DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index
+           << ", dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr
+           << ", num_mcast_dests:" << DEC() << num_mcast_dests << ENDL();
     if (multicast) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
@@ -573,8 +573,8 @@ void process_write_paged() {
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
     uint32_t dst_addr_offset = 0;  // Offset into page.
 
-    // DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
-    //        << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
+    DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
+           << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
     // DEVICE_PRINT("process_write_paged - pages: {} page_size: {} dispatch_cb_page_size: {}\n", pages, page_size,
     // dispatch_cb_page_size);
 
@@ -1506,11 +1506,11 @@ void kernel_main() {
     DEVICE_PRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
     // Get runtime args
-    DPRINT << "rta_l1_base address: " << (uintptr_t)rta_l1_base << ENDL();
-    DPRINT << "rta_l1_base[0]: " << rta_l1_base[0] << ENDL();
-    DPRINT << "rta_l1_base[1]: " << rta_l1_base[1] << ENDL();
-    DPRINT << "rta_l1_base[2]: " << rta_l1_base[2] << ENDL();
-    DPRINT << "rta_l1_base[3]: " << rta_l1_base[3] << ENDL();
+    // DPRINT << "rta_l1_base address: " << (uintptr_t)rta_l1_base << ENDL();
+    // DPRINT << "rta_l1_base[0]: " << rta_l1_base[0] << ENDL();
+    // DPRINT << "rta_l1_base[1]: " << rta_l1_base[1] << ENDL();
+    // DPRINT << "rta_l1_base[2]: " << rta_l1_base[2] << ENDL();
+    // DPRINT << "rta_l1_base[3]: " << rta_l1_base[3] << ENDL();
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
@@ -1583,7 +1583,7 @@ void kernel_main() {
     // Initialize progress counter in L1 memory
     *get_dispatch_progress_ptr() = dispatch_progress;
 
-    // DPRINT << "Starting dispatch loop" << ENDL();
+    DPRINT << "Starting dispatch loop" << ENDL();
     while (!done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
 
