@@ -98,7 +98,7 @@
   skus:
     bh_galaxy:
       timeout: 35
-  owner_id: U03HY7MK4BT
+  owner_id: U087S3K319A # Austin Ho
   team: models
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalMatmulExpert
@@ -109,7 +109,7 @@
   skus:
     bh_galaxy:
       timeout: 75
-  owner_id: U03HY7MK4BT
+  owner_id: U06MJ6CVCGZ # Yu Gao
   team: models
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalSingleDeviceRemainder
@@ -120,7 +120,7 @@
   skus:
     bh_galaxy:
       timeout: 15
-  owner_id: U03HY7MK4BT
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: models
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_SpecialModes
@@ -132,7 +132,7 @@
   skus:
     bh_galaxy:
       timeout: 15
-  owner_id: U03HY7MK4BT
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
   team: models
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO
@@ -144,7 +144,7 @@
   skus:
     bh_galaxy:
       timeout: 55
-  owner_id: U03HY7MK4BT
+  owner_id: U088DBNUKGR # Evan Smal
   team: models
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric
@@ -158,7 +158,7 @@
   skus:
     bh_galaxy:
       timeout: 15
-  owner_id: U03HY7MK4BT
+  owner_id: U081GCJ8NDN # Nour Ardo
   team: models
 
 # ============================================================================
