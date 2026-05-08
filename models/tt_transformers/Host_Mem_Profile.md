@@ -28,7 +28,8 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.2-3B      | T3K         |         7846          |         5388          | 68.5          | 52        |
 | Llama-3.1-8B      | T3K         |         13683         |         6922          | 64.3          | 53        |
 | Llama-3.2-11B     | T3K         |         13885         |         7254          | 62.7          | 47        |
-| Llama-3.3-70B     | T3K         |         34752         |         36082         | 16.6          | 164       |
+| Llama-3.1-70B     | T3K         |         35820         |         35187         | 16.6          | 164       |
+| Llama-3.3-70B     | T3K         |         101640        |         36176         | 16.6          | 164       |
 | Llama-3.2-90B     | T3K         |         34427         |         34842         | 6             | 5535      |
 | Qwen2.5-7B        | N300        |         16597         |         17754         | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         |         147106        |         145432        | 15.2          | 225       |
@@ -47,7 +48,8 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama-3.2-3B      | T3K         |        10374         |          5270          | 67.9          | 69        |
 | Llama-3.1-8B      | T3K         |        20406         |          7704          | 60.8          | 81        |
 | Llama-3.2-11B     | T3K         |        20265         |          7051          | 61.4          | 53        |
-| Llama-3.1-70B     | T3K         |        129181        |          34250         | 16.5          | 168       |
+| Llama-3.1-70B     | T3K         |        154122        |          37370         | 16.5          | 168       |
+| Llama-3.3-70B     | T3K         |        100112        |          35026         | 16.5          | 168       |
 | Llama-3.2-90B     | T3K         |        155139        |          34997         | 6             | 5600      |
 | Qwen2.5-7B        | N300        |        20189         |          17956         | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         |        146204        |          147032        | 15.1          | 216       |
