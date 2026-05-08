@@ -19,6 +19,79 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     // FLOAT32 is allowed so multi-stage Sum chains can carry FP32 between stages.
     operations::check_tensor(
         input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
+
+    auto validate_tensor_padded_spatial = [](const Tensor& t, const char* tensor_label) {
+        const uint32_t tile_height = t.tensor_spec().tile().get_height();
+        const uint32_t tile_width = t.tensor_spec().tile().get_width();
+        const auto& padded_shape = t.padded_shape();
+        TT_FATAL(
+            padded_shape.rank() >= 2,
+            "FastReduceNC {} padded_shape rank {} must be at least 2",
+            tensor_label,
+            padded_shape.rank());
+        TT_FATAL(
+            padded_shape[-2] > 0 && padded_shape[-1] > 0,
+            "FastReduceNC {} padded last-2 dims must be positive",
+            tensor_label);
+        TT_FATAL(
+            padded_shape[-2] % tile_height == 0,
+            "FastReduceNC {} padded height {} must be tile-height-aligned ({})",
+            tensor_label,
+            padded_shape[-2],
+            tile_height);
+        TT_FATAL(
+            padded_shape[-1] % tile_width == 0,
+            "FastReduceNC {} padded width {} must be tile-width-aligned ({})",
+            tensor_label,
+            padded_shape[-1],
+            tile_width);
+    };
+
+    auto validate_shard_shape_2d = [&input](uint32_t shape0, uint32_t shape1, const char* which) {
+        const uint32_t tile_height = input.tensor_spec().tile().get_height();
+        const uint32_t tile_width = input.tensor_spec().tile().get_width();
+        TT_FATAL(
+            shape0 > 0 && shape1 > 0,
+            "FastReduceNC {} shard_shape must be positive, got [{}, {}]",
+            which,
+            shape0,
+            shape1);
+        TT_FATAL(
+            shape0 % tile_height == 0,
+            "FastReduceNC {} shard_shape[0]={} must be tile-height-aligned ({})",
+            which,
+            shape0,
+            tile_height);
+        TT_FATAL(
+            shape1 % tile_width == 0,
+            "FastReduceNC {} shard_shape[1]={} must be tile-width-aligned ({})",
+            which,
+            shape1,
+            tile_width);
+    };
+
+    auto validate_nd_shard_last_two = [&input](const Shape& shard_shape, const char* which) {
+        if (shard_shape.rank() < 2) {
+            return;
+        }
+        const uint32_t tile_height = input.tensor_spec().tile().get_height();
+        const uint32_t tile_width = input.tensor_spec().tile().get_width();
+        TT_FATAL(
+            shard_shape[-2] > 0 && shard_shape[-1] > 0, "FastReduceNC {} ND shard last-2 dims must be positive", which);
+        TT_FATAL(
+            shard_shape[-2] % tile_height == 0,
+            "FastReduceNC {} ND shard_shape[-2]={} must be tile-height-aligned ({})",
+            which,
+            shard_shape[-2],
+            tile_height);
+        TT_FATAL(
+            shard_shape[-1] % tile_width == 0,
+            "FastReduceNC {} ND shard_shape[-1]={} must be tile-width-aligned ({})",
+            which,
+            shard_shape[-1],
+            tile_width);
+    };
+
     if (preallocated_output.has_value()) {
         operations::check_tensor(
             preallocated_output.value(),
@@ -30,32 +103,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             "FastReduceNC preallocated output rank {} must match input rank {}",
             preallocated_output.value().logical_shape().rank(),
             input.logical_shape().rank());
-        const auto& preallocated_output_tensor = preallocated_output.value();
-        const uint32_t pre_out_tile_height = preallocated_output_tensor.tensor_spec().tile().get_height();
-        const uint32_t pre_out_tile_width = preallocated_output_tensor.tensor_spec().tile().get_width();
-        const auto& pre_out_padded_shape = preallocated_output_tensor.padded_shape();
-        TT_FATAL(
-            pre_out_padded_shape.rank() >= 2,
-            "FastReduceNC preallocated output padded_shape rank {} must be at least 2",
-            pre_out_padded_shape.rank());
-        TT_FATAL(
-            pre_out_padded_shape[-2] > 0 && pre_out_padded_shape[-1] > 0,
-            "FastReduceNC preallocated output padded last-2 dims must be positive");
-        TT_FATAL(
-            pre_out_padded_shape[-2] % pre_out_tile_height == 0,
-            "FastReduceNC preallocated output padded height {} must be tile-height-aligned ({})",
-            pre_out_padded_shape[-2],
-            pre_out_tile_height);
-        TT_FATAL(
-            pre_out_padded_shape[-1] % pre_out_tile_width == 0,
-            "FastReduceNC preallocated output padded width {} must be tile-width-aligned ({})",
-            pre_out_padded_shape[-1],
-            pre_out_tile_width);
-        TT_FATAL(
-            preallocated_output_tensor.physical_volume() % (pre_out_tile_height * pre_out_tile_width) == 0,
-            "FastReduceNC preallocated output physical volume must be a multiple of tile element count {} (got {})",
-            pre_out_tile_height * pre_out_tile_width,
-            preallocated_output_tensor.physical_volume());
+        validate_tensor_padded_spatial(preallocated_output.value(), "preallocated output");
     }
 
     // validate input dim
@@ -71,33 +119,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
         input_rank,
         tt::tt_metal::MAX_NUM_DIMENSIONS);
 
-    {
-        const uint32_t in_tile_height = input.tensor_spec().tile().get_height();
-        const uint32_t in_tile_width = input.tensor_spec().tile().get_width();
-        const auto& in_padded_shape = input.padded_shape();
-        TT_FATAL(
-            in_padded_shape.rank() >= 2,
-            "FastReduceNC input padded_shape rank {} must be at least 2",
-            in_padded_shape.rank());
-        TT_FATAL(
-            in_padded_shape[-2] > 0 && in_padded_shape[-1] > 0,
-            "FastReduceNC input padded last-2 dims must be positive");
-        TT_FATAL(
-            in_padded_shape[-2] % in_tile_height == 0,
-            "FastReduceNC input padded height {} must be tile-height-aligned ({})",
-            in_padded_shape[-2],
-            in_tile_height);
-        TT_FATAL(
-            in_padded_shape[-1] % in_tile_width == 0,
-            "FastReduceNC input padded width {} must be tile-width-aligned ({})",
-            in_padded_shape[-1],
-            in_tile_width);
-        TT_FATAL(
-            input.physical_volume() % (in_tile_height * in_tile_width) == 0,
-            "FastReduceNC input physical volume must be a multiple of tile element count {} (got {})",
-            in_tile_height * in_tile_width,
-            input.physical_volume());
-    }
+    validate_tensor_padded_spatial(input, "input");
 
     const auto fr_nc_device_grid = tensor_args.input.device()->compute_with_storage_grid_size();
     TT_FATAL(
@@ -115,23 +137,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             fr_nc_in_memory_config.shard_spec().value().grid,
             fr_nc_full_device_grid);
         const auto& in_shard_spec = fr_nc_in_memory_config.shard_spec().value();
-        const uint32_t in_shard_tile_height = input.tensor_spec().tile().get_height();
-        const uint32_t in_shard_tile_width = input.tensor_spec().tile().get_width();
-        TT_FATAL(
-            in_shard_spec.shape[0] > 0 && in_shard_spec.shape[1] > 0,
-            "FastReduceNC input shard_shape must be positive, got [{}, {}]",
-            in_shard_spec.shape[0],
-            in_shard_spec.shape[1]);
-        TT_FATAL(
-            in_shard_spec.shape[0] % in_shard_tile_height == 0,
-            "FastReduceNC input shard_shape[0]={} must be tile-height-aligned ({})",
-            in_shard_spec.shape[0],
-            in_shard_tile_height);
-        TT_FATAL(
-            in_shard_spec.shape[1] % in_shard_tile_width == 0,
-            "FastReduceNC input shard_shape[1]={} must be tile-width-aligned ({})",
-            in_shard_spec.shape[1],
-            in_shard_tile_width);
+        validate_shard_shape_2d(in_shard_spec.shape[0], in_shard_spec.shape[1], "input");
     }
     if (fr_nc_in_memory_config.nd_shard_spec().has_value()) {
         TT_FATAL(
@@ -140,23 +146,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             fr_nc_in_memory_config.nd_shard_spec().value().grid,
             fr_nc_full_device_grid);
         const auto& in_nd_shard_spec = fr_nc_in_memory_config.nd_shard_spec().value();
-        if (in_nd_shard_spec.shard_shape.rank() >= 2) {
-            const uint32_t in_nd_tile_height = input.tensor_spec().tile().get_height();
-            const uint32_t in_nd_tile_width = input.tensor_spec().tile().get_width();
-            TT_FATAL(
-                in_nd_shard_spec.shard_shape[-2] > 0 && in_nd_shard_spec.shard_shape[-1] > 0,
-                "FastReduceNC input ND shard last-2 dims must be positive");
-            TT_FATAL(
-                in_nd_shard_spec.shard_shape[-2] % in_nd_tile_height == 0,
-                "FastReduceNC input ND shard_shape[-2]={} must be tile-height-aligned ({})",
-                in_nd_shard_spec.shard_shape[-2],
-                in_nd_tile_height);
-            TT_FATAL(
-                in_nd_shard_spec.shard_shape[-1] % in_nd_tile_width == 0,
-                "FastReduceNC input ND shard_shape[-1]={} must be tile-width-aligned ({})",
-                in_nd_shard_spec.shard_shape[-1],
-                in_nd_tile_width);
-        }
+        validate_nd_shard_last_two(in_nd_shard_spec.shard_shape, "input");
     }
     const auto& fr_nc_out_memory_config = args.output_mem_config;
     if (fr_nc_out_memory_config.shard_spec().has_value()) {
@@ -166,23 +156,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             fr_nc_out_memory_config.shard_spec().value().grid,
             fr_nc_full_device_grid);
         const auto& out_shard_spec = fr_nc_out_memory_config.shard_spec().value();
-        const uint32_t out_shard_tile_height = input.tensor_spec().tile().get_height();
-        const uint32_t out_shard_tile_width = input.tensor_spec().tile().get_width();
-        TT_FATAL(
-            out_shard_spec.shape[0] > 0 && out_shard_spec.shape[1] > 0,
-            "FastReduceNC output shard_shape must be positive, got [{}, {}]",
-            out_shard_spec.shape[0],
-            out_shard_spec.shape[1]);
-        TT_FATAL(
-            out_shard_spec.shape[0] % out_shard_tile_height == 0,
-            "FastReduceNC output shard_shape[0]={} must be tile-height-aligned ({})",
-            out_shard_spec.shape[0],
-            out_shard_tile_height);
-        TT_FATAL(
-            out_shard_spec.shape[1] % out_shard_tile_width == 0,
-            "FastReduceNC output shard_shape[1]={} must be tile-width-aligned ({})",
-            out_shard_spec.shape[1],
-            out_shard_tile_width);
+        validate_shard_shape_2d(out_shard_spec.shape[0], out_shard_spec.shape[1], "output");
     }
     if (fr_nc_out_memory_config.nd_shard_spec().has_value()) {
         TT_FATAL(
@@ -191,23 +165,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             fr_nc_out_memory_config.nd_shard_spec().value().grid,
             fr_nc_full_device_grid);
         const auto& out_nd_shard_spec = fr_nc_out_memory_config.nd_shard_spec().value();
-        if (out_nd_shard_spec.shard_shape.rank() >= 2) {
-            const uint32_t out_nd_tile_height = input.tensor_spec().tile().get_height();
-            const uint32_t out_nd_tile_width = input.tensor_spec().tile().get_width();
-            TT_FATAL(
-                out_nd_shard_spec.shard_shape[-2] > 0 && out_nd_shard_spec.shard_shape[-1] > 0,
-                "FastReduceNC output ND shard last-2 dims must be positive");
-            TT_FATAL(
-                out_nd_shard_spec.shard_shape[-2] % out_nd_tile_height == 0,
-                "FastReduceNC output ND shard_shape[-2]={} must be tile-height-aligned ({})",
-                out_nd_shard_spec.shard_shape[-2],
-                out_nd_tile_height);
-            TT_FATAL(
-                out_nd_shard_spec.shard_shape[-1] % out_nd_tile_width == 0,
-                "FastReduceNC output ND shard_shape[-1]={} must be tile-width-aligned ({})",
-                out_nd_shard_spec.shard_shape[-1],
-                out_nd_tile_width);
-        }
+        validate_nd_shard_last_two(out_nd_shard_spec.shard_shape, "output");
     }
 }
 
