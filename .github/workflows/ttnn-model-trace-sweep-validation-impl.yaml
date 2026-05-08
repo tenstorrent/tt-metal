@@ -120,6 +120,7 @@ jobs:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
           MANIFEST_PATH: ${{ inputs.manifest-path }}
           MODELS_FILTER: ${{ inputs.models-filter }}
+          SCOPE_TARGET: ${{ inputs.scope-targets }}
         run: |
           mkdir -p model_tracer/traced_operations
           # Build args as an array so a multi-token MODELS_FILTER value (e.g.
@@ -129,6 +130,15 @@ jobs:
             "$MANIFEST_PATH"
             model_tracer/traced_operations/ttnn_operations_master.json
           )
+          # Pass an explicit scope positional arg when the caller chose
+          # lead_models or model_traced. Without this, reconstruct-manifest
+          # iterates ALL scopes in the registry's `targets:` section and the
+          # scope filter the dispatch UI thinks it's enforcing is silently
+          # ignored. "all" deliberately omits the positional so the loader
+          # iterates every group.
+          if [[ "$SCOPE_TARGET" == "lead_models" || "$SCOPE_TARGET" == "model_traced" ]]; then
+            RECONSTRUCT_ARGS+=("$SCOPE_TARGET")
+          fi
           if [[ -n "$MODELS_FILTER" ]]; then
             RECONSTRUCT_ARGS+=(--models-filter "$MODELS_FILTER")
           fi
@@ -465,6 +475,19 @@ jobs:
             echo "No multi-device mesh shape detected in vectors, using default"
           fi
 
+      - name: Split sweep vectors by required dispatch axis
+        run: |
+          # Two-pass dispatch-axis design (see split_vectors_by_axis.py and
+          # ttnn-run-sweeps-impl.yaml): lead_models / model_traced traces
+          # include configs that need ROW dispatch (compute 8x9, x=7 cores)
+          # and configs that need COL dispatch (compute 7x10, y=9 cores).
+          # Pre-split the vector set so each pass only sees vectors for its
+          # own mesh axis, identical to the PCC sweep workflow.
+          cd /work
+          python3 tests/sweep_framework/split_vectors_by_axis.py
+          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ | head -20; echo "::endgroup::"
+          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ | head -20; echo "::endgroup::"
+
       - name: Run sweeps with tracer
         run: |
           mkdir -p /work/tests/sweep_framework/results_export
@@ -483,15 +506,55 @@ jobs:
           }
           EOF
 
-          python3 model_tracer/generic_ops_tracer.py \
-            tests/sweep_framework/sweeps_runner.py \
-            -o /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json \
-            -- \
-            --module-name "${{ matrix.module_selector }}" \
-            --suite-name "${{ matrix.suite_name }}" \
-            --vector-source vectors_export \
-            --result-dest results_export \
-            --main-proc-verbose
+          MODULE_SELECTOR="${{ matrix.module_selector }}"
+          TRACE_OUT="/work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json"
+
+          # Two-pass run: COL first, then ROW. generic_ops_tracer appends to
+          # the same -o trace file across both passes, so the validation
+          # aggregator sees a unified trace covering both dispatch axes.
+          # Skip a pass when the matching partition has no vectors for any
+          # module in this batch (sweeps_runner errors on empty inputs).
+          run_pass() {
+            local axis="$1"
+            local vectors_dir="tests/sweep_framework/vectors_export_${axis}"
+            if [[ ! -d "$vectors_dir" ]]; then
+              echo "[two-pass] $axis partition missing — skipping"
+              return 0
+            fi
+            local matched=0
+            local _IFS_old="$IFS"; IFS=','
+            for module in $MODULE_SELECTOR; do
+              for f in "$vectors_dir/${module}".*.json "$vectors_dir/${module}.json"; do
+                [[ -f "$f" ]] && matched=1 && break 2
+              done
+            done
+            IFS="$_IFS_old"
+            if [[ "$matched" == "0" ]]; then
+              echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
+              return 0
+            fi
+            echo "[two-pass] === axis=$axis ==="
+            TTNN_DISPATCH_AXIS="$axis" \
+              TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
+              python3 model_tracer/generic_ops_tracer.py \
+                tests/sweep_framework/sweeps_runner.py \
+                -o "$TRACE_OUT" \
+                -- \
+                --module-name "$MODULE_SELECTOR" \
+                --suite-name "${{ matrix.suite_name }}" \
+                --vector-source vectors_export \
+                --result-dest results_export \
+                --main-proc-verbose
+          }
+
+          set +e
+          run_pass col
+          rc_col=$?
+          run_pass row
+          rc_row=$?
+          set -e
+          if [[ $rc_col -ne 0 ]]; then echo "[two-pass] col pass exited $rc_col"; exit $rc_col; fi
+          if [[ $rc_row -ne 0 ]]; then echo "[two-pass] row pass exited $rc_row"; exit $rc_row; fi
 
       - name: Upload sweep traces
         if: always()
