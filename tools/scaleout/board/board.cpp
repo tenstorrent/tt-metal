@@ -337,9 +337,9 @@ private:
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
 
         // QSFP_DD ports (800G)
-        add_port(ports, PortType::QSFP_DD, PortId(1), {{0, ChanId(9)}, {0, ChanId(11)}});  // ASIC 0, channels 9,11
+        add_port(ports, PortType::QSFP_DD, PortId(1), {{0, ChanId(11)}, {0, ChanId(9)}});  // ASIC 0, channels 11,9
         add_port(ports, PortType::QSFP_DD, PortId(2), {{0, ChanId(8)}, {0, ChanId(10)}});  // ASIC 0, channels 8,10
-        add_port(ports, PortType::QSFP_DD, PortId(3), {{0, ChanId(5)}, {0, ChanId(7)}});   // ASIC 0, channels 5,7
+        add_port(ports, PortType::QSFP_DD, PortId(3), {{0, ChanId(7)}, {0, ChanId(5)}});   // ASIC 0, channels 7,5
         add_port(ports, PortType::QSFP_DD, PortId(4), {{0, ChanId(4)}, {0, ChanId(6)}});   // ASIC 0, channels 4,6
 
         return ports;

@@ -11,6 +11,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -48,8 +49,6 @@ class Cluster;
 }  // namespace tt::umd
 
 namespace tt::tt_fabric {
-
-class TopologyMapper;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {

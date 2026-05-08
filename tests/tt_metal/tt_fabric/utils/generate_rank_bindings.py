@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import copy
 import os
 import subprocess
@@ -37,6 +38,60 @@ def generate_tray_to_pcie_device_mapping(mapping_file):
     if not os.path.exists(mapping_file):
         logger.error(f"{mapping_file} not found")
         sys.exit(1)
+
+
+def generate_loudbox_mesh_descriptor(output_file, num_meshes=4, mesh_shape=(4, 2)):
+    """Generate a mesh descriptor for loudbox with 8-channel inter-mesh connections."""
+    rows, cols = mesh_shape
+    content = f"""# {num_meshes} {rows}x{cols} meshes with 8-channel inter-mesh connections
+# Generated for loudbox configuration
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {{
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology {{ dims: [ {rows}, {cols} ] }}
+  host_topology   {{ dims: [ 1, 1 ] }}
+  channels {{
+    count: 2
+    policy: RELAXED
+  }}
+}}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {{
+  name: "G0"
+  type: "FABRIC"
+"""
+    # Add mesh instances
+    for i in range(num_meshes):
+        content += f'  instances {{ mesh {{ mesh_descriptor: "M0" mesh_id: {i} }} }}\n'
+
+    content += "\n"
+
+    # Add ring connections with 8 channels
+    for i in range(num_meshes):
+        next_i = (i + 1) % num_meshes
+        content += f"""  connections {{
+    nodes {{ mesh {{ mesh_descriptor: "M0" mesh_id: {i} }} }}
+    nodes {{ mesh {{ mesh_descriptor: "M0" mesh_id: {next_i} }} }}
+    channels {{ count: 8 }}
+  }}
+"""
+
+    content += """}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+"""
+
+    with open(output_file, "w") as f:
+        f.write(content)
+
+    logger.info(f"Generated mesh descriptor: {output_file}")
+    return output_file
 
 
 def generate_rank_binding_yaml(
@@ -81,6 +136,28 @@ def generate_rank_binding_yaml(
     return rank_config
 
 
+def generate_loudbox_rank_binding_yaml(rank_bindings, mesh_graph_desc_path, output_file, devices_per_host=8):
+    """Generate rank binding YAML for loudbox (all devices visible on each host)."""
+    rank_bindings = copy.deepcopy(rank_bindings)
+
+    # For loudbox, each rank sees all local devices
+    visible_devices = ",".join(map(str, range(devices_per_host)))
+
+    for binding in rank_bindings:
+        binding["env_overrides"] = {"TT_VISIBLE_DEVICES": visible_devices}
+
+    rank_config = {
+        "rank_bindings": rank_bindings,
+        "mesh_graph_desc_path": mesh_graph_desc_path,
+    }
+
+    with open(output_file, "w") as f:
+        yaml.dump(rank_config, f, default_flow_style=False, sort_keys=False)
+
+    logger.info(f"Generated loudbox rank configuration file: {output_file}")
+    return rank_config
+
+
 def validate_device_mapping(tray_to_pcie_device_mapping):
     if "arch" not in tray_to_pcie_device_mapping:
         logger.error("Tray to PCIe device mapping does not contain arch")
@@ -94,6 +171,38 @@ def validate_device_mapping(tray_to_pcie_device_mapping):
             f"Customized splitting of PCIe devices across processes is currently supported only for Wormhole and Blackhole Galaxies. Found arch: {arch}, num_devices: {num_devices}"
         )
         sys.exit(1)
+
+
+def generate_loudbox_rank_bindings(output_dir=".", num_hosts=4, devices_per_host=8):
+    """Generate rank bindings for loudbox configurations."""
+    logger.info(f"Generating loudbox configurations for {num_hosts} hosts with {devices_per_host} devices each")
+
+    # Rank bindings for 4x2 multi-mesh (one mesh per host)
+    LOUDBOX_4X2_MULTI_MESH_RANK_BINDINGS = [
+        {
+            "rank": i,
+            "mesh_id": i,
+            "mesh_host_rank": 0,
+        }
+        for i in range(num_hosts)
+    ]
+
+    # Generate mesh descriptor
+    mesh_desc_file = os.path.join(output_dir, "loudbox_4x2_multi_mesh.textproto")
+    generate_loudbox_mesh_descriptor(mesh_desc_file, num_meshes=num_hosts, mesh_shape=(4, 2))
+
+    # Generate rank binding
+    output_file = os.path.join(output_dir, "loudbox_4x2_multi_mesh_rank_binding.yaml")
+    generate_loudbox_rank_binding_yaml(
+        LOUDBOX_4X2_MULTI_MESH_RANK_BINDINGS,
+        mesh_desc_file,
+        output_file,
+        devices_per_host=devices_per_host,
+    )
+
+    logger.info(f"Loudbox configurations generated in {output_dir}")
+    logger.info(f"  - Mesh descriptor: {mesh_desc_file}")
+    logger.info(f"  - Rank binding: {output_file}")
 
 
 def generate_supported_rank_bindings():
@@ -384,4 +493,38 @@ def generate_supported_rank_bindings():
 
 
 if __name__ == "__main__":
-    generate_supported_rank_bindings()
+    parser = argparse.ArgumentParser(description="Generate rank bindings for Galaxy or Loudbox configurations")
+    parser.add_argument(
+        "--loudbox",
+        action="store_true",
+        help="Generate configurations for loudbox (multi-host) setup instead of Galaxy",
+    )
+    parser.add_argument(
+        "--num-hosts",
+        type=int,
+        default=4,
+        help="Number of hosts in loudbox configuration (default: 4)",
+    )
+    parser.add_argument(
+        "--devices-per-host",
+        type=int,
+        default=8,
+        help="Number of devices per host in loudbox configuration (default: 8)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=".",
+        help="Output directory for generated files (default: current directory)",
+    )
+
+    args = parser.parse_args()
+
+    if args.loudbox:
+        generate_loudbox_rank_bindings(
+            output_dir=args.output_dir,
+            num_hosts=args.num_hosts,
+            devices_per_host=args.devices_per_host,
+        )
+    else:
+        generate_supported_rank_bindings()
