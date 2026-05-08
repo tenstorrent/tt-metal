@@ -5,8 +5,8 @@
 """Run DeepSeek unit tests in pytest subprocesses isolated by fabric topology.
 
 This runner avoids in-process fabric topology changes such as FABRIC_2D ->
-FABRIC_2D_TORUS_X. Each bucket runs in a fresh Python process, and risky fabric
-buckets get a reset/cluster-validation cycle before pytest starts.
+FABRIC_2D_TORUS_X. Each bucket runs in a fresh Python process. Buckets reset and
+cluster-validate before pytest by default; pure-local buckets opt out.
 """
 
 from __future__ import annotations
@@ -229,15 +229,10 @@ def parse_args() -> argparse.Namespace:
         help="Run the smoke pytest after reset/validation before each reset-enabled bucket.",
     )
     parser.add_argument(
-        "--continue-on-failure",
-        action="store_true",
-        default=True,
-        help="Continue to later buckets after a bucket fails. This is the default.",
-    )
-    parser.add_argument(
         "--fail-fast",
         action="store_false",
         dest="continue_on_failure",
+        default=True,
         help="Stop after the first bucket failure.",
     )
     parser.add_argument(
