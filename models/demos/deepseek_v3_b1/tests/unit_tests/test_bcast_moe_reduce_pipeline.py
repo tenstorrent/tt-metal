@@ -1258,7 +1258,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             downstream_d2d_socket_page_size=embedding_size_bytes,
             pipeline_device_coords=device_coords,
             pipeline_exit_core_coord=pipeline_core,
-            entry_device_coords=entry_device_coords,
+            entry_device_coords=entry_column_coords,
             exit_device_coords=exit_column_coords,
             loopback=fabric_loopback,
         )
@@ -1569,6 +1569,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
     # -- Pipeline teardown --
     logger.info(f"[rank={my_mesh_id}] waiting for pipeline termination")
     if is_stage0:
+        ttnn.distributed_context_barrier()
         for hio in host_ios:
             hio.terminate(False)
         entry_socket_interface.terminate(False)
