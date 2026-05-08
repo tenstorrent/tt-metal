@@ -35,7 +35,6 @@ KV Cache:
 - Drops O(n²) → O(n) for generation.
 """
 
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1684,246 +1683,65 @@ def generate_codes_ttnn(
     frame_breakdown_frames = 0
 
     try:
-        # --- Generation loop ---
-        for step in range(config.max_new_tokens):
-            if use_2cq:
-                ttnn.wait_for_event(1, trace_cq0_idle)
-            else:
-                ttnn.synchronize_device(device)
-            t_step_start = time.time()
-            _step_pc = time.perf_counter()
+        # === STEP 6: AR generation loop — delegates to the shared helper
+        # in tt/utils.py so the demo path here and the server path in
+        # run_inference run the EXACT same loop body.
+        from models.demos.qwen3_tts.tt.utils import DecodeLoopState, ar_decode_loop
 
-            # === CodePredictor: Generate codes 1-15 ===
-            past_hidden_torch = ttnn.to_torch(talker_hidden_tt)[:, :, -1:, :].float()
-            token_id_buf[0, 0] = token_0
-            code0_embed = F.embedding(token_id_buf, codec_embed_torch).unsqueeze(1)
-            cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
-
-            code_row = [token_0]
-            _t_after_cp_input = time.perf_counter()
-
-            # Restore CP constants corrupted by Talker's paged_update_cache
-            ttnn.copy_host_to_device_tensor(cp_trace_prefill_mask_host, cp_trace_prefill_mask_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(cp_trace_prefill_cos_host, cp_trace_prefill_cos_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(cp_trace_prefill_sin_host, cp_trace_prefill_sin_tt, cq_id=h2d_cq)
-            for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
-                ttnn.copy_host_to_device_tensor(k_zero, k_cache, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(v_zero, v_cache, cq_id=h2d_cq)
-            _t_after_kv = time.perf_counter()
-
-            # CP prefill trace
-            cp_prefill_embed_cpu.copy_(cp_input.bfloat16())
-            pfembed_host = ttnn.from_torch(cp_prefill_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            ttnn.copy_host_to_device_tensor(pfembed_host, cp_trace_prefill_embed_tt, cq_id=h2d_cq)
-            if use_2cq:
-                write_ev = ttnn.record_event(device, 1)
-                ttnn.wait_for_event(0, write_ev)
-            ttnn.execute_trace(device, cp_prefill_trace_id, cq_id=0, blocking=False)
-            if use_2cq:
-                trace_cq0_idle = ttnn.record_event(device, 0)
-            else:
-                ttnn.synchronize_device(device)
-
-            _prefill_sp = {}
-            if config.greedy:
-                _t_pf0 = time.perf_counter()
-                token = _read_device_token(cp_prefill_token_tt, index=1)
-                _prefill_sp["device_logits"] = time.perf_counter() - _t_pf0
-            else:
-                _pf_vocab = cp_prefill_logits_tt.shape[3]
-                last_prefill_logits = ttnn.slice(cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
-                token = sample_from_tt_vocab_logits(
-                    last_prefill_logits,
-                    temperature=config.temperature,
-                    top_k=config.top_k,
-                    greedy=config.greedy,
-                    prof_acc=_prefill_sp,
-                )
-                ttnn.deallocate(last_prefill_logits)
-            code_row.append(token)
-            _t_after_cp_prefill = time.perf_counter()
-
-            # CP decode traces (len = num_code_groups - 2).
-            # Two paths:
-            #   (greedy)         CPU F.embedding+H2D between traces, in-trace argmax.
-            #   (sampling, default) On-device chain: trace[i]'s in-trace ttnn.embedding
-            #     wrote the embed for trace[i+1] directly into cp_trace_decode_embed_tts.
-            #     We only H2D the FIRST trace's input embed (from cp_prefill's `token`)
-            #     and read tokens off device for code_row tracking.
-            _decode_sp_agg = {"device_logits": 0.0, "cpu_sample": 0.0}
-            for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
-                _buf_i = (_trace_i % 2) if use_2cq else 0
-                # H2D embed for this iteration's input. With on-device chain enabled,
-                # the previous trace's in-trace ttnn.embedding already wrote our buffer
-                # for trace_i>=1; skip the CPU lookup. We still H2D the FIRST iteration's
-                # input embed (sourced from cp_prefill's sampled `token`).
-                # Chain mode skips H2D for trace_i>=1 (chain wrote it). Sampling-only and
-                # CPU-sample paths always need the host F.embedding + H2D.
-                _need_h2d = (not _device_cp_chain) or _trace_i == 0
-                if _need_h2d:
-                    prev_embed_idx = code_idx - 2
-                    token_id_buf[0, 0] = token
-                    if prev_embed_idx < len(code_pred_embeds) and code_pred_embeds[prev_embed_idx] is not None:
-                        next_embed = F.embedding(token_id_buf, code_pred_embeds[prev_embed_idx])
-                    else:
-                        next_embed = F.embedding(token_id_buf, codec_embed_torch)
-                    next_embed = next_embed.unsqueeze(1).bfloat16()
-
-                    cp_decode_embed_cpu.copy_(next_embed)
-                    e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                    if use_2cq:
-                        ttnn.wait_for_event(1, cp_decode_input_ready[_buf_i])
-                    ttnn.copy_host_to_device_tensor(e_h, cp_trace_decode_embed_tts[_buf_i], cq_id=h2d_cq)
-                    if use_2cq:
-                        write_ev = ttnn.record_event(device, 1)
-                        ttnn.wait_for_event(0, write_ev)
-                ttnn.execute_trace(device, cp_decode_trace_ids[_buf_i][_trace_i], cq_id=0, blocking=False)
-                if use_2cq:
-                    cp_decode_input_ready[_buf_i] = ttnn.record_event(device, 0)
-                    trace_cq0_idle = cp_decode_input_ready[_buf_i]
-
-                _dsp = {}
-                if _device_cp_chain:
-                    # Aggregated D2H: chain feeds next embed on-device, defer reads.
-                    code_row.append(None)
-                    continue
-                elif config.greedy or _device_cp_sampling:
-                    # Device wrote the token id; small D2H.
-                    _t_dc0 = time.perf_counter()
-                    token = _read_device_token(cp_decode_token_tts[_buf_i][_trace_i], index=0)
-                    _dsp["device_logits"] = time.perf_counter() - _t_dc0
-                else:
-                    # CPU sampling path (default): D2H full vocab logits, host multinomial.
-                    token = sample_from_tt_vocab_logits(
-                        cp_decode_logits_tts[_buf_i][_trace_i],
-                        temperature=config.temperature,
-                        top_k=config.top_k,
-                        greedy=config.greedy,
-                        prof_acc=_dsp,
-                    )
-                _decode_sp_agg["device_logits"] += _dsp.get("device_logits", 0.0)
-                _decode_sp_agg["cpu_sample"] += _dsp.get("cpu_sample", 0.0)
-                code_row.append(token)
-
-            # Aggregated D2H: when chain is on, all 14 traces dispatched without
-            # per-iter token reads. Resolve all 14 placeholders here in one pass.
-            if _device_cp_chain:
-                _t_dc0 = time.perf_counter()
-                for _ti in range(config.num_code_groups - 2):
-                    _bi = (_ti % 2) if use_2cq else 0
-                    code_row[2 + _ti] = _read_device_token(cp_decode_token_tts[_bi][_ti], index=0)
-                _decode_sp_agg["device_logits"] += time.perf_counter() - _t_dc0
-
-            all_codes.append(code_row)
-            if streaming_decoder is not None:
-                streaming_decoder.add_tokens(torch.tensor(code_row, dtype=torch.long))
-            if not use_2cq:
-                ttnn.synchronize_device(device)
-            t_cp_end = time.time()
-            _t_after_cp_decode = time.perf_counter()
-
-            # === Build next Talker input embedding ===
-            _t_embed0 = time.perf_counter()
-            acc_code_embed.zero_()
-            for i, tok in enumerate(code_row):
-                token_id_buf[0, 0] = tok
-                if i == 0:
-                    acc_code_embed += F.embedding(token_id_buf, codec_embed_torch)
-                else:
-                    if i - 1 < len(code_pred_embeds) and code_pred_embeds[i - 1] is not None:
-                        acc_code_embed += F.embedding(token_id_buf, code_pred_embeds[i - 1])
-                    else:
-                        acc_code_embed += F.embedding(token_id_buf, codec_embed_torch)
-
-            next_embed = acc_code_embed
-
-            trailing_len = trailing_text_hidden.shape[1]
-            if step < trailing_len:
-                next_embed = next_embed + trailing_text_hidden[:, step : step + 1, :]
-            else:
-                next_embed = next_embed + tts_pad_embed
-
-            next_embed = next_embed.unsqueeze(1)
-            _t_after_build_embed = time.perf_counter()
-
-            # === Talker decode trace ===
-            _talker_h2d_i = talker_pos - real_seq_len
-            cos_host = talker_cos_h2d[_talker_h2d_i]
-            sin_host = talker_sin_h2d[_talker_h2d_i]
-            mask_host = talker_mask_h2d[_talker_h2d_i]
-            cur_pos_host = talker_cur_pos_h2d[_talker_h2d_i]
-
-            talker_embed_cpu.copy_(next_embed.bfloat16())
-            embed_host = ttnn.from_torch(talker_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            if use_2cq:
-                ttnn.wait_for_event(1, trace_cq0_idle)
-            ttnn.copy_host_to_device_tensor(embed_host, trace_embed_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(cos_host, trace_cos_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(sin_host, trace_sin_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(cur_pos_host, trace_cur_pos_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(mask_host, trace_mask_tt, cq_id=h2d_cq)
-            if use_2cq:
-                write_ev = ttnn.record_event(device, 1)
-                ttnn.wait_for_event(0, write_ev)
-            ttnn.execute_trace(device, talker_decode_trace_id, cq_id=0, blocking=False)
-            talker_hidden_tt = trace_hidden_out
-            talker_pos += 1
-            if use_2cq:
-                trace_cq0_idle = ttnn.record_event(device, 0)
-            else:
-                ttnn.synchronize_device(device)
-            t_talker_end = time.time()
-            talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
-            cp_times_ms.append((t_cp_end - t_step_start) * 1000)
-
-            # Get next code 0 from trace output (on-device argmax for greedy).
-            _c0_sp = {}
-            if config.greedy and config.repetition_penalty == 1.0:
-                _t_c00 = time.perf_counter()
-                token_0 = _read_device_token(talker_codec0_token_tt, index=0)
-                _c0_sp["device_logits"] = time.perf_counter() - _t_c00
-            else:
-                token_0 = sample_from_tt_vocab_logits(
-                    trace_codec_logits_out,
-                    temperature=config.temperature,
-                    top_k=config.top_k,
-                    greedy=config.greedy,
-                    repetition_penalty=config.repetition_penalty,
-                    generated_tokens=generated_code0_tokens,
-                    prof_acc=_c0_sp,
-                )
-            generated_code0_tokens.append(token_0)
-
-            frame_breakdown_sums["cp_input_prep_ms"] += (_t_after_cp_input - _step_pc) * 1000
-            frame_breakdown_sums["cp_kv_restore_ms"] += (_t_after_kv - _t_after_cp_input) * 1000
-            frame_breakdown_sums["cp_prefill_ms"] += (_t_after_cp_prefill - _t_after_kv) * 1000
-            frame_breakdown_sums["cp_decode_ms"] += (_t_after_cp_decode - _t_after_cp_prefill) * 1000
-            frame_breakdown_sums["build_acc_embed_ms"] += (_t_after_build_embed - _t_embed0) * 1000
-            frame_breakdown_sums["talker_decode_ms"] += (t_talker_end - t_cp_end) * 1000
-            frame_breakdown_sums["codec0_sample_device_logits_ms"] += _c0_sp.get("device_logits", 0.0) * 1000
-            frame_breakdown_sums["codec0_sample_cpu_ms"] += _c0_sp.get("cpu_sample", 0.0) * 1000
-            frame_breakdown_sums["cp_prefill_sample_device_logits_ms"] += _prefill_sp.get("device_logits", 0.0) * 1000
-            frame_breakdown_sums["cp_prefill_sample_cpu_ms"] += _prefill_sp.get("cpu_sample", 0.0) * 1000
-            frame_breakdown_sums["cp_decode_samples_device_logits_ms"] += (
-                _decode_sp_agg.get("device_logits", 0.0) * 1000
-            )
-            frame_breakdown_sums["cp_decode_samples_cpu_ms"] += _decode_sp_agg.get("cpu_sample", 0.0) * 1000
-            frame_breakdown_frames += 1
-
-            if token_0 == config.codec_eos_id:
-                print(f"  EOS at step {step + 1}")
-                break
-
-            if not use_2cq:
-                ttnn.synchronize_device(device)
-            t_step_end = time.time()
-            step_ms = (t_step_end - t_step_start) * 1000
-            if step == 0:
-                t_first_decode_end = t_step_end
-            decode_step_times.append(step_ms)
-
-            if (step + 1) % 20 == 0:
-                print(f"  Generated {step + 1} frames...")
+        loop_state = DecodeLoopState(
+            device=device,
+            cp_kv_caches_persistent=cp_kv_caches_persistent,
+            cp_kv_zero_hosts=cp_kv_zero_hosts,
+            cp_prefill_trace_id=cp_prefill_trace_id,
+            cp_prefill_logits_tt=cp_prefill_logits_tt,
+            cp_decode_trace_ids=cp_decode_trace_ids,
+            cp_decode_logits_tts=cp_decode_logits_tts,
+            cp_trace_prefill_embed_tt=cp_trace_prefill_embed_tt,
+            cp_trace_prefill_mask_tt=cp_trace_prefill_mask_tt,
+            cp_trace_prefill_cos_tt=cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt=cp_trace_prefill_sin_tt,
+            cp_trace_prefill_mask_host=cp_trace_prefill_mask_host,
+            cp_trace_prefill_cos_host=cp_trace_prefill_cos_host,
+            cp_trace_prefill_sin_host=cp_trace_prefill_sin_host,
+            cp_trace_decode_embed_tts=cp_trace_decode_embed_tts,
+            code_pred_embeds=code_pred_embeds,
+            codec_embed_torch=codec_embed_torch,
+            talker_decode_trace_id=talker_decode_trace_id,
+            trace_embed_tt=trace_embed_tt,
+            trace_cos_tt=trace_cos_tt,
+            trace_sin_tt=trace_sin_tt,
+            trace_cur_pos_tt=trace_cur_pos_tt,
+            trace_mask_tt=trace_mask_tt,
+            trace_hidden_out=trace_hidden_out,
+            trace_codec_logits_out=trace_codec_logits_out,
+            talker_cos_h2d=talker_cos_h2d,
+            talker_sin_h2d=talker_sin_h2d,
+            talker_mask_h2d=talker_mask_h2d,
+            talker_cur_pos_h2d=talker_cur_pos_h2d,
+            token_id_buf=token_id_buf,
+            cp_prefill_embed_cpu=cp_prefill_embed_cpu,
+            cp_decode_embed_cpu=cp_decode_embed_cpu,
+            talker_embed_cpu=talker_embed_cpu,
+            acc_code_embed=acc_code_embed,
+            talker_hidden_tt=talker_hidden_tt,
+            talker_pos=talker_pos,
+            real_seq_len=real_seq_len,
+            trailing_text_hidden=trailing_text_hidden,
+            tts_pad_embed=tts_pad_embed,
+            token_0=token_0,
+        )
+        codes_tensor, frame_breakdown_avg_ms_helper, t_first_decode_end, _t_last = ar_decode_loop(
+            loop_state,
+            config,
+            use_2cq,
+            streaming_decoder=streaming_decoder,
+            sample_token_fn=sample_token,
+            sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
+        )
+        decode_step_times = loop_state.decode_step_times_ms
+        talker_times_ms = loop_state.talker_times_ms
+        cp_times_ms = loop_state.cp_times_ms
+        all_codes = [] if codes_tensor is None else codes_tensor.tolist()
 
     finally:
         ttnn.synchronize_device(device)
@@ -2860,197 +2678,64 @@ def run_inference(
         acc_code_embed = torch.zeros(1, 1, _th, dtype=torch.float32)
 
         t_decode_start = time.time()
-        # Phase timers (gated by env): accumulate per-step phase timings to
-        # quantify the host gap. Set TT_QWEN3_PHASE_TIMERS=1 to enable.
-        _phase_dbg = bool(int(os.environ.get("TT_QWEN3_PHASE_TIMERS", "0")))
-        _phase_acc = {
-            "past_h": 0.0,
-            "cp_restore": 0.0,
-            "cp_prefill": 0.0,
-            "cp_decode": 0.0,
-            "build_emb": 0.0,
-            "talker_launch": 0.0,
-            "codec0_d2h": 0.0,
-            "codec0_cpu": 0.0,
-        }
-        _phase_n = 0
+        # Run the AR generation loop via the shared helper in tt/utils.py
+        # so this server path runs the EXACT same loop body as the demo's
+        # generate_codes_ttnn (no per-call drift between paths).
+        from models.demos.qwen3_tts.tt.utils import DecodeLoopState, ar_decode_loop
 
-        for step in range(config.max_new_tokens):
-            if use_2cq:
-                ttnn.wait_for_event(1, trace_cq0_idle)
-            else:
-                ttnn.synchronize_device(device)
-            t_step_start = time.time()
-
-            # --- CodePredictor: generate codes 1-15 ---
-            past_hidden_torch = ttnn.to_torch(talker_hidden_tt)[:, :, -1:, :].float()
-            token_id_buf[0, 0] = token_0
-            code0_embed = F.embedding(token_id_buf, ctx.codec_embed_torch).unsqueeze(1)
-            cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
-            code_row = [token_0]
-            _t_after_pasthidden = time.time()
-
-            # Restore CP constants (may be corrupted by paged_update_cache)
-            ttnn.copy_host_to_device_tensor(ctx.cp_trace_prefill_mask_host, ctx.cp_trace_prefill_mask_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(ctx.cp_trace_prefill_cos_host, ctx.cp_trace_prefill_cos_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(ctx.cp_trace_prefill_sin_host, ctx.cp_trace_prefill_sin_tt, cq_id=h2d_cq)
-            for (k_zero, v_zero), (k_cache, v_cache) in zip(ctx.cp_kv_zero_hosts, ctx.cp_kv_caches_persistent):
-                ttnn.copy_host_to_device_tensor(k_zero, k_cache, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(v_zero, v_cache, cq_id=h2d_cq)
-            _t_after_restore = time.time()
-
-            # CP prefill trace
-            cp_prefill_embed_cpu.copy_(cp_input.bfloat16())
-            pfembed_host = ttnn.from_torch(cp_prefill_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            ttnn.copy_host_to_device_tensor(pfembed_host, ctx.cp_trace_prefill_embed_tt, cq_id=h2d_cq)
-            if use_2cq:
-                write_ev = ttnn.record_event(device, 1)
-                ttnn.wait_for_event(0, write_ev)
-            ttnn.execute_trace(device, ctx.cp_prefill_trace_id, cq_id=0, blocking=False)
-            if use_2cq:
-                trace_cq0_idle = ttnn.record_event(device, 0)
-            else:
-                ttnn.synchronize_device(device)
-
-            _pf_vocab = ctx.cp_prefill_logits_tt.shape[3]
-            last_prefill_logits = ttnn.slice(ctx.cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
-            logits_torch = ttnn.to_torch(last_prefill_logits).squeeze().float()
-            ttnn.deallocate(last_prefill_logits)
-            token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
-            code_row.append(token)
-            _t_after_cp_prefill = time.time()
-
-            # CP decode traces x14
-            for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
-                prev_embed_idx = code_idx - 2
-                token_id_buf[0, 0] = token
-                if prev_embed_idx < len(ctx.code_pred_embeds) and ctx.code_pred_embeds[prev_embed_idx] is not None:
-                    next_embed = F.embedding(token_id_buf, ctx.code_pred_embeds[prev_embed_idx])
-                else:
-                    next_embed = F.embedding(token_id_buf, ctx.codec_embed_torch)
-                next_embed = next_embed.unsqueeze(1).bfloat16()
-
-                cp_decode_embed_cpu.copy_(next_embed)
-                e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                _buf_i = (_trace_i % 2) if use_2cq else 0
-                if use_2cq:
-                    ttnn.wait_for_event(1, cp_decode_input_ready[_buf_i])
-                ttnn.copy_host_to_device_tensor(e_h, ctx.cp_trace_decode_embed_tts[_buf_i], cq_id=h2d_cq)
-                if use_2cq:
-                    write_ev = ttnn.record_event(device, 1)
-                    ttnn.wait_for_event(0, write_ev)
-                ttnn.execute_trace(device, ctx.cp_decode_trace_ids[_buf_i][_trace_i], cq_id=0, blocking=False)
-                if use_2cq:
-                    cp_decode_input_ready[_buf_i] = ttnn.record_event(device, 0)
-                    trace_cq0_idle = cp_decode_input_ready[_buf_i]
-                else:
-                    ttnn.synchronize_device(device)
-
-                logits_torch = ttnn.to_torch(ctx.cp_decode_logits_tts[_buf_i][_trace_i]).squeeze().float()
-                token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
-                code_row.append(token)
-
-            all_codes.append(code_row)
-            if not use_2cq:
-                ttnn.synchronize_device(device)
-            t_cp_end = time.time()
-            _t_after_cp_decode = t_cp_end
-
-            # --- Build next Talker input embedding ---
-            acc_code_embed.zero_()
-            for i, tok in enumerate(code_row):
-                token_id_buf[0, 0] = tok
-                if i == 0:
-                    acc_code_embed += F.embedding(token_id_buf, ctx.codec_embed_torch)
-                else:
-                    if i - 1 < len(ctx.code_pred_embeds) and ctx.code_pred_embeds[i - 1] is not None:
-                        acc_code_embed += F.embedding(token_id_buf, ctx.code_pred_embeds[i - 1])
-                    else:
-                        acc_code_embed += F.embedding(token_id_buf, ctx.codec_embed_torch)
-
-            next_embed = acc_code_embed
-
-            trailing_len = trailing_text_hidden.shape[1]
-            if step < trailing_len:
-                next_embed = next_embed + trailing_text_hidden[:, step : step + 1, :]
-            else:
-                next_embed = next_embed + tts_pad_embed
-            next_embed = next_embed.unsqueeze(1)
-
-            _t_after_build_emb = time.time()
-
-            # --- Talker decode trace ---
-            _talker_h2d_i = talker_pos - real_seq_len
-            cos_host = talker_cos_h2d[_talker_h2d_i]
-            sin_host = talker_sin_h2d[_talker_h2d_i]
-            mask_host = talker_mask_h2d[_talker_h2d_i]
-            cur_pos_host = talker_cur_pos_h2d[_talker_h2d_i]
-
-            talker_embed_cpu.copy_(next_embed.bfloat16())
-            embed_host = ttnn.from_torch(talker_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            if use_2cq:
-                ttnn.wait_for_event(1, trace_cq0_idle)
-            ttnn.copy_host_to_device_tensor(embed_host, trace_embed_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(cos_host, trace_cos_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(sin_host, trace_sin_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(cur_pos_host, trace_cur_pos_tt, cq_id=h2d_cq)
-            ttnn.copy_host_to_device_tensor(mask_host, trace_mask_tt, cq_id=h2d_cq)
-            if use_2cq:
-                write_ev = ttnn.record_event(device, 1)
-                ttnn.wait_for_event(0, write_ev)
-            ttnn.execute_trace(device, talker_decode_trace_id, cq_id=0, blocking=False)
-            talker_hidden_tt = trace_hidden_out
-            talker_pos += 1
-            if use_2cq:
-                trace_cq0_idle = ttnn.record_event(device, 0)
-            else:
-                ttnn.synchronize_device(device)
-            t_talker_end = time.time()
-            talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
-            cp_times_ms.append((t_cp_end - t_step_start) * 1000)
-
-            # Get next code 0 from trace output (on-device argmax for greedy)
-            _t_before_codec0_d2h = time.time()
-            _codec0_logits_torch = ttnn.to_torch(trace_codec_logits_out, dtype=torch.float32)
-            _t_after_codec0_d2h = time.time()
-            token_0 = sample_token(
-                _codec0_logits_torch.flatten(),
-                config.temperature,
-                config.top_k,
-                config.greedy,
-                config.repetition_penalty,
-                generated_code0_tokens,
-            )
-            generated_code0_tokens.append(token_0)
-            _t_after_codec0_cpu = time.time()
-
-            if token_0 == config.codec_eos_id:
-                print(f"  EOS at step {step + 1}")
-                break
-
-            if not use_2cq:
-                ttnn.synchronize_device(device)
-            t_step_end = time.time()
-            step_ms = (t_step_end - t_step_start) * 1000
-            decode_step_times.append(step_ms)
-
-            if _phase_dbg and step >= 1:  # skip first step
-                _phase_acc["past_h"] += (_t_after_pasthidden - t_step_start) * 1000
-                _phase_acc["cp_restore"] += (_t_after_restore - _t_after_pasthidden) * 1000
-                _phase_acc["cp_prefill"] += (_t_after_cp_prefill - _t_after_restore) * 1000
-                _phase_acc["cp_decode"] += (_t_after_cp_decode - _t_after_cp_prefill) * 1000
-                _phase_acc["build_emb"] += (_t_after_build_emb - _t_after_cp_decode) * 1000
-                _phase_acc["talker_launch"] += (t_talker_end - _t_after_build_emb) * 1000
-                _phase_acc["codec0_d2h"] += (_t_after_codec0_d2h - _t_before_codec0_d2h) * 1000
-                _phase_acc["codec0_cpu"] += (_t_after_codec0_cpu - _t_after_codec0_d2h) * 1000
-                _phase_n += 1
-
-            if (step + 1) % 20 == 0:
-                print(f"  Generated {step + 1} frames...")
-                if _phase_dbg and _phase_n > 0:
-                    parts = " ".join(f"{k}={_phase_acc[k]/_phase_n:.2f}" for k in _phase_acc)
-                    print(f"  [PHASE_MS, n={_phase_n}, mean per step] {parts}")
-
+        loop_state = DecodeLoopState(
+            device=device,
+            cp_kv_caches_persistent=ctx.cp_kv_caches_persistent,
+            cp_kv_zero_hosts=ctx.cp_kv_zero_hosts,
+            cp_prefill_trace_id=ctx.cp_prefill_trace_id,
+            cp_prefill_logits_tt=ctx.cp_prefill_logits_tt,
+            cp_decode_trace_ids=ctx.cp_decode_trace_ids,
+            cp_decode_logits_tts=ctx.cp_decode_logits_tts,
+            cp_trace_prefill_embed_tt=ctx.cp_trace_prefill_embed_tt,
+            cp_trace_prefill_mask_tt=ctx.cp_trace_prefill_mask_tt,
+            cp_trace_prefill_cos_tt=ctx.cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt=ctx.cp_trace_prefill_sin_tt,
+            cp_trace_prefill_mask_host=ctx.cp_trace_prefill_mask_host,
+            cp_trace_prefill_cos_host=ctx.cp_trace_prefill_cos_host,
+            cp_trace_prefill_sin_host=ctx.cp_trace_prefill_sin_host,
+            cp_trace_decode_embed_tts=ctx.cp_trace_decode_embed_tts,
+            code_pred_embeds=ctx.code_pred_embeds,
+            codec_embed_torch=ctx.codec_embed_torch,
+            talker_decode_trace_id=talker_decode_trace_id,
+            trace_embed_tt=trace_embed_tt,
+            trace_cos_tt=trace_cos_tt,
+            trace_sin_tt=trace_sin_tt,
+            trace_cur_pos_tt=trace_cur_pos_tt,
+            trace_mask_tt=trace_mask_tt,
+            trace_hidden_out=trace_hidden_out,
+            trace_codec_logits_out=trace_codec_logits_out,
+            talker_cos_h2d=talker_cos_h2d,
+            talker_sin_h2d=talker_sin_h2d,
+            talker_mask_h2d=talker_mask_h2d,
+            talker_cur_pos_h2d=talker_cur_pos_h2d,
+            token_id_buf=token_id_buf,
+            cp_prefill_embed_cpu=cp_prefill_embed_cpu,
+            cp_decode_embed_cpu=cp_decode_embed_cpu,
+            talker_embed_cpu=talker_embed_cpu,
+            acc_code_embed=acc_code_embed,
+            talker_hidden_tt=talker_hidden_tt,
+            talker_pos=talker_pos,
+            real_seq_len=real_seq_len,
+            trailing_text_hidden=trailing_text_hidden,
+            tts_pad_embed=tts_pad_embed,
+            token_0=token_0,
+        )
+        codes_tensor, _frame_breakdown, _t_first, _t_last = ar_decode_loop(
+            loop_state,
+            config,
+            use_2cq,
+            sample_token_fn=sample_token,
+            sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
+        )
+        decode_step_times = loop_state.decode_step_times_ms
+        talker_times_ms = loop_state.talker_times_ms
+        cp_times_ms = loop_state.cp_times_ms
+        all_codes = [] if codes_tensor is None else codes_tensor.tolist()
         t_decode_end = time.time()
         timings["decode_loop"] = t_decode_end - t_decode_start
 
