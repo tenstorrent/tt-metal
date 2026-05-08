@@ -184,7 +184,7 @@ class TTSeamlessM4Tv2Decoder:
             scale=1.0,
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qh)
         ttnn.deallocate(kh)
@@ -199,7 +199,9 @@ class TTSeamlessM4Tv2Decoder:
 
         merged = self._merge_heads(attn_out, batch, seq_q, num_heads, head_dim, hidden_size)
         ttnn.deallocate(attn_out)
-        proj = self._linear(merged, attn_module.out_proj.weight, attn_module.out_proj.bias)
+        proj = self._linear(
+            merged, attn_module.out_proj.weight, attn_module.out_proj.bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         ttnn.deallocate(merged)
         return proj
 
@@ -326,6 +328,7 @@ class TTSeamlessM4Tv2Decoder:
                 layer.ffn.fc2.weight,
                 layer.ffn.fc2.bias,
                 compute_cfg=self._ffn_fc2_compute_cfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(ff_in)
             residual = hidden
