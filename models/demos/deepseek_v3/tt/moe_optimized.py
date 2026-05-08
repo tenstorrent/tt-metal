@@ -622,7 +622,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             _,
             _,
             _,
-            _,
+            compute_output,
             _,
             combine_output,  # same buffer as preallocated_combine_output
         ) = ttnn.experimental.moe_compute(
@@ -636,6 +636,8 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             layer_id=0,  # each layer is composed of distinct tensors, as apposed to all layers fused together
             **cfg["quad_ring_moe_compute"],
         )
+
+        ttnn.deallocate(compute_output)
 
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
 

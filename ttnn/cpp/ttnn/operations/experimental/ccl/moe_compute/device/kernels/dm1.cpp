@@ -183,6 +183,7 @@ void kernel_main() {
                 /*noc_id=*/1);
             noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
         };
+        noc_async_posted_writes_flushed(/*noc=*/1);
     };
 
     //-------------------------------------------------------------------------
@@ -201,6 +202,11 @@ void kernel_main() {
 
         uint32_t dest_height_shard_start = 0;
         uint32_t shard_row_start = 0;
+
+        // required to prevent a race with combine writer
+        if (num_expert_chunks == 0) {
+            noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
+        }
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Set state for the data writes
@@ -272,7 +278,9 @@ void kernel_main() {
                 const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
 
                 // wait for combine to signal that the buffer segment is available
-                noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
+                if (chunk == 0) {
+                    noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
+                }
 
                 uint32_t dest_height_shard = dest_height_shard_start;
                 uint32_t shard_row = shard_row_start;
