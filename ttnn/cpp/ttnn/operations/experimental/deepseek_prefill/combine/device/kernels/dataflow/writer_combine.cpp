@@ -214,13 +214,6 @@ void kernel_main() {
                        << ENDL();
 
 #ifdef DEST_CHIP_ID
-        if (distance > 1) {
-            while (true);
-        }
-
-        if (distance == 0) {
-            while (true);
-        }
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
@@ -230,8 +223,7 @@ void kernel_main() {
             output_page_idx,
             (int)aligned_output_page_size,
             l1_alignment);
-        // noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);

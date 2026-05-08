@@ -214,8 +214,7 @@ void kernel_main() {
             page_idx,
             (int)aligned_metadata_page_size,
             l1_alignment);
-        // noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 
 #endif
 
