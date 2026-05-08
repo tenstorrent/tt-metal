@@ -337,11 +337,14 @@ class TtKokoroGeneratorCore:
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4
         )
 
-    def __call__(self, *, x_bct: ttnn.Tensor, style_s: torch.Tensor, har_per_stage: list[torch.Tensor]) -> ttnn.Tensor:
+    def __call__(
+        self, *, x_bct: ttnn.Tensor, style_s: torch.Tensor, har_per_stage: list[torch.Tensor | ttnn.Tensor]
+    ) -> ttnn.Tensor:
         """
         x_bct: [B, C, T] TTNN
         style_s: [B, style_dim] torch
-        har_per_stage: list of torch tensors, each [B, gen_n_fft+2, Th_i], used for noise injection at each stage.
+        har_per_stage: list of tensors (torch or TTNN), each [B, gen_n_fft+2, Th_i],
+            used for noise injection at each stage.
 
         Returns: x_post_bct torch-like logits on device [B, post_n_fft+2, Tout]
         """
@@ -355,9 +358,17 @@ class TtKokoroGeneratorCore:
             x = ttnn.leaky_relu(x, negative_slope=0.1)
 
             # x_source = noise_convs[i](har) then noise_res[i]
-            har = ttnn.from_torch(
-                har_per_stage[i].detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
+            har_i = har_per_stage[i]
+            if isinstance(har_i, ttnn.Tensor):
+                har = har_i
+                if har.device() != self.device:
+                    raise ValueError("har_per_stage TTNN tensor is on a different device")
+                if har.layout != ttnn.TILE_LAYOUT:
+                    har = ttnn.to_layout(har, ttnn.TILE_LAYOUT)
+            else:
+                har = ttnn.from_torch(
+                    har_i.detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
             har_nlc = ttnn.permute(har, (0, 2, 1))
             x_source = conv1d_nlc(
                 x_nlc=har_nlc,
