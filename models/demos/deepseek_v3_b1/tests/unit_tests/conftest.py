@@ -15,21 +15,6 @@ import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.weights.prepare import SharedExpertWeights, prepare_shared_expert_weights
 
-#: Skip mark for tests that need ``TT_METAL_ALLOCATOR_MODE_HYBRID=1`` to exercise
-#: per-core L1 allocation (DeepSeek V3 B1 SRAM hot experts, fused buffers).  The
-#: env var must be exported before pytest starts so ``ttnn.open_device`` sees it
-#: -- there is no way to flip allocator mode after device init.
-#:
-#: Imported by sibling test modules via the full module path
-#: (``from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import
-#: requires_hybrid_allocator``) so the marker stays scoped to deepseek_v3_b1
-#: rather than living on the project-root ``conftest.py``.
-requires_hybrid_allocator = pytest.mark.skipif(
-    os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1",
-    reason="Test requires TT_METAL_ALLOCATOR_MODE_HYBRID=1 for per-core L1 allocation; "
-    "the env var must be exported before pytest starts so ttnn.open_device() sees it.",
-)
-
 # If False, load from DEEPSEEK_V3_HF_MODEL when set; otherwise skip. If True, use deterministic random weights.
 USE_RANDOM_WEIGHTS = True
 

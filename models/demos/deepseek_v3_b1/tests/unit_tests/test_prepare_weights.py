@@ -17,9 +17,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, bfp4_tile_byte_count
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.prepare import (

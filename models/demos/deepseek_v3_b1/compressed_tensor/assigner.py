@@ -93,8 +93,8 @@ class CompressedTensorAssigner:
         # ``best_precision`` and the only entry of ``formats_by_cost`` are the
         # same, so every tile is assigned that format regardless of its score.
         # Skipping the per-format ``quantize_fn`` + ``tile_metrics`` + per-tile
-        # assignment loop avoids the dominant host CPU cost on the SRAM hot
-        # expert path (production uses ``formats=["bfp4"]``).  This also
+        # assignment loop avoids the dominant host CPU cost when production uses
+        # a single format (``formats=["bfp4"]``).  This also
         # bypasses the ``.float().cpu().numpy()`` copy and the padded-zeros
         # allocation -- only the input shape is needed.  ``quantized`` is left
         # as ``None`` because no current caller reads it; callers that need

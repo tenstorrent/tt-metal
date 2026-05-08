@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
@@ -26,7 +27,6 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
     DENSE_SHARED_N,

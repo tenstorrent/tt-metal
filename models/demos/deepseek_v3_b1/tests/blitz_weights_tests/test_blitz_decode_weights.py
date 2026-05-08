@@ -44,8 +44,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
-from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,

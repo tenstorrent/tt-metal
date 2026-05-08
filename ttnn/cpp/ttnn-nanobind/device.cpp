@@ -483,7 +483,7 @@ void device_module(nb::module_& m_device) {
 
         For ``ttnn.BufferType.L1`` this is the worker-L1 unreserved base, i.e. the lowest address
         that the allocator is allowed to hand out for tensor / buffer storage on Tensix worker
-        cores. Combined with the worker-L1 size (queryable via :py:func:`ttnn.GetMemoryView`), it
+        cores. Combined with the worker-L1 size (queryable via :py:func:`ttnn.get_memory_view`), it
         defines the address range available for compute-time L1 allocations.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+

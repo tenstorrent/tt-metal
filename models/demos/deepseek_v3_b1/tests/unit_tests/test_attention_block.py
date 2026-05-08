@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
@@ -24,7 +25,6 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.utils import deinterleave_kv_cache, generate_mm_weights
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,

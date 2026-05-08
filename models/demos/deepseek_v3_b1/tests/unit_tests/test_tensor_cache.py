@@ -20,7 +20,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import requires_hybrid_allocator
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.weights.cache.cache import (
     AbsentCacheEntry,
     CorruptCacheEntry,
