@@ -32,10 +32,6 @@ constexpr uint32_t kCbCtrl = tt::CBIndex::c_6;  // NCRISC->compute: per-core act
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 
-// L1 alignment for CB pages and cross-core NOC writes. NOT the tile width
-// (which happens to also be 32 elements) — different unit, same number.
-constexpr uint32_t kL1_ALIGN = 32U;
-
 uint32_t pick_num_chunks(uint32_t h) {
     uint32_t row_bytes = h * 2U;
     uint32_t strip_bytes = 32U * row_bytes;
@@ -66,6 +62,11 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     auto& plan = std::get<5>(outputs);
 
     tt::tt_metal::Program program{};
+
+    // L1 alignment for CB pages and cross-core NOC writes. Queried from HAL
+    // (16 on WH/BH today) so the kernel layout stays correct on future archs
+    // with different alignment.
+    const uint32_t kL1_ALIGN = tt::tt_metal::hal::get_l1_alignment();
 
     const uint32_t h = attrs.h;
     const uint32_t e_local = attrs.e_local;
@@ -174,7 +175,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // alignment places shared_local_counts on top of the private counts array.
     uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), dram_align_bytes);
     uint32_t kLeidsBufBytes = std::max<uint32_t>(leids_aligned_page_host, 32U);
-    constexpr uint32_t kPlanChunk = 32U;      // plan pre-fill burst size (entries per chunk)
+    constexpr uint32_t kPlanChunk = 32U;  // per-expert phase-3 staging and prefill stamp chunk size
     // Metadata / scores aligned page = round_up(K * sizeof(uint16), DRAM_ALIGNMENT). DRAM alignment
     // is arch-specific (32 B on WH, 64 B on BH) and must match the TensorAccessor's AlignedPageSize
     // computed kernel-side — otherwise cb_scan is undersized and md_block / sc_block writes overflow
@@ -191,7 +192,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // round_up_to_align(e_local) uint32s (smallest multiple of the arch's L1
     // alignment that fits e_local). Arch-specific via HAL (16 B on WH/BH today,
     // may change on future parts).
-    const uint32_t l1_align_u32 = tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t);
+    const uint32_t l1_align_u32 = kL1_ALIGN / sizeof(uint32_t);
     uint32_t shared_slot_u32 = tt::round_up(e_local, l1_align_u32);
     if (shared_slot_u32 < l1_align_u32)
         shared_slot_u32 = l1_align_u32;
