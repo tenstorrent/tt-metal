@@ -52,7 +52,7 @@ class TTSeamlessM4Tv2Decoder:
         self.hidden_size = hidden_size
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
