@@ -100,6 +100,7 @@ public:
     // If data is available, returns ELF path. If data is not available (e.g. inspector disabled, or no kernel data for
     // the given id), returns empty string.
     static std::string get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id);
+    static void enable_kernel_path_collection();
 
     static inspector::RpcServer& get_rpc_server();
 

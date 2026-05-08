@@ -227,9 +227,7 @@ void kernel_main() {
         for (uint32_t md_idx = 0; md_idx < num_metadata_words; ++md_idx) {
             metadata_wr_ptr[md_idx] = metadata_rd_ptr[md_idx];
         }
-
         noc_async_read_barrier();
-
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(

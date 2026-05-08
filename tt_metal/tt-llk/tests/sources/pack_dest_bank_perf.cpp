@@ -216,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
 #ifdef ARCH_BLACKHOLE
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, TILE_C_DIM, 4);
-        _llk_pack_init_<false, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, TILE_CNT);
+        _llk_pack_init_<false, false, false>(formats.pack_src, FACE_R_DIM, TILE_C_DIM, num_faces, TILE_CNT);
         reconfigure_packer_l1_acc(L1_ACC);
 #else
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, 4);

@@ -1438,9 +1438,15 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     // Only the first NUM_DOWNSTREAM_CHANNELS values are used based on topology
     auto args_pt2 = std::vector<uint32_t>{};
 
-    // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility)
+    // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility).
+    // The array is sized max_downstream_edms which may be smaller than num_max_sender_channels,
+    // so clamp the index to avoid out-of-bounds reads (indices beyond the array get sentinel -1).
     for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
+        if (i < builder_config::max_downstream_edms) {
+            args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
+        } else {
+            args_pt2.push_back(static_cast<uint32_t>(-1));
+        }
     }
 
     rt_args.reserve(rt_args.size() + args_pt2.size());

@@ -13,6 +13,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling.generator import (
     SamplingGenerator,
     SamplingParams,
@@ -42,6 +43,13 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 )
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config, deallocate_weight_config_tensors
+from models.demos.deepseek_v3.utils.signpost_names import (
+    DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST,
+    DECODE_EXECUTE_TRACE_SIGNPOST,
+    DECODE_TRACE_CAPTURE_SIGNPOST,
+    DECODE_WARMUP_SIGNPOST,
+    WARMUP_MODEL_SIGNPOST,
+)
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -130,7 +138,7 @@ class _MtpDecodeLoopResult(NamedTuple):
     decode_step_user_tokens: List[List[int]]
 
 
-class DeepseekGenerator(WarmupForwardMixin):
+class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
     """
     Simple generator that wires RowBatchedModel + LMHead for decode-only inference.
 
@@ -342,6 +350,9 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _warmup_model_decode_demo(self, enable_trace: bool, sample_on_device: bool):
         warmup_tokens = torch.zeros(self.batch_size, dtype=torch.int32)
         warmup_start_pos = torch.zeros(self.batch_size, dtype=torch.int32)
+        signpost_decode_warmup = self.signpost and not enable_trace
+        if signpost_decode_warmup:
+            signpost(header=DECODE_WARMUP_SIGNPOST)
         decode_logits = self.decode_forward(
             tokens=warmup_tokens,
             start_pos=warmup_start_pos,
@@ -349,6 +360,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_table=None,
             sample_on_device=sample_on_device,
         )
+        if signpost_decode_warmup:
+            ttnn.synchronize_device(self.mesh_device)
+            signpost(header=DECODE_WARMUP_SIGNPOST)
 
         if sample_on_device:
             self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
@@ -1858,6 +1872,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             logger.warning(f"Supports 1..{self.batch_size} prompts. Cutton off additional prompts.")
             prompts = prompts[: self.batch_size]
         num_of_prompts = len(prompts)
+        if teacher_forcing is not None and num_of_prompts != teacher_forcing.num_entries:
+            raise ValueError(
+                "Teacher forcing requires one reference entry per prompt. "
+                f"Got prompts={num_of_prompts}, reference_entries={teacher_forcing.num_entries}."
+            )
 
         logger.info("Creating model run configs...")
         profiler.start("preparing_prefill_config")
@@ -1904,16 +1923,16 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         if warmup_cache_key not in self._warmup_completed_configs:
             if self.signpost:
-                signpost(header="warmup_model")
-            profiler.start("warmup_model")
+                signpost(header=WARMUP_MODEL_SIGNPOST)
+            profiler.start(WARMUP_MODEL_SIGNPOST)
             self.warmup_model(min_token_len, max_token_len)
-            profiler.end("warmup_model")
+            profiler.end(WARMUP_MODEL_SIGNPOST)
             if self.signpost:
-                signpost(header="warmup_model")
+                signpost(header=WARMUP_MODEL_SIGNPOST)
 
             self._warmup_completed_configs.add(warmup_cache_key)
         else:
-            # Keep profiler timing for "warmup_model" even when warmup is skipped.
+            # Warmup already ran for this runtime configuration.
             logger.info(f"Skipping warmup_model; warmup already completed for cache key={warmup_cache_key}.")
 
         decode_steps_for_stats = 0
@@ -2041,6 +2060,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
                             )
                         prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
+                    ttnn.synchronize_device(self.mesh_device)
                     self.ccl.reset_sem_counters()
                 if use_mtp_path:
                     assert last_logits is not None
@@ -2114,10 +2134,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                         next_tokens = prefill_tokens
                         positions = lengths.clone()
                 if teacher_forcing is not None:
-                    # Record user-0 prediction for accuracy, but force teacher token for alignment.
-                    tf_idx = int(prompt_user_ids[0].item()) if (prompt_user_ids is not None) else 0
-                    forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[tf_idx].item()))
-                    next_tokens[tf_idx] = int(forced0)
+                    for user_idx in range(num_of_prompts):
+                        tf_idx = int(prompt_user_ids[user_idx].item()) if (prompt_user_ids is not None) else user_idx
+                        forced_token = teacher_forcing.collect_predicted_tokens(
+                            int(next_tokens[tf_idx].item()), user_idx=user_idx
+                        )
+                        next_tokens[tf_idx] = int(forced_token)
 
                 # Record token 0
                 for i in range(num_of_prompts):
@@ -2201,9 +2223,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                         else:
                             pred_tokens = self._sample_on_host(decode_logits)
                         if teacher_forcing is not None:
-                            # Record user-0 prediction for accuracy, then force teacher token.
-                            forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                            pred_tokens[0] = int(forced)
+                            for user_idx in range(num_of_prompts):
+                                tf_idx = (
+                                    int(prompt_user_ids[user_idx].item()) if (prompt_user_ids is not None) else user_idx
+                                )
+                                forced_token = teacher_forcing.collect_predicted_tokens(
+                                    int(pred_tokens[tf_idx].item()), user_idx=user_idx
+                                )
+                                pred_tokens[tf_idx] = int(forced_token)
                         next_tokens = pred_tokens
                         positions += 1
 
@@ -2542,6 +2569,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     ttnn.deallocate(tokens_shifted)
                     self._deallocate_rope_tensors(mtp_rope_tensors)
                     ttnn.deallocate(mtp_logits_tt)
+                    ttnn.synchronize_device(self.mesh_device)
                     self.ccl.reset_sem_counters()
 
             if return_last_hidden:
@@ -2893,7 +2921,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
         if self.signpost:
-            signpost(header="decode_trace_capture")
+            signpost(header=DECODE_TRACE_CAPTURE_SIGNPOST)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         # Only capture the rot_mats generation from rot_idxs (all ttnn ops, no from_torch)
@@ -2908,7 +2936,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         if self.signpost:
-            signpost(header="decode_trace_capture")
+            signpost(header=DECODE_TRACE_CAPTURE_SIGNPOST)
         logger.info("Decode trace capture complete.")
         self._trace_id = trace_id
 
@@ -2960,7 +2988,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
 
             if self.signpost:
-                signpost(header="decode_execute_trace")
+                signpost(header=DECODE_EXECUTE_TRACE_SIGNPOST)
 
             host_tokens = ttnn.from_torch(
                 torch_input,
@@ -3006,7 +3034,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             if sample_on_device:
                 # return trace output for sampling on device, no need to get logits on host
                 if self.signpost:
-                    signpost(header="decode_execute_trace_sample_on_device")
+                    signpost(header=DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST)
                 if self.profile_decode:
                     # trigger the profiler to read the device side data each iteration to not miss any data
                     ttnn.ReadDeviceProfiler(self.mesh_device)
@@ -3021,7 +3049,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 ),
             )
             if self.signpost:
-                signpost(header="decode_execute_trace")
+                signpost(header=DECODE_EXECUTE_TRACE_SIGNPOST)
             if self.profile_decode:
                 # trigger the profiler to read the device side data each iteration to not miss any data
                 ttnn.ReadDeviceProfiler(self.mesh_device)
