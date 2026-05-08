@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import pytest
 import torch
 import ttnn
@@ -504,6 +505,97 @@ def test_matmul_m_direction_padding(device):
     assert_numeric_metrics(
         expected,
         output,
+        check_allclose=False,
+        check_frobenius=True,
+        frobenius_threshold=0.02,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
+
+
+def test_dram_sharded_weight_mm(device):
+    torch.manual_seed(0)
+    seq_len = 2048
+    n = 3200
+    tile_w = 32
+    dram_cores = 12
+
+    # Pad N up to a per-bank-aligned boundary so shards are uniform and only
+    # the last bank may be partially padded (matmul rejects fully-padded shards past N).
+    padded_size = math.ceil(n / (tile_w * dram_cores)) * (tile_w * dram_cores)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                )
+            }
+        ),
+        (1280, padded_size // dram_cores),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # grid_x must divide N_tiles so that grid_x * per_core_N == N_tiles
+    # (required when in1 is width-sharded so the kernel produces exactly N tiles).
+    n_tiles = n // tile_w  # 100
+    grid_x = 5  # 100 / 5 = 20
+    per_core_N = n_tiles // grid_x
+
+    m_tiles = seq_len // tile_w  # 64
+    per_core_M = 8
+    grid_y = m_tiles // per_core_M  # 8
+
+    pc_1 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=1,
+        out_subblock_h=1,  # Must be divisible by per_core_M
+        out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=seq_len <= 2048,
+    )
+
+    w1_torch = (2 * torch.randn(1, 1, 1280, 3200)) + 1
+    w1 = ttnn.from_torch(
+        w1_torch,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec),
+        dtype=ttnn.bfloat8_b,
+    )
+
+    torch_input = torch.randn(1, 1, seq_len, 1280)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_input = ttnn.reshape(tt_input, (1, seq_len // 1024, 1024, -1))
+
+    w1_out = ttnn.linear(
+        tt_input,
+        w1,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
+        dtype=ttnn.bfloat8_b,
+        program_config=pc_1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ref_torch = torch_input @ w1_torch
+    tt_out_torch = ttnn.to_torch(w1_out).reshape(1, 1, seq_len, -1)
+    assert_numeric_metrics(
+        ref_torch,
+        tt_out_torch,
         check_allclose=False,
         check_frobenius=True,
         frobenius_threshold=0.02,

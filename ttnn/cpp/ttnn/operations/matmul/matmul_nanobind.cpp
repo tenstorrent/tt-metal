@@ -127,7 +127,17 @@ void py_module(nb::module_& mod) {
     auto matmul_multi_core_reuse_multicast_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastProgramConfig>(
             mod, "MatmulMultiCoreReuseMultiCastProgramConfig", R"doc(
-        The "2D" matmul program config is used for block sharded tensors, and general interleaved tensors.
+        The "2D" matmul program config, used for block-sharded or interleaved input_tensor_a paired
+        with interleaved or DRAM-sharded input_tensor_b.
+
+        Supported input_tensor_b memory layouts:
+          * INTERLEAVED (DRAM or L1).
+          * WIDTH_SHARDED in DRAM. The shard grid must be a single row, the shards must collectively
+            cover N (with at most the last shard partially padded — no fully-padded shards past N),
+            and ``compute_with_storage_grid_size.x * per_core_N`` must equal N (in tiles).
+          * HEIGHT_SHARDED in DRAM, for batched matmul (``fuse_batch=False``); each DRAM bank holds
+            complete [K, N] matrices stacked along the height dimension.
+          * WIDTH_SHARDED in L1, in which case ``per_core_N`` must equal the shard width (in tiles).
     )doc");
 
     matmul_multi_core_reuse_multicast_program_config.def(
@@ -718,10 +728,10 @@ void py_module(nb::module_& mod) {
                   - Height Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig
                   - Interleaved (L1/DRAM), Block Sharded (L1)
-                  - Interleaved (L1/DRAM), Width Sharded (DRAM)
+                  - Interleaved (L1/DRAM), Width Sharded (DRAM, single-row shard grid; shards must cover N with at most the last shard partially padded; ``grid_x * per_core_N`` must equal N in tiles)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
                   - Interleaved (L1/DRAM), Height Sharded (L1)
-                  - Interleaved (L1/DRAM), Width Sharded (L1/DRAM), Height Sharded (DRAM batched matmuls where each bank holds B/num_banks complete [K,N] matrices)
+                  - Interleaved (L1/DRAM), Width Sharded (L1: ``per_core_N`` must equal shard width in tiles; DRAM: same constraints as above), Height Sharded (DRAM batched matmuls where each bank holds B/num_banks complete [K,N] matrices)
                 * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
                   - Interleaved (L1/DRAM), Width Sharded (L1)
                   - Interleaved (L1/DRAM), Width Sharded (L1)

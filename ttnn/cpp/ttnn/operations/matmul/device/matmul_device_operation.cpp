@@ -930,6 +930,55 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "coordinates, got start: {} vs end: {}",
                             input_tensor_b.shard_spec()->grid.bounding_box().start_coord.y,
                             input_tensor_b.shard_spec()->grid.bounding_box().end_coord.y);
+
+                        // For WIDTH_SHARDED in1, the shard layout must align with N: shards must
+                        // cover N, and at most the last shard may be partially padded. Otherwise
+                        // the kernel reader fetches in1 tiles from fully-padded shards (garbage)
+                        // for any tile_id_n that the compute grid iterates past the last valid
+                        // shard, silently producing wrong results.
+                        const auto N_tiles = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+                        const auto& in1_shard_spec = input_tensor_b.shard_spec().value();
+                        const uint32_t shard_width_tiles = in1_shard_spec.shape[1] / in1_tile.get_width();
+                        const uint32_t num_banks = in1_shard_spec.grid.num_cores();
+                        TT_FATAL(
+                            shard_width_tiles > 0 && num_banks > 0,
+                            "WIDTH_SHARDED input B must have non-zero shard width and at least one shard, "
+                            "got shard_width_tiles={} num_shards={}",
+                            shard_width_tiles,
+                            num_banks);
+                        TT_FATAL(
+                            num_banks * shard_width_tiles >= N_tiles,
+                            "WIDTH_SHARDED input B: total sharded width (num_shards={} * shard_width_tiles={} "
+                            "= {} tiles) must be >= N ({} tiles).",
+                            num_banks,
+                            shard_width_tiles,
+                            num_banks * shard_width_tiles,
+                            N_tiles);
+                        TT_FATAL(
+                            (num_banks - 1) * shard_width_tiles < N_tiles,
+                            "WIDTH_SHARDED input B: shard layout has fully-padded shards past N. "
+                            "(num_shards - 1) * shard_width_tiles = ({} - 1) * {} = {} must be < N ({} tiles); "
+                            "only the last shard may be partially padded. Reduce num_shards or shard_width "
+                            "so the shard layout matches N.",
+                            num_banks,
+                            shard_width_tiles,
+                            (num_banks - 1) * shard_width_tiles,
+                            N_tiles);
+
+                        // The compute grid must produce exactly N tiles of output when in1 is
+                        // width-sharded. If grid_x * per_core_N > N_tiles, the kernel iterates past
+                        // the last valid shard tile (reading padded/garbage data and writing past N
+                        // in the output); if < N_tiles, some output tiles are never written.
+                        const uint32_t grid_x = program_config.compute_with_storage_grid_size.x;
+                        TT_FATAL(
+                            grid_x * program_config.per_core_N == N_tiles,
+                            "WIDTH_SHARDED input B: grid_x ({}) * per_core_N ({}) = {} must equal N "
+                            "({} tiles). When in1 is width-sharded, the compute grid must produce "
+                            "exactly N tiles of output.",
+                            grid_x,
+                            program_config.per_core_N,
+                            grid_x * program_config.per_core_N,
+                            N_tiles);
                     }
                 }
 
