@@ -85,19 +85,11 @@ jobs:
 
           ASAN_BUILD="${{ inputs.build-type == 'ASan' && 'true' || 'false' }}"
 
-          # Known ASan failures tracked in #43381 — skip until fixed upstream.
-          ASAN_SKIP_EXAMPLES="NoC_tile_transfer hello_world_datatypes_kernel"
-
           FAILED_EXAMPLES=""
 
           for example in /usr/share/${{ inputs.product }}/examples/*; do
 
             example_name=$(basename "$example")
-
-            if [ "$ASAN_BUILD" = "true" ] && echo "$ASAN_SKIP_EXAMPLES" | grep -qw "$example_name"; then
-              echo "::warning::Skipping ${example_name} under ASan (known issue, #43381)"
-              continue
-            fi
 
             # https://github.com/actions/toolkit/issues/1001
             echo "::group::${example_name} - build"
