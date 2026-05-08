@@ -27,6 +27,7 @@ Follows the pattern established by TtSDXLPipeline:
   - __del__ releases device resources
 """
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -175,8 +176,6 @@ class TtDeepSeekPrefillPipeline:
 
     def _allocate_kv_cache(self) -> None:
         kvpe_head_dim = self.hf_config.qk_rope_head_dim + self.hf_config.kv_lora_rank
-        # ttnn.empty — no host→device zero transfer. MLA zeros padding pages
-        # before fill_cache_for_user_() when migration is active.
         self.kvpe_cache = init_kvpe_cache(
             kvpe_cache_head_dim=kvpe_head_dim,
             mesh_device=self.mesh_device,
@@ -184,6 +183,7 @@ class TtDeepSeekPrefillPipeline:
             mesh_shape=list(self.config.mesh_shape),
             sp_axis=self.config.sp_axis,
             num_kvpe_cache_layers=self.config.num_layers,
+            zero_init=True,
         )
         self.kv_cache_allocated = True
 
@@ -311,10 +311,11 @@ class TtDeepSeekPrefillPipeline:
 
         def on_layer_complete(layer_idx: int) -> None:
             ttnn.synchronize_device(mesh_device)
+            end_pos = math.ceil(actual_isl / 128) * 128
             print(
-                f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from slot {slot_id} to slot {slot_id}. Start_pos={0}, End_pos={actual_isl}"
+                f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from slot {slot_id} to slot {slot_id}. Start_pos={0}, End_pos={end_pos}"
             )
-            uuid = migration_layer.migrate_layer(layer_idx, 0, actual_isl, slot_id, slot_id)
+            uuid = migration_layer.migrate_layer(layer_idx, 0, end_pos, slot_id, slot_id)
             ## Wait for each one for initial bringup
             # if layer_idx == last_layer_idx:
             print(f"[migration][prefill] wait for migrate layer completion")

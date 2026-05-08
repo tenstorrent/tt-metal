@@ -646,24 +646,23 @@ class ttMLA:
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
         # Update KV cache with compressed latent representation.
-        # When migration is active (on_layer_complete is provided), zero the padding
-        # region of the cache before fill so that after fill_cache_for_user_ writes
-        # valid tokens, the padding pages are clean zeros for migration.
-        if on_layer_complete is not None:
-            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
-            sp_factor = self.mesh_device.shape[self.sp_axis]
-            tp_factor = self.mesh_device.shape[self.tp_axis]
-            # seq_len for the cache comes from the cache tensor itself (num_layers, 1, seq_len_local, head_dim)
-            seq_len_local = kvpe_cache.shape[2]
-            seq_len_total = seq_len_local * sp_factor
-            zero_cache_padding_zigzag(
-                kvpe_cache=kvpe_cache,
-                global_end_token=actual_isl,
-                sp_factor=sp_factor,
-                seq_len=seq_len_total,
-                decode_chunk_align=DECODE_CHUNK_ALIGN,
-                tp_factor=tp_factor,
-            )
+        # Padding region is guaranteed clean by zero_init at cache allocation time.
+        # (zero_cache_padding_zigzag was the per-layer alternative; re-enable if
+        # cache is allocated with ttnn.empty / without zero_init.)
+        # if on_layer_complete is not None:
+        #     assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+        #     sp_factor = self.mesh_device.shape[self.sp_axis]
+        #     tp_factor = self.mesh_device.shape[self.tp_axis]
+        #     seq_len_local = kvpe_cache.shape[2]
+        #     seq_len_total = seq_len_local * sp_factor
+        #     zero_cache_padding_zigzag(
+        #         kvpe_cache=kvpe_cache,
+        #         global_end_token=actual_isl,
+        #         sp_factor=sp_factor,
+        #         seq_len=seq_len_total,
+        #         decode_chunk_align=DECODE_CHUNK_ALIGN,
+        #         tp_factor=tp_factor,
+        #     )
 
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_user_idx)
 
