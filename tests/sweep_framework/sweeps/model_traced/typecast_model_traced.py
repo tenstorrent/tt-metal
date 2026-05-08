@@ -2,22 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
-
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -94,6 +95,19 @@ def run(
         output_dtype = ttnn.float32
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
+
+    # Restore memory_config from traced kwargs when master recorded it
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    traced_memory_config = kwargs.get("memory_config")
+    if (
+        "memory_config" not in absent_keys
+        and traced_memory_config is not None
+        and traced_memory_config != "__ABSENT__"
+        and "memory_config" not in op_kwargs
+    ):
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

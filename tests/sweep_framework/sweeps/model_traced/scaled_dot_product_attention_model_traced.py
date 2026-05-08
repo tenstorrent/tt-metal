@@ -3,29 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    replicate_with_topology,
-    mesh_tensor_to_torch,
-    get_mesh_composer,
-    reconcile_golden_to_actual,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+    replicate_with_topology,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
     extract_named_tensor_kwargs,
     parse_dict_value,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -199,7 +201,17 @@ def run(
         if key in kwargs and key not in absent_keys and kwargs[key] is None and key not in op_kwargs:
             op_kwargs[key] = None
 
-    # Clear sharded memory_config from op_kwargs too
+    # Restore memory_config from traced kwargs when master recorded it
+    traced_memory_config = kwargs.get("memory_config")
+    if (
+        "memory_config" not in absent_keys
+        and traced_memory_config is not None
+        and traced_memory_config != "__ABSENT__"
+        and "memory_config" not in op_kwargs
+    ):
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
 
     # Validate program_config grid fits current device
     pc = op_kwargs.get("program_config")

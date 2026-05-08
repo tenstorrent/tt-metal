@@ -3,25 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    mesh_tensor_to_torch,
-    get_mesh_composer,
-)
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+)
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 # Import helper functions from unit test
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
-    nearest_n,
-    nearest_pow_2,
     fa_rand,
     get_chunk_size,
+    nearest_n,
+    nearest_pow_2,
 )
-
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -214,8 +214,14 @@ def run(
         else:
             is_causal_flag = bool(is_causal)
 
-    # Force output to be DRAM_INTERLEAVED as operation doesn't support sharded output
+    # Use traced memory_config if present, otherwise default to DRAM
     output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    traced_memory_config = kwargs.get("memory_config")
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    if "memory_config" not in absent_keys and traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            output_mem_cfg = parsed_mc
 
     # Build program_config - prefer V2 format (single dict) over V1 split params
     # Validate that the traced grid fits the test device to avoid TT_FATAL
