@@ -14,7 +14,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -186,7 +185,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             }
         }
 
-        const std::array rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
+        const std::array rt_args = {static_cast<std::uint32_t>(bank_id), static_cast<std::uint32_t>(vc)};
 
         log_info(tt::LogTest, "core: {}, vc: {}", core, vc);
 
@@ -235,6 +234,14 @@ bool validation(
                     result_bfp8.begin() + result_step, result_bfp8.begin() + result_step + num_datum_per_slice);
 
                 if (input_slice != result_slice) {
+                    log_error(
+                        tt::LogTest,
+                        "Validation failed on core {} (core_id {}), slice {}: expected first value {}, got {}",
+                        core,
+                        core_id,
+                        i,
+                        input_slice.front(),
+                        result_slice.front());
                     return false;
                 }
             }
@@ -252,6 +259,14 @@ bool validation(
                     result_bfp4.begin() + result_step, result_bfp4.begin() + result_step + num_datum_per_slice);
 
                 if (input_slice != result_slice) {
+                    log_error(
+                        tt::LogTest,
+                        "Validation failed on core {} (core_id {}), slice {}: expected first value {}, got {}",
+                        core,
+                        core_id,
+                        i,
+                        input_slice.front(),
+                        result_slice.front());
                     return false;
                 }
             }
@@ -269,6 +284,14 @@ bool validation(
                     result_bf16.begin() + result_step, result_bf16.begin() + result_step + num_datum_per_slice);
 
                 if (input_slice != result_slice) {
+                    log_error(
+                        tt::LogTest,
+                        "Validation failed on core {} (core_id {}), slice {}: expected first value {}, got {}",
+                        core,
+                        core_id,
+                        i,
+                        static_cast<float>(input_slice.front()),
+                        static_cast<float>(result_slice.front()));
                     return false;
                 }
             }
@@ -302,6 +325,67 @@ void get_optimal_dram_bank_to_reader_assignment(
         all_cores_set.insert(CoreRange(worker_core));
     }
     all_worker_cores = CoreRangeSet(all_cores_set);
+}
+
+// On Blackhole, NoC0 routes packets right-then-down (per
+// tt-isa-documentation/BlackholeA0/NoC/RoutingPaths.md). DRAM endpoints sit on fixed columns, so a
+// duplicate reader is moved strictly to the right on the same logical row: this keeps the request on
+// the same horizontal corridor while ensuring its vertical down-leg into the DRAM column stays distinct
+// from the original reader's, minimising NoC contention.
+std::optional<CoreCoord> find_next_unused_worker_core_on_same_row(
+    tt_metal::distributed::MeshDevice* device,
+    const CoreCoord& preferred_core,
+    const std::set<CoreCoord>& used_cores) {
+    const auto grid_size = device->compute_with_storage_grid_size();
+    const auto& storage_only_cores = device->storage_only_cores();
+    const uint32_t y = preferred_core.y;
+
+    auto is_available = [&](const CoreCoord& candidate) {
+        return !used_cores.contains(candidate) && !storage_only_cores.contains(candidate);
+    };
+
+    for (uint32_t x = preferred_core.x + 1; x < grid_size.x; ++x) {
+        CoreCoord candidate{x, y};
+        if (is_available(candidate)) {
+            return candidate;
+        }
+    }
+    for (int32_t x = static_cast<int32_t>(preferred_core.x) - 1; x >= 0; --x) {
+        CoreCoord candidate{static_cast<uint32_t>(x), y};
+        if (is_available(candidate)) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
+}
+
+void make_dram_reader_cores_unique(
+    tt_metal::distributed::MeshDevice* device,
+    std::vector<CoreCoord>& reader_cores,
+    uint32_t bank_start_id) {
+    std::set<CoreCoord> used_cores;
+    for (uint32_t i = 0; i < reader_cores.size(); ++i) {
+        const auto preferred_core = reader_cores[i];
+        if (used_cores.insert(preferred_core).second) {
+            continue;
+        }
+
+        auto replacement = find_next_unused_worker_core_on_same_row(device, preferred_core, used_cores);
+        TT_FATAL(
+            replacement.has_value(),
+            "Could not find an unused worker core for DRAM bank {} on the same row as preferred core {}",
+            bank_start_id + i,
+            preferred_core);
+
+        log_info(
+            tt::LogTest,
+            "DRAM bank {} preferred duplicate reader core {}; using nearest unused reader core on same row {}",
+            bank_start_id + i,
+            preferred_core,
+            *replacement);
+        reader_cores[i] = *replacement;
+        used_cores.insert(*replacement);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -423,6 +507,7 @@ int main(int argc, char** argv) {
 
         // Slice all_cores_list to only use the first num_banks cores
         all_cores_list = slice_vec(all_cores_list, bank_start_id, bank_start_id + num_banks - 1);
+        make_dram_reader_cores_unique(device.get(), all_cores_list, bank_start_id);
 
         // Rebuild all_cores CoreRangeSet with only the selected cores
         std::set<CoreRange> selected_cores_set;
