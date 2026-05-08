@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,8 @@
 namespace ttnn::experimental::prim {
 
 struct OffsetCumsumParams {
-    // Shape is derived from the input tensor; no extra params needed.
+    uint32_t cluster_axis;
+    uint32_t experts_per_chip;
 };
 
 }  // namespace ttnn::experimental::prim

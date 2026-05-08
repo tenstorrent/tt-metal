@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,8 +54,8 @@ thread_local uint32_t crta_count __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
@@ -104,6 +104,7 @@ void deassert_trisc() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+volatile KernelBarrier g_kernel_barrier __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -111,6 +112,7 @@ void device_setup() {
     // clock gating
     // NOC setup
     set_deassert_addresses();
+    setup_isr_csrs();
     // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
@@ -126,6 +128,7 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
+    DEVICE_PRINT("DM-FW: waiting for TRISCs to complete\n");
     while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
@@ -133,6 +136,8 @@ inline void run_triscs(uint32_t enables) {
         invalidate_l1_cache();
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
+    DEVICE_PRINT("DM-FW: running TRISCs {}\n", enables);
+    invalidate_trisc_instruction_cache();
     if (enables &
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
@@ -194,6 +199,7 @@ extern "C" uint32_t _start1() {
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
     DPRINT << "DM0-FW: initialized" << ENDL();
+    DEVICE_PRINT("DM0-FW: initialized\n");
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -208,9 +214,11 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_INITIALIZE_LOCK();
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        thread_sync_init();
 
         deassert_trisc();
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
+        DEVICE_PRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -226,6 +234,7 @@ extern "C" uint32_t _start1() {
             // before mcasting the launch message (as a hang workaround), which
             // ensures that the unicast data will also have been received.
             DPRINT << "DM0-FW: waiting for GO message" << ENDL();
+            DEVICE_PRINT("DM0-FW: waiting for GO message\n");
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {

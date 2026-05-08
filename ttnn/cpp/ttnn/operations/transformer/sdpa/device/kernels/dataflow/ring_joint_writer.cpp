@@ -1,16 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
 
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
 // Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
-// Pushes output tiles into cb_prev_out (c_7) and LSE tiles into cb_lse_in (c_6).
+// Pushes output tiles into cb_prev_out and LSE tiles into cb_lse_in.
 //
 // @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
 // @param stats_writer        TensorAccessor for the stats DRAM tensor
@@ -22,8 +22,8 @@
 // @param end_seq_tile        Last valid sequence tile (for padding-aware reads)
 // @param stats_seq_start_tile  First tile row in the stats tensor for this Q chunk
 // @param stats_seq_end_tile    One-past-last tile row (clamped to avoid reading past padding)
-// @param cb_prev_out         CB to push previous output tiles into (c_7, read by compute)
-// @param cb_lse_in           CB to push previous LSE tiles into (c_6, read by compute)
+// @param cb_prev_out         CB to push previous output tiles into (read by compute)
+// @param cb_lse_in           CB to push previous LSE tiles into (read by compute)
 // @param tile_bytes          Output tile size in bytes
 // @param stats_tile_bytes    Stats tile size in bytes
 template <typename ReaderType, typename TensorAccessorType>
@@ -137,15 +137,18 @@ void complete_restore(
 // Only 3 barriers fire per ring iteration (one per TRID):
 //   Q[0]: wB(TRID_INNER), Q[N-2]: wB(TRID_LAST), Q[N-1]: wB(TRID_FIRST).
 // Start from 1 — TRID 0 is the default for all NOC writes and must not be used
-// for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row on last
-// ring iter) would inflate the outstanding count and stall the barrier.
+// for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row
+// on last ring iter) would inflate the outstanding count and stall the barrier.
 constexpr uint32_t TRID_FIRST = 1;
 constexpr uint32_t TRID_INNER = 2;
 constexpr uint32_t TRID_LAST = 3;
 
-// Row-by-row drain of output tiles from cb_out to DRAM.
-// Waits for each row group (sbh tile-rows), writes to DRAM, pops.
-// Overlaps DMA with compute: writes issue as soon as each row is ready.
+// Row-by-row drain of cb_out to DRAM; writes overlap with compute's next row-group push.
+// Padding past end_seq_tile is silently skipped by maybe_write_tile.
+//
+// flush_trid: TRID the caller stamped writes with via noc_async_write_set_trid (0 = default).
+// Save path passes save_trid; last-iter write_out path passes 0. Caller handles any final
+// NoC barrier (per-Q write_out path or the trid'd flush in save_accumulators).
 template <typename ReaderType>
 void write_out_row_by_row(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
@@ -153,29 +156,19 @@ void write_out_row_by_row(
     const uint32_t end_seq_tile,
     const uint32_t cb_out,
     const uint32_t tile_bytes,
-    const uint32_t sbh) {
-    const uint32_t out_rows = out_slice.get_d2_size();
-    const uint32_t out_cols = out_slice.get_d3_size();
-    const uint32_t row_tiles = sbh * out_cols;
-    const uint32_t num_row_groups = out_rows / sbh;
-
-    for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
-        cb_wait_front(cb_out, row_tiles);
-        uint32_t read_ptr = get_read_ptr(cb_out);
-        for (uint32_t r = 0; r < sbh; r++) {
-            for (uint32_t col = 0; col < out_cols; ++col) {
-                cat_out_generator.maybe_write_tile(
-                    out_slice.d0,
-                    out_slice.d1,
-                    out_slice.d2_start + rg * sbh + r,
-                    out_slice.d3_start + col,
-                    end_seq_tile,
-                    read_ptr);
-                read_ptr += tile_bytes;
-            }
-        }
-        cb_pop_front(cb_out, row_tiles);
-    }
+    const uint32_t sbh,
+    const uint32_t flush_trid) {
+    drain_cb_row_grouped(
+        cb_out,
+        out_slice.get_d2_size(),
+        out_slice.get_d3_size(),
+        tile_bytes,
+        sbh,
+        flush_trid,
+        [&](uint32_t row, uint32_t col, uint32_t l1_addr) {
+            cat_out_generator.maybe_write_tile(
+                out_slice.d0, out_slice.d1, out_slice.d2_start + row, out_slice.d3_start + col, end_seq_tile, l1_addr);
+        });
 }
 
 // Save all 3 accumulators (out, max, sum) to DRAM, tagged with a TRID for prefetch barriers.
@@ -202,7 +195,7 @@ void save_accumulators_with_trid(
     const uint32_t save_trid) {
     noc_async_write_set_trid(save_trid);
 
-    write_out_row_by_row(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh);
+    write_out_row_by_row(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh, save_trid);
 
     // Bulk drain of max/sum
     cb_wait_front(cb_max_out, Sq_chunk_t);
@@ -221,9 +214,10 @@ void save_accumulators_with_trid(
     }
 
     noc_async_write_flushed_with_trid(save_trid);
-    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row on last ring iter).
+    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row_no_pop on last ring iter).
     // Without this, subsequent noc_async_write calls would inflate save_trid's outstanding count,
     // causing noc_async_write_barrier_with_trid(save_trid) to wait for unrelated writes.
+    // cb_out was already popped per-group inside write_out_row_by_row (via drain_cb_row_grouped).
     noc_async_write_set_trid(0);
     cb_pop_front(cb_max_out, Sq_chunk_t);
     cb_pop_front(cb_sum_out, Sq_chunk_t);
@@ -231,7 +225,7 @@ void save_accumulators_with_trid(
 
 // Eager-path writer: writes normalized output and LSE to DRAM every ring iteration.
 // Used by the non-streaming (old sdpa_ring) path.
-// Reads from: cb_out (c_16), cb_lse_out (c_17).
+// Reads from: cb_out and cb_lse_out.
 //
 // @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
 // @param stats_writer        TensorAccessor for the stats DRAM tensor
@@ -243,8 +237,8 @@ void save_accumulators_with_trid(
 // @param end_seq_tile        Last valid sequence tile
 // @param stats_seq_start_tile  First tile row in stats tensor for this Q chunk's LSE
 // @param stats_seq_end_tile    One-past-last tile row (clamped to sequence bounds)
-// @param cb_out              CB to drain output tiles from (c_16)
-// @param cb_lse_out          CB to drain LSE tiles from (c_17)
+// @param cb_out              CB to drain output tiles from
+// @param cb_lse_out          CB to drain LSE tiles from
 // @param tile_bytes          Output tile size in bytes
 // @param stats_tile_bytes    Stats tile size in bytes
 template <typename ReaderType, typename TensorAccessorType>
@@ -346,9 +340,10 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t is_causal = get_compile_time_arg_val(25) == 1;
     constexpr uint32_t is_balanced = get_compile_time_arg_val(26) == 1;
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(27);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
 
-    constexpr auto out_args = TensorAccessorArgs<28>();
+    constexpr auto out_args = TensorAccessorArgs<29>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -363,8 +358,9 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // c_6/c_17 carry softmax statistics between compute and writer for DRAM round-trips.
-    // Aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
+    // TODO: CB indices below are hardcoded and duplicated from the program factory.
+    // They should be passed as compile-time args so the factory is the single source of truth.
+    // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
     constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: DRAM → compute (running max)
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: DRAM → compute (LSE)
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
@@ -375,12 +371,16 @@ void kernel_main() {
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
     constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
-    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
-    const auto stats_writer = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
+    const auto stats_writer = TensorAccessor(stats_args, stats_addr);
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
@@ -391,29 +391,42 @@ void kernel_main() {
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
 
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
-    // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    // Needed when any K/joint dimension has padding, or when causal masking is active.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !is_causal;
+    constexpr bool needs_lightweight_mask =
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || is_causal;
     if constexpr (needs_lightweight_mask) {
-        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>();
+        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, is_causal>();
     }
 
-    const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
+
+    // Deferred save: stash params for save_accumulators_with_trid and call it
+    // during the next Q chunk's K-loop window to avoid DRAM bank contention.
+    struct DeferredWriteContext {
+        bool pending = false;
+        uint32_t trid = 0;
+        uint32_t nb = 0;
+        uint32_t nq = 0;
+        QChunkInfo qi = {};
+    } deferred = {};
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -428,6 +441,13 @@ void kernel_main() {
         if (!ring_iter_does_work) {
             continue;
         }
+
+        // When total_valid_kv == 1, compute's sole K chunk triggers save_to_staging on K0,
+        // reserving staging CBs immediately. The deferred flush must happen before any
+        // prefetch that blocks on cb_prev_out, or the writer and compute deadlock.
+        const uint32_t total_valid_kv =
+            count_valid_kv_chunks(num_kv_chunks, num_local_k_chunks, ring_iter_kv_start_tile, Sk_chunk_t, logical_nt);
+        const bool single_valid_kv_chunk = (total_valid_kv <= 1);
 
         /**
         We have 3 possible masks
@@ -477,145 +497,199 @@ void kernel_main() {
 
             const uint32_t q_per_core = global_q_end - global_q_start;
             const uint32_t last_q_index = q_per_core - 1;
+            const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
 
-            auto q_trid = [last_q_index](uint32_t q_idx) -> uint32_t {
-                if (q_idx == 0) {
-                    return TRID_FIRST;
-                }
-                if (q_idx == last_q_index) {
-                    return TRID_LAST;
-                }
-                return TRID_INNER;
+            // TRID assignment by Q position: Q[0] -> TRID_FIRST, Q[N-1] -> TRID_LAST,
+            // Q[1..N-2] -> TRID_INNER. Used both for tagging the current Q's save and for
+            // selecting which TRID to barrier on for the next Q's prefetch.
+            auto trid_for_q = [&](uint32_t qi) {
+                return qi == 0 ? TRID_FIRST : qi == last_q_index ? TRID_LAST : TRID_INNER;
             };
 
-            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-                const uint32_t q_index = global_q_chunk - global_q_start;
+            // Issue NOC reads to fill staging for Q[pf_q_index] of the current ring_iter (or
+            // ring_iter+1 for cross-ring at q==last_q_index, when the caller passes 0). Optionally
+            // barriers on pf_trid first to ensure the prior save with that TRID has landed.
+            auto prefetch_for = [&](uint32_t pf_q_index, uint32_t pf_trid, bool barrier_first) {
+                if (barrier_first) {
+                    noc_async_write_barrier_with_trid(pf_trid);
+                }
+                const uint32_t gq = remap_q_index(global_q_start + pf_q_index, num_q_chunks, use_zigzag_balancing);
+                const uint32_t nb_pf = gq / (NH * num_q_chunks);
+                const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t qc_pf = gq % num_q_chunks;
+                const auto qi_pf =
+                    get_q_chunk_info(qc_pf, nb_pf, nq_pf, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                issue_restore_reads(
+                    qi_pf.is_joint_q ? joint_out_generator : out_generator,
+                    stats_writer,
+                    stats_tile_logical,
+                    nb_pf,
+                    nq_pf,
+                    Sq_chunk_t,
+                    qi_pf.out_slice,
+                    qi_pf.stats_seq_start_tile,
+                    qi_pf.stats_seq_end_tile,
+                    sum_offset,
+                    cb_prev_out,
+                    cb_max_in,
+                    cb_sum_in,
+                    tile_bytes,
+                    stats_tile_bytes);
+            };
+
+            // Intra-ring prefetch: bounds-check next_q_index, then dispatch with the per-TRID
+            // barrier rule. Only barrier when next Q's TRID hasn't been cleared yet this ring
+            // iter: Q[0] -> wB(TRID_INNER), Q[N-2] -> wB(TRID_LAST), Q[1..N-3] -> skip
+            // (TRID_INNER already cleared at Q[0]).
+            auto prefetch_intra_ring = [&](uint32_t next_q_index) {
+                if (next_q_index >= q_per_core) {
+                    return;
+                }
+                const uint32_t next_trid = trid_for_q(next_q_index);
+                const bool need_barrier = (next_trid != TRID_INNER || next_q_index == 1);
+                prefetch_for(next_q_index, next_trid, need_barrier);
+            };
+
+            // Drain pending deferred save (raw accumulators -> DRAM) for the prior Q. Called at
+            // the early-flush site (before prefetch when total_valid_kv<=1 or q_per_core==2) and
+            // the late-flush site (after prefetch in the K-loop window).
+            auto flush_deferred_save = [&]() {
+                constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
+                save_accumulators_with_trid(
+                    deferred.qi.is_joint_q ? joint_out_generator : out_generator,
+                    stats_writer,
+                    stats_tile_logical,
+                    deferred.nb,
+                    deferred.nq,
+                    Sq_chunk_t,
+                    deferred.qi.out_slice,
+                    all_tiles_valid,
+                    deferred.qi.stats_seq_start_tile,
+                    deferred.qi.stats_seq_end_tile,
+                    sum_offset,
+                    cb_out,
+                    cb_max_out,
+                    cb_sum_out,
+                    tile_bytes,
+                    stats_tile_bytes,
+                    out_subblock_h,
+                    deferred.trid);
+                deferred.pending = false;
+            };
+
+            for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
+                uint32_t global_q_chunk = remap_q_index(global_q_start + q_index, num_q_chunks, use_zigzag_balancing);
+
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+
+                const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
                 const auto qi =
                     get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
                 const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
 
-                // 1. Complete restore + intra-ring prefetch (ring_iter > 0 only)
+                // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
+                // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
+                // compute skips these Q chunks entirely and doesn't need staging data.
                 if (!single_q_chunk && ring_iter > 0) {
-                    complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
-
-                    // Intra-ring prefetch: issue reads for Q[q+1] during Q[q]'s K-loop.
-                    // Only barrier when next Q's TRID hasn't been cleared yet this ring iter:
-                    //   Q[0]: wB(TRID_INNER) — clears all prev-ring inner saves
-                    //   Q[N-2]: wB(TRID_LAST) — clears prev-ring Q[N-1] save
-                    //   Q[1..N-3]: skip — TRID_INNER already cleared at Q[0]
-                    // Without this, Q[j+1]'s wB(TRID_INNER) would stall on Q[j]'s
-                    // current-ring save (near-zero flight time) for q_per_core >= 5.
-                    const uint32_t next_q_index = q_index + 1;
-                    if (next_q_index < q_per_core) {
-                        const uint32_t next_trid = q_trid(next_q_index);
-                        // First inner Q (next_q_index==1) needs the barrier; subsequent
-                        // inner Qs (next_q_index>1 && next_trid==TRID_INNER) don't.
-                        if (next_trid != TRID_INNER || next_q_index == 1) {
-                            noc_async_write_barrier_with_trid(next_trid);
-                        }
-                        const uint32_t next_q_global = global_q_chunk + 1;
-                        const uint32_t nb_next = next_q_global / (NH * num_q_chunks);
-                        const uint32_t nq_next = (next_q_global % (NH * num_q_chunks)) / num_q_chunks;
-                        const uint32_t qc_next = next_q_global % num_q_chunks;
-                        const auto qi_next = get_q_chunk_info(
-                            qc_next, nb_next, nq_next, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
-                        issue_restore_reads(
-                            qi_next.is_joint_q ? joint_out_generator : out_generator,
-                            stats_writer,
-                            stats_tile_logical,
-                            nb_next,
-                            nq_next,
-                            Sq_chunk_t,
-                            qi_next.out_slice,
-                            qi_next.stats_seq_start_tile,
-                            qi_next.stats_seq_end_tile,
-                            sum_offset,
-                            cb_prev_out,
-                            cb_max_in,
-                            cb_sum_in,
-                            tile_bytes,
-                            stats_tile_bytes);
+                    if (balanced_skip_q && !is_last_ring_iter) {
+                        noc_async_read_barrier();
+                    } else {
+                        complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
                     }
                 }
 
-                // 2. Cross-ring prefetch: Q[N-1] → Q[0] of next ring iter.
-                // Reads fly during Q[N-1]'s K-loop + save drain.
-                if (!single_q_chunk && !is_last_ring_iter && (global_q_chunk + 1 >= global_q_end)) {
-                    noc_async_write_barrier_with_trid(TRID_FIRST);
-                    const uint32_t gq0 = global_q_start;
-                    const uint32_t nb0 = gq0 / (NH * num_q_chunks);
-                    const uint32_t nq0 = (gq0 % (NH * num_q_chunks)) / num_q_chunks;
-                    const uint32_t qc0 = gq0 % num_q_chunks;
-                    const auto qi0 =
-                        get_q_chunk_info(qc0, nb0, nq0, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
-                    issue_restore_reads(
-                        qi0.is_joint_q ? joint_out_generator : out_generator,
-                        stats_writer,
-                        stats_tile_logical,
-                        nb0,
-                        nq0,
-                        Sq_chunk_t,
-                        qi0.out_slice,
-                        qi0.stats_seq_start_tile,
-                        qi0.stats_seq_end_tile,
-                        sum_offset,
-                        cb_prev_out,
-                        cb_max_in,
-                        cb_sum_in,
-                        tile_bytes,
-                        stats_tile_bytes);
+                // 2. Early flush: drain staging before prefetch when needed.
+                // - total_valid_kv <= 1: compute's sole K chunk triggers save_to_staging on K0,
+                //   reserving staging CBs immediately — deadlock if they're still full.
+                // - q_per_core == 2: next Q == last Q whose deferred data isn't in DRAM yet,
+                //   so prefetch would read stale data without flushing first.
+                // With >= 2 valid K chunks and q_per_core >= 3, K0 uses ping-pong accumulators
+                // (not staging CBs), so we prefetch first and flush later during the K-loop
+                // window — spreading DRAM writes to reduce bank contention.
+                if (deferred.pending && flush_before_prefetch) {
+                    flush_deferred_save();
                 }
 
-                // === Compute runs K-loop for this Q chunk ===
+                // 3. Prefetch next Q chunk's accumulators from DRAM.
+                // Skip the intra-ring prefetch when this Q is on the normalize-only path
+                // (balanced_skip_q + is_last_ring_iter): normalize produces cb_out incrementally
+                // and blocks on cb_out space; cb_out can't drain until the writer reaches
+                // write_out below. A cb_reserve_back(cb_prev_out) here would block until
+                // normalize finishes, creating a cycle with cb_out. Deferred prefetch below
+                // runs after write_out to break the cycle.
+                const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;
+                if (!single_q_chunk && ring_iter > 0 && !defer_prefetch) {
+                    prefetch_intra_ring(q_index + 1);
+                }
+                // Cross-ring: Q[N-1] -> Q[0] of next ring iter.
+                if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index) {
+                    prefetch_for(/*pf_q_index=*/0, TRID_FIRST, /*barrier_first=*/true);
+                }
+
+                // 4. Late flush (>= 2 valid K chunks, q_per_core >= 3): drain during K-loop
+                // window after prefetch, spreading DRAM writes to reduce bank contention.
+                if (deferred.pending) {
+                    flush_deferred_save();
+                }
+
+                // Balanced causal skip: on non-last ring iters, compute pops staging and
+                // doesn't push the K-loop signal. Writer skips signal wait + save + write.
+                // On the last ring iter, compute runs normalize-only and pushes the signal;
+                // fall through to signal wait + write (no save — no ping-pong state to save).
+                if (balanced_skip_q && !is_last_ring_iter) {
+                    continue;
+                }
+
+                // === Compute runs K-loop (or normalize-only on last iter) ===
 
                 // Wait for compute to signal last K-chunk start (multi-Q only).
+                // Normalize-only path also pushes this signal.
                 if (!single_q_chunk) {
                     cb_wait_front(cb_signal, 1);
                     cb_pop_front(cb_signal, 1);
                 }
 
                 if (is_last_ring_iter) {
+                    // Last-iter writes carry default trid (caller never set a non-zero trid here);
+                    // pass 0 so the per-group flush waits exactly for these writes.
                     write_out_row_by_row(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         end_seq_tile,
                         cb_out,
                         tile_bytes,
-                        out_subblock_h);
+                        out_subblock_h,
+                        /*flush_trid=*/0);
                     noc_async_write_barrier();
                 } else if (!single_q_chunk) {
-                    // Accumulators are raw compute state — all tiles are valid (including padded rows),
-                    // so bypass maybe_write_tile's padding skip (same convention as restore reads).
-                    constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
-                    save_accumulators_with_trid(
-                        qi.is_joint_q ? joint_out_generator : out_generator,
-                        stats_writer,
-                        stats_tile_logical,
-                        nb,
-                        nq,
-                        Sq_chunk_t,
-                        qi.out_slice,
-                        all_tiles_valid,
-                        qi.stats_seq_start_tile,
-                        qi.stats_seq_end_tile,
-                        sum_offset,
-                        cb_out,
-                        cb_max_out,
-                        cb_sum_out,
-                        tile_bytes,
-                        stats_tile_bytes,
-                        out_subblock_h,
-                        q_trid(q_index));
+                    deferred.pending = true;
+                    deferred.trid = trid_for_q(q_index);
+                    deferred.nb = nb;
+                    deferred.nq = nq;
+                    deferred.qi = qi;
+                }
+
+                // Delayed intra-ring prefetch for normalize-only Qs: skipped earlier to avoid
+                // cycling cb_prev_out <-> cb_out with compute's normalize. Now cb_out has been
+                // drained by write_out above, and compute's normalize has fully freed cb_prev_out.
+                if (defer_prefetch && !single_q_chunk) {
+                    prefetch_intra_ring(q_index + 1);
                 }
             }
-            // No global write_barrier — per-trid barriers in the Q loop
-            // ensure each save has landed before its data is read back.
+            // Hoisted DRAM-arrival barrier: on the last ring iter, write_out_row_by_row_no_pop
+            // issued N untagged NOC writes (one per Q on this core). Wait once at the end of the
+            // Q loop for all of them to land in DRAM, before the outer ring-iter loop advances
+            // or the op teardown runs. Previously this was a per-Q barrier inside the loop.
+            if (is_last_ring_iter) {
+                noc_async_write_barrier();
+            }
         } else {
-            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+            for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
+                uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
@@ -631,19 +705,6 @@ void kernel_main() {
 
                 if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
                     continue;
-                }
-
-                if (is_causal) {
-                    generate_mask<false, 0, true, cb_mask_in>(
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        q_chunk,
-                        0,
-                        ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
-                        ring_iter_needs_joint_n_mask,
-                        ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
-                        L,
-                        causality);
                 }
 
                 // If not on the first iteration, read LSE and previous output chunk.

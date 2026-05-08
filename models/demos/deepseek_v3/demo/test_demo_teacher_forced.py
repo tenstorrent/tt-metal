@@ -1,36 +1,53 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
 from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
-from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN as GENERATOR_MAX_SEQ_LEN
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, K_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv(
         "DEEPSEEK_V3_HF_MODEL",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
     )
 )
-CACHE_DIR = Path(
-    os.getenv(
-        "DEEPSEEK_V3_CACHE",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/dev/",
-    )
-)
+_ds_cache = os.getenv("DEEPSEEK_V3_CACHE")
+CACHE_DIR = Path(_ds_cache) if _ds_cache else None
 
 # Must match the path used in generate_teacher_forced_file.py
 # REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
 REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic.refpt")
+
+ARTIFACT_DIR = Path("generated/artifacts")
+
+
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
+def _timestamped_artifact_stem(artifact_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{artifact_name}_{timestamp}"
 
 
 def _sanitize_decoded(text: str) -> str:
@@ -67,11 +84,22 @@ def _assert_no_garbage_tokens(
         )
 
 
+def _tile_align(length: int) -> int:
+    k_chunk_size = K_CHUNK_SIZE
+    aligned_size = max(int(ttnn.TILE_SIZE), k_chunk_size)
+    return ((int(length) + aligned_size - 1) // aligned_size) * aligned_size
+
+
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128, 2048, 8192], ids=["128", "2048", "8192"])
+@pytest.mark.parametrize("max_users_per_row", [8, 32], ids=["8", "32"])
 def test_demo_teacher_forcing_accuracy(
-    reference_file: Path, max_new_tokens: int, is_ci_env: bool, force_recalculate_weight_config: bool
+    reference_file: Path,
+    max_new_tokens: int,
+    is_ci_env: bool,
+    force_recalculate_weight_config: bool,
+    max_users_per_row: int,
 ):
     """
     Test DeepSeek v3 demo with teacher forcing to verify accuracy.
@@ -123,20 +151,11 @@ def test_demo_teacher_forcing_accuracy(
     tf_prompt_len = int(payload["tf_prompt_len"])
     saved_max_new_tokens = int(payload.get("max_new_tokens"))
 
-    max_supported_new_tokens = GENERATOR_MAX_SEQ_LEN - tf_prompt_len
-    if max_supported_new_tokens <= 0:
-        pytest.skip(f"Prompt length {tf_prompt_len} exceeds max_seq_len {GENERATOR_MAX_SEQ_LEN}.")
-    if max_new_tokens > max_supported_new_tokens:
-        pytest.skip(
-            f"Requested max_new_tokens={max_new_tokens} exceeds generator capacity: "
-            f"max_seq_len={GENERATOR_MAX_SEQ_LEN}, prompt_len={tf_prompt_len} -> max_new_tokens<={max_supported_new_tokens}."
-        )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, TG, or T3K.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    num_users = USERS_PER_ROW * mesh_shape[0]
+    num_users = max_users_per_row * mesh_shape[0]
     prompt_text_for_users = payload.get("prompt", "")
 
     # Print token ID metadata if available
@@ -181,10 +200,20 @@ def test_demo_teacher_forcing_accuracy(
             f"in {reference_file}. Regenerate the reference with a larger max_new_tokens."
         )
 
+    # Teacher forcing only needs enough configured context for the prompt plus the
+    # number of forced decode steps under test.
+    configured_max_seq_len = _tile_align(tf_prompt_len + max_new_tokens)
+    if configured_max_seq_len > DEFAULT_MAX_SEQ_LEN:
+        pytest.skip(
+            f"Requested teacher-forced context requires max_seq_len={configured_max_seq_len}, "
+            f"which exceeds the default demo max_seq_len {DEFAULT_MAX_SEQ_LEN}."
+        )
+
     logger.info("=== Phase 2: Run teacher forcing ===")
     logger.info("Loaded reference from: {}", reference_file)
     logger.info("Total reference tokens: {}, prompt length: {}", total_ref_tokens, tf_prompt_len)
     logger.info("Using max_new_tokens={}", max_new_tokens)
+    logger.info("Using configured max_seq_len={}", configured_max_seq_len)
 
     # Run the demo with teacher forcing
     results = run_demo(
@@ -193,6 +222,7 @@ def test_demo_teacher_forcing_accuracy(
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=max_new_tokens,
+        max_seq_len=configured_max_seq_len,
         repeat_batches=1,
         token_accuracy=True,
         reference_file=reference_file,
@@ -201,12 +231,13 @@ def test_demo_teacher_forcing_accuracy(
         force_recalculate=force_recalculate_weight_config,
         stop_at_eos=False,
         sample_on_device=False,
+        max_users_per_row=max_users_per_row,
     )
 
     # Check results
     assert "generations" in results
     assert len(results["generations"]) == num_users, (
-        f"Expected {num_users} generations (USERS_PER_ROW={USERS_PER_ROW}, rows={mesh_shape[0]}), "
+        f"Expected {num_users} generations (USERS_PER_ROW={max_users_per_row}, rows={mesh_shape[0]}), "
         f"got {len(results['generations'])}"
     )
 
@@ -257,6 +288,42 @@ def test_demo_teacher_forcing_accuracy(
                     f"user0={expected_tokens[first_diff]}, user{idx}={tokens[first_diff]}"
                 )
             break
+
+    # Save per-user TT vs reference decode artifact from host rank 0 only (same pattern as test_demo.py).
+    if _is_primary_artifact_writer():
+        upr_suffix = f"{max_users_per_row}upr"
+        gt_decode = tokenizer.decode(
+            ref_gen_ids[:max_new_tokens].tolist(),
+            skip_special_tokens=False,
+        )
+        output_records: list[dict[str, object]] = []
+        for idx, gen in enumerate(results["generations"]):
+            tt_text = gen.get("text")
+            if not tt_text:
+                gen_ids = gen.get("tokens", [])
+                tt_text = tokenizer.decode([int(x) for x in gen_ids], skip_special_tokens=False) if gen_ids else ""
+
+            record: dict[str, object] = {
+                "index": idx + 1,
+                "prompt": prompt_text_for_users,
+                "tt_output": tt_text,
+                "gt_output": gt_decode,
+            }
+
+            pred_ids = gen.get("predicted_tokens")
+            if pred_ids:
+                record["tt_predicted_output"] = tokenizer.decode([int(x) for x in pred_ids], skip_special_tokens=False)
+
+            output_records.append(record)
+        artifact_dir = ARTIFACT_DIR
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        output_file = (
+            artifact_dir / f"{_timestamped_artifact_stem(f'teacher_forced_generated_outputs_{upr_suffix}')}.json"
+        )
+        with output_file.open("w", encoding="utf-8") as f:
+            json.dump(output_records, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        logger.info("Saved {} user outputs to {}", len(output_records), output_file)
 
     if "predicted_tokens" in first_gen:
         assert len(first_gen["predicted_tokens"]) == len(

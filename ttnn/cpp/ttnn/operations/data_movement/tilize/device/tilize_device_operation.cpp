@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,10 @@ bool can_use_sharded_optimized_factories(
     }
 
     if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            return false;
+        }
         if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH != 0) {
             return false;
         }
@@ -61,6 +65,26 @@ bool can_use_sharded_optimized_factories(
         return false;  // Sharded tilize does not support sub core grid specification
     }
 
+    // The sharded factories place kernels on every core in the shard grid.
+    // If the grid extends beyond the compute grid (e.g. includes dispatch cores),
+    // kernel placement will fail.  Fall back to the default factory which
+    // distributes work across the compute grid and accesses shards via NoC.
+    auto* device = input_tensor.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRangeSet compute_grid(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    const auto& shard_grid = input_tensor.shard_spec().value().grid;
+    if (!compute_grid.contains(shard_grid)) {
+        log_debug(
+            tt::LogOp,
+            "ttnn::tilize: Shard grid {} extends beyond compute grid {}x{}, falling back to default factory",
+            shard_grid.str(),
+            grid_size.x,
+            grid_size.y);
+        return false;
+    }
+    if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        return false;  // ND_SHARDED output should take the default factory.
+    }
     return true;
 }
 }  // namespace
@@ -121,7 +145,9 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
             "factory is being used");
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
             input_tensor.memory_config().shard_spec());  // If the input is using the legacy sharded optimized program
                                                          // factory, the output has the same shard spec as the input.
         return {TensorSpec(
@@ -136,17 +162,10 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
-    auto output_padded_shape = output_layout.compute_padded_shape(
-        input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
-                                        // padded_shape due to having a differrent shard_spec.
     return {TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            operation_attributes.output_dtype,
-            PageConfig(Layout::TILE),
-            operation_attributes.output_mem_config,
-            input_tensor.logical_shape(),
-            output_padded_shape))};
+        TensorLayout(
+            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
 }
 
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(

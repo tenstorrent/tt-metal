@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
 #include <cstdint>
@@ -31,6 +32,10 @@ public:
         tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
     explicit TensorAccessorArgs(
         const std::shared_ptr<distributed::MeshBuffer>& buffer,
+        tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
+
+    explicit TensorAccessorArgs(
+        const MeshTensor& tensor,
         tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
 
     static TensorAccessorArgs create_dram_interleaved();

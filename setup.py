@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -299,7 +299,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -335,6 +335,7 @@ class CMakeBuild(build_ext):
             "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
@@ -363,7 +364,7 @@ class CMakeBuild(build_ext):
             "impl/dispatch/kernels/**/*",
             "include/**/*",
             "kernels/**/*",
-            "third_party/tt_llk/**/*",
+            "tt-llk/**/*",
             "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
             "sfpi-version",

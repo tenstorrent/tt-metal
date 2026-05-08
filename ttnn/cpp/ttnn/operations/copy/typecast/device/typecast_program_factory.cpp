@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -88,9 +88,9 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         src0_cb_index,
         output_cb_index};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     constexpr bool math_approx_mode = false;
@@ -112,7 +112,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         path,
         core_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -132,7 +132,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
             path,
             core_group_2,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -239,21 +239,17 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores[0]));
     }
 
-    uint32_t ntiles_per_block = ntiles / ncores;
-    uint32_t nblocks = (ntiles / ntiles_per_block);
-    uint32_t nblocks_per_core = nblocks / ncores;
-
     std::vector<CoreCoord> cores_with_rtargs;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = ntiles_per_block * 2;
+    constexpr uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = ntiles_per_block * 2;
+    constexpr uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
@@ -280,15 +276,16 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    uint32_t ntiles_per_core = ntiles / ncores;
     std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(nblocks_per_core),  // per_core_block_cnt
-        static_cast<uint32_t>(ntiles_per_block),  // per_block_ntiles // per_core_block_size
+        static_cast<uint32_t>(ntiles_per_core),  // per_core_block_cnt
+        1,                                       // per_core_block_dim
         src0_cb_index,
         output_cb_index};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = false;
@@ -310,7 +307,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         path,
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -319,7 +316,6 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
             .defines = unary_defines});
 
     uint32_t tile_start_id = 0;
-    auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
 
     for (auto core : cores) {
         tt::tt_metal::SetRuntimeArgs(

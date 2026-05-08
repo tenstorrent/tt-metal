@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,13 @@
     } while (0)
 
 void kernel_main() {
+    // Extract config type from compile-time argument
+    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
+    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
+
+    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
+    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
+
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -51,16 +58,16 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -68,35 +75,26 @@ void kernel_main() {
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
-    // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
-
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
-
-    const uint32_t num_in2_tiles = num_w2_tiles_w;
-    const uint32_t num_mm2_tiles = num_w2_tiles_w;
-
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
+    // constexpr uint32_t w0_w1_tiles_w = moe_ring::W0_W1_BLOCK_TILES_W;
+    constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
-    constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B / 2;  // 32 * 3 = 96
-    // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
+
+    constexpr uint32_t w0_w1_dram_tiles_h = config_t::NUM_W0_W1_DRAM_TILES_H;
+    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = detail::div_up<w0_w1_dram_tiles_h, w0_w1_block_tiles_h>();
+    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP / 2;
 
     // W2 reading constants
+    constexpr uint32_t w2_dram_tiles_h = config_t::NUM_W2_DRAM_TILES_H;
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
-    constexpr uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
+    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -107,12 +105,13 @@ void kernel_main() {
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Offsets for layer_id
-    constexpr uint32_t w0_size_per_expert = num_w0_w1_tiles_h * 6 * w0_w1_tile_size;
-    constexpr uint32_t w0_w1_total_size_per_expert = 2 * w0_size_per_expert;
+
+    constexpr uint32_t w0_w1_total_size_per_expert = w0_w1_blocks_per_expert * 2 * w0_w1_bytes_per_txn;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
-    constexpr uint32_t w2_total_size_per_expert = 70 * 20 * w2_tile_size;  // We pad 64 to 70 tiles
+    // W2: same approach
+    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert * 2 * w2_bytes_per_txn;
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
@@ -153,16 +152,14 @@ void kernel_main() {
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
-    // Precompute NUM_CHUNKS_PER_EXPERT
-    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
+    // Read per-expert token counts from CB
+    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-    constexpr uint32_t BITS_PER_EXPERT = 10;
-    constexpr uint32_t EXPERT_MASK = 0x3FFu;
+    // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 

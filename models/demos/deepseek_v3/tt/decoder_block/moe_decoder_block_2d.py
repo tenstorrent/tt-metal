@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
@@ -63,10 +63,21 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         return {
-            "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device, fabric_config),
-            "moe": MoE.decode_model_config(hf_config, mesh_device, fabric_config),
+            "shared_expert": SharedExpert.decode_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
+            "moe": MoE.decode_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
         }
 
     @classmethod
@@ -113,6 +124,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             # Should always be TP-sharded at this point
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
+        batch_size = x_gathered.shape[1]
+        seq_len = x_gathered.shape[2]
+        if batch_size > 1:
+            x_gathered = ttnn.reshape(x_gathered, (x_gathered.shape[0], 1, batch_size * seq_len, x_gathered.shape[3]))
+
         # Run both MoE and SharedExpert with the same gathered input
         mlp_out = MoE.forward_prefill(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
@@ -132,6 +148,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
             )
             ttnn.deallocate(combined_out)
+            if batch_size > 1:
+                output = ttnn.reshape(output, (output.shape[0], batch_size, seq_len, output.shape[3]))
             # Cleanup gathered tensor
             if x_gathered is not x:
                 ttnn.deallocate(x_gathered)
@@ -148,6 +166,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         hidden_size = cfg["moe"]["hidden_size"]
         tp_size = cfg["moe"]["mesh_device"].shape[1]
         x_dim = x.shape[-1]
+        num_tokens_per_row = x.shape[-2]
 
         if x_dim == hidden_size // tp_size:
             # Input is TP-sharded, need to gather
@@ -178,7 +197,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
 
-            if cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8:
+            if (
+                cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING
+                and tp_size == 8
+                and num_tokens_per_row == ttnn.TILE_SIZE
+            ):
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     combined_out,
                     dim=0,

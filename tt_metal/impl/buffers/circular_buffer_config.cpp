@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -212,6 +212,8 @@ uint32_t CircularBufferConfig::max_size() const { return this->max_size_; }
 uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; }
 
 uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
+
+void CircularBufferConfig::set_address_offset(uint32_t offset) { this->address_offset_ = offset; }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {

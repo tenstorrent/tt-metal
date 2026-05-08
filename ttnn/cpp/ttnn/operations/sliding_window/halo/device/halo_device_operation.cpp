@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_with_halo_program_factory.hpp"
@@ -96,6 +96,7 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
 Tensor halo(
     const Tensor& input_tensor,
     const ttnn::operations::sliding_window::SlidingWindowConfig& config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
@@ -137,7 +138,8 @@ Tensor halo(
             .max_out_nsticks_per_core = max_out_nsticks_per_core,
             .in_nsticks_per_core = in_nsticks_per_core,
             .is_out_tiled = is_out_tiled,
-            .config_tensors_in_dram = config_tensors_in_dram},
+            .config_tensors_in_dram = config_tensors_in_dram,
+            .compute_kernel_config = compute_kernel_config},
         input_tensor);
 }
 }  // namespace ttnn::prim

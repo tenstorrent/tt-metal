@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Functional tests for load_ttnn_ops_data_v2.py.
 
@@ -984,15 +984,98 @@ class TestLoadDataWithMockedDB:
         # In dry run: rollback is called, commit is not
         mock_pg.connect.return_value.rollback.assert_called()
 
+    def _write_loadable_master(self, tmp_path):
+        """Minimal valid master JSON — inlines trace_uid (the loader requires it)."""
+        data = {
+            "operations": {
+                "ttnn::add": {
+                    "configurations": [
+                        {
+                            "config_hash": "hash_a1",
+                            "arguments": {"arg0": {"type": "int", "value": 1}},
+                            "executions": [
+                                {
+                                    "source": "models/demos/deepseek_v3/demo/demo.py",
+                                    "machine_info": {
+                                        "board_type": "Wormhole",
+                                        "device_series": "n300",
+                                        "card_count": 1,
+                                    },
+                                    "count": 1,
+                                    "trace_uid": "fixture-trace-uid",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        }
+        p = tmp_path / "loadable_master.json"
+        p.write_text(json.dumps(data))
+        return str(p)
+
+    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
+    @patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts")
+    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.get_or_create_trace_run")
+    def test_emit_id_file_writes_new_trace_run_id(self, mock_get_trace_run, mock_drafts, mock_pg, tmp_path):
+        """--emit-id-file writes the new trace_run_id so CI can pin validation."""
+
+        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None):
+            cache[trace_uid] = 77
+            return 77
+
+        mock_get_trace_run.side_effect = fake_trace_run
+
+        json_path = self._write_loadable_master(tmp_path)
+        _, mock_cur = self._setup_mock_db(mock_pg)
+        mock_cur.fetchall.return_value = []  # no existing trace_uids, no lookup rows
+        mock_cur.fetchone.return_value = (1,)  # uniform response for all other fetchone()s
+
+        emit_path = tmp_path / "trace_run_id.txt"
+        load_data(
+            json_path=json_path,
+            tt_metal_sha="abc",
+            dry_run=False,
+            emit_id_file=str(emit_path),
+        )
+
+        assert emit_path.read_text().strip() == "77"
+
+    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
+    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.get_or_create_trace_run")
+    def test_emit_id_file_not_written_on_dry_run(self, mock_get_trace_run, mock_pg, tmp_path):
+        """Dry run must never produce an ID file — the trace_run doesn't exist."""
+
+        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None):
+            cache[trace_uid] = 77
+            return 77
+
+        mock_get_trace_run.side_effect = fake_trace_run
+
+        json_path = self._write_loadable_master(tmp_path)
+        _, mock_cur = self._setup_mock_db(mock_pg)
+        mock_cur.fetchall.return_value = []
+        mock_cur.fetchone.return_value = (1,)
+
+        emit_path = tmp_path / "trace_run_id.txt"
+        load_data(
+            json_path=json_path,
+            tt_metal_sha="abc",
+            dry_run=True,
+            emit_id_file=str(emit_path),
+        )
+
+        assert not emit_path.exists()
+
 
 # =====================================================================
 # §5  Production Manifest Mirroring
-#     (Tests against the actual sweep_manifest.yaml patterns)
+#     (Tests against the actual trace_selection_registry.yaml patterns)
 # =====================================================================
 
 
 class TestProductionManifestPatterns:
-    """Reproduce the exact structure of the real sweep_manifest.yaml."""
+    """Reproduce the exact structure of the real trace_selection_registry.yaml."""
 
     @pytest.fixture
     def prod_manifest(self, tmp_path):
@@ -1241,7 +1324,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, ""),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                     (
@@ -1312,7 +1395,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, ""),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                     (2, "path/llama.py", "meta-llama/Llama-3.2-1B", "llama-3.2-1b"),
@@ -1345,7 +1428,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, ""),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                 ],
@@ -1362,7 +1445,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (35, "Wormhole", "tt-galaxy-wh", 32, "sha", "2026-03-21", 323, ""),
+                "tr_meta": (35, "Wormhole", "tt-galaxy-wh", 32, "sha", "2026-03-21", 323, "", None),
                 "trace_models": [
                     (1, "models/demos/deepseek_v3/demo/demo.py", None, "deepseek_v3"),
                 ],

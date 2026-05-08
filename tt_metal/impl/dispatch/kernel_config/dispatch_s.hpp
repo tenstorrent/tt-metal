@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -16,6 +16,7 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> cb_log_page_size;
     std::optional<uint32_t> cb_size;
     std::optional<uint32_t> my_dispatch_cb_sem_id;
+    std::optional<uint32_t> dispatch_d_shutdown_sem_id;
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
 
     std::optional<uint32_t> mcast_go_signal_addr;
@@ -24,6 +25,12 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> max_num_worker_sems;
     std::optional<uint32_t> max_num_go_signal_noc_data_entries;
+
+    // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (includes the
+    // program-id handoff FIFO consumed by this kernel). Assigned by DispatchMemMap via
+    // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Must match the value passed to the
+    // co-located DispatchKernel and to the RT-profiler core kernels.
+    std::optional<uint32_t> realtime_profiler_msg_addr;
 };
 
 struct dispatch_s_dependent_config_t {

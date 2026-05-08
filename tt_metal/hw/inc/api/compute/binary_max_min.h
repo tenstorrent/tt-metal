@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_int32_init<APPROX>())); }
+ALWI void binary_max_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_int32_init())); }
 
 // clang-format off
 /**
@@ -65,7 +65,7 @@ ALWI void binary_max_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_uint32_init<APPROX>())); }
+ALWI void binary_max_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_uint32_init())); }
 
 // clang-format off
 /**
@@ -93,7 +93,7 @@ ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, int vec
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_init<APPROX>())); }
+ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_init())); }
 
 // clang-format off
 /**
@@ -121,7 +121,7 @@ ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_int32_init<APPROX>())); }
+ALWI void binary_min_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_int32_init())); }
 
 // clang-format off
 /**
@@ -149,7 +149,7 @@ ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_uint32_init<APPROX>())); }
+ALWI void binary_min_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_uint32_init())); }
 
 // clang-format off
 /**
@@ -177,6 +177,6 @@ ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, int vec
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_init<APPROX>())); }
+ALWI void binary_min_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_init())); }
 
 }  // namespace ckernel

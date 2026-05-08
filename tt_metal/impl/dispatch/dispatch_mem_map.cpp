@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,8 +15,10 @@
 
 namespace tt::tt_metal {
 
-DispatchMemMap::DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster) :
-    settings(DispatchSettings(num_hw_cqs, core_type, is_galaxy_cluster, hal.get_alignment(HalMemType::L1))),
+DispatchMemMap::DispatchMemMap(
+    const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster, bool are_cqs_dram_backed) :
+    settings(DispatchSettings(
+        num_hw_cqs, core_type, is_galaxy_cluster, are_cqs_dram_backed, hal.get_alignment(HalMemType::L1))),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
     noc_overlay_start_addr_(hal.get_noc_overlay_start_addr()),
@@ -67,6 +69,12 @@ DispatchMemMap::DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, c
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
             device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) {
+            // Real-time profiler mailbox: dispatch-core-local L1 region shared between the
+            // dispatch cores and the reserved RT-profiler tensix core.
+            device_cq_addr_sizes_[dev_addr_idx] =
+                hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX)
+                    .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -82,7 +90,8 @@ DispatchMemMap::DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, c
         } else if (
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
-            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
+            dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }

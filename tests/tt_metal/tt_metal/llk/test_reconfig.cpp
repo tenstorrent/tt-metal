@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -180,7 +180,7 @@ bool single_core_reconfig(
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines;
 
-    defines["DST_ACCUM_MODE"] = "1";  // Needed always in order for reader kernel to load data from CB2
+    defines["LOAD_BUF2_DATA"] = "1";  // Needed always in order for reader kernel to load data from CB2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";
     defines["SPLIT_SRC_RECONFIG"] = test_config.split_src_reconfig ? "1" : "0";
     defines["BLOCK_COPY"] = test_config.block_copy ? "1" : "0";
@@ -362,7 +362,7 @@ bool single_core_reconfig(
 // - pack_reconfig_l1_acc
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
+TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -399,7 +399,7 @@ TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
+TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);

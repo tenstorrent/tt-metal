@@ -1,5 +1,6 @@
 set(JIT_BUILD_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/build.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/build_cache_telemetry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/build_env_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_device_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format.cpp

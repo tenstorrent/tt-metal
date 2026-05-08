@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,12 +14,18 @@ std::optional<std::string> get_mock_cluster_desc_name(tt::ARCH arch, uint32_t nu
                 case 2: return "wormhole_N300.yaml";
                 case 4: return "2x2_n300_cluster_desc.yaml";
                 case 8: return "t3k_cluster_desc.yaml";
+                case 32: return "6u_cluster_desc.yaml";  // Galaxy 6U, 4x8 grid
                 default: return std::nullopt;
             }
         case tt::ARCH::BLACKHOLE:
             switch (num_chips) {
                 case 1: return "blackhole_P150.yaml";
                 case 2: return "blackhole_P300_both_mmio.yaml";
+                default: return std::nullopt;
+            }
+        case tt::ARCH::QUASAR:
+            switch (num_chips) {
+                case 1: return "quasar_Q1.yaml";
                 default: return std::nullopt;
             }
         default: return std::nullopt;

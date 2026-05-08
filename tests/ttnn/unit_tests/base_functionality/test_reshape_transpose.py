@@ -1,10 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 def test_transpose_with_reshape(device):
@@ -30,4 +30,4 @@ def test_transpose_with_reshape(device):
     torch_ref = torch_ref.transpose(1, 2)
 
     # Compare results
-    assert_with_pcc(torch_ref, tt_result, 0.9999)
+    assert_equal(torch_ref, tt_result)

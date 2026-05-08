@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -163,7 +163,7 @@ class RMSNorm(LightweightModule):
         xnorm = ttnn.rsqrt(xnorm + epsilon)
         xnorm = ttnn.multiply(inp, xnorm)
         weight = ttnn.reshape(weight, [1, 1, -1])
-        output = ttnn.multiply(xnorm, (weight), use_legacy=False)
+        output = ttnn.multiply(xnorm, (weight))
 
         if memory_config is not None:
             output = ttnn.to_memory_config(output, memory_config)

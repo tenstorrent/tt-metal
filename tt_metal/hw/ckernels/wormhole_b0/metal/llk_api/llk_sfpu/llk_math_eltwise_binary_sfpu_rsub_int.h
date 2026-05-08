@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,8 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_rsub_int_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>();
 }
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
@@ -23,7 +22,7 @@ inline void llk_math_eltwise_binary_sfpu_rsub_int(
         "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_rsub_int<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>,
         dst_index0,
         dst_index1,

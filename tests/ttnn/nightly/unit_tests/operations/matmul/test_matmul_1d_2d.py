@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_equal,
-    comp_pcc,
-)
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -84,6 +81,7 @@ def test_llama2_matmul(
     grid_size,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -161,9 +159,9 @@ def test_llama2_matmul(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        pt_out, tt_out, atol=0.003 * K, rtol=0.304 * K, frobenius_threshold=0.001 * K, check_ulp=False
+    )
 
 
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -398,6 +396,7 @@ def test_multi_core_matmul_2d_wh(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -489,9 +488,16 @@ def test_multi_core_matmul_2d_wh(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    if dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            pt_out, tt_out, atol=0.009 * K, rtol=10.173 * K, frobenius_threshold=0.001 * K, check_ulp=False
+        )
+    elif dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            pt_out, tt_out, atol=0.007 * K, rtol=5.777 * K, frobenius_threshold=0.001 * K, check_ulp=False
+        )
+    else:
+        assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -702,6 +708,7 @@ def test_multi_core_matmul_1d_wh(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -785,6 +792,27 @@ def test_multi_core_matmul_1d_wh(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    if dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            pt_out,
+            tt_out,
+            atol=0.013 * K,
+            rtol=13.299 * K,
+            frobenius_threshold=0.001 * K,
+            pcc_threshold=0.99,
+            check_ulp=False,
+        )
+    elif dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            pt_out,
+            tt_out,
+            atol=0.009 * K,
+            rtol=6.39 * K,
+            frobenius_threshold=0.001 * K,
+            pcc_threshold=0.99,
+            check_ulp=False,
+        )
+    else:
+        assert_numeric_metrics(
+            pt_out, tt_out, check_allclose=False, check_frobenius=False, pcc_threshold=0.99, check_ulp=False
+        )

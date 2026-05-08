@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,10 +9,11 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -39,39 +40,18 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
     output_memory_config=None,
     batch_size=None,
     input_h=None,
@@ -89,16 +69,32 @@ def run(
 ) -> list:
     """
     Run max_pool2d test with parameters extracted from traced JSON.
-    All parameters are now extracted from JSON including applied_shard_scheme.
+    V2 loader may use input_tensor_* naming; fall back to input_a_* from signature.
     """
     torch.manual_seed(0)
 
-    # Extract kwargs
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    # V2 loader uses input_tensor_* naming for this op; fall back to named params
+    input_a_dtype = kwargs.get("input_tensor_dtype", input_a_dtype)
+    input_a_layout = kwargs.get("input_tensor_layout", input_a_layout)
+    input_a_memory_config = kwargs.get("input_tensor_memory_config", input_a_memory_config)
+    input_a_tensor_placement = kwargs.get("input_tensor_tensor_placement", kwargs.get("input_a_tensor_placement"))
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Exclude pool-specific params already handled above so they don't leak via op_kwargs
+    _pool_keys = {
+        "batch_size",
+        "input_h",
+        "input_w",
+        "channels",
+        "kernel_size",
+        "stride",
+        "padding",
+        "dilation",
+        "applied_shard_scheme",
+    }
+    op_kwargs = build_op_kwargs(kwargs, exclude=_pool_keys, output_memory_config=output_memory_config)
 
     # All parameters must be extracted from JSON - no fallbacks
     if batch_size is None or input_h is None or input_w is None or channels is None:
@@ -199,7 +195,7 @@ def run(
 
     if not input_is_sharded:
         if applied_shard_scheme is None:
-            applied_shard_scheme = kwargs.get("applied_shard_scheme", "BLOCK_SHARDED")
+            applied_shard_scheme = "BLOCK_SHARDED"
 
         if applied_shard_scheme == "BLOCK_SHARDED":
             applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -219,10 +215,17 @@ def run(
     result = mesh_tensor_to_torch(result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Convert back to [N, C, H, W] format
+    # Convert TTNN output back to [N, C, H, W] format for PCC comparison.
+    # TTNN max_pool2d returns [1, 1, N*outH*outW, C] — reshape to [N, outH, outW, C] then permute.
+    out_h = (H + 2 * pad_h - dil_h * (kH - 1) - 1) // stride_h + 1
+    out_w = (W + 2 * pad_w - dil_w * (kW - 1) - 1) // stride_w + 1
+    if result.ndim == 4 and result.shape[0] == 1 and result.shape[1] == 1:
+        result = result.reshape(N, out_h, out_w, C)
     output_tensor = torch.permute(result, (0, 3, 1, 2))
 
     # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

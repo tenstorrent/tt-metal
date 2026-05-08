@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,7 @@
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -47,6 +49,10 @@ namespace nb = nanobind;
 // NOLINTBEGIN(bugprone-unused-raii)
 
 namespace {
+
+// Prevent Python callback GC while registered.  Keyed by handle returned from C++
+// RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
+std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
 void ttnn_device(nb::module_& mod) {
     mod.def(
@@ -132,6 +138,27 @@ void py_device_module_types(nb::module_& m_device) {
     nb::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
 
     nb::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
+
+    nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
+        m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
+        .def_ro("program_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::program_id, "Runtime program ID")
+        .def_ro(
+            "start_timestamp",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::start_timestamp,
+            "Device start timestamp (raw ticks)")
+        .def_ro(
+            "end_timestamp",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::end_timestamp,
+            "Device end timestamp (raw ticks)")
+        .def_ro(
+            "frequency",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
+            "Device clock frequency (cycles per ns)")
+        .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
+        .def_ro(
+            "kernel_sources",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::kernel_sources,
+            "Kernel source paths for this program");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -477,7 +504,10 @@ void device_module(nb::module_& m_device) {
         synchronize_device_doc.data(),
         nb::arg("device"),
         nb::arg("cq_id") = nb::none(),
-        nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
+        nb::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        // Release GIL: sync can block a long time; other threads need it to run Python (e.g. real-time profiler
+        // callbacks).
+        nb::call_guard<nb::gil_scoped_release>());
     m_device.def(
         "ReadDeviceProfiler",
         [](MeshDevice* mesh_device) {
@@ -508,6 +538,16 @@ void device_module(nb::module_& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
+
+    m_device.def(
+        "get_dram_alignment",
+        &tt::tt_metal::hal::get_dram_alignment,
+        "Return the DRAM alignment requirement in bytes for the current architecture.");
+
+    m_device.def(
+        "get_l1_alignment",
+        &tt::tt_metal::hal::get_l1_alignment,
+        "Return the L1 alignment requirement in bytes for the current architecture.");
 
     m_device.def(
         "get_optimal_dram_bank_to_logical_worker_assignment",
@@ -558,6 +598,88 @@ void device_module(nb::module_& m_device) {
         nb::arg("device"),
         R"doc(
         Experimental: If Slow Dispatch is enabled, this function disables the ability to run multiple non-overlapping programs concurrently on the same device.
+        )doc");
+    m_device.def(
+        "is_asynchronous_slow_dispatch_enabled",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            return tt::tt_metal::experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(device);
+        },
+        nb::arg("device"),
+        R"doc(
+        Experimental: Returns whether asynchronous slow dispatch is currently enabled on the given device.
+        )doc");
+
+    m_device.def(
+        "RegisterProgramRealtimeProfilerCallback",
+        [](const nb::callable& callback) -> uint64_t {
+            PyObject* raw_cb = callback.ptr();
+            Py_INCREF(raw_cb);
+
+            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                    nb::gil_scoped_acquire gil;
+                    (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
+                });
+
+            python_realtime_callback_refs[handle] = raw_cb;
+            return handle;
+        },
+        nb::arg("callback"),
+        R"doc(
+            Register a callback to be invoked when real-time profiler data arrives from a device.
+            The callback receives a ProgramRealtimeRecord and is called from the real-time profiler
+            receiver thread.
+
+            Multiple callbacks can be registered.
+
+            Args:
+                callback: A callable that accepts a single ProgramRealtimeRecord argument.
+
+            Returns:
+                int: A handle that can be passed to UnregisterProgramRealtimeProfilerCallback.
+
+            Example:
+                >>> def my_callback(record):
+                ...     print(f"Program {record.program_id} on chip {record.chip_id}")
+                >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
+        )doc");
+
+    m_device.def(
+        "UnregisterProgramRealtimeProfilerCallback",
+        [](uint64_t handle) {
+            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            auto it = python_realtime_callback_refs.find(handle);
+            if (it != python_realtime_callback_refs.end()) {
+                Py_DECREF(it->second);
+                python_realtime_callback_refs.erase(it);
+            }
+        },
+        nb::arg("handle"),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Unregister a previously registered real-time profiler callback.
+            This call waits for any in-flight invocations of the callback to finish.
+
+            Args:
+                handle (int): The handle returned by RegisterProgramRealtimeProfilerCallback.
+        )doc");
+
+    m_device.def(
+        "IsProgramRealtimeProfilerActive",
+        []() { return tt::tt_metal::experimental::IsProgramRealtimeProfilerActive(); },
+        R"doc(
+            Returns True if the real-time profiler is currently running on at least one chip.
+
+            Returns False when the profiler was silently disabled for the current run
+            (for example, ETH dispatch, remote-only mesh, or a platform that can't reserve
+            a tensix dispatch core). Tests that want to collect RT records should call this
+            after opening the device and skip their verification when it returns False —
+            registered callbacks will simply never fire in that case.
+
+            Example:
+                >>> mesh_device = ttnn.open_mesh_device(...)
+                >>> if not ttnn.device.IsProgramRealtimeProfilerActive():
+                ...     pytest.skip("Real-time profiler not active on this configuration")
         )doc");
 }
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -755,55 +755,28 @@ class TtQwenModelArgs(TtModelArgs):
             #  Only used when seq_len >= 4096
             def prefill_ff2_minimal_matmul_config(seq_len):
                 """
-                Returns the best minimal matmul config for prefill FF2 based on sequence length.
-                Configurations are optimized based on sweep results.
+                Qwen3-32B FF2 fused AG+MM config (WH Galaxy, 8x4 mesh, cluster_axis=1).
+
+                Tuned via tests/ttnn/unit_tests/operations/ccl/sweep_qwen3_ff2_agmm.py.
+                Winner at both 4k and 8k (end-to-end TTFT improvement vs non-fused):
+                  grid=(6,8), M=8, K=5, N=5, sub=(1,5)   -> +7.7% at 4k, +8.6% at 8k
+
+                Key constraints (shape-derived, divisibility):
+                  K_block | K_tiles_per_device (= 25)        => K_block in {1, 5, 25}
+                  N_block | N_tiles            (= 40)
+                  sub_h * sub_w <= 8, sub_h | M_block, sub_w | N_block
+                  grid_x=6 forces num_links=3 (via line_all_gather_matmul auto-derive);
+                    grid_x in {2,4,8} hits a CCL core-range overlap bug, grid_x=5 loses
+                    bandwidth with num_links=1.
                 """
-                # Best configurations from sweep results for each M value
-                if seq_len <= 4096:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
-                    )
-                elif seq_len <= 16384:  # Both 8K and 16K share the same config
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 32768:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 65536:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                else:  # For seq_len >= 131072
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
-                    )
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=5,
+                    N_block_size=5,
+                    subblock_h=1,
+                    subblock_w=5,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 

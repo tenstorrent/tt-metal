@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,12 +14,11 @@
 
 template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operand_id = get_operand_id(operandA);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
-    _llk_math_eltwise_binary_init_custom_<EltwiseBinaryType::ELWSUB, BroadcastType::COL, math_fidelity>(
-        num_faces, acc_to_dest);
+    _llk_math_eltwise_binary_init_custom_<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(num_faces);
 }
 
 template <bool is_fp32_dest_acc_en = false>
@@ -29,6 +28,6 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(const std::uint32_t ds
         "dst_index out of range");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_eltwise_binary_bcast_reuse_custom_(ct_dim);
+    _llk_math_sub_bcast_cols_reuse_custom_(ct_dim);
     math::clear_dst_reg_addr();
 }

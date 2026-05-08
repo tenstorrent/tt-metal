@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(0);
@@ -29,33 +30,58 @@ void kernel_main() {
     uint32_t tiles_read = 0;
     const uint32_t tile_size = get_tile_size(cb_id_in0);
     constexpr auto src_args = TensorAccessorArgs<1>();
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
     const uint32_t extra_tiles_per_row = num_tiles_per_row - num_tiles_per_row_this_core;
+
+    experimental::Noc noc;
+    experimental::CB cb_in0(cb_id_in0);
 
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", num_dims: " << num_dims << ", start_id: " << start_id
            << ", num_tiles_per_core: " << num_tiles_per_core << ", num_tiles_per_barrier: " << num_tiles_per_barrier
            << ENDL();
+    DEVICE_PRINT(
+        "src_addr: {}, num_dims: {}, start_id: {}, num_tiles_per_core: {}, num_tiles_per_barrier: {}\n",
+        src_addr,
+        num_dims,
+        start_id,
+        num_tiles_per_core,
+        num_tiles_per_barrier);
 
     DPRINT << "tile_size: " << tile_size << ", src_stick_id: " << src_stick_id << ", tiles_read: " << tiles_read
            << ENDL();
+    DEVICE_PRINT("tile_size: {}, src_stick_id: {}, tiles_read: {}\n", tile_size, src_stick_id, tiles_read);
 
     DPRINT << "num_unpadded_sticks: " << num_unpadded_sticks[0] << " " << num_unpadded_sticks[1] << " "
            << num_unpadded_sticks[2] << " " << num_unpadded_sticks[3] << " " << ENDL();
+    DEVICE_PRINT(
+        "num_unpadded_sticks: {} {} {} {}\n",
+        num_unpadded_sticks[0],
+        num_unpadded_sticks[1],
+        num_unpadded_sticks[2],
+        num_unpadded_sticks[3]);
     DPRINT << "num_padded_sticks: " << num_padded_sticks[0] << " " << num_padded_sticks[1] << " "
            << num_padded_sticks[2] << " " << num_padded_sticks[3] << " " << ENDL();
+    DEVICE_PRINT(
+        "num_padded_sticks: {} {} {} {}\n",
+        num_padded_sticks[0],
+        num_padded_sticks[1],
+        num_padded_sticks[2],
+        num_padded_sticks[3]);
     DPRINT << "num_tiles_per_row_this_core: " << num_tiles_per_row_this_core
            << " extra_tiles_per_row: " << extra_tiles_per_row << ENDL();
+    DEVICE_PRINT(
+        "num_tiles_per_row_this_core: {} extra_tiles_per_row: {}\n", num_tiles_per_row_this_core, extra_tiles_per_row);
 #endif
-    const uint32_t base_src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-    const uint64_t base_noc_addr = get_noc_addr(0, s0);
     uint32_t num_tiles_pushed = 0;
     while (tiles_read < num_tiles_per_core) {
-        cb_reserve_back(cb_id_in0, num_tiles_per_barrier);
-        uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
+        cb_in0.reserve_back(num_tiles_per_barrier);
+        uint32_t l1_offset = 0;
 #ifdef DEBUG
-        DPRINT << "Src Buffer L1 Addr: " << src_buffer_l1_addr << ENDL();
+        DPRINT << "Src Buffer L1 Addr: " << cb_in0.get_write_ptr() << ENDL();
+        DEVICE_PRINT("Src Buffer L1 Addr: {}\n", cb_in0.get_write_ptr());
         DPRINT << "Tiles read " << tiles_read << ", Num tiles pushed: " << num_tiles_pushed << ENDL();
+        DEVICE_PRINT("Tiles read {} Num tiles pushed: {}\n", tiles_read, num_tiles_pushed);
 #endif
         for (uint32_t i = 0; i < num_tiles_per_barrier and tiles_read < num_tiles_per_core; ++i) {
             tiles_read++;
@@ -64,19 +90,36 @@ void kernel_main() {
                 DPRINT << "Skipping read for src_stick_id: " << src_stick_id << ", id_per_dim: " << id_per_dim[0] << ","
                        << id_per_dim[1] << "," << id_per_dim[2] << "," << id_per_dim[3]
                        << ", tiles_read: " << tiles_read << ENDL();
+                DEVICE_PRINT(
+                    "Skipping read for src_stick_id: {}, id_per_dim: {} {} {} {}, tiles_read: {}\n",
+                    src_stick_id,
+                    id_per_dim[0],
+                    id_per_dim[1],
+                    id_per_dim[2],
+                    id_per_dim[3],
+                    tiles_read);
 #endif
-                src_buffer_l1_addr += tile_size;
+                l1_offset += tile_size;
                 src_stick_id++;
 
             } else {
-                uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-                noc_async_read(src_noc_addr, src_buffer_l1_addr, tile_size);
+                noc.async_read(s0, cb_in0, tile_size, {.page_id = src_stick_id}, {.offset_bytes = l1_offset});
 #ifdef DEBUG
-                DPRINT << "src_stick_id: " << src_stick_id << ", src_buffer_l1_addr: " << src_buffer_l1_addr
+                DPRINT << "src_stick_id: " << src_stick_id
+                       << ", src_buffer_l1_addr: " << cb_in0.get_write_ptr() + l1_offset
                        << ", tiles_read: " << tiles_read << "id " << id_per_dim[0] << "," << id_per_dim[1] << ","
                        << id_per_dim[2] << "," << id_per_dim[3] << ENDL();
+                DEVICE_PRINT(
+                    "src_stick_id: {}, src_buffer_l1_addr: {}, tiles_read: {}, id {} {} {} {}\n",
+                    src_stick_id,
+                    cb_in0.get_write_ptr() + l1_offset,
+                    tiles_read,
+                    id_per_dim[0],
+                    id_per_dim[1],
+                    id_per_dim[2],
+                    id_per_dim[3]);
 #endif
-                src_buffer_l1_addr += tile_size;
+                l1_offset += tile_size;
                 src_stick_id++;
             }
 
@@ -90,8 +133,8 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, num_tiles_per_barrier);
+        noc.async_read_barrier();
+        cb_in0.push_back(num_tiles_per_barrier);
         num_tiles_pushed += num_tiles_per_barrier;
     }
 }

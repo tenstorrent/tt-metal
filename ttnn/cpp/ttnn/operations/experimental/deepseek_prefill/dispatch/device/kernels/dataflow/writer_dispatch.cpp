@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,40 +56,42 @@ void kernel_main() {
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(22);
     constexpr uint32_t dispatch_table_page_size = get_compile_time_arg_val(23);
 
-    // Operation parameters (indices 24-31)
+    // Operation parameters (indices 24-30)
     constexpr uint32_t num_devices = get_compile_time_arg_val(24);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(25);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(26);
     constexpr uint32_t n_routed_experts = get_compile_time_arg_val(27);
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(28);
     constexpr uint32_t metadata_len = get_compile_time_arg_val(29);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(30);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(31);
+    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(30);
 
-    // Mesh information (indices 32-36)
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(32);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(33);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(34);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(35);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
+    // Mesh information (indices 31-35)
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(31);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(32);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(33);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(34);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(35);
 
-    // Aligned page sizes (indices 37-43)
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(37);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(38);
-    constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(39);
-    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(40);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(41);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(42);
-    constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(43);
+    // Aligned page sizes (indices 36-42)
+    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(36);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(37);
+    constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(38);
+    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(39);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(40);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(41);
+    constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(42);
 
-    // Fabric configuration (indices 44-47)
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(44);
-    constexpr uint32_t l1_alignment = get_compile_time_arg_val(45);
-    constexpr uint32_t num_links = get_compile_time_arg_val(46);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(47);
+    // Fabric configuration (indices 43-46)
+    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(43);
+    constexpr uint32_t l1_alignment = get_compile_time_arg_val(44);
+    constexpr uint32_t num_links = get_compile_time_arg_val(45);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(46);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 48)
-    constexpr auto input_args = TensorAccessorArgs<48>();
+    // Batch configuration (index 47) — read_batch_size not used by writer
+    // Index 48 — max_dispatch_buffer_token_size (used by reader only)
+
+    // TensorAccessorArgs for all 7 tensors (starting at index 49)
+    constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -157,8 +159,8 @@ void kernel_main() {
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
 #endif
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, aligned_output_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, aligned_metadata_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // Sentinel-terminated fabric send loop
     while (true) {
@@ -204,8 +206,7 @@ void kernel_main() {
             page_idx,
             (int)aligned_metadata_page_size,
             l1_alignment);
-
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 #endif
 
         cb_pop_front(cb_payload_for_writer_id, 1);
@@ -213,6 +214,8 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
+    noc_async_write_barrier();
+
     // Exit semaphore exchange
     {
         const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);

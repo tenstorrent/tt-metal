@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,15 +20,14 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
     constexpr uint32_t row_length = get_compile_time_arg_val(5);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
 
     constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
-    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t tile_height = 32;
@@ -38,7 +37,6 @@ void kernel_main() {
 
     cb_reserve_back(cb_id_in1, 1);
     uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
-    const uint32_t tile_size_bytes = get_tile_size(cb_id_in1);
     volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
 
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
@@ -84,7 +82,7 @@ void kernel_main() {
     bool read_indices = true;
     uint32_t col_offset = curr_col;
     uint32_t tiles_per_row = (row_length + tile_height - 1) / tile_height;
-    const auto s = TensorAccessor(input_args, input_buffer_src_addr, tile_size_bytes);
+    const auto s = TensorAccessor(input_args, input_buffer_src_addr);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {

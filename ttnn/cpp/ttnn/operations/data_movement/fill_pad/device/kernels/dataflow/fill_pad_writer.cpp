@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,7 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
     constexpr auto dst_args = TensorAccessorArgs<12>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, tile_hw * element_size_bytes);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 #endif
 
     // Reserve and push the fill value into the circular buffer
@@ -72,7 +72,7 @@ void kernel_main() {
 
             for (uint32_t col = start_col; col < padded_width;) {
                 // so for each iteration of col, we will be writing at most 2 faces
-                uint64_t start_tile_noc_addr = get_noc_addr(curr_tile, s0);
+                uint64_t start_tile_noc_addr = s0.get_noc_addr(curr_tile);
                 uint32_t face = face_offset / (face_hw);
 
                 uint64_t dst_noc_addr = start_tile_noc_addr + face_offset * element_size_bytes;

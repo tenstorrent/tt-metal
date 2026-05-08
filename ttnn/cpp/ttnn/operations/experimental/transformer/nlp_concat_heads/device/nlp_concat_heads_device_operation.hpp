@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "nlp_concat_heads_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "nlp_concat_heads_device_operation_types.hpp"
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,10 +24,7 @@ using namespace tt::tt_metal;
 constexpr uint32_t NUM_DM_CORES = 8;
 constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYTES;
 
-class LegacyVsNonLegacyTest
-    : public MeshDeviceSingleCardFixture,
-      public testing::WithParamInterface<bool> {
-};
+class LegacyVsNonLegacyTest : public QuasarMeshDeviceSingleCardFixture, public testing::WithParamInterface<bool> {};
 
 // This test requires simulator environment
 TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
@@ -42,9 +39,6 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "This test is for Quasar compute kernels only.";
     }
 
     constexpr CoreCoord core = {0, 0};
@@ -249,10 +243,10 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
 
         // 8. Check that initialized thread local variables have the correct value.
         // I.e. incrementing the variable in one DM does not affect the value in another DM.
-        // TODO: Initializing thread local variables does not work yet. Once they work,
-        // update this check with the correct values.
-        EXPECT_EQ(thread_local_start, 0u) << "dm=" << dm;
-        EXPECT_EQ(thread_local_end, 1u) << "dm=" << dm;
+        // Each DM should observe its own independently initialized TLS value, so
+        // incrementing the variable in one DM does not affect the value in another DM.
+        EXPECT_EQ(thread_local_start, 10u) << "dm=" << dm;
+        EXPECT_EQ(thread_local_end, 11u) << "dm=" << dm;
 
         // 9. Check that uninitialized thread local variables have the correct value.
         // Same as #8, but variables are cleared to 0 at the start.
@@ -285,16 +279,13 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
     QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
-TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     auto mesh_device = devices_[0];
     IDevice* device = mesh_device->get_devices()[0];
 
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "This test is for Quasar compute kernels only.";
     }
 
     constexpr CoreCoord core = {0, 0};

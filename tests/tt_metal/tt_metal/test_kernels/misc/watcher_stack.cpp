@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,10 @@ void kernel_main() {
     uint32_t *sp;
     asm ("mv %0,sp" : "=r"(sp));
 
-    // Do not scribble above stack pointer.
-    if (sp > point)
+    // When usage == 0 we're testing full-overflow detection; write
+    // unconditionally since SP may already be below the stack base
+    // on cores with small stacks
+    if (sp > point || usage == 0) {
         *point = 0;
+    }
 }

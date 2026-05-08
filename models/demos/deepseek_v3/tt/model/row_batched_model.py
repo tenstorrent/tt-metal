@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -33,6 +33,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+from models.demos.deepseek_v3.utils.signpost_names import FIRST_DENSE_LAYER_SIGNPOST, FIRST_MOE_LAYER_SIGNPOST
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -100,6 +101,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 (sub_state_dict(state_dict, mtp_layer_prefix),),
                 output_path / "mtp",
                 mesh_device,
+                reuse_embedding_weight_cfg=weight_cfg["embedding"],
+                reuse_head_weight_cfg=weight_cfg["lm_head"],
             )
         return weight_cfg
 
@@ -108,6 +111,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
         model_cfg = {
@@ -117,6 +121,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "moe_decoder_block": [
@@ -124,13 +129,19 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
-            "lm_head": LMHead1D.prefill_model_config(mesh_device),
+            "lm_head": LMHead1D.prefill_model_config(hf_config, mesh_device),
         }
         if cls._has_mtp_layer(hf_config):
-            model_cfg["mtp"] = MTP2D.prefill_model_config(hf_config, mesh_device, get_fabric_config())
+            model_cfg["mtp"] = MTP2D.prefill_model_config(
+                hf_config,
+                mesh_device,
+                get_fabric_config(),
+                batch_size_per_row=batch_size_per_row,
+            )
         return model_cfg
 
     @classmethod
@@ -138,9 +149,14 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """Create the model configuration for decode mode."""
-        norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+        norm_config = DistributedRMSNorm.decode_model_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+        )
         model_cfg = {
             "embedding": Embedding2D.decode_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
@@ -148,6 +164,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "moe_decoder_block": [
@@ -155,14 +172,17 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
             "norm": norm_config,
-            "lm_head": LMHead1D.decode_model_config(mesh_device),
+            "lm_head": LMHead1D.decode_model_config(hf_config, mesh_device),
         }
         if cls._has_mtp_layer(hf_config):
-            model_cfg["mtp"] = MTP2D.decode_model_config(hf_config, mesh_device, get_fabric_config())
+            model_cfg["mtp"] = MTP2D.decode_model_config(
+                hf_config, mesh_device, get_fabric_config(), batch_size_per_row=batch_size_per_row
+            )
         return model_cfg
 
     @classmethod
@@ -295,19 +315,19 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             # Profile mode: run only first dense layer + first MoE layer
             # First dense layer (MLP)
             if cfg["mlp_decoder_block"]:
-                signpost(header="first_dense_layer")
+                signpost(header=FIRST_DENSE_LAYER_SIGNPOST)
                 x = DecoderBlock2D.forward_decode(
                     x, position_idxs, cfg["mlp_decoder_block"][0], rope_tensors, page_tables[0]
                 )
-                signpost(header="first_dense_layer")
+                signpost(header=FIRST_DENSE_LAYER_SIGNPOST)
             # First MoE layer
             if cfg["moe_decoder_block"]:
-                signpost(header="first_moe_layer")
+                signpost(header=FIRST_MOE_LAYER_SIGNPOST)
                 moe_page_table_idx = len(cfg["mlp_decoder_block"])
                 x = MoEDecoderBlock2D.forward_decode(
                     x, position_idxs, cfg["moe_decoder_block"][0], rope_tensors, page_tables[moe_page_table_idx]
                 )
-                signpost(header="first_moe_layer")
+                signpost(header=FIRST_MOE_LAYER_SIGNPOST)
 
         else:
             # Normal mode: run all layers

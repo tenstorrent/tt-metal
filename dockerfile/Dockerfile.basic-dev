@@ -15,6 +15,7 @@ ARG PYTHON_VERSION
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     && apt-get update && apt-get install -y \
+    curl \
     cmake \
     ninja-build \
     g++-12 \

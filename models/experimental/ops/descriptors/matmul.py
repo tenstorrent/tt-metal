@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@ import ttnn
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 
+@OpDescriptor.create(name="matmul")
 def matmul(
     input_a: "ttnn.Tensor",
     input_b: "ttnn.Tensor",
@@ -113,11 +114,11 @@ def matmul(
         operation_params, tensor_args, output_tensors, core_range_set
     )
 
-    # Build OpDescriptor
-    inputs = [input_a, input_b]
-    outputs = list(output_tensors)
-
-    return OpDescriptor(program_descriptor, inputs, outputs, "matmul")
+    return OpDescriptor(
+        descriptor=program_descriptor,
+        input_tensors={"input_a": input_a, "input_b": input_b},
+        output_tensors=list(output_tensors),
+    )
 
 
 def _default_program_config(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -188,8 +188,7 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
         return;
     }
 
-    // Guard: skip on Mock devices
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+    if (cluster.is_mock_or_emulated()) {
         return;
     }
 

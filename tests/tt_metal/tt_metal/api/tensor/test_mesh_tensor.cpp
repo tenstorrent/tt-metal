@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Sanity tests for MeshTensor class.
@@ -70,6 +70,19 @@ TEST(MeshTensorTest, MoveAssignment) {
     (void)other;
 }
 
+TEST(MeshTensorTest, DefaultConstructedIsNotInitialized) {
+    MeshTensor tensor;
+    EXPECT_FALSE(tensor.is_initialized());
+}
+
+TEST(MeshTensorTest, MovedFromIsNotInitialized) {
+    MeshTensor source;
+    MeshTensor dest;
+    dest = std::move(source);
+    EXPECT_FALSE(source.is_initialized());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(dest.is_initialized());
+}
+
 TEST(MeshTensorTest, ConstructionWithNullMeshBufferFails) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -78,18 +91,6 @@ TEST(MeshTensorTest, ConstructionWithNullMeshBufferFails) {
     auto topology = TensorTopology();
 
     EXPECT_ANY_THROW(MeshTensor(nullptr, std::move(spec), std::move(topology)));
-}
-
-TEST(MeshTensorTest, MoveConstructionWithNewSpecFromDefaultConstructedFails) {
-    MeshTensor default_tensor;
-
-    auto page_config = PageConfig(Layout::ROW_MAJOR);
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    auto new_spec = TensorSpec(Shape{4, 32}, tensor_layout);
-    auto new_topology = TensorTopology();
-
-    EXPECT_ANY_THROW(MeshTensor(std::move(default_tensor), std::move(new_spec), std::move(new_topology)));
 }
 
 // Device-based tests using GenericMeshDeviceFixture
@@ -136,6 +137,42 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     EXPECT_EQ(tensor.logical_shape(), Shape({1, 32}));
 }
 
+TEST_F(MeshTensorDeviceTest, ConstructedWithMeshBufferIsInitialized) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
+    ASSERT_NE(mesh_buffer, nullptr);
+    ASSERT_TRUE(mesh_buffer->is_allocated());
+
+    auto topology = TensorTopology();
+
+    MeshTensor tensor(mesh_buffer, std::move(spec), std::move(topology));
+
+    EXPECT_TRUE(tensor.is_initialized());
+}
+
+TEST_F(MeshTensorDeviceTest, IsNotInitializedAfterMoveFrom) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
+    auto topology = TensorTopology();
+
+    MeshTensor original(mesh_buffer, std::move(spec), std::move(topology));
+
+    EXPECT_TRUE(original.is_initialized());
+
+    MeshTensor moved(std::move(original));
+
+    EXPECT_FALSE(original.is_initialized());  // NOLINT(bugprone-use-after-move)
+    EXPECT_TRUE(moved.is_initialized());
+}
+
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -146,7 +183,7 @@ TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
     auto topology = TensorTopology();
 
     MeshTensor original(mesh_buffer, std::move(spec), std::move(topology));
-    auto* buffer_ptr = &original.mesh_buffer();
+    const auto* buffer_ptr = &original.mesh_buffer();
 
     MeshTensor moved(std::move(original));
 
@@ -168,33 +205,12 @@ TEST_F(MeshTensorDeviceTest, MoveAssignmentTransfersOwnership) {
     MeshTensor tensor1(mesh_buffer1, std::move(spec1), TensorTopology());
     MeshTensor tensor2(mesh_buffer2, std::move(spec2), TensorTopology());
 
-    auto* buffer1_ptr = &tensor1.mesh_buffer();
+    const auto* buffer1_ptr = &tensor1.mesh_buffer();
 
     tensor2 = std::move(tensor1);
 
     EXPECT_EQ(&tensor2.mesh_buffer(), buffer1_ptr);
     EXPECT_EQ(tensor2.logical_shape(), Shape({1, 32}));
-}
-
-TEST_F(MeshTensorDeviceTest, MoveConstructionWithNewSpecAndTopology) {
-    auto page_config = PageConfig(Layout::ROW_MAJOR);
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    auto spec = TensorSpec(Shape{2, 64}, tensor_layout);
-
-    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
-    MeshTensor original(mesh_buffer, std::move(spec), TensorTopology());
-    auto* buffer_ptr = &original.mesh_buffer();
-
-    auto new_tensor_layout = TensorLayout(DataType::FLOAT32, page_config, memory_config);
-    auto new_spec = TensorSpec(Shape{4, 32}, new_tensor_layout);
-    auto new_topology = TensorTopology();
-
-    MeshTensor moved(std::move(original), std::move(new_spec), std::move(new_topology));
-
-    EXPECT_EQ(&moved.mesh_buffer(), buffer_ptr);
-    EXPECT_EQ(moved.logical_shape(), Shape({4, 32}));
-    EXPECT_EQ(moved.dtype(), DataType::FLOAT32);
 }
 
 TEST_F(MeshTensorDeviceTest, TensorProperties) {

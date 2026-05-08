@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ void kernel_main() {
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+    const auto in0 = TensorAccessor(in0_args, in0_addr);
 
     // Create Device 2.0 experimental Noc and CircularBuffer objects
     experimental::Noc noc;

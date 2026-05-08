@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -98,6 +98,8 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 56) {
         // fast divide for 56 divisor. Handles Banked L1 address generation for N300
         return fast_udiv_56(n);
+    } else if constexpr (d == 63) {
+        return fast_udiv_63(n);
     } else if constexpr (d == 70) {
         return fast_udiv_70(n);
     } else if constexpr (d == 72) {
@@ -124,49 +126,8 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 140) {
         return fast_udiv_140(n);
     } else {
-        // generic divide from llvm
-        const unsigned n_uword_bits = sizeof(uint32_t) * CHAR_BIT;
-        unsigned int q;
-        unsigned int r;
-        unsigned sr;
-        /* special cases */
-        if (d == 0) {
-            return 0; /* ?! */
-        }
-        if (n == 0) {
-            return 0;
-        }
-        sr = __builtin_clz(d) - __builtin_clz(n);
-        /* 0 <= sr <= n_uword_bits - 1 or sr large */
-        if (sr > n_uword_bits - 1) { /* d > r */
-            return 0;
-        }
-        if (sr == n_uword_bits - 1) { /* d == 1 */
-            return n;
-        }
-        ++sr;
-        /* 1 <= sr <= n_uword_bits - 1 */
-        /* Not a special case */
-        q = n << (n_uword_bits - sr);
-        r = n >> sr;
-        unsigned int carry = 0;
-        for (; sr > 0; --sr) {
-            /* r:q = ((r:q)  << 1) | carry */
-            r = (r << 1) | (q >> (n_uword_bits - 1));
-            q = (q << 1) | carry;
-            /* carry = 0;
-             * if (r.all >= d.all)
-             * {
-             *      r.all -= d.all;
-             *      carry = 1;
-             * }
-             */
-            const int s = (unsigned int)(d - r - 1) >> (n_uword_bits - 1);
-            carry = s & 1;
-            r -= d & s;
-        }
-        q = (q << 1) | carry;
-        return q;
+        // Fallback to division instruction. This takes six to 33 cycles on WH/BH.
+        return n / d;
     }
 }
 template <uint32_t d>

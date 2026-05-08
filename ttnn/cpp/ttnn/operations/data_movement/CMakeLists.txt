@@ -56,7 +56,9 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
-            copy/device/copy_program_factory.hpp
+            copy/device/copy_same_memory_config_program_factory.hpp
+            copy/device/copy_default_row_major_program_factory.hpp
+            copy/device/copy_default_tilized_program_factory.hpp
             copy/device/copy_device_operation_types.hpp
             fill_pad/fill_pad.hpp
             fill_pad/device/fill_pad_device_operation.hpp
@@ -150,7 +152,6 @@ target_sources(
             gather/gather_nanobind.hpp
             gather/device/gather_device_operation.hpp
             gather/device/gather_device_operation_types.hpp
-            gather/device/gather_program_factory.hpp
             gather/tosa/gather_tosa.hpp
             gather/tosa/gather_tosa_nanobind.hpp
             # indexed_fill/
@@ -159,6 +160,7 @@ target_sources(
             indexed_fill/device/indexed_fill_device_operation.hpp
             indexed_fill/device/indexed_fill_device_operation_types.hpp
             indexed_fill/device/indexed_fill_program_factory.hpp
+            indexed_fill/device/indexed_fill_utils.hpp
             # moe_expert_token_remap/
             moe_expert_token_remap/moe_expert_token_remap.hpp
             moe_expert_token_remap/moe_expert_token_remap_nanobind.hpp
@@ -315,6 +317,7 @@ target_sources(
             transpose/device/transpose_hc_tiled_program_factory.hpp
             transpose/device/transpose_wh_program_factory.hpp
             transpose/device/transpose_wh_sharded_program_factory.hpp
+            transpose/device/transpose_utils.hpp
             transpose/device/transpose_wh_sharded_rm_program_factory.hpp
             # unsqueeze/
             unsqueeze/unsqueeze.hpp
@@ -368,7 +371,9 @@ target_sources(
         concat/device/concat_s2i_program_factory.cpp
         copy/copy.cpp
         copy/device/copy_device_operation.cpp
-        copy/device/copy_program_factory.cpp
+        copy/device/copy_same_memory_config_program_factory.cpp
+        copy/device/copy_default_row_major_program_factory.cpp
+        copy/device/copy_default_tilized_program_factory.cpp
         expand/expand.cpp
         fill_pad/device/fill_pad_device_operation.cpp
         fill_pad/device/fill_pad_program_factory.cpp
@@ -382,6 +387,7 @@ target_sources(
         fold/fold.cpp
         indexed_fill/device/indexed_fill_device_operation.cpp
         indexed_fill/device/indexed_fill_program_factory.cpp
+        indexed_fill/device/indexed_fill_utils.cpp
         indexed_fill/indexed_fill.cpp
         moe_expert_token_remap/moe_expert_token_remap.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
@@ -394,6 +400,7 @@ target_sources(
         move/device/move_overlap_program_factory.cpp
         move/device/move_sharded_program_factory.cpp
         move/move.cpp
+        narrow/narrow.cpp
         non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
         non_zero_indices/non_zero_indices.cpp
@@ -483,6 +490,7 @@ target_sources(
         transpose/device/transpose_hc_tiled_program_factory.cpp
         transpose/device/transpose_wh_program_factory.cpp
         transpose/device/transpose_wh_sharded_program_factory.cpp
+        transpose/device/transpose_utils.cpp
         transpose/device/transpose_wh_sharded_rm_program_factory.cpp
         transpose/transpose.cpp
         unsqueeze/unsqueeze.cpp
