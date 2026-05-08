@@ -37,6 +37,7 @@ ResolvedBindings resolve_bindings(
     // so we fall back to the slow path (rebuild the descriptor) when this happens.
     {
         std::unordered_set<Buffer*> seen;
+        seen.reserve(tensor_buffers.size());
         for (Buffer* buf : tensor_buffers) {
             if (buf && !seen.insert(buf).second) {
                 return ResolvedBindings{};
