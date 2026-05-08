@@ -159,42 +159,62 @@ class TTSeamlessM4Tv2Encoder:
 
     def forward(
         self,
-        input_ids: ttnn.Tensor,
+        input_ids: Optional[ttnn.Tensor],
         position_ids: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
+        *,
+        inputs_embeds: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Args:
-            input_ids: ``uint32`` ``[batch, seq]`` on device.
-            position_ids: ``uint32`` ``[batch, seq]`` on device.
+            input_ids: ``uint32`` ``[batch, seq]`` on device (mutually exclusive with ``inputs_embeds``).
+            position_ids: ``uint32`` ``[batch, seq]`` on device (sinusoidal table indices).
             attention_mask: optional additive mask ``[batch, 1, seq, seq]`` (bfloat16).
+            inputs_embeds: optional ``bfloat16`` ``[batch, seq, hidden_size]`` on device; matches HF
+                ``SeamlessM4Tv2Encoder`` when ``inputs_embeds`` is passed instead of ``input_ids``.
 
         Returns:
             Last hidden states ``bfloat16`` ``[batch, seq, hidden_size]`` on device.
         """
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("Specify only one of input_ids or inputs_embeds.")
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("One of input_ids or inputs_embeds is required.")
+
         parameters = self.parameters
         num_heads = self.num_attention_heads
         hidden_size = self.hidden_size
         head_dim = hidden_size // num_heads
         num_layers = self.num_hidden_layers
 
-        batch = int(input_ids.shape[0])
-        seq = int(input_ids.shape[1])
+        if inputs_embeds is not None:
+            batch = int(inputs_embeds.shape[0])
+            seq = int(inputs_embeds.shape[1])
+            pos = ttnn.embedding(
+                position_ids,
+                weight=parameters.embed_positions.weight,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            hidden = ttnn.add(inputs_embeds, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pos)
+        else:
+            batch = int(input_ids.shape[0])  # type: ignore[union-attr]
+            seq = int(input_ids.shape[1])
 
-        tok = ttnn.embedding(
-            input_ids,
-            weight=parameters.embed_tokens.weight,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        pos = ttnn.embedding(
-            position_ids,
-            weight=parameters.embed_positions.weight,
-            layout=ttnn.TILE_LAYOUT,
-        )
+            tok = ttnn.embedding(
+                input_ids,
+                weight=parameters.embed_tokens.weight,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            pos = ttnn.embedding(
+                position_ids,
+                weight=parameters.embed_positions.weight,
+                layout=ttnn.TILE_LAYOUT,
+            )
 
-        hidden = ttnn.add(tok, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(tok)
-        ttnn.deallocate(pos)
+            hidden = ttnn.add(tok, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(tok)
+            ttnn.deallocate(pos)
 
         sdpa_self = self._sdpa_program_config(seq, seq)
 

@@ -81,11 +81,19 @@ class TTSeamlessM4Tv2Decoder:
             packer_l1_acc=True,
         )
 
-    def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
-        # Keep chunks aligned to the actual sequence envelope; forcing 64 for short prefill (seq=32)
-        # can over-tile SDPA and add avoidable orchestration overhead.
-        q_chunk = max(32, min(256, nearest_32(seq_q)))
-        k_chunk = max(32, min(256, nearest_32(seq_k)))
+    def _sdpa_program_config(self, seq_q: int, seq_k: int, *, large_chunks: bool = True) -> ttnn.SDPAProgramConfig:
+        """Chunk sizes for ``ttnn.transformer.scaled_dot_product_attention``.
+
+        Long sequences use Whisper-style 64-wide chunks to limit bf16 drift. Short *encoder* keys
+        (speech after adaptor subsampling, often ``< 32``) must not force ``k_chunk=64`` against a
+        narrow key sequence; that schedule misaligns SDPA with PyTorch and tanks full-model speech PCC.
+        """
+        if large_chunks:
+            q_chunk = max(64, min(256, nearest_32(seq_q)))
+            k_chunk = max(64, min(256, nearest_32(seq_k)))
+        else:
+            q_chunk = max(32, min(256, nearest_32(seq_q)))
+            k_chunk = max(32, min(256, nearest_32(seq_k)))
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
@@ -207,23 +215,32 @@ class TTSeamlessM4Tv2Decoder:
 
     def forward(
         self,
-        input_ids: ttnn.Tensor,
+        input_ids: Optional[ttnn.Tensor],
         position_ids: ttnn.Tensor,
         encoder_hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor,
         cross_attention_mask: Optional[ttnn.Tensor] = None,
+        *,
+        inputs_embeds: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Args:
-            input_ids: ``uint32`` ``[batch, seq]`` on device.
+            input_ids: ``uint32`` ``[batch, seq]`` on device (mutually exclusive with ``inputs_embeds``).
             position_ids: ``uint32`` ``[batch, seq]`` on device (sinusoidal table indices).
             encoder_hidden_states: ``bfloat16`` ``[batch, enc_seq, hidden_size]`` on device.
             causal_attention_mask: ``bfloat16`` additive mask ``[batch, 1, seq, seq]`` on device.
-            cross_attention_mask: optional ``bfloat16`` ``[batch, 1, seq, enc_seq]`` on device.
+            cross_attention_mask: optional ``bfloat16`` ``[batch, 1, seq, enc_seq]`` on device; when
+                ``None``, cross-attention runs with no additive mask (all encoder keys visible).
+            inputs_embeds: optional decoder ``bfloat16`` ``[batch, seq, hidden_size]`` (HF ``decoder_inputs_embeds``).
 
         Returns:
             Last hidden states ``bfloat16`` ``[batch, seq, hidden_size]`` on device (after ``decoder.layer_norm``).
         """
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("Specify only one of input_ids or inputs_embeds.")
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("One of input_ids or inputs_embeds is required.")
+
         device = self.device
         parameters = self.parameters
         num_heads = self.num_attention_heads
@@ -231,29 +248,40 @@ class TTSeamlessM4Tv2Decoder:
         head_dim = hidden_size // num_heads
         num_layers = self.num_hidden_layers
 
-        batch = int(input_ids.shape[0])
-        seq = int(input_ids.shape[1])
         enc_seq = int(encoder_hidden_states.shape[1])
 
-        tok = ttnn.embedding(
-            input_ids,
-            weight=parameters.embed_tokens.weight,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        pos = ttnn.embedding(
-            position_ids,
-            weight=parameters.embed_positions.weight,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if inputs_embeds is not None:
+            batch = int(inputs_embeds.shape[0])
+            seq = int(inputs_embeds.shape[1])
+            pos = ttnn.embedding(
+                position_ids,
+                weight=parameters.embed_positions.weight,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            hidden = ttnn.add(inputs_embeds, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pos)
+        else:
+            batch = int(input_ids.shape[0])  # type: ignore[union-attr]
+            seq = int(input_ids.shape[1])
+            tok = ttnn.embedding(
+                input_ids,
+                weight=parameters.embed_tokens.weight,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            pos = ttnn.embedding(
+                position_ids,
+                weight=parameters.embed_positions.weight,
+                layout=ttnn.TILE_LAYOUT,
+            )
 
-        hidden = ttnn.add(tok, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(tok)
-        ttnn.deallocate(pos)
+            hidden = ttnn.add(tok, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(tok)
+            ttnn.deallocate(pos)
 
-        sdpa_self = self._sdpa_program_config(seq, seq)
-        sdpa_cross = self._sdpa_program_config(seq, enc_seq)
+        sdpa_self = self._sdpa_program_config(seq, seq, large_chunks=True)
+        # Cross-attn over subsampled speech (``enc_seq`` ~7) keeps ``nearest_32(enc_seq)`` small; do not
+        # promote to 64-wide K chunks or parity vs HF logits collapses.
+        sdpa_cross = self._sdpa_program_config(seq, enc_seq, large_chunks=(enc_seq >= 32))
 
         for i in range(num_layers):
             layer = parameters.layers[i]
