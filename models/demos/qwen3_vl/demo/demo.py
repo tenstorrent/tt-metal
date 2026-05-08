@@ -106,7 +106,7 @@ def create_tt_model(
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/qwen3_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             4096,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -119,7 +119,7 @@ def create_tt_model(
         (  # Batch-32 run (Throughput) - 32 users, small prompts
             "models/demos/qwen3_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
+            2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
             32,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -145,7 +145,7 @@ def create_tt_model(
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
             "models/demos/qwen3_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
+            2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -158,7 +158,7 @@ def create_tt_model(
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             16384,  # max_seq_len, allow for image tokens
             4,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -171,7 +171,7 @@ def create_tt_model(
         (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             32768,  # max_seq_len, allow for image tokens
             2,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -184,7 +184,7 @@ def create_tt_model(
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             65536,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -197,7 +197,7 @@ def create_tt_model(
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             131072,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -536,33 +536,18 @@ def test_demo(
             else:
                 page_table_user = None
 
-            # Warmup/compile on first user
-            if user_id == 0:
-                profiler.start(f"compile_prefill", iteration=batch_idx)
-                logits = generator.prefill_forward_single_user_text(
-                    ttnn.unsqueeze(input_prefill, 0),
-                    page_table=page_table_user,
-                    user_id=user_id,
-                    last_token_idx=decoding_pos - 1,
-                    rot_mats=(cos, sin),
-                    kv_cache=tt_kv_cache,
-                    deepstack_visual_embeds=deepstack_visual_embeds_processed,
-                )
-                profiler.end(f"compile_prefill", iteration=batch_idx)
-
             # Run prefill for this user (timed per-user)
-            else:
-                profiler.start(f"inference_prefill_user_{user_id}", iteration=batch_idx)
-                logits = generator.prefill_forward_single_user_text(
-                    ttnn.unsqueeze(input_prefill, 0),
-                    page_table=page_table_user,
-                    user_id=user_id,
-                    last_token_idx=decoding_pos - 1,
-                    rot_mats=(cos, sin),
-                    kv_cache=tt_kv_cache,
-                    deepstack_visual_embeds=deepstack_visual_embeds_processed,
-                )
-                profiler.end(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+            profiler.start(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+            logits = generator.prefill_forward_single_user_text(
+                ttnn.unsqueeze(input_prefill, 0),
+                page_table=page_table_user,
+                user_id=user_id,
+                last_token_idx=decoding_pos - 1,
+                rot_mats=(cos, sin),
+                kv_cache=tt_kv_cache,
+                deepstack_visual_embeds=deepstack_visual_embeds_processed,
+            )
+            profiler.end(f"inference_prefill_user_{user_id}", iteration=batch_idx)
             output_logits[user_id] = logits
 
             # === DEALLOCATE === (free memory before next user)
@@ -754,23 +739,22 @@ def test_demo(
         assert F10.mean().item() > 0.70, f"BERTScore F1 (raw) is lower than expected."
 
     # Prepare profile benchmark metrics for the last repeat batch only -- batch_idx'th batch
-    compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
     compile_decode_time = profiler.get_duration("compile_decode", iteration=batch_idx)
 
     # Sum up per-user prefill times (excludes vision model time)
     total_inference_prefill_time = sum(
-        profiler.get_duration(f"inference_prefill_user_{i}", iteration=batch_idx) for i in range(1, batch_size)
+        profiler.get_duration(f"inference_prefill_user_{i}", iteration=batch_idx) for i in range(batch_size)
     )
     total_inference_decode_time = 0
     for i in range(1, iteration):  # i == 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
 
     # Average prefill time for each user (text prefill only, excludes vision)
-    avg_time_to_first_token = total_inference_prefill_time / (batch_size - 1)
+    avg_time_to_first_token = total_inference_prefill_time / (batch_size)
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * (batch_size - 1)
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * (batch_size)
     decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
@@ -789,7 +773,6 @@ def test_demo(
         "vision_model_prefill": vision_model_time,
         "vision_model_prefill time per user": vision_model_time_per_user,
         "vision_model_prefill time per user per token": vision_model_t_u_s,
-        "compile_prefill": compile_prefill_time,
         "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
         "inference_prefill time per user": avg_time_to_first_token,
@@ -799,7 +782,6 @@ def test_demo(
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
         # Optional measurements
-        "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
 
