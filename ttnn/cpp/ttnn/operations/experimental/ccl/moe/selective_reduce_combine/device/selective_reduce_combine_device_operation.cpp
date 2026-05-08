@@ -39,6 +39,8 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const uint32_t expected_activations_stride_elm =
         tt::align((2 * experts_per_device + 1) * datum_size, alignment) / datum_size;
 
+    TT_FATAL(operation_attributes.axis.has_value(), "Cluster axis must be specified");
+
     TT_FATAL(
         activations_stride_elm == expected_activations_stride_elm,
         "The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token");
