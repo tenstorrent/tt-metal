@@ -4,8 +4,10 @@ on:
   workflow_call:
     inputs:
       docker-image:
-        required: true
+        required: false
         type: string
+        default: "ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:latest"
+        description: "Worker image for multihost TTOP environments (reset + test pods)"
       build-artifact-name:
         required: true
         type: string
