@@ -654,7 +654,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     bool run_global_discovery,
     bool run_live_discovery) {
 
-    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr = 
+    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr =
         (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
             // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
             tt::umd::Cluster::create_cluster_descriptor() :
