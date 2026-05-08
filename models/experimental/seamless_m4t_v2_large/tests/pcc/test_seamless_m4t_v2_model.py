@@ -5,8 +5,9 @@
 
 This module defines **two** pytest tests:
 
-1. **``test_torch_hf_reference_vs_ttnn_forward``** — ``forward()``: HF torch vs TTNN for **text** then **speech** logits (same file, one test).
-2. **``test_torch_hf_reference_vs_ttnn_generate``** — ``generate()``: HF torch vs TTNN (text-only greedy prefix).
+1. **``test_torch_hf_reference_vs_ttnn_forward``** — ``forward()``: HF torch vs TTNN for **text** then **speech** logits (one test).
+2. **``test_torch_hf_reference_vs_ttnn_forward_speech_modality``** — same **speech** logits check alone (skips text).
+3. **``test_torch_hf_reference_vs_ttnn_generate``** — ``generate()``: HF torch vs TTNN (text-only greedy prefix).
 
 Readback to torch is only for assertions; the port under test is TTNN.
 """
@@ -133,6 +134,57 @@ def _random_text_forward_inputs(
     return input_ids, enc_attn, decoder_input_ids, dec_attn
 
 
+def _assert_forward_speech_modality_logits_pcc(
+    device: ttnn.Device,
+    model: torch.nn.Module,
+    tt_model: TTSeamlessM4Tv2Model,
+    dev: torch.device,
+    processor: Any,
+    decoder_input_ids: torch.Tensor,
+    dec_attn: torch.Tensor,
+) -> None:
+    """HF vs TTNN ``forward()`` speech path: processor mel + given decoder ids → logits PCC."""
+    torch.manual_seed(0)
+    sampling_rate = 16_000
+    wav = torch.randn(1, sampling_rate, dtype=torch.float32) * 0.01
+    audio_inputs = processor(audios=wav, sampling_rate=sampling_rate, return_tensors="pt")
+    input_features = audio_inputs["input_features"].to(dev, dtype=torch.bfloat16)
+    enc_attn_s = audio_inputs["attention_mask"].to(dev, dtype=torch.long)
+
+    with torch.no_grad():
+        ref_out_speech = model(
+            input_features=input_features,
+            attention_mask=enc_attn_s,
+            decoder_input_ids=decoder_input_ids,
+            decoder_attention_mask=dec_attn,
+            use_cache=False,
+            return_dict=True,
+        )
+    ref_logits_speech = ref_out_speech.logits.to(torch.bfloat16).cpu().float()
+
+    feats_tt = ttnn.from_torch(
+        input_features.cpu().contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    enc_attn_tt = torch_token_ids_to_ttnn(device, enc_attn_s.cpu())
+    out_speech = tt_model.forward(
+        input_features=feats_tt,
+        attention_mask=enc_attn_tt,
+        decoder_input_ids=torch_token_ids_to_ttnn(device, decoder_input_ids),
+        decoder_attention_mask=torch_token_ids_to_ttnn(device, dec_attn),
+        use_cache=False,
+        return_dict=True,
+    )
+    assert_pcc_torch_reference_vs_ttnn_logits(
+        ref_logits_speech,
+        out_speech.logits,
+        context="forward() speech modality (torch ref vs ttnn)",
+    )
+
+
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 def test_torch_hf_reference_vs_ttnn_forward(device, reset_seeds):
@@ -189,48 +241,37 @@ def test_torch_hf_reference_vs_ttnn_forward(device, reset_seeds):
     )
 
     # --- Speech modality (``processor(audios=..., sampling_rate=16_000)`` like ``demo/torch_demo.py``) ---
-    torch.manual_seed(0)
-    sampling_rate = 16_000
-    # Short mono clip at 16 kHz (same rate as the demo after ``resample_waveform``).
-    wav = torch.randn(1, sampling_rate, dtype=torch.float32) * 0.01
-    audio_inputs = processor(audios=wav, sampling_rate=sampling_rate, return_tensors="pt")
-    input_features = audio_inputs["input_features"].to(dev, dtype=torch.bfloat16)
-    enc_attn_s = audio_inputs["attention_mask"].to(dev, dtype=torch.long)
-    # Reuse the text-branch decoder ids so speech PCC isolates the speech encoder + cross-attn path.
-    decoder_input_ids_s = decoder_input_ids
-    dec_attn_s = dec_attn
-
-    with torch.no_grad():
-        ref_out_speech = model(
-            input_features=input_features,
-            attention_mask=enc_attn_s,
-            decoder_input_ids=decoder_input_ids_s,
-            decoder_attention_mask=dec_attn_s,
-            use_cache=False,
-            return_dict=True,
-        )
-    ref_logits_speech = ref_out_speech.logits.to(torch.bfloat16).cpu().float()
-
-    feats_tt = ttnn.from_torch(
-        input_features.cpu().contiguous(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    _assert_forward_speech_modality_logits_pcc(
+        device,
+        model,
+        tt_model,
+        dev,
+        processor,
+        decoder_input_ids,
+        dec_attn,
     )
-    enc_attn_tt = torch_token_ids_to_ttnn(device, enc_attn_s.cpu())
-    out_speech = tt_model.forward(
-        input_features=feats_tt,
-        attention_mask=enc_attn_tt,
-        decoder_input_ids=torch_token_ids_to_ttnn(device, decoder_input_ids_s),
-        decoder_attention_mask=torch_token_ids_to_ttnn(device, dec_attn_s),
-        use_cache=False,
-        return_dict=True,
-    )
-    assert_pcc_torch_reference_vs_ttnn_logits(
-        ref_logits_speech,
-        out_speech.logits,
-        context="forward() speech modality (torch ref vs ttnn)",
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_torch_hf_reference_vs_ttnn_forward_speech_modality(device, reset_seeds):
+    """``forward()`` speech modality only: same PCC check as the second half of ``test_torch_hf_reference_vs_ttnn_forward``."""
+    _ = reset_seeds
+    weights_dir = _weights_dir_or_skip()
+    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
+    t2u_cfg = model.t2u_model.config
+    dev = next(model.parameters()).device
+    tt_model = make_tt_seamless_m4tv2_model(device, model, cfg, t2u_cfg)
+    processor = AutoProcessor.from_pretrained(os.fspath(weights_dir), local_files_only=True)
+    _, _, decoder_input_ids, dec_attn = _random_text_forward_inputs(cfg, dev, batch=1, enc_seq=32, dec_seq=32, seed=1)
+    _assert_forward_speech_modality_logits_pcc(
+        device,
+        model,
+        tt_model,
+        dev,
+        processor,
+        decoder_input_ids,
+        dec_attn,
     )
 
 
