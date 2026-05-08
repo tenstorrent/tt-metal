@@ -1065,6 +1065,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 video_planar = fast_device_to_host_yuv(
                     tt_video_BCTHW,
                     self.mesh_device,
+                    ccl_manager=self.vae_ccl_manager,
                     logical_h=new_logical_h,
                 )
                 video = video_planar[None]  # (1, T, planar_bytes)
