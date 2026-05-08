@@ -317,7 +317,7 @@ def eltwise_rsqrt(
         t0 = t0.to(ttnn.TILE_LAYOUT)
         t0 = t0.to(device)
         t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
-        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape)
+        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     return tt2torch_tensor(t1)
 
