@@ -292,12 +292,14 @@ class TestFastDeviceToHost:
         expected[:, hw + uv :] = ref_Cr.permute(2, 0, 1).reshape(T, uv).numpy()
 
         tt_tensor = _shard_to_device(ref_bcthw, mesh_device)
-        actual = fast_device_to_host_yuv(tt_tensor, mesh_device, debug=True)
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+        actual = fast_device_to_host_yuv(tt_tensor, mesh_device, ccl_manager=ccl_manager, debug=True)
 
         rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
         if rank != 0:
             return
 
+        assert actual is not None, f"Rank {rank} got None from fast_device_to_host_yuv"
         assert actual.shape == expected.shape, f"shape: {actual.shape} vs {expected.shape}"
 
         diff = np.abs(actual.astype(np.int32) - expected.astype(np.int32))
@@ -322,14 +324,15 @@ class TestFastDeviceToHost:
         gen = torch.Generator().manual_seed(42)
         ref_bcthw = torch.rand(B, C, T, height, width, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
         tt_tensor = _shard_to_device(ref_bcthw, mesh_device)
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
         # Warmup (also forces program cache population).
-        fast_device_to_host_yuv(tt_tensor, mesh_device)
+        fast_device_to_host_yuv(tt_tensor, mesh_device, ccl_manager=ccl_manager)
         ttnn.synchronize_device(mesh_device)
 
         start = time.perf_counter()
         for _ in range(n_iters):
-            fast_device_to_host_yuv(tt_tensor, mesh_device)
+            fast_device_to_host_yuv(tt_tensor, mesh_device, ccl_manager=ccl_manager)
         ttnn.synchronize_device(mesh_device)
         end = time.perf_counter()
 

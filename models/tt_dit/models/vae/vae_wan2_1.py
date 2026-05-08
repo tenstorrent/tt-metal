@@ -2032,6 +2032,7 @@ class WanVAEDecoderAdapter:
             return fast_device_to_host_yuv(
                 tt_video_BCTHW,
                 self.device,
+                ccl_manager=self._ccl_manager,
                 logical_h=new_logical_h,
             )
 
