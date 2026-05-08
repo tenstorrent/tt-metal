@@ -20,7 +20,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import ttnn
 from models.demos.kokoro.tt.ttnn_kokoro_conv import Conv1dParams, conv1d_nlc, weight_norm_weight
@@ -84,13 +83,8 @@ class AdainResBlk1dParams:
     norm2: AdaIN1dParams
     conv1x1: Optional[Conv1dParams]
     upsample: bool
-    # Use host ConvTranspose1d for upsample for now (TT conv_transpose2d path has shape constraints)
-    pool_weight: Optional[torch.Tensor]  # [C,1,k] depthwise
-    pool_bias: Optional[torch.Tensor]
-    pool_stride: int
-    pool_padding: int
-    pool_output_padding: int
-    pool_groups: int
+    # Depthwise ConvTranspose1d(k=3,s=2,p=1,op=1) == conv1d(zero_insert(x), flip(w), p=1, groups=C)
+    pool_conv: Optional[Conv1dParams]
 
 
 def _preprocess_adain_resblk_1d(
@@ -142,20 +136,35 @@ def _preprocess_adain_resblk_1d(
     upsample = getattr(block, "upsample_type", "none") != "none"
     # Note: reference uses a depthwise ConvTranspose1d pool. TTNN conv_transpose2d-based path
     # currently has shape/reshape constraints; run the depthwise pool on host for correctness.
-    pool_weight = None
-    pool_bias = None
-    pool_stride = 1
-    pool_padding = 0
-    pool_output_padding = 0
-    pool_groups = 1
+    pool_conv = None
     if upsample:
         convt = block.pool
-        pool_weight = weight_norm_weight(convt.weight_v.detach().cpu(), convt.weight_g.detach().cpu())  # [C,1,k]
-        pool_bias = convt.bias.detach().cpu() if convt.bias is not None else None
-        pool_stride = convt.stride[0]
-        pool_padding = convt.padding[0]
-        pool_output_padding = convt.output_padding[0]
-        pool_groups = convt.groups
+        assert (
+            convt.kernel_size[0] == 3
+            and convt.stride[0] == 2
+            and convt.padding[0] == 1
+            and convt.output_padding[0] == 1
+        )
+        assert convt.groups == convt.in_channels == convt.out_channels
+        w = weight_norm_weight(convt.weight_v.detach().cpu(), convt.weight_g.detach().cpu())  # [C,1,3]
+        w = torch.flip(w, dims=[2])
+        b = convt.bias.detach().cpu() if convt.bias is not None else None
+        w_tt = ttnn.from_torch(w, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        b_tt = (
+            ttnn.from_torch(b.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+            if b is not None
+            else None
+        )
+        pool_conv = Conv1dParams(
+            weight=w_tt,
+            bias=b_tt,
+            in_channels=convt.in_channels,
+            out_channels=convt.out_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            groups=convt.groups,
+        )
 
     conv1 = conv1d_params(block.conv1)
     conv2 = conv1d_params(block.conv2)
@@ -169,12 +178,7 @@ def _preprocess_adain_resblk_1d(
         norm2=norm2,
         conv1x1=conv1x1,
         upsample=upsample,
-        pool_weight=pool_weight,
-        pool_bias=pool_bias,
-        pool_stride=pool_stride,
-        pool_padding=pool_padding,
-        pool_output_padding=pool_output_padding,
-        pool_groups=pool_groups,
+        pool_conv=pool_conv,
     )
 
 
@@ -201,17 +205,18 @@ def _adain_resblk1d_forward_bcl(
     y = ttnn.leaky_relu(y, negative_slope=0.2)
     if params.upsample:
         # Reference residual uses depthwise ConvTranspose1d pool before conv1
-        yy = ttnn.to_torch(y).to(torch.float32).permute(0, 2, 1)  # [B,C,L]
-        yy = F.conv_transpose1d(
-            yy,
-            weight=params.pool_weight.to(yy.dtype),
-            bias=params.pool_bias.to(yy.dtype) if params.pool_bias is not None else None,
-            stride=params.pool_stride,
-            padding=params.pool_padding,
-            output_padding=params.pool_output_padding,
-            groups=params.pool_groups,
-        )
-        y = ttnn.from_torch(yy.permute(0, 2, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        assert params.pool_conv is not None
+        # zero-insert upsample by 2: [x0,0,x1,0,...], then depthwise conv1d with flipped kernel
+        zeros = ttnn.zeros(y.shape, dtype=y.dtype, layout=y.layout, device=device)
+        y2 = ttnn.reshape(y, [y.shape[0], y.shape[1], 1, y.shape[2]])
+        z2 = ttnn.reshape(zeros, [zeros.shape[0], zeros.shape[1], 1, zeros.shape[2]])
+        y = ttnn.concat([y2, z2], dim=2)
+        # y is [B, L, 2, C] -> [B, 2L, C]
+        y = ttnn.reshape(y, [y.shape[0], y.shape[1] * 2, y.shape[3]])
+        ttnn.deallocate(zeros)
+        ttnn.deallocate(y2)
+        ttnn.deallocate(z2)
+        y = conv1d_nlc(x_nlc=y, params=params.pool_conv, device=device, compute_config=compute_kernel_config)
     y = conv1d_nlc(x_nlc=y, params=params.conv1, device=device, compute_config=compute_kernel_config)
     y = adain_1d_nlc(x_nlc=y, s_bc=style_bs, params=params.norm2, compute_kernel_config=compute_kernel_config)
     y = ttnn.leaky_relu(y, negative_slope=0.2)
