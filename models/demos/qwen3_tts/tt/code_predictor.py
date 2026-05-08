@@ -173,8 +173,11 @@ class CodePredictor(LightweightModule):
             if lm_head_key in state_dict:
                 self.lm_heads.append(_linear_weight_to_matmul_4d(state_dict[lm_head_key], f"cp_lm_head_{g}"))
 
+        import os as _os_fid
+
+        _hi_fi = _os_fid.environ.get("TT_QWEN3_HIFI4", "0") == "1"
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4 if _hi_fi else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

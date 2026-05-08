@@ -229,8 +229,11 @@ class Attention(LightweightModule):
                 mesh_mapper=_mesh_mapper,
             )
 
+        import os as _os_fid
+
+        _hi_fi = _os_fid.environ.get("TT_QWEN3_HIFI4", "0") == "1"
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4 if _hi_fi else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -270,7 +273,7 @@ class Attention(LightweightModule):
 
         # RoPE (P3): default kernel was HiFi4; LoFi + explicit L1 matches linears and avoids DRAM spill.
         self.rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4 if _hi_fi else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -663,6 +666,16 @@ class Attention(LightweightModule):
                     v_paged_hs = ttnn.transpose(v, 1, 2, memory_config=self.paged_v_input_mem_config)
                     ttnn.deallocate(k)
                     ttnn.deallocate(v)
+                    # Typecast K/V to cache dtype if cache is higher precision (e.g. fp32).
+                    # paged_fused_update_cache requires matching dtypes between input and cache.
+                    if k_paged_hs.dtype != k_cache.dtype:
+                        k_paged_typed = ttnn.typecast(k_paged_hs, dtype=k_cache.dtype)
+                        ttnn.deallocate(k_paged_hs)
+                        k_paged_hs = k_paged_typed
+                    if v_paged_hs.dtype != v_cache.dtype:
+                        v_paged_typed = ttnn.typecast(v_paged_hs, dtype=v_cache.dtype)
+                        ttnn.deallocate(v_paged_hs)
+                        v_paged_hs = v_paged_typed
                     # Write K + V to cache at cur_pos_tensor position. The fused variant
                     # writes both in one kernel launch — saves 1× dispatch overhead per
                     # layer compared to two separate paged_update_cache calls. Same op
@@ -744,8 +757,16 @@ class Attention(LightweightModule):
                 # [B, n_kv, max_seq, D]; fill_cache writes positions [0:k_seq] without
                 # reallocating. Attention itself reads from the freshly projected k/v
                 # (small, fits L1) — the cache is purely a write-through for later decode.
-                ttnn.fill_cache(k_cache, k, 0)
-                ttnn.fill_cache(v_cache, v, 0)
+                # Typecast K/V to cache dtype only for the cache write (do not mutate
+                # the in-flight bf16 K/V used by the prefill SDPA below).
+                k_to_write = k if k.dtype == k_cache.dtype else ttnn.typecast(k, dtype=k_cache.dtype)
+                v_to_write = v if v.dtype == v_cache.dtype else ttnn.typecast(v, dtype=v_cache.dtype)
+                ttnn.fill_cache(k_cache, k_to_write, 0)
+                ttnn.fill_cache(v_cache, v_to_write, 0)
+                if k_to_write is not k:
+                    ttnn.deallocate(k_to_write)
+                if v_to_write is not v:
+                    ttnn.deallocate(v_to_write)
 
             updated_kv_cache = (k_cache, v_cache)
 
