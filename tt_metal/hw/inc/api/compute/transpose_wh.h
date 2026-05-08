@@ -61,7 +61,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
 #else
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet
+    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK((llk_unpack_A_init<true /*transpose*/, DST_ACCUM_MODE>(icb)));
 
@@ -106,7 +106,7 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
 #else
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet
+    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
     UNPACK((llk_unpack_A_init<true /*transpose*/, DST_ACCUM_MODE>(icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
@@ -153,7 +153,7 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #else
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet
+    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
     UNPACK((llk_unpack_A(icb, itile)));
     MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
 #endif
