@@ -57,7 +57,7 @@ inline void dump_fabric_telemetry_on_failure(
             mesh->num_devices());
 
         for (const auto& coord : distributed::MeshCoordinateRange(shape)) {
-            tt::tt_fabric::FabricNodeId node_id;
+            tt::tt_fabric::FabricNodeId node_id(tt::tt_fabric::MeshId{0}, 0);
             try {
                 node_id = mesh->get_fabric_node_id(coord);
             } catch (const std::exception& e) {
@@ -143,7 +143,7 @@ inline std::vector<FabricDeviceBaseline> capture_fabric_telemetry_baseline(
     try {
         const auto& shape = mesh->shape();
         for (const auto& coord : distributed::MeshCoordinateRange(shape)) {
-            tt::tt_fabric::FabricNodeId node_id;
+            tt::tt_fabric::FabricNodeId node_id(tt::tt_fabric::MeshId{0}, 0);
             try {
                 node_id = mesh->get_fabric_node_id(coord);
             } catch (...) {
@@ -198,7 +198,7 @@ inline void compare_fabric_telemetry_baseline(
 
         const auto& shape = mesh->shape();
         for (const auto& coord : distributed::MeshCoordinateRange(shape)) {
-            tt::tt_fabric::FabricNodeId node_id;
+            tt::tt_fabric::FabricNodeId node_id(tt::tt_fabric::MeshId{0}, 0);
             try {
                 node_id = mesh->get_fabric_node_id(coord);
             } catch (...) {
