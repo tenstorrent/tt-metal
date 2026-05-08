@@ -18,7 +18,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     // Skip if simulator is not available
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {

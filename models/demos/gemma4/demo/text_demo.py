@@ -13,6 +13,7 @@ Usage:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600 -k "test_demo"
 """
 
+import gc
 import os
 import time
 
@@ -21,11 +22,112 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.model_config import determine_device_name
+
+_TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
+_CONTEXT_CACHE_DIR = "models/tt_transformers/demo/context_cache"
+
+
+def _snap_to_bucket(prompt_len, max_seq_len):
+    """Round prompt length up to the next PREFILL_BUCKETS value within max_seq_len.
+
+    Each bucket corresponds to a separately-compiled prefill kernel; snapping
+    keeps the number of compiled kernel variants finite. Buckets above
+    max_seq_len are filtered, and prompts longer than the largest usable
+    bucket fall back to max_seq_len itself.
+    """
+    usable = [b for b in PREFILL_BUCKETS if b <= max_seq_len]
+    if not usable:
+        raise ValueError(f"max_seq_len={max_seq_len} is below the smallest prefill bucket ({PREFILL_BUCKETS[0]})")
+    for b in usable:
+        if prompt_len <= b:
+            return b
+    return max_seq_len
+
+
+def _shorten_for_log(prompt, head=200, tail=200):
+    """Return a head/tail excerpt for logging; long contexts otherwise flood logs."""
+    if len(prompt) <= head + tail + 50:
+        return prompt
+    return f"{prompt[:head]}\n<long prompt not printed in full ({len(prompt)} chars)>\n{prompt[-tail:]}"
+
+
+def _load_and_cache_context(url, max_chars=None):
+    """Fetch a long-context source from URL with on-disk caching.
+
+    Mirrors tt_transformers' load_and_cache_context: hashes the URL into a
+    cache file, downloads on miss, and clips to max_chars. Reuses the
+    tt_transformers cache so files fetched there are visible here too.
+    """
+    import hashlib
+    from pathlib import Path
+
+    import requests
+
+    cache_dir = Path(_CONTEXT_CACHE_DIR)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / hashlib.md5(url.encode()).hexdigest()
+
+    if cache_file.exists():
+        text = cache_file.read_text()
+    else:
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        text = resp.text
+        cache_file.write_text(text)
+        logger.info(f"Cached context from {url} ({len(text)} chars)")
+
+    if max_chars:
+        text = text[:max_chars]
+    return text
+
+
+def _bucket_to_prompt_file(target_bucket):
+    """Map a prefill bucket length to a tt_transformers sample prompts file.
+
+    Buckets ≤ 256 use the hand-written question prompts; ≥ 1024 use the
+    long-context files (with URL fetch + caching). Sizes between (e.g. 512)
+    fall back to the 256 file and rely on bucket-snap zero-padding.
+    """
+    if target_bucket <= 128:
+        return f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_questions_prefill_128.json"
+    if target_bucket <= 256:
+        return f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_questions_prefill_256.json"
+    if target_bucket < 1024:
+        return f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_questions_prefill_256.json"
+    # Long-context files step in 1k/2k/.../128k. Cap at 128k (the largest
+    # source file); buckets above that reuse the 128k file and bucket-snap
+    # pads to the larger length.
+    long_size = min(target_bucket, 131072)
+    size_k = long_size // 1024
+    return f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_long_{size_k}k.json"
+
+
+def load_demo_prompt(target_bucket, instruct=True):
+    """Load a single prompt suitable for the target prefill bucket.
+
+    Short prompts (≤256) come from the hand-written question files. Long
+    prompts pull a gutenberg-style context via URL (cached), clipped to the
+    file's max_length, then wrapped in a markdown block per the
+    tt_transformers convention when instruct=True.
+    """
+    import json
+
+    path = _bucket_to_prompt_file(target_bucket)
+    with open(path) as f:
+        entry = json.load(f)[0]
+
+    prompt = entry["prompt"]
+    if "context" in entry:
+        max_chars = entry.get("max_length")
+        context = _load_and_cache_context(entry["context"], max_chars=max_chars)
+        prompt = "```" + context + "```\n\n" + prompt if instruct else context
+    return prompt
 
 
 def run_generation(
@@ -37,6 +139,7 @@ def run_generation(
     max_seq_len=4096,
     page_params=None,
     enable_decode_trace=True,
+    target_prefill_len=None,
 ):
     """
     Run text generation with Gemma4.
@@ -49,6 +152,10 @@ def run_generation(
         num_layers: Override layer count (for quick testing)
         max_seq_len: Maximum sequence length (determines KV cache size)
         page_params: Paged attention params dict with "page_block_size" and "page_max_num_blocks"
+        target_prefill_len: If set, force the prefill bucket to this exact length
+            (truncating the tokenized prompt if necessary). Used by the
+            length-parametrized demo tests; otherwise the bucket is chosen
+            dynamically via _snap_to_bucket.
 
     Returns:
         List of generated text strings
@@ -110,7 +217,7 @@ def run_generation(
 
     for prompt_idx, prompt in enumerate(prompts):
         logger.info(f"\n{'='*60}")
-        logger.info(f"Prompt {prompt_idx}: {prompt}")
+        logger.info(f"Prompt {prompt_idx}: {_shorten_for_log(prompt)}")
 
         # Tokenize using chat template for instruct models
         if tokenizer.chat_template:
@@ -123,13 +230,17 @@ def run_generation(
             input_ids = tokenizer.encode(prompt, return_tensors="pt").squeeze(0)
 
         prompt_len = input_ids.shape[0]
-        # Pad to standard prefill lengths (matches tt_transformers/gpt_oss pattern)
-        if prompt_len <= 128:
-            padded_len = 128
-        elif prompt_len <= 1024:
-            padded_len = 1024
+        if target_prefill_len is not None:
+            padded_len = target_prefill_len
         else:
-            padded_len = 2 ** (prompt_len - 1).bit_length()
+            padded_len = _snap_to_bucket(prompt_len, max_seq_len)
+
+        # Tokenized prompt may exceed the chosen bucket (long-context files
+        # tokenize to more tokens than their character cap predicts) — truncate
+        # in that case before zero-padding up to the bucket.
+        if prompt_len > padded_len:
+            input_ids = input_ids[:padded_len]
+            prompt_len = padded_len
         input_ids_padded = torch.nn.functional.pad(input_ids, (0, padded_len - prompt_len), value=0)
         logger.info(f"Prompt tokens: {prompt_len} (padded to {padded_len})")
 
@@ -261,6 +372,7 @@ def run_generation(
                 page_table=page_table_tt,
                 kv_cache=tt_kv_cache,
                 sampling_on_device=on_device_sampling,
+                pli_combined=device_inputs.get("pli"),
             )
 
         def _inputs_to_device(inputs):
@@ -287,86 +399,108 @@ def run_generation(
         )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 
-        # ── Main decode loop (mode-agnostic) ──────────────────────────────
-        for step in range(max_new_tokens - 1):
-            if iteration == 0:
-                profiler.start(f"compile_decode", iteration=prompt_idx)
-            else:
-                profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
+        # Disable Python GC during decode to avoid pause spikes; collect once before.
+        # The decode loop, trace capture, and trace execution all sit inside a try
+        # so that GC is always restored and any captured trace is always released
+        # — otherwise an exception leaves GC disabled for the rest of the pytest
+        # worker (contaminating unrelated tests) and leaks the trace handle.
+        gc.collect()
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
 
-            inputs_h = _make_decode_inputs(next_token, current_pos)
+        try:
+            # ── Main decode loop (mode-agnostic) ──────────────────────────────
+            for step in range(max_new_tokens - 1):
+                if iteration == 0:
+                    profiler.start(f"compile_decode", iteration=prompt_idx)
+                else:
+                    profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
 
-            if enable_decode_trace and trace_id is not None:
-                # ── Traced execution: copy inputs and replay ──
-                _copy_inputs_to_trace(inputs_h)
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-                decode_logits = trace_output
+                t_make_start = time.perf_counter()
+                inputs_h = _make_decode_inputs(next_token, current_pos)
+                t_make_end = time.perf_counter()
 
-            elif enable_decode_trace and iteration == 0:
-                # ── Iteration 0: compile run + trace capture ──
-                # 1. Compile run (un-traced)
-                inputs_d = _inputs_to_device(inputs_h)
-                decode_logits, _ = _fwd(inputs_d)
+                if enable_decode_trace and trace_id is not None:
+                    # ── Traced execution: copy inputs and replay ──
+                    _copy_inputs_to_trace(inputs_h)
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    decode_logits = trace_output
+                    t_enq_end = time.perf_counter()
+
+                elif enable_decode_trace and iteration == 0:
+                    # ── Iteration 0: compile run + trace capture ──
+                    # 1. Compile run (un-traced)
+                    inputs_d = _inputs_to_device(inputs_h)
+                    decode_logits, _ = _fwd(inputs_d)
+                    next_token = _extract_token(decode_logits)
+                    generated_tokens.append(next_token)
+                    current_pos += 1
+                    profiler.end(f"compile_decode", iteration=prompt_idx)
+                    decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
+                    logger.debug(
+                        f"Iteration {iteration} (compile): {1000*decode_iteration_time:.0f}ms @ "
+                        f"{1/decode_iteration_time:.1f} tok/s/user"
+                    )
+                    iteration += 1
+
+                    # 2. Capture trace with fresh device buffers
+                    logger.info("Capturing decode trace...")
+                    inputs_h2 = _make_decode_inputs(next_token, current_pos)
+                    trace_device_inputs = _inputs_to_device(inputs_h2)
+
+                    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                    trace_output, _ = _fwd(trace_device_inputs)
+                    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+                    logger.info("Decode trace captured")
+
+                    # 3. Execute trace for current iteration
+                    profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
+                    _copy_inputs_to_trace(inputs_h2)
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    decode_logits = trace_output
+                    t_enq_end = time.perf_counter()
+
+                else:
+                    # ── No tracing: straightforward forward ──
+                    inputs_d = _inputs_to_device(inputs_h)
+                    decode_logits, _ = _fwd(inputs_d)
+                    t_enq_end = time.perf_counter()
+
                 next_token = _extract_token(decode_logits)
+                t_sync_end = time.perf_counter()
                 generated_tokens.append(next_token)
                 current_pos += 1
-                profiler.end(f"compile_decode", iteration=prompt_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
+
+                if iteration == 0:
+                    profiler.end(f"compile_decode", iteration=prompt_idx)
+                    decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
+                else:
+                    profiler.end(f"inference_decode_time_{iteration}", iteration=prompt_idx)
+                    decode_iteration_time = profiler.get_duration(
+                        f"inference_decode_time_{iteration}", iteration=prompt_idx
+                    )
+
+                tokens_per_second_per_user = 1 / decode_iteration_time
+                host_inputs_ms = 1000 * (t_make_end - t_make_start)
+                copy_enq_ms = 1000 * (t_enq_end - t_make_end)
+                exec_sync_ms = 1000 * (t_sync_end - t_enq_end)
                 logger.debug(
-                    f"Iteration {iteration} (compile): {1000*decode_iteration_time:.0f}ms @ "
-                    f"{1/decode_iteration_time:.1f} tok/s/user"
+                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ "
+                    f"{tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput) "
+                    f"| host_inputs={host_inputs_ms:.1f}ms copy+enq={copy_enq_ms:.1f}ms exec+sync={exec_sync_ms:.1f}ms"
                 )
+
                 iteration += 1
 
-                # 2. Capture trace with fresh device buffers
-                logger.info("Capturing decode trace...")
-                inputs_h2 = _make_decode_inputs(next_token, current_pos)
-                trace_device_inputs = _inputs_to_device(inputs_h2)
+                # Check for EOS
+                if next_token == tokenizer.eos_token_id:
+                    break
 
-                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                trace_output, _ = _fwd(trace_device_inputs)
-                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-                logger.info("Decode trace captured")
-
-                # 3. Execute trace for current iteration
-                profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
-                _copy_inputs_to_trace(inputs_h2)
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-                decode_logits = trace_output
-
-            else:
-                # ── No tracing: straightforward forward ──
-                inputs_d = _inputs_to_device(inputs_h)
-                decode_logits, _ = _fwd(inputs_d)
-
-            next_token = _extract_token(decode_logits)
-            generated_tokens.append(next_token)
-            current_pos += 1
-
-            if iteration == 0:
-                profiler.end(f"compile_decode", iteration=prompt_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=prompt_idx)
-                decode_iteration_time = profiler.get_duration(
-                    f"inference_decode_time_{iteration}", iteration=prompt_idx
-                )
-
-            tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.debug(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ "
-                f"{tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
-
-            iteration += 1
-
-            # Check for EOS
-            if next_token == tokenizer.eos_token_id:
-                break
-
-        # Release trace
-        if trace_id is not None:
-            ttnn.release_trace(mesh_device, trace_id)
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+            if trace_id is not None:
+                ttnn.release_trace(mesh_device, trace_id)
 
         profiler.end(f"inference_decode", iteration=prompt_idx)
 
@@ -375,10 +509,9 @@ def run_generation(
         full_text = prompt + generated_text
         generated_texts.append(full_text)
 
-        short_prompt = (
-            (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:]) if len(prompt) > 200 else prompt
+        logger.info(
+            f"\n==PROMPT {prompt_idx}\n{_shorten_for_log(prompt)}\n==OUTPUT {prompt_idx}\n{generated_text.strip()}\n"
         )
-        logger.info(f"\n==PROMPT {prompt_idx}\n{short_prompt}\n==OUTPUT {prompt_idx}\n{generated_text.strip()}\n")
 
     num_tokens_generated_decode = iteration  # from last prompt
 
@@ -484,12 +617,12 @@ def run_generation(
             target=None,
         )
 
-        model_name = "Gemma4"
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
-            ml_model_name=model_name,
+            ml_model_name="gemma4",
             ml_model_type="llm",
+            device_name=determine_device_name(mesh_device),
             num_layers=num_layers or model_args.num_hidden_layers,
             batch_size=batch_size,
             config_params={},
@@ -524,22 +657,56 @@ def test_demo_single_layer(device, model_path):
     assert len(results[0]) > len(prompts[0])
 
 
+_DEMO_PREFILL_LENGTHS = [128, 4096]
+
+
 @parametrize_mesh_with_fabric()
-def test_demo(mesh_device, model_path):
-    """Full model demo — runs on any multi-device mesh.
+@pytest.mark.parametrize("prefill_len", _DEMO_PREFILL_LENGTHS, ids=[f"prefill_{b}" for b in _DEMO_PREFILL_LENGTHS])
+def test_demo(mesh_device, model_path, prefill_len, request):
+    """Full model demo — runs on any multi-device mesh, parametrized over a
+    short and a long prefill bucket.
+
+    Loads a tt_transformers sample prompt sized for the target bucket
+    (short hand-written prompt for 128, long-context book excerpt for 4k),
+    forces the prefill kernel to that exact length, and runs 200 decode
+    iterations so the full prefill→decode pipeline is exercised end-to-end.
+    Wider per-length kernel coverage lives in the unit tests, which sweep
+    the full PREFILL_BUCKETS list under --max-prefill.
 
     Filter by mesh shape:
-        pytest -k "1x2"   # N300 / TP=2
-        pytest -k "1x8"   # T3K  / TP=8
+        pytest -k "1x2"               # N300 / TP=2
+        pytest -k "1x8"               # T3K  / TP=8
+    Filter by prefill length:
+        pytest -k "prefill_4096"      # 4k prefill only
     """
-    prompts = ["Explain quantum computing in simple terms."]
+    max_prefill = request.config.getoption("--max-prefill")
+    if prefill_len > max_prefill:
+        pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
+
+    if os.environ.get("CI") == "true" and prefill_len != 128:
+        pytest.skip(f"CI: only prefill_128 runs in CI; skipping prefill_{prefill_len}")
+
+    prompt = load_demo_prompt(prefill_len, instruct=True)
+
+    # KV cache must hold the prefill plus the 200 decode tokens. Keep a small
+    # floor so short-bucket runs still allocate a usable cache.
+    max_new_tokens = 200
+    max_seq_len = max(prefill_len + max_new_tokens, 4096)
+    page_block_size = 64
+    page_params = {
+        "page_block_size": page_block_size,
+        "page_max_num_blocks": max_seq_len // page_block_size,
+    }
+
     results = run_generation(
         mesh_device=mesh_device,
         model_path=model_path,
-        prompts=prompts,
-        max_new_tokens=128,
-        max_seq_len=4 * 1024,
+        prompts=[prompt],
+        max_new_tokens=max_new_tokens,
+        max_seq_len=max_seq_len,
+        page_params=page_params,
         enable_decode_trace=True,
+        target_prefill_len=prefill_len,
     )
     assert len(results) == 1
-    logger.info(f"Full model output: {results[0]}")
+    logger.info(f"Full model output: {_shorten_for_log(results[0])}")

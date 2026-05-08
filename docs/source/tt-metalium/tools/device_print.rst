@@ -37,6 +37,16 @@ If only TT_METAL_DPRINT_CORES is set, the legacy DPRINT system will be used.
 To generate device debug prints on the device, include the ``api/debug/device_print.h`` header and use the APIs defined there.
 An example with the different features available is shown below:
 
+.. important::
+    Each ``DEVICE_PRINT`` line **must end with** ``\n``. The host-side print server flushes its per-RISC
+    intermediate buffer **only when it sees a newline**; messages without one are buffered until a later
+    print supplies a ``\n``, and any tail still buffered at device detach is dropped (it is **not** flushed
+    on device close). If your prints never appear, the most common cause is a missing ``\n``.
+
+    Examples:
+    1.    ``DEVICE_PRINT("hit checkpoint {}\n", id);`` // This will be printed
+    2.    ``DEVICE_PRINT("hit checkpoint {}", id);``  // This may never be printed
+
 .. code-block:: c++
 
     #include "api/debug/device_print.h"  // required in all kernels using DEVICE_PRINT
@@ -171,4 +181,8 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
     }
 
 .. note::
-    The DEVICE_PRINT buffer for a RISC is only flushed when new line character ``\n`` is read, or the device that the RISC belongs to is closed.
+    The host-side ``DEVICE_PRINT`` server splits each per-RISC stream on the newline character ``\n``.
+    Anything written without a trailing ``\n`` is held in an intermediate buffer until a later print
+    provides one. If a kernel never emits a final ``\n``, the trailing partial line is **not** flushed
+    when the device is closed and will be lost. Always terminate ``DEVICE_PRINT`` format strings with
+    ``\n``.

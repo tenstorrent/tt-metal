@@ -116,7 +116,7 @@ inline void _calculate_rsqrt_compat_(const int iterations)
         }
         else
         {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
+            sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg++;
     }
@@ -152,7 +152,7 @@ inline void _calculate_reciprocal_compat_(const int iterations)
         }
         else
         {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
+            sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg++;
     }

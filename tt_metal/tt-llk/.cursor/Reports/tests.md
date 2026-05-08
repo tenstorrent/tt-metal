@@ -103,7 +103,7 @@ The `llk_lib` directories contain header files for Low-Level Kernel (LLK) implem
 | `llk_pack_common.h` | Pack |
 | `llk_pack_matmul.h` | Pack |
 | `llk_pack_untilize.h` | Pack |
-| `llk_srcs_tdma.h` | TDMA |
+| `llk_srcs.h` | TDMA |
 | `llk_unpack_binary_broadcast_operands.h` | Unpack |
 | `llk_unpack_binary_operands.h` | Unpack |
 | `llk_unpack_common.h` | Unpack |

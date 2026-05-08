@@ -2,19 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gather_program_factory.hpp"
+#include "gather_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
-// Single row - single core
-GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySingleRowSingleCore::create(
-    const GatherParams& attributes, const GatherInputs& tensor_args, Tensor& output_tensor) {
-    tt::tt_metal::Program program{};
+using namespace tt::tt_metal;
 
-    // Tensor config info
+namespace {
+
+constexpr const char* kReaderSingle =
+    "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_single_row_single_core.cpp";
+constexpr const char* kWriterSingle =
+    "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_single_row_single_core.cpp";
+constexpr const char* kReaderMulti =
+    "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
+constexpr const char* kWriterMulti =
+    "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
+
+}  // namespace
+
+ProgramDescriptor GatherDeviceOperation::SingleRowSingleCore::create_descriptor(
+    const GatherParams& attributes, const GatherInputs& tensor_args, Tensor& output_tensor) {
     const tt::DataFormat input_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
     const tt::DataFormat input_index_tensor_cb_data_format =
@@ -67,31 +78,42 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
     const auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
-    const std::vector<CoreCoord>& cores = corerange_to_cores(core_range, total_number_of_cores, true);
 
-    // Circular buffers
+    ProgramDescriptor desc;
+
     constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
-    const tt::tt_metal::CircularBufferConfig input_tensor_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            Wt_input * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
-            .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = Wt_input * input_tensor_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_tensor_cb_index),
+            .data_format = input_tensor_cb_data_format,
+            .page_size = input_tensor_tile_size,
+        }}},
+    });
 
     constexpr uint32_t input_index_tensor_cb_index = tt::CBIndex::c_1;
-    const tt::tt_metal::CircularBufferConfig input_index_tensor_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            input_index_tensor_tile_size, {{input_index_tensor_cb_index, input_index_tensor_cb_data_format}})
-            .set_page_size(input_index_tensor_cb_index, input_index_tensor_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, input_index_tensor_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_index_tensor_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_index_tensor_cb_index),
+            .data_format = input_index_tensor_cb_data_format,
+            .page_size = input_index_tensor_tile_size,
+        }}},
+    });
 
     constexpr uint32_t output_tensor_cb_index = tt::CBIndex::c_2;
-    const tt::tt_metal::CircularBufferConfig output_tensor_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            output_tensor_tile_size, {{output_tensor_cb_index, output_tensor_cb_data_format}})
-            .set_page_size(output_tensor_cb_index, output_tensor_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_tensor_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_tensor_cb_index),
+            .data_format = output_tensor_cb_data_format,
+            .page_size = output_tensor_tile_size,
+        }}},
+    });
 
-    // Kernels
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
         input_index_tensor_cb_index,
@@ -104,14 +126,13 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
-    const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/"
-        "gather_reader_single_row_single_core.cpp";
-    tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        gather_reader_kernel_path,
-        core_range,
-        tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kReaderSingle;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_range;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_index,
@@ -126,64 +147,38 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
         compute_with_storage_grid_size.y};
     TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
-    const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/"
-        "gather_writer_single_row_single_core.cpp";
-    tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        gather_writer_kernel_path,
-        core_range,
-        tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kWriterSingle;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_range;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
 
     uint32_t id = 0;  // Offset for the next core in the group
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                SetRuntimeArgs(
-                    program,
-                    gather_reader_kernel_id,
+                reader_desc.runtime_args.emplace_back(
                     core,
-                    {input_index_tensor_buffer->address(), work_per_core, tile_width, tile_height, id});
-                SetRuntimeArgs(
-                    program,
-                    gather_writer_kernel_id,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        input_index_tensor_buffer->address(), work_per_core, tile_width, tile_height, id});
+                writer_desc.runtime_args.emplace_back(
                     core,
-                    {input_tensor_buffer->address(), output_tensor_buffer->address(), work_per_core, id});
+                    KernelDescriptor::CoreRuntimeArgs{
+                        input_tensor_buffer->address(), output_tensor_buffer->address(), work_per_core, id});
                 id++;
             }
         }
     }
 
-    return {std::move(program), {gather_reader_kernel_id, gather_writer_kernel_id, cores}};
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
 }
 
-void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const GatherParams& /*attributes*/,
-    const GatherInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    auto* output_tensor_buffer = output_tensor.buffer();
-
-    for (const auto& core : cached_program.shared_variables.cores) {
-        auto& gather_reader_runtime_args = tt::tt_metal::GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.gather_reader_kernel_id, core);
-        gather_reader_runtime_args[0] = input_index_tensor_buffer->address();
-
-        auto& gather_writer_runtime_args = tt::tt_metal::GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.gather_writer_kernel_id, core);
-        gather_writer_runtime_args[0] = input_tensor_buffer->address();
-        gather_writer_runtime_args[1] = output_tensor_buffer->address();
-    }
-}
-
-// Single row - multi core
-GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySingleRowMultiCore::create(
+ProgramDescriptor GatherDeviceOperation::SingleRowMultiCore::create_descriptor(
     const GatherParams& attributes, const GatherInputs& tensor_args, Tensor& output_tensor) {
-    tt::tt_metal::Program program{};
-
-    // Tensor config info
     const tt::DataFormat input_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
     const tt::DataFormat input_index_tensor_cb_data_format =
@@ -236,32 +231,43 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
     const auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
-    const std::vector<CoreCoord>& cores = corerange_to_cores(core_range, total_number_of_cores, true);
 
-    // Circular buffers
+    ProgramDescriptor desc;
     constexpr uint32_t buffer_scale_factor = 2;
+
     constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
-    const tt::tt_metal::CircularBufferConfig input_tensor_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            buffer_scale_factor * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
-            .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = buffer_scale_factor * input_tensor_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_tensor_cb_index),
+            .data_format = input_tensor_cb_data_format,
+            .page_size = input_tensor_tile_size,
+        }}},
+    });
 
     constexpr uint32_t input_index_tensor_cb_index = tt::CBIndex::c_1;
-    const tt::tt_metal::CircularBufferConfig input_index_tensor_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            input_index_tensor_tile_size, {{input_index_tensor_cb_index, input_index_tensor_cb_data_format}})
-            .set_page_size(input_index_tensor_cb_index, input_index_tensor_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, input_index_tensor_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_index_tensor_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_index_tensor_cb_index),
+            .data_format = input_index_tensor_cb_data_format,
+            .page_size = input_index_tensor_tile_size,
+        }}},
+    });
 
     constexpr uint32_t output_tensor_cb_index = tt::CBIndex::c_2;
-    const tt::tt_metal::CircularBufferConfig output_tensor_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            output_tensor_tile_size, {{output_tensor_cb_index, output_tensor_cb_data_format}})
-            .set_page_size(output_tensor_cb_index, output_tensor_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_tensor_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_tensor_cb_index),
+            .data_format = output_tensor_cb_data_format,
+            .page_size = output_tensor_tile_size,
+        }}},
+    });
 
-    // Kernels
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
         input_index_tensor_cb_index,
@@ -274,13 +280,13 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
-    const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
-    tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        gather_reader_kernel_path,
-        core_range,
-        tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kReaderMulti;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_range;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_index,
@@ -295,56 +301,34 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
         compute_with_storage_grid_size.y};
     TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
-    const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
-    tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        gather_writer_kernel_path,
-        core_range,
-        tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kWriterMulti;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_range;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
 
     uint32_t id = 0;  // Offset for the next core in the group
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                SetRuntimeArgs(
-                    program,
-                    gather_reader_kernel_id,
+                reader_desc.runtime_args.emplace_back(
                     core,
-                    {input_index_tensor_buffer->address(), work_per_core, tile_width, tile_height, id});
-                SetRuntimeArgs(
-                    program,
-                    gather_writer_kernel_id,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        input_index_tensor_buffer->address(), work_per_core, tile_width, tile_height, id});
+                writer_desc.runtime_args.emplace_back(
                     core,
-                    {input_tensor_buffer->address(), output_tensor_buffer->address(), work_per_core, id});
+                    KernelDescriptor::CoreRuntimeArgs{
+                        input_tensor_buffer->address(), output_tensor_buffer->address(), work_per_core, id});
                 id++;
             }
         }
     }
 
-    return {std::move(program), {gather_reader_kernel_id, gather_writer_kernel_id, cores}};
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
 }
 
-void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const GatherParams& /*attributes*/,
-    const GatherInputs& tensor_args,
-    Tensor& output_tensor) {
-    // Get tensor buffers
-    auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    auto* output_tensor_buffer = output_tensor.buffer();
-
-    // Update runtime arguments for each core
-    for (const auto& core : cached_program.shared_variables.cores) {
-        auto& gather_reader_runtime_args = tt::tt_metal::GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.gather_reader_kernel_id, core);
-        gather_reader_runtime_args[0] = input_index_tensor_buffer->address();
-
-        auto& gather_writer_runtime_args = tt::tt_metal::GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.gather_writer_kernel_id, core);
-        gather_writer_runtime_args[0] = input_tensor_buffer->address();
-        gather_writer_runtime_args[1] = output_tensor_buffer->address();
-    }
-}
 }  // namespace ttnn::prim

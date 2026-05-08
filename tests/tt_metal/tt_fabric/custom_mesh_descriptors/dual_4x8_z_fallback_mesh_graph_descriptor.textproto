@@ -1,6 +1,6 @@
 # Dual 4x8 galaxies with Z-only connections between them.
 # NO assign_z_direction - tests Z-direction fallback when NESW runs out
-# (physical topology between c02u08 and c03u02 has only Z links).
+# (physical topology between SP4 hosts bh-glx-d04u08 and bh-glx-d05u08 has only Z links).
 
 mesh_descriptors {
   name: "M0"

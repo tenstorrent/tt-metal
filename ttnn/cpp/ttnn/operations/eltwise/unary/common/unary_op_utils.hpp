@@ -14,7 +14,6 @@ namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
 
-bool get_op_approx_mode(UnaryOpType op_type);
 using DataType = tt::tt_metal::DataType;
 
 template <typename T = float>
@@ -80,6 +79,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::FILL:
         case UnaryOpType::ROUND:
         case UnaryOpType::SIGMOID:
+        case UnaryOpType::LOGIT:
         case UnaryOpType::PRELU_SFPU:
         case UnaryOpType::FMOD:
         case UnaryOpType::MINIMUM:

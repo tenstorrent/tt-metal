@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "api/tt-metalium/kernel_types.hpp"
@@ -19,13 +20,14 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "jit_build/jit_build_options.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
+
+class JitBuildOptions;
 
 enum Eth : uint8_t {
     SENDER = 0,
@@ -89,6 +91,20 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: local DFB accessor names -> logical DFB ids
 using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: local semaphore accessor names -> semaphore ids
+using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+
+// Metal 2.0: per-kernel resolved TensorBinding.
+// Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
+// TensorParameter name so SetProgramRunParameters can fill the binding's base-address slot
+// from the corresponding TensorArg at enqueue time.
+struct TensorBindingHandle {
+    std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
+    std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
+    uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
+    uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+                                // (binding addresses live in their own section appended after user-named CRTAs)
+};
 
 class Kernel : public JitBuildSettings {
 public:
@@ -148,6 +164,17 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+    void process_semaphore_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
+    void process_tensor_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>)
+        const override;
+    const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
+    const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }
+    const std::vector<std::string>& get_named_common_runtime_args() const override {
+        return named_common_runtime_args_;
+    }
+    bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -204,7 +231,14 @@ protected:
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
         const std::unordered_map<std::string, uint32_t>& named_compile_args,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {});
+        // Metal 2.0-only parameters below.
+        // If is_metal2_kernel is false, the remaining parameters are ignored and should be left default.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -215,7 +249,15 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
+    // Metal 2.0-only members below. is_metal2_kernel_ leads the group; the others are
+    // populated only when is_metal2_kernel_ is true. Order of named_runtime_args_ /
+    // named_common_runtime_args_ determines byte-offset layout in the dispatch buffer.
+    const bool is_metal2_kernel_;
     const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
+    const SemaphoreLocalAccessorHandleMap semaphore_local_accessor_handles_;
+    const std::vector<std::string> named_runtime_args_;
+    const std::vector<std::string> named_common_runtime_args_;
+    const std::vector<TensorBindingHandle> tensor_binding_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -248,7 +290,13 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const DataMovementConfig& config,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -257,7 +305,12 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -371,7 +424,13 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const ComputeConfig& config,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -380,7 +439,12 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -443,7 +507,13 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
         const std::set<DataMovementProcessor>& dm_processors,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -452,7 +522,12 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -501,7 +576,13 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
         const std::set<QuasarComputeProcessor>& compute_processors,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -510,7 +591,12 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(

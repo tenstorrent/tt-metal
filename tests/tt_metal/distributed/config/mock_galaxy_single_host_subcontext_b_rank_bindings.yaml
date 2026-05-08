@@ -1,0 +1,17 @@
+# Decode overlay: two local ranks (0, 1) on mesh_id 0 and 1; mesh graph is dual 2×4 + intermesh (sub-context 0 uses a separate 4×4 mesh descriptor).
+# TT_VISIBLE_DEVICES: slices 2 and 3 (same 2×4 cross-tray convention as sub-context 0; complementary chip sets).
+# Referenced from mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml (sub-context 1).
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      # slice 2
+      TT_VISIBLE_DEVICES: 4,7,10,14,15,18,25,30
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      # slice 3
+      TT_VISIBLE_DEVICES: 0,2,3,6,8,21,28,31
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto"
