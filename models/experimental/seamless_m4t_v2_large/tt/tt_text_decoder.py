@@ -66,6 +66,13 @@ class TTSeamlessM4Tv2Decoder:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._ffn_linear_compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         # Keep chunks aligned to the actual sequence envelope; forcing 64 for short prefill (seq=32)
@@ -79,14 +86,21 @@ class TTSeamlessM4Tv2Decoder:
             exp_approx_mode=False,
         )
 
-    def _linear(self, x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
+    def _linear(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        compute_cfg: Optional[ttnn.DeviceComputeKernelConfig] = None,
+    ) -> ttnn.Tensor:
         return ttnn.linear(
             x,
             weight,
             bias=bias,
             core_grid=_core_grid(self.device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self._linear_ln_compute_cfg,
+            compute_kernel_config=compute_cfg if compute_cfg is not None else self._linear_ln_compute_cfg,
         )
 
     def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
@@ -282,13 +296,23 @@ class TTSeamlessM4Tv2Decoder:
                 weight=layer.ffn_layer_norm.weight,
                 bias=layer.ffn_layer_norm.bias,
             )
-            ff = self._linear(normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias)
+            ff = self._linear(
+                normed,
+                layer.ffn.fc1.weight,
+                layer.ffn.fc1.bias,
+                compute_cfg=self._ffn_linear_compute_cfg,
+            )
             ttnn.deallocate(normed)
             ff_in = ff
             ff = ttnn.relu(ff_in, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff_in)
             ff_in = ff
-            ff = self._linear(ff_in, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
+            ff = self._linear(
+                ff_in,
+                layer.ffn.fc2.weight,
+                layer.ffn.fc2.bias,
+                compute_cfg=self._ffn_linear_compute_cfg,
+            )
             ttnn.deallocate(ff_in)
             residual = hidden
             hidden = ttnn.add(residual, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
