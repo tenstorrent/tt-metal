@@ -21,6 +21,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <numeric>
 
@@ -72,9 +73,23 @@ std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dim
     return {non_height_width_dims, height_width_dims};
 }
 
-float get_pad_value(reduction_common::ReduceType reduce_type) {
+float get_pad_value(
+    reduction_common::ReduceType reduce_type, tt::tt_metal::DataType dtype = tt::tt_metal::DataType::FLOAT32) {
     // Prod reduction is handled separately in prod.cpp.
     TT_FATAL(reduce_type != reduction_common::ReduceType::Prod, "Prod reduction is not supported");
+
+    // INT32: pad_value flows through float-typed pad APIs; static_cast<uint32_t>(±inf) is UB.
+    // Bit-encode INT32 sentinels via bit_cast; avoid 0x80000000 (SFPU col-reduce corner + MIN negate).
+    if (dtype == tt::tt_metal::DataType::INT32) {
+        if (reduce_type == reduction_common::ReduceType::Max) {
+            return std::bit_cast<float>(static_cast<uint32_t>(0x80000001u));  // INT32_MIN + 1
+        }
+        if (reduce_type == reduction_common::ReduceType::Min) {
+            return std::bit_cast<float>(static_cast<uint32_t>(0x7FFFFFFFu));  // INT32_MAX
+        }
+        return 0.0f;
+    }
+
     return reduce_type == reduction_common::ReduceType::Max
                ? -std::numeric_limits<float>::infinity()
                : (reduce_type == reduction_common::ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);
@@ -136,7 +151,7 @@ static Tensor reduce_impl(
         return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
-    float pad_value = get_pad_value(reduce_type);
+    float pad_value = get_pad_value(reduce_type, input_tensor_arg.dtype());
     bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
@@ -551,7 +566,7 @@ Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool use_legacy) {
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
-    float pad_value = get_pad_value(reduce_type);
+    float pad_value = get_pad_value(reduce_type, input_tensor_arg.dtype());
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
 

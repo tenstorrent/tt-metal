@@ -27,12 +27,12 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                     return ttnn::operations::data_movement::pack_two_uint16_into_uint32(
                         {uint16_pad_value, uint16_pad_value});
                 }
-                if (tensor.dtype() == DataType::FLOAT32) {
+                if (tensor.dtype() == DataType::FLOAT32 || tensor.dtype() == DataType::INT32) {
+                    // INT32 callers bit-encode the sentinel into pad_value (see ttnn::reduce).
                     return std::bit_cast<uint32_t>(static_cast<float>(pad_value));
                 }
                 TT_FATAL(
-                    tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::INT32,
-                    "only supporting bfloat16, float32, and uint32/int32/uint16");
+                    tensor.dtype() == DataType::UINT32, "only supporting bfloat16, float32, and uint32/int32/uint16");
                 return static_cast<uint32_t>(pad_value);
             }
             if constexpr (std::is_same_v<T, uint32_t>) {

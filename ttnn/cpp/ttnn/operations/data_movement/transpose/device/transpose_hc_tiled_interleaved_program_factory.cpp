@@ -153,7 +153,8 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = max_padding_write / num_packed_values;
         switch (input_tensor.dtype()) {
-            case DataType::INT32:
+            // INT32 callers bit-encode the sentinel into pad_value (see ttnn::reduce).
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
             case DataType::UINT32: padding_val_packed = pad_value; break;
             case DataType::BFLOAT16:
                 padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
