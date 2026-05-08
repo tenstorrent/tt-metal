@@ -102,7 +102,7 @@ RUNNER_PROFILES = {
     },
     "galaxy-topology-6u": {
         "arch": "wormhole_b0",
-        "runs_on": ["topology-6u", "in-service", "bare-metal"],
+        "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "bare-metal"],
         "runner_label": "topology-6u",
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
@@ -129,7 +129,7 @@ TEST_GROUPS = {
     "wormhole-t3k-sweeps": {"runner_profile": "t3k"},
     "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
     "lead-models-single-chip": {"runner_profile": "n150"},
-    "lead-models-galaxy": {"runner_profile": "galaxy-g04glx03"},
+    "lead-models-galaxy": {"runner_profile": "galaxy-topology-6u"},
 }
 
 

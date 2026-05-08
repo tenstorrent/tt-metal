@@ -530,10 +530,6 @@ class TtMoe(LightweightModule):
         final_output = ttnn.add(routed_output, shared_output)
         logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 
-        # Convert to ROW_MAJOR for output consistency
-        final_output = ttnn.to_layout(final_output, ttnn.ROW_MAJOR_LAYOUT)
-        logger.debug(f"[TtMoe.forward] Final output shape: {final_output.shape}")
-
         # Build intermediates if requested
         intermediates = None
         if return_intermediates:

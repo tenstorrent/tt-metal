@@ -176,28 +176,32 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
+                dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::LT;
             } else {
                 postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
+                dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::GT;
             } else {
                 postprocess = unary::UnaryOpType::GTZ;
             }
             break;
         case BinaryOpType::GE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
+                dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::GE;
             } else {
                 postprocess = unary::UnaryOpType::GEZ;
             }
             break;
         case BinaryOpType::LE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
+                dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::LE;
             } else {
                 postprocess = unary::UnaryOpType::LEZ;
@@ -768,7 +772,6 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     }
 
     // enable a few more conditions for faster performance
-    // in order to achieve performance parity with legacy binary
     auto output_shape = compute_broadcasted_output(a.logical_shape(), b->logical_shape());
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();
