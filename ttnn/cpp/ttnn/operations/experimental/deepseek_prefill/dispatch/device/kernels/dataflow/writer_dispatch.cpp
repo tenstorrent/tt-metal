@@ -225,9 +225,10 @@ void kernel_main() {
     // so the exit-sem signal cannot reach peers ahead of the last metadata/payload writes.
     noc_async_write_barrier();
 
-    // Exit semaphore exchange — uses a dedicated semaphore (exit_semaphore_address)
-    // and the dedicated sem_packet_header so neither can collide with anything from
-    // the init handshake or the data loop above. Mirrors the combine fix.
+    // Exit semaphore exchange — uses a dedicated semaphore (exit_semaphore_address) and
+    // the dedicated sem_packet_header. flush=true: EDM holds the atomic-inc on the receiver
+    // until our prior fabric writes (payload + metadata) to that destination have committed,
+    // so the peer's wait-completes ordering implies all data writes have landed in DRAM.
     {
         const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
         send_init_semaphore_to_configured_targets<
@@ -237,7 +238,13 @@ void kernel_main() {
             mesh_rows,
             mesh_cols,
             axis,
-            num_devices>(fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
+            num_devices>(
+            fabric_connections,
+            sem_packet_header,
+            dest_chip_ids,
+            dest_mesh_ids,
+            exit_noc_semaphore_addr,
+            /*flush=*/true);
 
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
