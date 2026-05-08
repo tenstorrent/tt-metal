@@ -227,4 +227,3 @@ for var in "${!changes[@]}"; do
         echo "$var=${changes[$var]}" >> "$GITHUB_OUTPUT"
     fi
 done
-
