@@ -6,6 +6,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
@@ -21,83 +22,75 @@ void kernel_main() {
     constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
-    constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
     init_sfpu(cb_output_grad, tt::CBIndex::c_16);
 
+    using namespace compute_kernel_lib;
+
 #if defined(DIVISOR)
-    // PARTIAL migration: cb_tmp1 = 1 / cb_divisor.
-    //   migrated: CopyTile + Recip + PackTile chain (cb_divisor held — pop at end).
-    //   skipped : main bcast multiplications below (cross-stage scratch handoff).
+    // cb_tmp1 = 1 / cb_divisor (already migrated, kept).
     cb_wait_front(cb_divisor, onetile);
-    {
-        using namespace compute_kernel_lib;
-        eltwise_chain(
-            onetile,
-            CopyTile<cb_divisor, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
-            Recip<Dst::D0>{},
-            PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-    }
+    eltwise_chain(
+        onetile,
+        CopyTile<cb_divisor, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
+        Recip<Dst::D0>{},
+        PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #endif
 
     cb_wait_front(cb_output_grad, onetile);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
 #if defined(DIVISOR)
-        cb_wait_front(cb_tmp_weight, onetile);
-        cb_reserve_back(cb_tmp2, onetile);
+        // T1.25: cb_tmp2 = -(cb_tmp_weight * cb_output_grad)  (bcast scalar, B=output_grad held)
+        eltwise_chain(
+            onetile,
+            BinaryFpu<
+                cb_tmp_weight,
+                cb_output_grad,
+                cb_tmp2,
+                BinaryFpuOp::Mul,
+                BroadcastDim::Scalar,
+                BinaryDataFormatReconfig::InputAndOutput,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>{},
+            Negative<Dst::D0>{},
+            PackTile<cb_tmp2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
-        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
-        negative_tile_init();
-        negative_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        tile_regs_release();
-
-        cb_push_back(cb_tmp2, onetile);
-        cb_pop_front(cb_tmp_weight, onetile);
-
-        cb_reserve_back(cb_input_grad, onetile);
-        cb_wait_front(cb_tmp2, onetile);
-        cb_wait_front(cb_tmp1, onetile);
-
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp2, cb_tmp1);
-        mul_tiles_bcast_scalar(cb_tmp2, cb_tmp1, 0, 0, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
-        tile_regs_release();
-
-        cb_push_back(cb_input_grad, onetile);
-        cb_pop_front(cb_tmp2, onetile);
-
+        // T1.26: cb_input_grad = cb_tmp2 * cb_tmp1  (bcast scalar, B=tmp1 held)
+        eltwise_chain(
+            onetile,
+            BinaryFpu<
+                cb_tmp2,
+                cb_tmp1,
+                cb_input_grad,
+                BinaryFpuOp::Mul,
+                BroadcastDim::Scalar,
+                BinaryDataFormatReconfig::InputAndOutput,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::WaitNoPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>{},
+            PackTile<cb_input_grad, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #else
-        cb_wait_front(cb_tmp_weight, onetile);
-
-        cb_reserve_back(cb_input_grad, onetile);
-
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
-        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
-        negative_tile_init();
-        negative_tile(dst0);
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
-        tile_regs_release();
-
-        cb_push_back(cb_input_grad, onetile);
-
-        cb_pop_front(cb_tmp_weight, onetile);
+        // T1.27 (no-DIVISOR branch): cb_input_grad = -(cb_tmp_weight * cb_output_grad)
+        eltwise_chain(
+            onetile,
+            BinaryFpu<
+                cb_tmp_weight,
+                cb_output_grad,
+                cb_input_grad,
+                BinaryFpuOp::Mul,
+                BroadcastDim::Scalar,
+                BinaryDataFormatReconfig::InputAndOutput,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>{},
+            Negative<Dst::D0>{},
+            PackTile<cb_input_grad, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #endif
     }
 
