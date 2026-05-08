@@ -1031,9 +1031,15 @@ class Generator(WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
             reset_inputs = True
-        if getattr(self, "_force_next_decode_reset_inputs", False):
+        had_prefill_sampling = getattr(self, "_force_next_decode_reset_inputs", False)
+        if had_prefill_sampling:
             reset_inputs = True
             self._force_next_decode_reset_inputs = False
+        # vLLM raises reset_batch when the persistent decode layout changed.
+        # Even if page-table contents happen to compare equal, traced decode
+        # inputs and per-batch sampling state must be reloaded.
+        if reset_batch:
+            reset_inputs = True
         if self.prev_page_table is None:
             self.prev_page_table = (
                 page_table.clone()
@@ -1062,7 +1068,6 @@ class Generator(WarmupForwardMixin):
             sm_bs = self.model.sampling.seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
             self.model.sampling.seed_manager.apply_slot_remap(rank_remap)
-        self.model.sampling.seed_manager.get_new_values()
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
@@ -1072,6 +1077,12 @@ class Generator(WarmupForwardMixin):
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
+                if not had_prefill_sampling:
+                    sampling_module.seed_manager.reset_seed(
+                        sampling_params.seed,
+                        list(range(self.model_args.max_batch_size)),
+                    )
+        self.model.sampling.seed_manager.get_new_values()
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
@@ -1210,10 +1221,7 @@ class Generator(WarmupForwardMixin):
             if sampling_module is not None and getattr(sampling_module, "enable_internal_trace", False):
                 # Pre-capture the split sampling trace so the first live decode
                 # step does not lazily enter sampling trace capture.
-                sampling_module.capture_trace(
-                    logits=tt_out_tok[0],
-                    tt_out_tok=tokens_tt if sampling_module.tt_sampling.force_argmax_sampling else None,
-                )
+                sampling_module.capture_trace(logits=tt_out_tok[0], tt_out_tok=tokens_tt)
         logger.info("Done Capturing Decode Trace")
 
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
@@ -1285,18 +1293,10 @@ class Generator(WarmupForwardMixin):
         )
 
         if not return_logits:
-            sampling_module = self.model.sampling
-            if sampling_module.tt_sampling.force_argmax_sampling:
-                return sampling_module.sample(
-                    logits=trace_tok_rm[0],
-                    tt_out_tok=self.trace_inputs_decode[return_logits][0],
-                )
-
-            sampled = sampling_module.sample(logits=trace_tok_rm[0])
-            sampled_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
-            # Keep readback output separate from the next-step trace input buffer.
-            ttnn.copy(input_a=sampled_tokens, input_b=self.trace_inputs_decode[return_logits][0])
-            return sampled
+            return self.model.sampling.sample(
+                logits=trace_tok_rm[0],
+                tt_out_tok=self.trace_inputs_decode[return_logits][0],
+            )
 
         return trace_tok_rm
 

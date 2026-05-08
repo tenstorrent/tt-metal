@@ -173,6 +173,7 @@ class SamplingGenerator:
         reset_batch: bool = False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        reset_seeds: bool = False,
     ):
         """Format, merge (if row-sharded), and apply sampling params for one model instance.
 
@@ -182,6 +183,7 @@ class SamplingGenerator:
             reset_batch: Also reset prompt tokens and output state (first decode step).
             prompt_tokens: Prompt tokens for penalty tracking.
             output_tokens: Output tokens for penalty tracking.
+            reset_seeds: Also reset per-slot seed streams from sampling params.
 
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
         advancement separately since generators call it at different points.
@@ -211,6 +213,8 @@ class SamplingGenerator:
         if reset_batch:
             self.reset_prompt_tokens(prompt_tokens)
             self.reset_output_state(output_tokens)
+            if reset_seeds:
+                self.seed_manager.reset_seed(formatted_params.seed, list(range(len(formatted_params.seed))))
 
     # ---------------------------------------------------------------------
     # Sampling helpers

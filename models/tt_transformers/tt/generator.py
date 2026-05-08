@@ -1141,6 +1141,7 @@ class Generator(WarmupForwardMixin):
                     reset_batch=reset_batch,
                     prompt_tokens=model_prompt,
                     output_tokens=model_output,
+                    reset_seeds=reset_batch,
                 )
                 # Apply slot remap from condense before advancing seeds.
                 if slot_remap is not None:
@@ -1158,7 +1159,10 @@ class Generator(WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs,
+                reset_batch=reset_batch or mode_switched,
+            )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -1269,10 +1273,7 @@ class Generator(WarmupForwardMixin):
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
 
             if split_enabled:
-                sampling_module.capture_trace(
-                    logits=tt_out_trace[i],
-                    tt_out_tok=device_inputs[i][0] if sampling_module.tt_sampling.force_argmax_sampling else None,
-                )
+                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
@@ -1326,20 +1327,12 @@ class Generator(WarmupForwardMixin):
                     new_outputs.append(outputs[i])
                     continue
 
-                if sampling_module.tt_sampling.force_argmax_sampling:
-                    new_outputs.append(
-                        sampling_module.sample(
-                            logits=outputs[i],
-                            tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
-                        )
+                new_outputs.append(
+                    sampling_module.sample(
+                        logits=outputs[i],
+                        tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
                     )
-                    continue
-
-                sampled = sampling_module.sample(logits=outputs[i])
-                sampled_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
-                # Keep readback output separate from the next-step trace input buffer.
-                ttnn.copy(input_a=sampled_tokens, input_b=self.trace_inputs_decode[sampling_on_device][i][0])
-                new_outputs.append(sampled)
+                )
             return new_outputs
         return outputs
 
