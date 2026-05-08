@@ -23,6 +23,9 @@
 #      That probe is the part that genuinely cannot be skipped: which 8 of
 #      each host's 32 devices belong to which slice is cluster-specific
 #      runtime info.
+#   5. Resets chips on every host (via reset_chips.sh) so the discovery
+#      probes don't leave stale device state for the next runner. Skip
+#      with BOOTSTRAP_SKIP_RESET=1.
 
 case "${1:-}" in
   -h|--help)
@@ -45,13 +48,22 @@ Required environment:
                    a built test_physical_discovery binary
                    (from --build-tests, included in --build-tt-train).
 
+  HOSTS            Space- or comma-separated 4-host list. NO DEFAULT —
+                   set per-shell, e.g.
+                     export HOSTS="hostA hostB hostC hostD"
+                   The scripts refuse to run without it.
+
 Optional environment:
-  HOSTS Space- or comma-separated 4-host list. Default in _hosts.sh.
-                   *** OVERRIDE THIS for a different cluster. ***
 
   SINGLE_POD_PIPELINE_DIR
                    Override the bundle path (e.g. /tmp/x or /scratch/x).
                    Default: \$TT_METAL_HOME/generated/single_pod_pipeline_dir.
+
+  BOOTSTRAP_SKIP_RESET=1
+                   Skip the chips-reset step at the end. Useful only if
+                   you've just reset and want to save ~60s. The runner
+                   will then likely need its own reset_chips.sh before
+                   the first test.
 
 When to run manually:
   - You changed the host list and want to refresh the bundle without
@@ -169,13 +181,26 @@ esac
 
 # ---- (re)create the bundle dir + symlinks --------------------------------
 # Wipe any existing dir so a stale bundle doesn't shadow today's discovery.
+#
+# Two cwd-safety steps below:
+#   1. `cd /` before the wipe — if the user ran this script from inside
+#      $PIPELINE_DIR (or a subdir), `rm -rf $PIPELINE_DIR` would unlink
+#      our cwd inode and every subsequent child shell would print
+#      'shell-init: getcwd: No such file or directory' warnings.
+#   2. Subshell for the post-create `cd "$PIPELINE_DIR"` — keeps the
+#      top-level cwd at `/`, so even if a later step (e.g. the per-host
+#      ssh-self loop, when is_self misses) wipes-and-recreates the dir,
+#      our process never sat on the unlinked inode.
+cd /
 rm -rf "$PIPELINE_DIR"
 mkdir -p "$PIPELINE_DIR"
-cd "$PIPELINE_DIR"
-mkdir -p .benchmarks generated/{fabric,inspector,test_reports,watcher}
-for sub in build models python_env runtime tests tt_metal ttnn; do
-    [ -e "$sub" ] || ln -s "$TT_METAL_HOME/$sub" "$sub"
-done
+(
+    cd "$PIPELINE_DIR"
+    mkdir -p .benchmarks generated/{fabric,inspector,test_reports,watcher}
+    for sub in build models python_env runtime tests tt_metal ttnn; do
+        [ -e "$sub" ] || ln -s "$TT_METAL_HOME/$sub" "$sub"
+    done
+)
 
 echo "[bootstrap] PIPELINE_DIR  = $PIPELINE_DIR"
 echo "[bootstrap] hosts         = $HOSTS"
@@ -463,6 +488,17 @@ RANKFILE_FOR_MPI="${SINGLE_POD_RANKFILE_PATH:-/var/tmp/single_pod_rankfile}"
 RANKFILE_FOR_MPI_DIR="$(dirname "$RANKFILE_FOR_MPI")"
 mkdir -p "$RANKFILE_FOR_MPI_DIR" 2>/dev/null
 cp -f "$EXPECTED_RF" "$RANKFILE_FOR_MPI"
+
+# Reset chips on every host. The discovery probes above (the generator's
+# mpirun-spawned test_physical_discovery, plus on Rev C the per-host
+# GenerateTrayToPCIeDeviceMapping pass) open devices and can leave chip
+# locks / FW state stale. Without this, the first test run after bootstrap
+# typically fails with "Device N init: failed to initialize FW! Try
+# resetting the board." Skip with BOOTSTRAP_SKIP_RESET=1.
+if [ "${BOOTSTRAP_SKIP_RESET:-0}" != "1" ]; then
+    echo "[bootstrap] resetting chips on all hosts so the runner sees fresh devices..."
+    "$SCRIPT_DIR/reset_chips.sh"
+fi
 
 echo "[bootstrap] done."
 echo "[bootstrap]   rank binding:        $EXPECTED_RB"

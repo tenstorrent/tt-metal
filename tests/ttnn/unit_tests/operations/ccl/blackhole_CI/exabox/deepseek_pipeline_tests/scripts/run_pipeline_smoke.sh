@@ -30,11 +30,11 @@ FIFO-size-mismatch bug introduced upstream by PR #43389.
 Required environment:
   TT_METAL_HOME    Repo root.
 
-Optional environment:
-  HOSTS Space- or comma-separated 4-host list. Default in
-                   ./_hosts.sh.
-                   *** OVERRIDE THIS for a different cluster. ***
+  HOSTS            Space- or comma-separated 4-host list. NO DEFAULT —
+                   set per-shell, e.g.
+                     export HOSTS="hostA hostB hostC hostD"
 
+Optional environment:
   PYTEST_TIMEOUT   Per-test timeout (seconds). Default: 900.
 EOF
     exit 0

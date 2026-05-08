@@ -10,9 +10,10 @@ Usage: $(basename "$0") [-h|--help]
 Force-kills lingering tt-run / prterun / pytest / prted processes locally
 and on every host in \$HOSTS. Use after a hung test run.
 
-Optional environment:
-  HOSTS Space- or comma-separated host list. Default in _hosts.sh.
-                   *** OVERRIDE THIS for a different cluster. ***
+Required environment:
+  HOSTS            Space- or comma-separated 4-host list. NO DEFAULT —
+                   set per-shell, e.g.
+                     export HOSTS="hostA hostB hostC hostD"
 
 When to run:
   - After ctrl-C'ing a hung run.

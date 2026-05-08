@@ -11,14 +11,11 @@ Resets chips on all hosts in \$HOSTS in parallel by running
 'tt-smi -glx_reset_auto' on each. Wallclock ≈ 60 s.
 
 Required environment:
-  TT_METAL_HOME    Repo root (used to find tt-smi). Default:
-                     /data/llong/tt-metal
+  TT_METAL_HOME    Repo root (used to find tt-smi). Must be set.
 
-Optional environment:
-  HOSTS Space- or comma-separated host list (4 hosts). Default in _hosts.sh:
-                     bh-glx-110-c07u02 bh-glx-110-c07u08
-                     bh-glx-110-c08u02 bh-glx-110-c08u08
-                   *** OVERRIDE THIS for a different cluster. ***
+  HOSTS            Space- or comma-separated 4-host list. NO DEFAULT —
+                   set per-shell, e.g.
+                     export HOSTS="hostA hostB hostC hostD"
 
 When to run:
   - Before the first test of a session.
