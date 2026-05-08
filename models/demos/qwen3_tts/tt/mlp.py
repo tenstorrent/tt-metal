@@ -114,8 +114,11 @@ class MLP(LightweightModule):
             m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
         )
 
+        import os as _os_fid
+
+        _hi_fi = _os_fid.environ.get("TT_QWEN3_HIFI4", "0") == "1"
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4 if _hi_fi else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

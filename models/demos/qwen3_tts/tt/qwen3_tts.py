@@ -79,14 +79,29 @@ class Qwen3TTS(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-        # Initialize CodePredictor
-        self.code_predictor = CodePredictor(
-            device=device,
-            config=code_predictor_config,
-            talker_hidden_size=talker_config.hidden_size,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-        )
+        # Initialize CodePredictor — TT_QWEN3_CP_FP32=1 swaps in the fp32-activation
+        # variant for voice-clone fidelity. Trace-compatible; ~+10 ms/frame decode.
+        import os as _os_cp
+
+        if _os_cp.environ.get("TT_QWEN3_CP_FP32", "0") == "1":
+            from models.demos.qwen3_tts.tt.code_predictor_fp32 import CodePredictorFp32
+
+            print("Using CodePredictorFp32 (fp32 activations, fp32 KV cache, HiFi4)")
+            self.code_predictor = CodePredictorFp32(
+                device=device,
+                config=code_predictor_config,
+                talker_hidden_size=talker_config.hidden_size,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+            )
+        else:
+            self.code_predictor = CodePredictor(
+                device=device,
+                config=code_predictor_config,
+                talker_hidden_size=talker_config.hidden_size,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+            )
 
         # Initialize Speaker Encoder
         self.speaker_encoder = SpeakerEncoder(
