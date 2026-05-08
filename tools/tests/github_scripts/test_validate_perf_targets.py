@@ -238,6 +238,131 @@ def test_validate_perf_targets_detects_regression(tmp_path):
     assert "decode_t/s/u" in result.stdout
 
 
+def test_validate_perf_targets_local_artifacts_no_regression_then_regression(tmp_path):
+    """
+    End-to-end local validation test that does not require CI or model weights.
+
+    The test creates complete_run_*.json artifacts under generated/benchmark_data
+    and validates both a passing run and a failing run with a synthetic regression.
+    """
+    benchmark_dir = tmp_path / "generated/benchmark_data"
+    benchmark_dir.mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model-a": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "decode_t/s/u": 100.0,
+                                    "prefill_time_to_token": 0.10,
+                                },
+                                "accuracy": {
+                                    "top1": 90.0,
+                                },
+                            }
+                        ]
+                    }
+                },
+            },
+            "demo-model-b": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 4,
+                                "seq_len": 256,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 50.0},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            },
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+
+    tests_yaml = [
+        {"model": "demo-model-a", "skus": {"wh_n150": {"tier": 1}}, "team": "models"},
+        {"model": "demo-model-b", "skus": {"wh_n150": {"tier": 2}}, "team": "models"},
+    ]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    # Baseline artifacts: all metrics satisfy targets.
+    (benchmark_dir / "complete_run_1.json").write_text(
+        json.dumps(
+            {
+                "ml_model_name": "demo-model-a",
+                "batch_size": 1,
+                "input_sequence_length": 128,
+                "device_info": {"card_type": "wh_n150"},
+                "measurements": [
+                    {"step_name": "inference_decode", "name": "tokens/s/user", "value": 110.0},
+                    {"step_name": "inference_prefill", "name": "time_to_token", "value": 0.09},
+                    {"step_name": "inference_decode", "name": "top1_token_accuracy", "value": 93.0},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (benchmark_dir / "complete_run_2.json").write_text(
+        json.dumps(
+            {
+                "ml_model_name": "demo-model-b",
+                "batch_size": 4,
+                "input_sequence_length": 256,
+                "device_info": {"card_type": "wh_n150"},
+                "measurements": [
+                    {"step_name": "inference_decode", "name": "tokens/s/user", "value": 56.0},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    baseline = _run_validator(tmp_path)
+    assert baseline.returncode == 0, baseline.stdout + baseline.stderr
+
+    # Inject a regression for model-a:
+    # - throughput drops below target
+    # - lower-is-better prefill_time_to_token gets worse
+    # - accuracy drops below target
+    (benchmark_dir / "complete_run_1.json").write_text(
+        json.dumps(
+            {
+                "ml_model_name": "demo-model-a",
+                "batch_size": 1,
+                "input_sequence_length": 128,
+                "device_info": {"card_type": "wh_n150"},
+                "measurements": [
+                    {"step_name": "inference_decode", "name": "tokens/s/user", "value": 40.0},
+                    {"step_name": "inference_prefill", "name": "time_to_token", "value": 0.20},
+                    {"step_name": "inference_decode", "name": "top1_token_accuracy", "value": 70.0},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    regressed = _run_validator(tmp_path)
+    assert regressed.returncode == 1
+    assert "decode_t/s/u" in regressed.stdout
+    assert "prefill_time_to_token" in regressed.stdout
+    assert "top1" in regressed.stdout
+
+
 def test_validate_perf_targets_respects_decode_tolerance_family(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)
