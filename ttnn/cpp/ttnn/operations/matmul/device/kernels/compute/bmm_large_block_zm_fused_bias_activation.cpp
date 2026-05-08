@@ -17,7 +17,10 @@
 
 #include "api/compute/eltwise_binary.h"
 #ifdef SFPU_ACTIVATION
-#include "bmm_fused_activation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
+using compute_kernel_lib::ActivationApplyHelper;
+using compute_kernel_lib::ActivationInitHelper;
+using compute_kernel_lib::apply_activation_from_pack;
 #endif
 
 // Please update

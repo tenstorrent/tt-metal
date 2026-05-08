@@ -11,7 +11,10 @@
 #include "internal/mod_div_lib.h"
 
 #ifdef SFPU_ACTIVATION
-#include "bmm_fused_activation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
+using compute_kernel_lib::ActivationApplyHelper;
+using compute_kernel_lib::ActivationInitHelper;
+using compute_kernel_lib::apply_activation_from_pack;
 #endif
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
