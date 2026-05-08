@@ -35,6 +35,7 @@ from inspector_data import run as get_inspector_data, InspectorData
 from triage import (
     triage_singleton,
     ScriptConfig,
+    TTTriageError,
     triage_field,
     recurse_field,
     run_script,
@@ -110,28 +111,33 @@ class PerCoreCheckResult(PerBlockCheckResult):
 
 def get_devices(
     devices: list[str],
-    inspector_data: InspectorData | None,
+    inspector_data: InspectorData,
     metal_device_id_mapping: MetalDeviceIdMapping,
     context: Context,
 ) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
-        if inspector_data is not None:
-            metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
+        metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
 
-            if len(metal_device_ids) == 0:
+        if len(metal_device_ids) == 0:
+            # Live "in use" list is empty — most often because firmware init failed and
+            # devices were torn down. Fall back to the SystemMesh's configured local set.
+            system_mesh = inspector_data.getSystemMesh().systemMesh
+            metal_device_ids = [m.localChipId for m in system_mesh.mappedDevices if m.isLocal]
+            if len(metal_device_ids) > 0:
                 utils.WARN(
-                    f"  No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache."
+                    f"  No devices in use found in inspector data — firmware init likely failed. "
+                    f"Falling back to the {len(metal_device_ids)} device(s) configured in the System Mesh."
                 )
-                device_ids = [int(id) for id in context.devices.keys()]
             else:
-                device_ids = [
-                    metal_device_id_mapping.get_device_id(metal_device_id)
-                    for metal_device_id in metal_device_ids
-                    if metal_device_id_mapping.get_device_id(metal_device_id) is not None
-                ]
-        else:
-            utils.WARN(f"  Using all available devices.")
-            device_ids = [int(id) for id in context.devices.keys()]
+                raise TTTriageError(
+                    "Cannot determine which devices to inspect: no active devices in metal and the "
+                    "System Mesh has no host-local devices."
+                )
+        device_ids = [
+            metal_device_id_mapping.get_device_id(metal_device_id)
+            for metal_device_id in metal_device_ids
+            if metal_device_id_mapping.get_device_id(metal_device_id) is not None
+        ]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
