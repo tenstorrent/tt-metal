@@ -738,6 +738,11 @@ class DecoderStage(StageKind):
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
 
+    @property
+    def kv_cache(self):
+        """Return the KV cache tensor once setup() has run, else None."""
+        return self._state.get("d", {}).get("ttnn_kv_cache")
+
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config

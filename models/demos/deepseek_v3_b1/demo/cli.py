@@ -152,6 +152,7 @@ def run_demo(
     top_k: int = 1,
     top_p: float = 1.0,
     temperature: float = 0.6,
+    on_kv_cache_ready=None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -174,6 +175,7 @@ def run_demo(
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            on_kv_cache_ready=on_kv_cache_ready,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
