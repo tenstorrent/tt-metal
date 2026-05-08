@@ -174,25 +174,28 @@ void kernel_main() {
             // chunk slice. Bounds derive from the same args the compute kernel
             // uses (slots [7] / [8]). With cores_per_head_arg = 1 the slice is
             // [0, valid_k_chunks) — same as before.
-            const uint32_t chunks_per_worker_r = (valid_k_chunks + cores_per_head_arg - 1) / cores_per_head_arg;
-            const uint32_t k_chunk_start_r = core_idx_in_group_arg * chunks_per_worker_r;
-            const uint32_t k_chunk_end_r = (k_chunk_start_r + chunks_per_worker_r < valid_k_chunks)
-                                               ? k_chunk_start_r + chunks_per_worker_r
-                                               : valid_k_chunks;
-
-            // Hybrid: split point between TQ chunks and ring chunks. Last
-            // `actual_W_chunks` chunks of the valid range come from the BFP8
-            // ring (most recent W positions), earlier chunks come from the
-            // TQ cache (older quantized positions). When valid_k_chunks <
-            // actual_W_chunks (early decode), split_chunk_idx clamps to 0
-            // and every chunk is read from the ring — equivalent to the
-            // standalone ring SDPA call in the legacy hybrid_sdpa_decode.
             //
-            // ring_W_padded is required to be a multiple of k_chunk_size_tokens
-            // (host-side validation), so chunks never straddle the split.
+            // Hybrid (Option A) — TQ-full + ring-overlay semantics. The chunk
+            // loop runs `valid_k_chunks + actual_W_chunks` iterations:
+            //   - chunks [0, valid_k_chunks)              → TQ source (full
+            //     range [0, cur_pos], same as legacy single TQ SDPA call).
+            //   - chunks [valid_k_chunks, +actual_W_chunks) → ring source
+            //     (most recent W positions, mapped to ring chunk index
+            //     `k_chunk - valid_k_chunks`).
+            // Online softmax accumulates across both; recent positions are
+            // counted twice (once via TQ-quantized, once via ring-precise),
+            // matching the LSE-emphasis-blend math the legacy dual-call
+            // hybrid_sdpa_decode used to produce. This is the math Llama's
+            // downstream weights expect — disjoint coverage (Phase 3b's
+            // earlier "Option B") drifted enough across 32 layers to wipe
+            // out token accuracy in eval_token_accuracy.py.
             constexpr uint32_t actual_W_chunks = hybrid_mode ? (ring_W_padded / k_chunk_size_tokens) : 0;
-            const uint32_t split_chunk_idx =
-                (hybrid_mode && valid_k_chunks > actual_W_chunks) ? (valid_k_chunks - actual_W_chunks) : 0;
+            const uint32_t total_chunks_to_read = valid_k_chunks + actual_W_chunks;
+            const uint32_t chunks_per_worker_r = (total_chunks_to_read + cores_per_head_arg - 1) / cores_per_head_arg;
+            const uint32_t k_chunk_start_r = core_idx_in_group_arg * chunks_per_worker_r;
+            const uint32_t k_chunk_end_r = (k_chunk_start_r + chunks_per_worker_r < total_chunks_to_read)
+                                               ? k_chunk_start_r + chunks_per_worker_r
+                                               : total_chunks_to_read;
 
             for (uint32_t k_chunk = k_chunk_start_r; k_chunk < k_chunk_end_r; ++k_chunk) {
                 const uint32_t chunk_start_row = k_chunk * Sk_chunk_t;
@@ -204,8 +207,8 @@ void kernel_main() {
                 //    skip the TQ idx+norms reads. K transposed (matches the
                 //    pre_rescaled layout the compute matmul expects); V not
                 //    transposed.
-                if (hybrid_mode && k_chunk >= split_chunk_idx) {
-                    const uint32_t ring_chunk_idx = k_chunk - split_chunk_idx;
+                if (hybrid_mode && k_chunk >= valid_k_chunks) {
+                    const uint32_t ring_chunk_idx = k_chunk - valid_k_chunks;
                     const uint32_t ring_start_row = ring_chunk_idx * Sk_chunk_t;
                     // ring chunks always span a full Sk_chunk_t (no boundary
                     // since ring_W_padded is chunk-aligned).

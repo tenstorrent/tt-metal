@@ -523,8 +523,9 @@ void kernel_main() {
     // Hybrid SDPA: ring K / V land here when recent_window > 0. The reader
     // pushes BFP8 (or whatever the ring's native format is) directly,
     // bypassing the dequant cascade. The chunk-loop matmul reads from these
-    // CBs for chunks at index >= split_chunk_idx; cb_k_in / cb_v_in (the
-    // dequant pipeline output) stays the source for earlier (TQ) chunks.
+    // CBs for chunks at index >= valid_k_chunks (the ring overlay tail);
+    // cb_k_in / cb_v_in (the dequant pipeline output) stays the source for
+    // earlier chunks (the full TQ pass).
     constexpr uint32_t cb_k_ring = tt::CBIndex::c_18;
     constexpr uint32_t cb_v_ring = tt::CBIndex::c_19;
     constexpr uint32_t cb_dq_temp = tt::CBIndex::c_14;
@@ -689,20 +690,21 @@ void kernel_main() {
                 // will start sending non-trivial values; the cross-core reduce
                 // of partial (max, sum, out) state lands in Phase 2.3-2.5.
                 // See turbo_quant/TIER_2A_DESIGN.md for the full plan.
-                const uint32_t chunks_per_worker = (valid_k_chunks + cores_per_head_arg - 1) / cores_per_head_arg;
-                const uint32_t k_chunk_start_for_core = core_idx_in_group_arg * chunks_per_worker;
-                const uint32_t k_chunk_end_for_core = (k_chunk_start_for_core + chunks_per_worker < valid_k_chunks)
-                                                          ? k_chunk_start_for_core + chunks_per_worker
-                                                          : valid_k_chunks;
-
-                // Hybrid SDPA: split index between TQ and ring sources, mirroring
-                // the same calculation in the reader. Ring covers the last
-                // actual_W_chunks chunks of valid_k_chunks (most recent positions
-                // in BFP8); TQ covers earlier chunks. Aligned to chunk boundary
-                // so chunks never straddle (host-side validation).
+                // Hybrid (Option A) — TQ-full + ring-overlay. Total chunks =
+                // valid_k_chunks (TQ over full [0, cur_pos]) + actual_W_chunks
+                // (ring over the most recent W positions, double-counting the
+                // recent W in the softmax to match the legacy LSE-blend math).
+                // Reader produces the same `total_chunks` chunks in the same
+                // order (TQ first, then ring) → both kernels just need to know
+                // when to switch sources at chunk index >= valid_k_chunks.
                 constexpr uint32_t actual_W_chunks = hybrid_mode ? (ring_W_padded_arg / k_chunk_size_tokens) : 0;
-                const uint32_t split_chunk_idx =
-                    (hybrid_mode && valid_k_chunks > actual_W_chunks) ? (valid_k_chunks - actual_W_chunks) : 0;
+                const uint32_t total_chunks = valid_k_chunks + actual_W_chunks;
+
+                const uint32_t chunks_per_worker = (total_chunks + cores_per_head_arg - 1) / cores_per_head_arg;
+                const uint32_t k_chunk_start_for_core = core_idx_in_group_arg * chunks_per_worker;
+                const uint32_t k_chunk_end_for_core = (k_chunk_start_for_core + chunks_per_worker < total_chunks)
+                                                          ? k_chunk_start_for_core + chunks_per_worker
+                                                          : total_chunks;
 
                 {
                     DeviceZoneScopedN("TQ_CHUNK_LOOP");
@@ -710,7 +712,7 @@ void kernel_main() {
                         DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
                         // Ring chunks bypass the dequant cascade — reader pushes
                         // already-rescaled BFP8 K/V to cb_k_ring / cb_v_ring.
-                        const bool is_ring_chunk = hybrid_mode && (k_chunk >= split_chunk_idx);
+                        const bool is_ring_chunk = hybrid_mode && (k_chunk >= valid_k_chunks);
                         const uint32_t cb_k_src = is_ring_chunk ? cb_k_ring : cb_k_in;
                         const uint32_t cb_v_src = is_ring_chunk ? cb_v_ring : cb_v_in;
 
