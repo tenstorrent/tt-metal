@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 import torch
 
-# tt-metal root (models/demos/kokoro/tests -> parents[4])
+# tt-metal root (models/experimental/kokoro/tests -> parents[4])
 _TT_METAL_ROOT = Path(__file__).resolve().parents[4]
 if str(_TT_METAL_ROOT) not in sys.path:
     sys.path.insert(0, str(_TT_METAL_ROOT))
@@ -45,7 +45,7 @@ def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 def test_official_kmodel_produces_finite_audio():
     """Sanity check: upstream `KModel` runs and returns finite waveform."""
     pytest.importorskip("kokoro")
-    from models.demos.kokoro.reference import KokoroConfig, load_reference_model
+    from models.experimental.kokoro.reference import KokoroConfig, load_reference_model
 
     device = "cpu"
     hf_repo_id = KokoroConfig().repo_id
@@ -66,7 +66,7 @@ def test_official_kmodel_produces_finite_audio():
 def test_reference_plbert_matches_official_kmodel():
     """PLBERT + projection: reference `KokoroPlBert` vs upstream `km.bert` + `km.bert_encoder`."""
     pytest.importorskip("kokoro")
-    from models.demos.kokoro.reference import KokoroConfig, load_plbert_from_huggingface, load_reference_model
+    from models.experimental.kokoro.reference import KokoroConfig, load_plbert_from_huggingface, load_reference_model
 
     device = "cpu"
     hf_repo_id = KokoroConfig().repo_id
@@ -97,7 +97,11 @@ def test_reference_full_model_matches_official_waveform():
     pytest.importorskip("kokoro")
     from kokoro import KPipeline
 
-    from models.demos.kokoro.reference import KokoroConfig, load_full_reference_from_huggingface, load_reference_model
+    from models.experimental.kokoro.reference import (
+        KokoroConfig,
+        load_full_reference_from_huggingface,
+        load_reference_model,
+    )
 
     device = "cpu"
     hf_repo_id = KokoroConfig().repo_id
@@ -139,7 +143,7 @@ def test_reference_predictor_matches_official_submodules():
     Predictor + text encoder path vs upstream `predictor` / `text_encoder` on shared PLBERT outputs.
     """
     pytest.importorskip("kokoro")
-    from models.demos.kokoro.reference import (
+    from models.experimental.kokoro.reference import (
         KokoroConfig,
         load_plbert_from_huggingface,
         load_predictor_from_huggingface,
@@ -196,7 +200,7 @@ def test_reference_predictor_matches_official_submodules():
 def test_reference_decoder_matches_official_istftnet():
     """ISTFTNet decoder: same ASR / F0 / N / style as upstream after identical predictor alignment."""
     pytest.importorskip("kokoro")
-    from models.demos.kokoro.reference import (
+    from models.experimental.kokoro.reference import (
         KokoroConfig,
         load_decoder_from_huggingface,
         load_plbert_from_huggingface,
