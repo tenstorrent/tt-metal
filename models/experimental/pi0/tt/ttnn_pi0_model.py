@@ -206,9 +206,8 @@ class PI0ModelTTNN:
         # Step 2: Forward prefix through VLM and cache KV
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
-        # Get timesteps using pure Python list (for control flow on host)
+        # Get timesteps
         num_steps = self.denoise_config.num_steps
-        # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
         # Compute timestep tensor on device
@@ -221,31 +220,25 @@ class PI0ModelTTNN:
         ttnn.deallocate(timestep_indices)
         ttnn.deallocate(timestep_values)
 
-        # Step 3: Sample initial noise (small tensor - host generation is fine)
-        # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
-        # The tensor is small (batch * 50 * 32 = 1600 floats), so transfer is negligible
+        # Step 3: Sample initial noise
         x_t_ttnn = self.x_t_ttnn
 
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):
-            t = timesteps[i]  # Already Python float
+            t = timesteps[i]
             t_next = timesteps[i + 1]
-            dt = t_next - t  # Negative since we go from 1.0 to 0.0
+            dt = t_next - t
 
-            # OPTIMIZATION: Slice timestep from pre-computed tensor (no transfer per step!)
             t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
             t_tensor = ttnn.reshape(t_tensor, (batch_size,))
 
-            # Embed suffix (x_t_ttnn already on device - no transfer!)
             suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
 
-            # Forward through expert with cached prefix KV
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
                 past_key_values=prefix_kv_cache,
             )
 
-            # Extract action output (skip state token in PI0 mode)
             if not self.config.pi05:
                 action_output = ttnn.slice(
                     expert_output, [0, 1, 0], [expert_output.shape[0], expert_output.shape[1], expert_output.shape[2]]
@@ -253,14 +246,11 @@ class PI0ModelTTNN:
             else:
                 action_output = expert_output
 
-            # Project to velocity
             velocity = self.suffix_embedding.project_output(action_output)
 
-            # Euler step ON DEVICE (no transfer per step!)
             velocity_scaled = ttnn.mul(velocity, dt)
             x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
         return x_t_ttnn
 
     @classmethod

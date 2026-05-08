@@ -496,13 +496,14 @@ class GemmaMLPTTNN:
                 x_chunk = ttnn.to_memory_config(x_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
-            # Gate and up projections - use bfloat8_b for 2x memory savings
-            gate = ttnn.linear(
+            # Gate projection with fused GELU activation (single kernel launch)
+            gate_activated = ttnn.linear(
                 x_chunk,
                 self.gate_proj,
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 core_grid=self.core_grid,
+                activation="gelu",
             )
             up = ttnn.linear(
                 x_chunk,
@@ -512,10 +513,6 @@ class GemmaMLPTTNN:
                 core_grid=self.core_grid,
             )
             ttnn.deallocate(x_chunk)
-
-            # GELU activation
-            gate_activated = ttnn.gelu(gate)
-            ttnn.deallocate(gate)
 
             # Element-wise multiply
             hidden_out = ttnn.multiply(gate_activated, up)

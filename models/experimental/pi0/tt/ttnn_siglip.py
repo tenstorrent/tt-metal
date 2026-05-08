@@ -261,56 +261,34 @@ class SigLIPAttentionTTNN:
         self.padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 72 -> 96
         padding_size = self.padded_head_dim - self.head_dim
 
-        # Helper function to pad weights on device using ttnn.pad
-        def pad_head_dim_weight_ttnn(weight, heads_out=True):
-            """Pad weight tensor's head dimension using TTNN operations."""
-            dim = weight.shape[0]  # hidden_size
+        # Pad weights on host using pure PyTorch (avoids expensive device round-trips)
+        def pad_head_dim_weight(weight, heads_out=True):
+            """Pad weight tensor's head dimension using PyTorch on host."""
+            dim = weight.shape[0]
 
             if padding_size > 0:
                 if heads_out:
-                    weight = weight.T  # (hidden, hidden) -> transpose for reshape
-                # Reshape to expose head dimension
+                    weight = weight.T
                 weight = weight.reshape(dim, self.num_heads, self.head_dim)
-                # Transfer to device
-                weight_ttnn = ttnn.from_torch(
-                    weight.contiguous(),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                # Pad head dimension using ttnn.pad
-                weight_ttnn = ttnn.pad(weight_ttnn, padding=((0, 0), (0, 0), (0, padding_size)), value=0.0)
-                weight_ttnn = ttnn.reshape(weight_ttnn, (dim, self.num_heads * self.padded_head_dim))
-                weight = ttnn.to_torch(weight_ttnn)
+                weight = torch.nn.functional.pad(weight, (0, padding_size))
+                weight = weight.reshape(dim, self.num_heads * self.padded_head_dim)
                 if heads_out:
                     weight = weight.T
             return weight
 
-        def pad_head_dim_bias_ttnn(bias):
-            """Pad 1D bias using TTNN operations."""
+        def pad_head_dim_bias(bias):
+            """Pad 1D bias using PyTorch on host."""
             if padding_size > 0:
-                # Reshape to expose head dimension
                 bias = bias.view(self.num_heads, self.head_dim)
-                # Transfer to device
-                bias_ttnn = ttnn.from_torch(
-                    bias.contiguous(),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                # Pad using ttnn.pad
-                bias_ttnn = ttnn.pad(bias_ttnn, padding=((0, 0), (0, padding_size)), value=0.0)
-                bias_ttnn = ttnn.reshape(bias_ttnn, (self.num_heads * self.padded_head_dim,))
-                bias = ttnn.to_torch(bias_ttnn)
+                bias = torch.nn.functional.pad(bias, (0, padding_size))
+                bias = bias.reshape(self.num_heads * self.padded_head_dim)
             return bias
 
         # OPTIMIZATION: Fused QKV weights - single linear instead of 3
-        # Pad each weight using TTNN, then concatenate
-        wq_padded = pad_head_dim_weight_ttnn(weights["self_attn.q_proj.weight"])
-        wk_padded = pad_head_dim_weight_ttnn(weights["self_attn.k_proj.weight"])
-        wv_padded = pad_head_dim_weight_ttnn(weights["self_attn.v_proj.weight"])
+        # Pad each weight on host, then transfer to device
+        wq_padded = pad_head_dim_weight(weights["self_attn.q_proj.weight"])
+        wk_padded = pad_head_dim_weight(weights["self_attn.k_proj.weight"])
+        wv_padded = pad_head_dim_weight(weights["self_attn.v_proj.weight"])
 
         # Concatenate Q, K, V weights on device
         wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -320,9 +298,9 @@ class SigLIPAttentionTTNN:
 
         # Fused QKV biases
         if "self_attn.q_proj.bias" in weights:
-            bq_padded = pad_head_dim_bias_ttnn(weights["self_attn.q_proj.bias"])
-            bk_padded = pad_head_dim_bias_ttnn(weights["self_attn.k_proj.bias"])
-            bv_padded = pad_head_dim_bias_ttnn(weights["self_attn.v_proj.bias"])
+            bq_padded = pad_head_dim_bias(weights["self_attn.q_proj.bias"])
+            bk_padded = pad_head_dim_bias(weights["self_attn.k_proj.bias"])
+            bv_padded = pad_head_dim_bias(weights["self_attn.v_proj.bias"])
 
             # Concatenate biases on device (using tensor_1d_to_2d_ttnn to avoid torch.unsqueeze)
             bq_ttnn = tensor_1d_to_2d_ttnn(bq_padded, device, dtype=ttnn.bfloat16)
@@ -333,7 +311,7 @@ class SigLIPAttentionTTNN:
             self.bqkv = None
 
         # Output projection - pad input head dim, output is hidden_size
-        wo_padded = pad_head_dim_weight_ttnn(weights["self_attn.out_proj.weight"], heads_out=False)
+        wo_padded = pad_head_dim_weight(weights["self_attn.out_proj.weight"], heads_out=False)
         self.wo = ttnn.from_torch(
             wo_padded.T.contiguous(),
             dtype=ttnn.bfloat16,

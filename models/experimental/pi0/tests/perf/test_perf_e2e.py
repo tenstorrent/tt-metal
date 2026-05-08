@@ -112,8 +112,8 @@ def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
     "device_params",
     [
         {
-            "l1_small_size": 16384,
-            "trace_region_size": 40000000,
+            "l1_small_size": 24576,
+            "trace_region_size": 80000000,
             "num_command_queues": 2,
         }
     ],
@@ -176,8 +176,8 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
 
     run_model = create_pi0_pipeline_model(model_ttnn, device, inputs)
 
-    # Create pipeline configuration with 2CQ + Trace enabled
-    config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    # 2CQ with overlapped input (trace disabled - model allocates KV buffers internally)
+    config = PipelineConfig(use_trace=False, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         config,
         run_model,
