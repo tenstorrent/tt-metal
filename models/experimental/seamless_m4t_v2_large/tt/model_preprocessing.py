@@ -81,7 +81,7 @@ def _ln_to_device(param: torch.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
 
 
 def _linear_pair(linear: torch.nn.Linear, *, device: ttnn.Device) -> dict:
-    w = preprocess_linear_weight(linear.weight.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    w = preprocess_linear_weight(linear.weight.detach(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     b = preprocess_linear_bias(linear.bias.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return {
         "weight": ttnn.to_device(w, device),
