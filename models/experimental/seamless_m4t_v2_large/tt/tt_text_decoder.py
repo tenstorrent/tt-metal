@@ -68,9 +68,10 @@ class TTSeamlessM4Tv2Decoder:
         )
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
-        # Larger chunks match Whisper-style prefill SDPA schedules and reduce boundary accumulation drift.
-        q_chunk = max(64, min(256, nearest_32(seq_q)))
-        k_chunk = max(64, min(256, nearest_32(seq_k)))
+        # Keep chunks aligned to the actual sequence envelope; forcing 64 for short prefill (seq=32)
+        # can over-tile SDPA and add avoidable orchestration overhead.
+        q_chunk = max(32, min(256, nearest_32(seq_q)))
+        k_chunk = max(32, min(256, nearest_32(seq_k)))
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
@@ -140,14 +141,10 @@ class TTSeamlessM4Tv2Decoder:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        qh = ttnn.to_memory_config(qh, ttnn.DRAM_MEMORY_CONFIG)
-        kh = ttnn.to_memory_config(kh, ttnn.DRAM_MEMORY_CONFIG)
-        vh = ttnn.to_memory_config(vh, ttnn.DRAM_MEMORY_CONFIG)
-
         # Match Hugging Face ``SeamlessM4Tv2Attention``: scale Q by head_dim**-0.5 before QKᵀ.
         # Use SDPA ``scale=1.0`` so ttnn does not premultiply ``attn_mask`` by 1/scale (see
         # ``sdpa.cpp``); that premultiply overflows HF-style masks (``finfo(dtype).min``).
-        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         is_causal = encoder_hidden_states is None and attn_mask is None
 
