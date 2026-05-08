@@ -300,6 +300,15 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
         batch_size,
     )
     sg.reset_sampling_params(params)
+    # ``reset_sampling_params`` does not propagate the seed to ``SeedManager``
+    # (only top-k/top-p/temperature/penalties/log-probs flow through), so
+    # without this explicit reset the manager stays in its
+    # ``_seed_active=False, _reseted=False`` initial state and
+    # ``get_new_values()`` early-returns every iteration. The device's
+    # ``seeds_tt_tensor`` would then keep its constructor default
+    # (``arange(0..31)``, none ``MAX_UINT32``) and ``rand_tile_init`` would
+    # re-seed user 0 to ``seed=0`` every step → 1 unique token in 100 samples.
+    sg.seed_manager.reset_seed([seed] * batch_size, list(range(batch_size)))
 
     # Run device sampling
     sampled_tokens = []
@@ -428,23 +437,37 @@ def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
     args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
 
     torch_input = torch.randn(1, 1, BATCH_SIZE, args.padded_vocab_size)
-    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
+    # Use a very-negative finite value (not ``-inf``) for padding. The old
+    # logprobs path masks gathered logits via ``ttnn.multiply(logit, mask)``
+    # at ``tt_log_probs.py:454``: ``-inf * 0`` produces NaN (or ``-inf`` on
+    # Wormhole bf16) which then poisons the sum-across-devices and yields
+    # ``-inf`` for every user. ``-1e9`` is far enough below the random-init
+    # logits (~bounded in [-5, 5]) that the sampler never picks padding,
+    # without breaking the multiply-mask arithmetic.
+    torch_input[:, :, :, VOCAB_SIZE:] = -1e9
 
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
     sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
 
+    seed = 42
     params = format_sampling_params(
         SamplingParams(
             temperature=1.0,
             top_k=32,
             top_p=0.95,
             enable_log_probs=True,
-            seed=42,
+            seed=seed,
         ),
         BATCH_SIZE,
     )
     sg.reset_sampling_params(params)
+    # See ``test_gpt_oss_stochastic_sampling`` — ``reset_sampling_params`` doesn't
+    # propagate ``seed`` into the ``SeedManager``, so we have to seed it
+    # explicitly. Without this, ``get_new_values()`` early-returns and the
+    # device runs ``rand_tile_init`` from the constructor's default
+    # ``arange(0..31)`` seeds tensor on every call.
+    sg.seed_manager.reset_seed([seed] * BATCH_SIZE, list(range(BATCH_SIZE)))
     sg.seed_manager.get_new_values()
 
     tokens, log_probs = sg.sample(tt_input, enable_trace=False)
