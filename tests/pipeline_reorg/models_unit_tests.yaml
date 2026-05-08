@@ -358,7 +358,7 @@
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
   model: gpt-oss-120b-high-batch-galaxy
   skus:
-    wh_galaxy_perf:
+    wh_galaxy:
       timeout: 25
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
