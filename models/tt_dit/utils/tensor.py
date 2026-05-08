@@ -672,6 +672,7 @@ def _yuv_planar_d2h(
     W: int,
     T: int,
     *,
+    view=None,
     pool: ThreadPoolExecutor | None = None,
 ) -> np.ndarray:
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
@@ -685,21 +686,22 @@ def _yuv_planar_d2h(
     ``[Y plane | Cb plane | Cr plane]`` in row-major.
 
     Kicks off all three ``cpu(blocking=False)`` calls before a single
-    ``synchronize_device`` so the reads overlap, then dispatches the 96
+    ``synchronize_device`` so the reads overlap, then dispatches the
     per-shard scatters across the shared reassembly thread pool using
     torch's strided-copy backend.  Each scatter is a strided->strided copy
     (T innermost in source, W innermost in dest) — the ideal would be an
     on-device permute BHWT->BCTHW so the source becomes contiguous, but
     ``ttnn.permute`` is currently broken on uint8 multi-device tensors.
+
+    Args:
+        view: Optional mesh device view for multi-host environments.
+            When provided, uses ``host_buffer()`` / ``get_shard()`` with
+            ``view.is_local()`` filtering instead of ``get_device_tensors()``.
     """
     Hu, Wu = H // 2, W // 2
     hw = H * W
     uv = Hu * Wu
     row_stride = hw + 2 * uv
-
-    TP, SP = tuple(mesh_device.shape)
-    h_per_y, w_per_y = H // TP, W // SP
-    h_per_uv, w_per_uv = Hu // TP, Wu // SP
 
     # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
     host_Y = tt_Y.cpu(blocking=False)
@@ -707,17 +709,62 @@ def _yuv_planar_d2h(
     host_Cr = tt_Cr.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
 
-    mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
+    if view is not None:
+        # --- Multi-host: extract local shards via host_buffer/get_shard ---
+        def _extract_local(host_tensor):
+            host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
+            distributed_buf = host_tensor.host_buffer()
+            tt_dtype = host_tensor.dtype
+            padded_shape = list(host_tensor.padded_shape)
+            logical_shape = list(host_tensor.shape)
+            trim = tuple(slice(0, d) for d in logical_shape)
 
-    def _extract(host_tensor):
-        host_shards = ttnn.get_device_tensors(host_tensor)
-        logical_shape = list(host_shards[0].shape)
-        trim = tuple(slice(0, d) for d in logical_shape)
-        return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+            coords_and_shards = []
+            for c in host_mesh_coords:
+                if not view.is_local(c):
+                    continue
+                buf = distributed_buf.get_shard(c)
+                if buf is not None:
+                    coords_and_shards.append((c, _host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim]))
+            return coords_and_shards
 
-    Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
-    Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
-    Cr_shards = _extract(host_Cr)
+        Y_coords_shards = _extract_local(host_Y)
+        Cb_coords_shards = _extract_local(host_Cb)
+        Cr_coords_shards = _extract_local(host_Cr)
+
+        # Remap global mesh coordinates to 0-based local coordinates.
+        all_local_coords = [c for c, _ in Y_coords_shards]
+        local_row_positions = sorted({int(c[0]) for c in all_local_coords})
+        local_col_positions = sorted({int(c[1]) for c in all_local_coords})
+        row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
+        col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
+        local_TP = len(local_row_positions)
+        local_SP = len(local_col_positions)
+
+        h_per_y, w_per_y = H // local_TP, W // local_SP
+        h_per_uv, w_per_uv = Hu // local_TP, Wu // local_SP
+
+        mesh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
+        Y_shards = [s for _, s in Y_coords_shards]
+        Cb_shards = [s for _, s in Cb_coords_shards]
+        Cr_shards = [s for _, s in Cr_coords_shards]
+    else:
+        # --- Single-host: extract all shards via get_device_tensors ---
+        TP, SP = tuple(mesh_device.shape)
+        h_per_y, w_per_y = H // TP, W // SP
+        h_per_uv, w_per_uv = Hu // TP, Wu // SP
+
+        mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
+
+        def _extract(host_tensor):
+            host_shards = ttnn.get_device_tensors(host_tensor)
+            logical_shape = list(host_shards[0].shape)
+            trim = tuple(slice(0, d) for d in logical_shape)
+            return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+
+        Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
+        Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
+        Cr_shards = _extract(host_Cr)
 
     # Allocate the planar output and view each plane region as a (T, h, w)
     # strided torch tensor (no copy, shares storage with `out`).
@@ -824,27 +871,40 @@ def fast_device_to_host_yuv(
     tt_video_BCTHW: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
     *,
+    ccl_manager=None,
+    root: int | None = None,
     coefficients=None,
     pool: ThreadPoolExecutor | None = None,
     debug: bool = False,
     logical_h: int | None = None,
-) -> np.ndarray:
+) -> np.ndarray | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
     Takes a sharded BCTHW bf16 row-major tensor with values in ``[-1, 1]`` —
     typically the output of the Wan VAE — and returns a single numpy uint8
     array in ffmpeg ``AV_PIX_FMT_YUV420P`` layout.
 
+    On a single-host system, reads all per-device shards concurrently with
+    async DMA, converts each shard's YUV planes, and scatters into the
+    planar output on host.
+
+    On a multi-host (distributed) system, uses a hybrid approach: an
+    on-device all_gather for the inter-host axis only, then re-shards with
+    repeat + mesh_partition so each local device holds unique data, runs the
+    YUV conversion on the gathered data, and performs fast async DMA + planar
+    concat for local shards only.
+
     Pipeline:
-      1. Permute BCTHW -> BCHWT (T moves to the last position) and reshape to
+      1. (Multi-host only) ``all_gather`` + ``repeat`` + ``mesh_partition``
+         on the inter-host axis of the bf16 BCTHW input.
+      2. Permute BCTHW -> BCHWT (T moves to the last position) and reshape to
          drop the B=1 dim, landing in CHWT — the layout the YUV kernel expects.
-      2. ``ttnn.experimental.yuv_conversion`` runs on each device's local shard,
+      3. ``ttnn.experimental.yuv_conversion`` runs on each device's local shard,
          producing 3 uint8 outputs (Y full-res, Cb/Cr 4:2:0 subsampled).
-      3. Async ``cpu(blocking=False)`` on all three outputs followed by a
+      4. Async ``cpu(blocking=False)`` on all three outputs followed by a
          single ``synchronize_device`` so the D2H reads overlap.
-      4. The 96 per-shard scatters (32 each for Y/Cb/Cr) are dispatched across
-         the shared reassembly thread pool using torch's strided-copy backend
-         (the ``torch_threaded`` pattern from the host-concat benchmarks).
+      5. Per-shard scatters are dispatched across the shared reassembly thread
+         pool using torch's strided-copy backend.
 
     Output shape: ``(T, H*W + 2*(H/2 * W/2))`` numpy uint8 — one row per frame,
     ``[Y plane | Cb plane | Cr plane]`` in row-major.
@@ -854,20 +914,27 @@ def fast_device_to_host_yuv(
             bfloat16, ROW_MAJOR_LAYOUT, sharded ``{axis 0: dim 3 (H), axis 1: dim 4 (W)}``.
             Values must lie in ``[-1, 1]`` — the YUV kernel's expected range.
         mesh_device: The mesh device.
+        ccl_manager: Optional :class:`CCLManager` instance.  Required for
+            multi-host environments where only local devices are accessible.
+        root: If set, only the host with this MPI rank performs the D2H
+            transfer and returns the assembled array; all other ranks return
+            ``None``.  If ``None`` (default), all ranks perform D2H.
         coefficients: ``ttnn.experimental.YUVCoefficients`` to use for the
             per-channel weights and offsets.  Defaults to BT.601.
         pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
             If ``None``, the module-level lazy default pool is used.
+        debug: If ``True``, print diagnostic shape information.
         logical_h: Optional logical (un-padded) height of the output.  When
             the VAE pads ``H`` to a coarser size, pass the true logical height
             here and the function will trim the bottom rows of each plane in
-            the planar buffer on host (Y → top ``logical_h`` rows; Cb/Cr →
-            top ``logical_h/2`` rows).  Must be even and ``≤ H``.  Defaults to
+            the planar buffer on host (Y -> top ``logical_h`` rows; Cb/Cr ->
+            top ``logical_h/2`` rows).  Must be even and ``<= H``.  Defaults to
             ``None`` (no trim).
 
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W + 2*(H'/2 * W/2))``, dtype uint8,
         where ``H' = logical_h if logical_h is not None else H``.
+        Returns ``None`` for non-root ranks when ``root`` is set.
 
     Raises:
         AssertionError: if ``B != 1``, ``C != 3``, or H/W are not even.
@@ -883,19 +950,63 @@ def fast_device_to_host_yuv(
     # (permute, reshape, yuv_conversion) operate on per-shard semantics, so
     # we use ``h_per, w_per`` for the reshape target; ``_yuv_planar_d2h``
     # then takes the global ``H, W`` to size the output buffer.
+    mesh_shape = tuple(mesh_device.shape)
     B, C, T, h_per, w_per = tt_video_BCTHW.shape
     assert B == 1, f"fast_device_to_host_yuv requires B=1, got {B}"
     assert C == 3, f"fast_device_to_host_yuv requires C=3 (RGB), got {C}"
-    assert (
-        h_per % 2 == 0 and w_per % 2 == 0
-    ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
 
-    TP, SP = tuple(mesh_device.shape)
+    TP, SP = mesh_shape
     H, W = h_per * TP, w_per * SP
 
     if debug:
         print(f"  [yuv-d2h] input per-shard: {list(tt_video_BCTHW.shape)}")
         print(f"  [yuv-d2h] global H={H}, W={W}, T={T}  (mesh TP={TP}, SP={SP})")
+
+    # Sharding convention: axis 0 -> dim 3 (H), axis 1 -> dim 4 (W).
+    concat_dims: list[int | None] = [3, 4]
+
+    # --- Multi-host: hybrid on-device collective + fast local DMA -----------
+    d2h_view = None
+    if ttnn.using_distributed_env():
+        if ccl_manager is None:
+            msg = "fast_device_to_host_yuv requires ccl_manager in a distributed (multi-host) environment"
+            raise ValueError(msg)
+
+        d2h_view = mesh_device.get_view()
+        rank = int(ttnn.distributed_context_get_rank())
+
+        inter_host_axis = _get_inter_host_axis(mesh_device, d2h_view, mesh_shape)
+
+        inter_dim = concat_dims[inter_host_axis]
+        if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
+            tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
+            tt_video_BCTHW = ccl_manager.all_gather(
+                tt_video_BCTHW,
+                dim=inter_dim,
+                mesh_axis=inter_host_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
+            )
+            n_hosts = int(ttnn.distributed_context_get_size())
+            if n_hosts > 1:
+                repeat_dims = [1] * len(tt_video_BCTHW.shape)
+                repeat_dims[inter_dim] = n_hosts
+                tt_video_BCTHW = ttnn.repeat(tt_video_BCTHW, repeat_dims)
+                tt_video_BCTHW = ttnn.mesh_partition(tt_video_BCTHW, dim=inter_dim, cluster_axis=inter_host_axis)
+            tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Recompute per-shard dims after gather — they may have grown.
+        B, C, T, h_per, w_per = tt_video_BCTHW.shape
+
+        if debug:
+            print(f"  [yuv-d2h] (distributed) post-gather per-shard: {list(tt_video_BCTHW.shape)}")
+
+        if root is not None and rank != root:
+            return None
+
+    assert (
+        h_per % 2 == 0 and w_per % 2 == 0
+    ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
 
     # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
     tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
@@ -915,7 +1026,7 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
 
     # 3+4. Batched D2H + planar concat — uses GLOBAL H, W to size the buffer.
-    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, pool=pool)
+    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, view=d2h_view, pool=pool)
 
     # 5. Optional host-side trim of the height in the planar buffer for the
     # case where the VAE pads H beyond its logical extent.
