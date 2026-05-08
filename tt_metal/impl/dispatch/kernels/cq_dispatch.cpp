@@ -159,18 +159,7 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
         DPRINT << "NocReleasePolicy: release: pages=" << pages << " sem_id=" << sem_id << ENDL();
-        uint32_t sem_addr = get_semaphore<fd_core_type>(sem_id);
-        // noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
-        // do local pointer increment
-        volatile tt_l1_ptr uint32_t* sem =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
-        *sem += pages;
-        // #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        //         // Push the dirty line out of this core's private write-back L1 D$ so the consumer (other RISC
-        //         // on the same core) can see the increment via L2.
-        //         flush_l1_dcache((uintptr_t)sem);
-        // #endif
-        DPRINT << "NocReleasePolicy: after local pointer increment: sem val = " << *sem << ENDL();
+        experimental::Semaphore<fd_core_type>(sem_id).up(pages);
     }
 };
 
