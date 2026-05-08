@@ -220,9 +220,23 @@ def run(
     if "program_config" not in op_kwargs:
         raw_pc = kwargs.get("program_config")
         if raw_pc is not None and raw_pc != "__ABSENT__":
-            parsed_pc = parse_dict_value("program_config", raw_pc) if isinstance(raw_pc, dict) else raw_pc
-            if parsed_pc is not None:
-                op_kwargs["program_config"] = parsed_pc
+            if isinstance(raw_pc, dict) and raw_pc.get("type") == "SDPAProgramConfig":
+                import re
+
+                val = raw_pc.get("value", "")
+                gm = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
+                qm = re.search(r"q_chunk_size=(\d+)", val)
+                km = re.search(r"k_chunk_size=(\d+)", val)
+                em = re.search(r"exp_approx_mode=(\w+)", val)
+                if gm and qm and km:
+                    op_kwargs["program_config"] = ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=(int(gm.group(1)), int(gm.group(2))),
+                        q_chunk_size=int(qm.group(1)),
+                        k_chunk_size=int(km.group(1)),
+                        exp_approx_mode=em.group(1).lower() == "true" if em else False,
+                    )
+            elif not isinstance(raw_pc, dict):
+                op_kwargs["program_config"] = raw_pc
     pc = op_kwargs.get("program_config")
     if pc is not None:
         try:
