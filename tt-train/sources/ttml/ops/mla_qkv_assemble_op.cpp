@@ -25,11 +25,11 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> mla_qk
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim,
     uint32_t v_dim) {
-    auto [q_raw, k_full_raw, v_raw] = ttml::metal::mla_qkv_assemble_fw(
+    auto [q_raw, k_raw, v_raw] = ttml::metal::mla_qkv_assemble_fw(
         q_pre->get_value(), kv_up->get_value(), k_pe->get_value(), n_heads, qk_nope_dim, qk_rope_dim, v_dim);
 
     auto out_q = autograd::create_tensor(q_raw);
-    auto out_k = autograd::create_tensor(k_full_raw);
+    auto out_k = autograd::create_tensor(k_raw);
     auto out_v = autograd::create_tensor(v_raw);
 
     autograd::GradFunction grad =

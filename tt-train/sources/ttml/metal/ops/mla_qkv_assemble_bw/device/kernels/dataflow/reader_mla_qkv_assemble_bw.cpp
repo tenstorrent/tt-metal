@@ -13,8 +13,10 @@ void kernel_main() {
     uint32_t dK_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t dV_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_blocks = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t sb = get_arg_val<uint32_t>(runtime_args_counter++);             // s-tile-row in current batch
-    uint32_t dQ_block_base = get_arg_val<uint32_t>(runtime_args_counter++);  // head 0 of (b, sb), w=0
+    uint32_t sb = get_arg_val<uint32_t>(runtime_args_counter++);  // s-tile-row in current batch
+    // Shared dQ/dK base — validation enforces same shape, so the per-head head_dim is
+    // identical and a single base + h*kq_HtWt addresses both tensors.
+    uint32_t dQK_block_base = get_arg_val<uint32_t>(runtime_args_counter++);  // head 0 of (b, sb), w=0
     uint32_t dV_block_base = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_dq = tt::CBIndex::c_0;
@@ -39,8 +41,7 @@ void kernel_main() {
     const auto dK_addr_gen = TensorAccessor(dK_args, dK_addr);
     const auto dV_addr_gen = TensorAccessor(dV_args, dV_addr);
 
-    // dK shares dQ's per-head head_dim, so kq_HtWt is the head stride for both.
-    // End-of-batch jump to advance dQ_block_base across batch boundary:
+    // End-of-batch jump to advance dQK_block_base across batch boundary:
     //   from b * H*kq_HtWt + (S_t-1)*Th  →  (b+1) * H*kq_HtWt
     //   = current + ((H-1)*S_t + 1) * Th
     constexpr uint32_t end_of_batch_jump_q = ((n_heads - 1U) * S_t + 1U) * Th;
@@ -48,8 +49,8 @@ void kernel_main() {
 
     for (uint32_t block = 0U; block < num_blocks; ++block) {
         for (uint32_t h = 0U; h < n_heads; ++h) {
-            const uint32_t head_dq = dQ_block_base + h * kq_HtWt;
-            const uint32_t head_dk = dQ_block_base + h * kq_HtWt;  // dK same layout as dQ
+            const uint32_t head_dq = dQK_block_base + h * kq_HtWt;
+            const uint32_t head_dk = dQK_block_base + h * kq_HtWt;
             const uint32_t head_dv = dV_block_base + h * v_HtWt;
 
             // Th dQ tiles
@@ -88,11 +89,11 @@ void kernel_main() {
         // Advance to next block.
         ++sb;
         if (sb < S_t) {
-            dQ_block_base += Th;
+            dQK_block_base += Th;
             dV_block_base += Tv;
         } else {
             sb = 0U;
-            dQ_block_base += end_of_batch_jump_q;
+            dQK_block_base += end_of_batch_jump_q;
             dV_block_base += end_of_batch_jump_v;
         }
     }

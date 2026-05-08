@@ -20,7 +20,7 @@ from ttml.common.profiler_utils import profiler_marker
 from ttml.modules import AbstractModuleBase, LinearLayer
 
 from .transformer import RMSNormLayer
-from .autograd_ops import autograd_slice, rope_partial
+from .autograd_ops import autograd_slice, rope_trailing
 
 
 class MultiHeadLatentAttention(AbstractModuleBase):
@@ -29,13 +29,13 @@ class MultiHeadLatentAttention(AbstractModuleBase):
     Naive-mode flow (no KV-cache absorption):
       Q   : x -> [wq | wq_a -> q_norm -> wq_b]                       # [B, 1, S, H*qk_head]
       KV  : x -> wkv_a -> [kv_latent, k_pe]                          # split low-rank latent + rope-half
-            kv_latent -> kv_norm -> wkv_b                            # [B, 1, S, H*(qk_nope+v_dim)]
-            k_pe      -> RoPE                                        # [B, 1, S, qk_rope]
+            kv_latent -> kv_norm -> wkv_b                            # [B, 1, S, H*(qk_nope_dim+v_dim)]
+            k_pe      -> RoPE                                        # [B, 1, S, qk_rope_dim]
       QKV : (q_pre, kv_up, k_pe) -> mla.qkv_assemble                 # head-split + broadcast k_pe + demux v
                                   -> q  [B, H, S, qk_head]           (not yet RoPE'd)
                                   -> k  [B, H, S, qk_head]           (k_nope | broadcast k_pe)
                                   -> v  [B, H, S, v_dim]
-            q   -> rope_partial(rotate trailing qk_rope cols)
+            q   -> rope_trailing(rotate trailing qk_rope_dim cols)
       Attn: composite_SDPA(q, k, v, mask) -> heads_fusion -> wo
     """
 
@@ -78,10 +78,10 @@ class MultiHeadLatentAttention(AbstractModuleBase):
     def forward(self, x: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         B, _, S, _ = list(x.get_value().shape)
         n_heads = self.n_heads
-        qk_nope = self.qk_nope_head_dim
-        qk_rope = self.qk_rope_head_dim
+        qk_nope_dim = self.qk_nope_head_dim
+        qk_rope_dim = self.qk_rope_head_dim
         v_dim = self.v_head_dim
-        kv_lora = self.kv_lora_rank
+        kv_latent_rank = self.kv_lora_rank
 
         x_in = profiler_marker(x, "[START] [MLA]")
 
@@ -100,33 +100,33 @@ class MultiHeadLatentAttention(AbstractModuleBase):
 
         # ── KV down-projection: split into low-rank latent and the shared rope-half ──
         x_kv = profiler_marker(x_in, "[START] [MLA] KV-Down")
-        kv_full = self.wkv_a(x_kv)  # [B, 1, S, kv_lora + qk_rope]
-        kv = autograd_slice(kv_full, [0, 0, 0, 0], [B, 1, S, kv_lora])
-        k_pe = autograd_slice(kv_full, [0, 0, 0, kv_lora], [B, 1, S, kv_lora + qk_rope])
+        kv_down = self.wkv_a(x_kv)  # [B, 1, S, kv_latent_rank + qk_rope_dim]
+        kv_latent = autograd_slice(kv_down, [0, 0, 0, 0], [B, 1, S, kv_latent_rank])
+        k_pe = autograd_slice(kv_down, [0, 0, 0, kv_latent_rank], [B, 1, S, kv_latent_rank + qk_rope_dim])
         k_pe = profiler_marker(k_pe, "[END] [MLA] KV-Down")
 
         # ── RoPE on shared k_pe (per-token, not per-head) ──
         k_pe = profiler_marker(k_pe, "[START] [MLA] RoPE-K")
-        k_pe = ttml.ops.rope.rope(k_pe, self.rope_params)  # [B, 1, S, qk_rope]
+        k_pe = ttml.ops.rope.rope(k_pe, self.rope_params)  # [B, 1, S, qk_rope_dim]
         k_pe = profiler_marker(k_pe, "[END] [MLA] RoPE-K")
 
         # ── KV up-projection (produces packed per-head [k_nope | v]) ──
-        kv = profiler_marker(kv, "[START] [MLA] KV-Up")
-        kv_up = self.wkv_b(self.kv_norm(kv))  # [B, 1, S, n_heads * (qk_nope + v_dim)]
+        kv_latent = profiler_marker(kv_latent, "[START] [MLA] KV-Up")
+        kv_up = self.wkv_b(self.kv_norm(kv_latent))  # [B, 1, S, n_heads * (qk_nope_dim + v_dim)]
         kv_up = profiler_marker(kv_up, "[END] [MLA] KV-Up")
 
         # ── Fused QKV assembly ──
         # Q head-split, KV demux into per-head (k_nope, v), and broadcast k_pe
         # into every head's rope-suffix of K. Q is emitted head-split but NOT
-        # yet rotated; rope_partial below applies RoPE to Q's rope-suffix.
+        # yet rotated; rope_trailing below applies RoPE to Q's rope-suffix.
         q_pre = profiler_marker(q_pre, "[START] [MLA] QKV-Assemble")
-        q, k_full, v = ttml.ops.mla.qkv_assemble(q_pre, kv_up, k_pe, n_heads, qk_nope, qk_rope, v_dim)
+        q, k_full, v = ttml.ops.mla.qkv_assemble(q_pre, kv_up, k_pe, n_heads, qk_nope_dim, qk_rope_dim, v_dim)
         # q, k_full : [B, n_heads, S, qk_head]
         # v         : [B, n_heads, S, v_dim]
         q = profiler_marker(q, "[END] [MLA] QKV-Assemble")
 
         q = profiler_marker(q, "[START] [MLA] RoPE-Q")
-        q = rope_partial(q, self.rope_params)
+        q = rope_trailing(q, self.rope_params)
         q = profiler_marker(q, "[END] [MLA] RoPE-Q")
 
         # ── Attention (composite path supports v_dim != qk_head) ──

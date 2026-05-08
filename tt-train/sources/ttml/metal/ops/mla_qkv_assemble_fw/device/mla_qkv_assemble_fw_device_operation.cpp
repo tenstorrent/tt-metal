@@ -117,6 +117,7 @@ MLAQKVAssembleFwDeviceOperation::spec_return_value_t MLAQKVAssembleFwDeviceOpera
     spec_return_value_t output_specs;
     output_specs.reserve(3U);
 
+    const auto& q_pre = tensor_args.q_pre;
     const auto& kv_up = tensor_args.kv_up;
     const auto kv_up_shape = kv_up.logical_shape();
     const uint32_t B = kv_up_shape[0];
@@ -128,10 +129,13 @@ MLAQKVAssembleFwDeviceOperation::spec_return_value_t MLAQKVAssembleFwDeviceOpera
     const ttnn::Shape k_shape({B, args.n_heads, S, qk_head});
     const ttnn::Shape v_shape({B, args.n_heads, S, args.v_dim});
 
-    auto layout = tt::tt_metal::TensorLayout(kv_up.dtype(), tt::tt_metal::Layout::TILE, kv_up.memory_config());
-    output_specs.emplace_back(q_shape, layout);
-    output_specs.emplace_back(k_shape, layout);
-    output_specs.emplace_back(v_shape, layout);
+    // Each output inherits from its primary input source. Validation requires all three
+    // inputs share dtype + memory_config, so these layouts are equal in practice.
+    auto q_layout = tt::tt_metal::TensorLayout(q_pre.dtype(), tt::tt_metal::Layout::TILE, q_pre.memory_config());
+    auto kv_layout = tt::tt_metal::TensorLayout(kv_up.dtype(), tt::tt_metal::Layout::TILE, kv_up.memory_config());
+    output_specs.emplace_back(q_shape, q_layout);
+    output_specs.emplace_back(k_shape, kv_layout);
+    output_specs.emplace_back(v_shape, kv_layout);
 
     return output_specs;
 }
@@ -150,7 +154,7 @@ ttsl::hash::hash_t MLAQKVAssembleFwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<MLAQKVAssembleFwDeviceOperation>(
         args,
-        tensor_args.q_pre.dtype(),
+        tensor_args.kv_up.dtype(),
         tensor_args.q_pre.logical_shape(),
         tensor_args.kv_up.logical_shape(),
         tensor_args.k_pe.logical_shape());

@@ -34,7 +34,7 @@ void kernel_main() {
     const auto kv_up_addr_gen = TensorAccessor(kv_up_args, kv_up_addr);
     const auto kpe_addr_gen = TensorAccessor(kpe_args, k_pe_addr);
 
-    const uint32_t tile_bytes = get_tile_size(cb_q);
+    const uint32_t tile_bytes = get_tile_size(cb_kpe);
 
     for (uint32_t block = 0U; block < num_blocks; ++block) {
         // Block-level: load Tr k_pe tiles (peeked by writer for every head, popped at block end).
