@@ -7,11 +7,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE
-from models.demos.wormhole.bge_m3.tt.device_kernels import (
-    bge_m3_layernorm_compute_kernel_config,
-    bge_m3_linear_activation_memory_config,
-    bge_m3_weight_dram_memory_config,
-)
 
 SHARD_HEIGHT = TILE_SIZE
 
@@ -31,28 +26,20 @@ class LayerNorm1DConfig:
     # Optional input memcfg override
     input_memcfg: ttnn.MemoryConfig | None = None
 
-    # Compile-time envelope (same as matmul: batch×seq + seq cap for L1 vs DRAM).
     max_seq_len: int | None = None
     max_batch_size: int | None = None
     output_memcfg: ttnn.MemoryConfig | None = None
 
     # Compute kernel config
     compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
+    program_config: object | None = None
+    sharded_memcfg: ttnn.MemoryConfig | None = None
 
     def is_resolved(self) -> bool:
         return self.mesh_device is not None and self.compute_kernel_config is not None
 
 
 class LayerNorm1D(LightweightModule):
-    """
-    BGE-M3 LayerNorm public API scaffold.
-
-    Step 3 class skeleton:
-      - simple API via __init__(weight, bias, eps)
-      - power API via from_config(config)
-      - config is resolved at construction time
-    """
-
     def __init__(self, weight: LazyWeight, bias: LazyWeight, eps: float = 1e-5):
         super().__init__()
         self.config = _resolve_1d_config(LayerNorm1DConfig(weight=weight, bias=bias, eps=eps))
@@ -61,11 +48,6 @@ class LayerNorm1D(LightweightModule):
 
     @classmethod
     def from_config(cls, config: LayerNorm1DConfig) -> "LayerNorm1D":
-        """
-        Power API entrypoint.
-
-        Step 2 resolves config defaults and program/memory configs.
-        """
         instance = object.__new__(cls)
         super(LayerNorm1D, instance).__init__()
         instance.config = _resolve_1d_config(config)
@@ -74,16 +56,11 @@ class LayerNorm1D(LightweightModule):
         return instance
 
     def load_device_weights(self) -> None:
-        """Load affine weights once for all forward paths."""
         if self._device_weights_loaded:
             return
-
-        cfg = self.config
-        assert cfg.is_resolved(), "config must be resolved before loading device weights!"
-
-        # Single-device path: weight and bias are materialized locally.
-        self.weight = cfg.weight.get_device_weight()
-        self.bias = cfg.bias.get_device_weight()
+        assert self.config.is_resolved(), "config must be resolved before loading device weights!"
+        self.weight = self.config.weight.get_device_weight()
+        self.bias = self.config.bias.get_device_weight()
         self._device_weights_loaded = True
 
     def forward(
@@ -91,165 +68,90 @@ class LayerNorm1D(LightweightModule):
         x: ttnn.Tensor | LazyWeight,
         residual_input_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """LayerNorm over ``x``, optionally fusing ``x += residual`` before norm (Post-LN block)."""
         self.load_device_weights()
-        cfg = self.config
-        x = _load_input_device_tensor(x, cfg)
+        x = _load_input_device_tensor(x, self.config)
         assert self.weight is not None and self.bias is not None, "weights must be loaded before forward"
 
-        runtime_batch = int(x.shape[0])
-        runtime_seq = int(x.shape[2])
-        out_mem = cfg.output_memcfg or bge_m3_linear_activation_memory_config(runtime_seq, runtime_batch)
-        sharded_ln = _b1s512_layernorm_sharded_config(runtime_seq, runtime_batch)
-        compute_kernel_config = bge_m3_layernorm_compute_kernel_config(
-            cfg.mesh_device,
-            max_seq_len=runtime_seq,
-            max_batch_size=runtime_batch,
-        )
-        program_config = None
+        out_mem = self.config.output_memcfg or ttnn.DRAM_MEMORY_CONFIG
+        program_config = self.config.program_config
         memory_config = out_mem
-        if sharded_ln is not None:
-            sharded_mem, program_config = sharded_ln
-            x = ttnn.to_memory_config(x, memory_config=sharded_mem)
+
+        if self.config.sharded_memcfg is not None:
+            x = ttnn.to_memory_config(x, memory_config=self.config.sharded_memcfg)
             if residual_input_tensor is not None:
-                residual_input_tensor = ttnn.to_memory_config(residual_input_tensor, memory_config=sharded_mem)
-            memory_config = sharded_mem
+                residual_input_tensor = ttnn.to_memory_config(
+                    residual_input_tensor, memory_config=self.config.sharded_memcfg
+                )
+            memory_config = self.config.sharded_memcfg
 
         output = ttnn.layer_norm(
             x,
-            epsilon=cfg.eps,
+            epsilon=self.config.eps,
             weight=self.weight,
             bias=self.bias,
             residual_input_tensor=residual_input_tensor,
-            program_config=program_config,  # None to pc
+            program_config=program_config,
             memory_config=memory_config,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.config.compute_kernel_config,
         )
-        if sharded_ln is not None and out_mem != memory_config:
+
+        if self.config.sharded_memcfg is not None and out_mem != memory_config:
             output = ttnn.to_memory_config(output, memory_config=out_mem)
         return output
 
 
-################################################################################
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-################################################################################
+# ──────────────────────────────────────────────────────────────────────────────
 
 
-def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LayerNorm1DConfig) -> ttnn.Tensor:
-    """
-    Resolve input to a device tensor when provided as LazyWeight.
-
-    This LayerNorm module supports single-device execution and replicated mesh execution.
-    """
+def _load_input_device_tensor(x, config):
     if isinstance(x, LazyWeight):
         mem_cfg = config.input_memcfg or ttnn.DRAM_MEMORY_CONFIG
-        mesh_device = config.mesh_device
-        assert mesh_device is not None, "mesh_device must be resolved before loading input tensors"
-
+        assert config.mesh_device is not None, "mesh_device must be resolved"
         resolved_x = resolve_lazy_weight(
             x,
-            device=mesh_device,
+            device=config.mesh_device,
             memory_config=mem_cfg,
             mesh_mapper_config=None,
             layout=ttnn.TILE_LAYOUT,
         )
         return resolved_x.get_device_weight()
-
     assert isinstance(x, ttnn.Tensor), f"x must be ttnn.Tensor or LazyWeight, got {type(x)}"
     return x
 
 
-def _b1s512_layernorm_sharded_config(
-    max_seq_len: int | None,
-    max_batch_size: int | None,
-) -> tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig] | None:
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len != 512 or max_batch != 1:
-        return None
-
-    core_grid = ttnn.CoreGrid(y=8, x=8)
-    core_range = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1),
-            )
-        }
-    )
-    shard_height = 512 // core_grid.y
-    shard_width = 1024 // core_grid.x
-    sharded_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_range, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-        subblock_w=shard_width // TILE_SIZE,
-        block_h=shard_height // TILE_SIZE,
-        block_w=shard_width // TILE_SIZE,
-        inplace=False,
-        use_welford=False,
-        legacy_reduction=True,
-        legacy_rsqrt=True,
-    )
-    return sharded_mem, program_config
-
-
 def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
-    """
-    Resolve LayerNorm1D config defaults and materializable LazyWeights.
-
-    Mirrors the staged resolver flow used by RMSNorm1D while adapting for
-    LayerNorm affine parameters (weight + bias).
-    """
     to_set: dict[str, object] = {}
 
-    # --- Phase 1: derive mesh_device ---
+    # Resolve device
     weight_device = config.weight.device
     bias_device = config.bias.device
     if weight_device is not None and bias_device is not None and weight_device != bias_device:
         raise ValueError("LayerNorm weight and bias must target the same device")
 
-    mesh_device = config.mesh_device
-    if mesh_device is None:
-        mesh_device = weight_device or bias_device
-    if mesh_device is None:
-        mesh_device = ttnn.GetDefaultDevice()
+    mesh_device = config.mesh_device or weight_device or bias_device or ttnn.GetDefaultDevice()
     if mesh_device is None:
         raise ValueError("Unable to resolve mesh_device")
-
-    if weight_device is not None and weight_device != mesh_device:
-        raise ValueError("LayerNorm weight must target the resolved mesh_device")
-    if bias_device is not None and bias_device != mesh_device:
-        raise ValueError("LayerNorm bias must target the resolved mesh_device")
-
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
 
-    # --- Phase 2: determine hidden dim D and validate affine sizes ---
+    # Validate affine sizes
     dim = config.weight.source.numel()
     if config.bias.source.numel() != dim:
-        raise ValueError(f"LayerNorm weight/bias numel mismatch: weight={dim}, bias={config.bias.source.numel()}")
+        raise ValueError(f"LayerNorm weight/bias numel mismatch: {dim} vs {config.bias.source.numel()}")
     if dim % SHARD_HEIGHT != 0:
         raise ValueError(f"LayerNorm hidden dim must be divisible by {SHARD_HEIGHT}, got {dim}")
 
-    max_b = config.max_batch_size if config.max_batch_size is not None else 1
-
-    # --- Phase 3: compute kernel config default ---
+    # Defaults: DRAM, HiFi4
     if config.compute_kernel_config is None:
-        to_set["compute_kernel_config"] = bge_m3_layernorm_compute_kernel_config(
-            mesh_device,
-            max_seq_len=config.max_seq_len,
-            max_batch_size=max_b,
-        )
-
+        to_set["compute_kernel_config"] = _default_compute_kernel(mesh_device)
     if config.output_memcfg is None:
-        to_set["output_memcfg"] = bge_m3_linear_activation_memory_config(config.max_seq_len, max_b)
+        to_set["output_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
-    weight_dram = bge_m3_weight_dram_memory_config()
+    weight_mem = ttnn.DRAM_MEMORY_CONFIG
 
-    # --- Phase 4: resolve local LazyWeights for replicated execution ---
+    # Resolve weights with correct shape
     expected_shape = (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
 
     weight_source = config.weight.source
@@ -259,24 +161,31 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
     if tuple(bias_source.shape) != expected_shape:
         bias_source = bias_source.reshape(*expected_shape)
 
-    transformed_weight = replace(config.weight, source=weight_source)
-    transformed_bias = replace(config.bias, source=bias_source)
-
     to_set["weight"] = resolve_lazy_weight(
-        transformed_weight,
+        replace(config.weight, source=weight_source),
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=weight_dram,
+        memory_config=weight_mem,
         mesh_mapper_config=None,
     )
     to_set["bias"] = resolve_lazy_weight(
-        transformed_bias,
+        replace(config.bias, source=bias_source),
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=weight_dram,
+        memory_config=weight_mem,
         mesh_mapper_config=None,
     )
 
     return replace(config, **to_set)
+
+
+def _default_compute_kernel(mesh_device):
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
