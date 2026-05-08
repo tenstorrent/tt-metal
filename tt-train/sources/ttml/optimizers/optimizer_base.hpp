@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <unordered_map>
-
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
@@ -28,12 +26,6 @@ public:
     [[nodiscard]] virtual serialization::StateDict get_state_dict() const = 0;
     virtual void set_state_dict(const serialization::StateDict& dict) = 0;
 
-    // Maps ValueType keys to a zero-initialized sentinel of the correct variant
-    // alternative. The nanobind binding uses this to cast Python values to the
-    // right C++ type without hardcoding key names. Populated by each subclass
-    // constructor via m_state_dict_schema.
-    [[nodiscard]] const std::unordered_map<std::string, serialization::ValueType>& get_state_dict_schema() const;
-
     [[nodiscard]] virtual size_t get_steps() const = 0;
     virtual void set_steps(size_t steps) = 0;
 
@@ -44,7 +36,6 @@ public:
 
 protected:
     serialization::NamedParameters m_parameters;
-    std::unordered_map<std::string, serialization::ValueType> m_state_dict_schema;
 };
 
 }  // namespace ttml::optimizers

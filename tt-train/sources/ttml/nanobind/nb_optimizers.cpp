@@ -153,30 +153,7 @@ void py_module(nb::module_& m) {
         py_optimizer_base.def("step", &OptimizerBase::step, "Step function");
         py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict, "Get state dictionary");
         py_optimizer_base.def(
-            "set_state_dict",
-            [](OptimizerBase& self, nb::dict d) {
-                const auto& schema = self.get_state_dict_schema();
-                serialization::StateDict cpp_dict;
-                for (auto [key_obj, val_obj] : d) {
-                    std::string key = nb::cast<std::string>(key_obj);
-                    auto it = schema.find(key);
-                    if (it != schema.end()) {
-                        // For ValueType keys, the optimizer should specify their required type in the schema.
-                        serialization::ValueType typed_val = std::visit(
-                            [&val_obj](const auto& sentinel) -> serialization::ValueType {
-                                using T = std::decay_t<decltype(sentinel)>;
-                                return serialization::ValueType{nb::cast<T>(val_obj)};
-                            },
-                            it->second);
-                        cpp_dict.emplace(std::move(key), std::move(typed_val));
-                    } else {
-                        cpp_dict.emplace(std::move(key), nb::cast<serialization::SerializableType>(val_obj));
-                    }
-                }
-                self.set_state_dict(cpp_dict);
-            },
-            nb::arg("dict"),
-            "Set state dictionary");
+            "set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"), "Set state dictionary");
         py_optimizer_base.def("get_lr", &OptimizerBase::get_lr, "Get learning rate");
         py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"), "Set learning rate");
         py_optimizer_base.def("print_stats", &OptimizerBase::print_stats, "Print statistics");

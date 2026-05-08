@@ -12,10 +12,6 @@ namespace ttml::optimizers {
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
-const std::unordered_map<std::string, serialization::ValueType>& OptimizerBase::get_state_dict_schema() const {
-    return m_state_dict_schema;
-}
-
 void OptimizerBase::print_stats() const {
     fmt::print("\n\nOptimization parameters values and gradients:\n");
     for (const auto& [name, tensor] : m_parameters) {

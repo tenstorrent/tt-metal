@@ -17,14 +17,6 @@ namespace ttml::optimizers {
 
 SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    m_state_dict_schema = {
-        {"steps", size_t{0}},
-        {"lr", float{0}},
-        {"momentum_factor", float{0}},
-        {"dampening", float{0}},
-        {"weight_decay", float{0}},
-        {"nesterov", bool{false}},
-    };
     validate_config();
     if (m_config.momentum > 0.0) {
         for (const auto& [name, tensor_ptr] : m_parameters) {

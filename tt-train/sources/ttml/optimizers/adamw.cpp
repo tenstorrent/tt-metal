@@ -20,17 +20,6 @@ std::string AdamW::get_name() const {
 
 AdamW::AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    m_state_dict_schema = {
-        {"steps", size_t{0}},
-        {"lr", float{0}},
-        {"beta1", float{0}},
-        {"beta2", float{0}},
-        {"epsilon", float{0}},
-        {"weight_decay", float{0}},
-        {"amsgrad", bool{false}},
-        {"stochastic_rounding", bool{false}},
-    };
-
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_exp_avg.emplace(
