@@ -24,7 +24,251 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
+#include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
+#include <tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp>
+
 namespace tt::tt_metal {
+
+// Mitigation — structured telemetry types for baseline capture / comparison.
+struct FabricChannelBaseline {
+    tt::tt_fabric::chan_id_t channel_id = 0;
+    tt::tt_fabric::FabricTelemetryRouterState router_state = tt::tt_fabric::FabricTelemetryRouterState::Standby;
+    uint64_t tx_heartbeat = 0;
+    uint64_t rx_heartbeat = 0;
+};
+
+struct FabricDeviceBaseline {
+    ChipId device_id = 0;
+    std::vector<FabricChannelBaseline> channels;
+};
+
+// Mitigation — dump fabric telemetry on test failure for post-mortem diagnosis.
+// Only called on failure paths; zero cost on happy path.
+inline void dump_fabric_telemetry_on_failure(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh) {
+    if (!mesh) {
+        return;
+    }
+    try {
+        const auto& shape = mesh->shape();
+        log_warning(
+            tt::LogTest,
+            "[fabric_telemetry_dump] BEGIN — {} device(s) in mesh",
+            mesh->num_devices());
+
+        for (const auto& coord : distributed::MeshCoordinateRange(shape)) {
+            tt::tt_fabric::FabricNodeId node_id;
+            try {
+                node_id = mesh->get_fabric_node_id(coord);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest,
+                    "[fabric_telemetry_dump] coord ({}) — get_fabric_node_id() threw: {}",
+                    coord, e.what());
+                continue;
+            }
+
+            std::vector<tt::tt_fabric::FabricTelemetrySample> samples;
+            try {
+                samples = tt::tt_fabric::read_fabric_telemetry(node_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest,
+                    "[fabric_telemetry_dump] device {} (coord {}) — read_fabric_telemetry() threw: {}",
+                    mesh->get_device(coord)->id(), coord, e.what());
+                continue;
+            }
+
+            auto* dev = mesh->get_device(coord);
+            for (const auto& sample : samples) {
+                const auto& si = sample.snapshot.static_info;
+                if (sample.snapshot.dynamic_info.has_value()) {
+                    const auto& dyn = *sample.snapshot.dynamic_info;
+                    for (size_t erisc_idx = 0; erisc_idx < dyn.erisc.size(); ++erisc_idx) {
+                        const auto& entry = dyn.erisc[erisc_idx];
+                        const char* state_str =
+                            entry.router_state == tt::tt_fabric::FabricTelemetryRouterState::Active  ? "Active" :
+                            entry.router_state == tt::tt_fabric::FabricTelemetryRouterState::Paused  ? "Paused" :
+                            entry.router_state == tt::tt_fabric::FabricTelemetryRouterState::Draining ? "Draining" :
+                                                                                                       "Standby";
+                        bool unhealthy =
+                            entry.router_state != tt::tt_fabric::FabricTelemetryRouterState::Active;
+                        // Use log_warning for unhealthy channels to ensure visibility in CI logs.
+                        if (unhealthy) {
+                            log_warning(
+                                tt::LogTest,
+                                "[fabric_telemetry_dump] device={} chan={} erisc={} "
+                                "router_state={} tx_heartbeat={} rx_heartbeat={} "
+                                "direction={} mesh_id={} neighbor_mesh_id={} [UNHEALTHY]",
+                                dev->id(), sample.channel_id, erisc_idx,
+                                state_str, entry.tx_heartbeat, entry.rx_heartbeat,
+                                si.direction, si.mesh_id, si.neighbor_mesh_id);
+                        } else {
+                            log_warning(
+                                tt::LogTest,
+                                "[fabric_telemetry_dump] device={} chan={} erisc={} "
+                                "router_state={} tx_heartbeat={} rx_heartbeat={} "
+                                "direction={} mesh_id={} neighbor_mesh_id={}",
+                                dev->id(), sample.channel_id, erisc_idx,
+                                state_str, entry.tx_heartbeat, entry.rx_heartbeat,
+                                si.direction, si.mesh_id, si.neighbor_mesh_id);
+                        }
+                    }
+                } else {
+                    log_warning(
+                        tt::LogTest,
+                        "[fabric_telemetry_dump] device={} chan={} — no dynamic info "
+                        "(direction={} mesh_id={} ver={})",
+                        dev->id(), sample.channel_id,
+                        si.direction, si.mesh_id, si.version);
+                }
+            }
+        }
+        log_warning(tt::LogTest, "[fabric_telemetry_dump] END");
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogTest,
+            "[fabric_telemetry_dump] outer exception — telemetry dump aborted: {}",
+            e.what());
+    }
+}
+
+// Mitigation — capture per-device telemetry baseline for comparison at TearDown.
+inline std::vector<FabricDeviceBaseline> capture_fabric_telemetry_baseline(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh) {
+    std::vector<FabricDeviceBaseline> baselines;
+    if (!mesh) {
+        return baselines;
+    }
+    try {
+        const auto& shape = mesh->shape();
+        for (const auto& coord : distributed::MeshCoordinateRange(shape)) {
+            tt::tt_fabric::FabricNodeId node_id;
+            try {
+                node_id = mesh->get_fabric_node_id(coord);
+            } catch (...) {
+                continue;
+            }
+
+            std::vector<tt::tt_fabric::FabricTelemetrySample> samples;
+            try {
+                samples = tt::tt_fabric::read_fabric_telemetry(node_id);
+            } catch (...) {
+                continue;
+            }
+
+            FabricDeviceBaseline dev_baseline;
+            dev_baseline.device_id = mesh->get_device(coord)->id();
+            for (const auto& sample : samples) {
+                if (!sample.snapshot.dynamic_info.has_value()) continue;
+                const auto& dyn = *sample.snapshot.dynamic_info;
+                // Use erisc[0] as the primary router state for this channel.
+                if (!dyn.erisc.empty()) {
+                    FabricChannelBaseline ch;
+                    ch.channel_id = sample.channel_id;
+                    ch.router_state = dyn.erisc[0].router_state;
+                    ch.tx_heartbeat = dyn.erisc[0].tx_heartbeat;
+                    ch.rx_heartbeat = dyn.erisc[0].rx_heartbeat;
+                    dev_baseline.channels.push_back(ch);
+                }
+            }
+            baselines.push_back(std::move(dev_baseline));
+        }
+    } catch (...) {
+        // Best-effort — don't fail test setup over telemetry capture.
+    }
+    return baselines;
+}
+
+// Mitigation — compare current telemetry against SetUp baseline and log degradations.
+inline void compare_fabric_telemetry_baseline(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+    const std::vector<FabricDeviceBaseline>& baselines) {
+    if (!mesh || baselines.empty()) {
+        return;
+    }
+    try {
+        // Build a lookup: device_id -> channel_id -> baseline
+        std::unordered_map<ChipId, std::unordered_map<tt::tt_fabric::chan_id_t, FabricChannelBaseline>> baseline_map;
+        for (const auto& db : baselines) {
+            for (const auto& ch : db.channels) {
+                baseline_map[db.device_id][ch.channel_id] = ch;
+            }
+        }
+
+        const auto& shape = mesh->shape();
+        for (const auto& coord : distributed::MeshCoordinateRange(shape)) {
+            tt::tt_fabric::FabricNodeId node_id;
+            try {
+                node_id = mesh->get_fabric_node_id(coord);
+            } catch (...) {
+                continue;
+            }
+
+            std::vector<tt::tt_fabric::FabricTelemetrySample> samples;
+            try {
+                samples = tt::tt_fabric::read_fabric_telemetry(node_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest,
+                    "[fabric_baseline_compare] device {} — read_fabric_telemetry() threw: {}",
+                    mesh->get_device(coord)->id(), e.what());
+                continue;
+            }
+
+            auto* dev = mesh->get_device(coord);
+            auto dev_it = baseline_map.find(dev->id());
+            if (dev_it == baseline_map.end()) continue;
+
+            for (const auto& sample : samples) {
+                if (!sample.snapshot.dynamic_info.has_value()) continue;
+                const auto& dyn = *sample.snapshot.dynamic_info;
+                if (dyn.erisc.empty()) continue;
+
+                auto ch_it = dev_it->second.find(sample.channel_id);
+                if (ch_it == dev_it->second.end()) continue;
+
+                const auto& before = ch_it->second;
+                const auto& after_entry = dyn.erisc[0];
+
+                bool degraded =
+                    (before.router_state == tt::tt_fabric::FabricTelemetryRouterState::Active &&
+                     after_entry.router_state != tt::tt_fabric::FabricTelemetryRouterState::Active);
+                bool heartbeat_stalled =
+                    (after_entry.tx_heartbeat == before.tx_heartbeat &&
+                     after_entry.rx_heartbeat == before.rx_heartbeat &&
+                     before.tx_heartbeat > 0);
+
+                if (degraded || heartbeat_stalled) {
+                    const char* before_state =
+                        before.router_state == tt::tt_fabric::FabricTelemetryRouterState::Active  ? "Active" :
+                        before.router_state == tt::tt_fabric::FabricTelemetryRouterState::Paused  ? "Paused" :
+                        before.router_state == tt::tt_fabric::FabricTelemetryRouterState::Draining ? "Draining" :
+                                                                                                     "Standby";
+                    const char* after_state =
+                        after_entry.router_state == tt::tt_fabric::FabricTelemetryRouterState::Active  ? "Active" :
+                        after_entry.router_state == tt::tt_fabric::FabricTelemetryRouterState::Paused  ? "Paused" :
+                        after_entry.router_state == tt::tt_fabric::FabricTelemetryRouterState::Draining ? "Draining" :
+                                                                                                          "Standby";
+                    log_warning(
+                        tt::LogTest,
+                        "[fabric_baseline_compare] device={} chan={} DEGRADED: "
+                        "router_state {} -> {} | tx_hb {} -> {} | rx_hb {} -> {}{}",
+                        dev->id(), sample.channel_id,
+                        before_state, after_state,
+                        before.tx_heartbeat, after_entry.tx_heartbeat,
+                        before.rx_heartbeat, after_entry.rx_heartbeat,
+                        heartbeat_stalled ? " [HEARTBEAT_STALLED]" : "");
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogTest,
+            "[fabric_baseline_compare] outer exception — comparison aborted: {}",
+            e.what());
+    }
+}
 
 class TwoMeshDeviceFixture : public MeshDispatchFixture {
 protected:
@@ -225,6 +469,17 @@ protected:
         log_info(tt::LogMetal, "[fixture_setup] MeshDeviceFixtureBase::SetUp() EXIT — mesh_device created with {} devices",
                  mesh_device_->num_devices());
 
+        // Mitigation — capture fabric telemetry baseline after successful mesh open.
+        // Compared against TearDown state to detect channels that degraded during the test.
+        if (mesh_device_ && config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
+            fabric_telemetry_baseline_ = capture_fabric_telemetry_baseline(mesh_device_);
+            log_info(
+                tt::LogMetal,
+                "[fixture_setup] MeshDeviceFixtureBase::SetUp() captured fabric telemetry baseline "
+                "for {} device(s)",
+                fabric_telemetry_baseline_.size());
+        }
+
         // Opt-in watchdog: kill the process if the test body exceeds its budget.
         if (config_.test_budget_ms.has_value()) {
             watchdog_stop_.store(false, std::memory_order_relaxed);
@@ -295,6 +550,19 @@ protected:
             }
         }
 
+        // Mitigation — dump fabric telemetry on test failure or broken fabric.
+        // Only fires on the failure path; zero cost on happy path.
+        if ((HasFailure() || fabric_broken) && mesh_device_ &&
+            config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
+            log_warning(
+                tt::LogTest,
+                "[fixture_teardown] MeshDeviceFixtureBase::TearDown() test failure or fabric broken — "
+                "dumping fabric telemetry for post-mortem diagnosis (HasFailure={}, fabric_broken={})",
+                HasFailure(), fabric_broken);
+            dump_fabric_telemetry_on_failure(mesh_device_);
+            compare_fabric_telemetry_baseline(mesh_device_, fabric_telemetry_baseline_);
+        }
+
         // Skip quiesce on remote-only MeshDevices (no local devices on this host).
         // quiesce_internal() calls get_active_sub_device_manager_id() which requires
         // sub_device_manager_tracker_ — null on remote-only devices — and would throw.
@@ -329,6 +597,9 @@ protected:
     std::atomic<bool> watchdog_stop_{false};
 
     Config config_;
+
+    // Mitigation — fabric telemetry baseline captured in SetUp for TearDown comparison.
+    std::vector<FabricDeviceBaseline> fabric_telemetry_baseline_;
 };
 
 class MeshDeviceFixture4x8DispatchAgnostic : public MeshDeviceFixtureBase {

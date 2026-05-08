@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX EXT|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|fabric_telemetry_dump|fabric_baseline_compare)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX EXT|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always|Fabric)' | \
 python3 -c "
 import sys, re, signal
@@ -982,6 +982,12 @@ FIX_TH3_FIRES=$(grep -cE 'FIX TH3.*extending fabric_router_sync_timeout' "$CLEAN
 # Log (FIX TG2 clear):    "configure_fabric_cores: device N channel N base-UMD relay — clearing sync address 0xNNNNNNNN to prevent stale handshake state [FIX TG2 #42429]"
 FIX_TG_L1_FIRES=$(grep -cE 'preserving edm_status_address.*0x49706550.*FIX TG' "$CLEAN" 2>/dev/null; :)
 FIX_TG2_SYNC_CLEARS=$(grep -cE 'clearing sync address.*stale handshake.*FIX TG2' "$CLEAN" 2>/dev/null; :)
+# FIX EXT (#42429): external ETH channel classification — channel at 0x49706550 with no in-cluster
+# peer (e.g. physically wired to out-of-mesh host).  Excluded from soft-reset AND firmware launch.
+# Fires in wait_for_fabric_router_sync() and verify_all_fabric_channels_healthy() when such
+# channels are encountered.  Without this fix, the channel would block ring-sync or health-check.
+# Log: "wait_for_fabric_router_sync: Device N master chan=N is an external ETH channel — skipping cleanly. (FIX EXT #42429)"
+FIX_EXT_FIRES=$(grep -cE 'external ETH channel.*skipping cleanly.*FIX EXT|FIX EXT.*external ETH channel' "$CLEAN" 2>/dev/null; :)
 # FIX TI ring-sync (#42429): fabric_firmware_initializer.cpp verify_all_fabric_channels_healthy() —
 # skip health check for devices whose ring barrier timed out while base-UMD channels were present.
 # Sets fabric_channels_not_ready_for_traffic_ + fabric_ring_sync_timed_out_ so test fixtures SKIP
@@ -1107,6 +1113,32 @@ FIX_BC_FIRES=$(grep -cE 'FIX BC \(#42429\).*not active|FIX BC \(#42429\).*ETH re
 #   "teardown: FIX PG (#42429): ALL MMIO ETH heartbeats timed out — relay NOT restored; skipping FIX AY"
 #   "teardown: FIX PG: skipping FIX AY — relay not restored, N non-MMIO device(s) will be handled by FIX BC on next SetUp."
 FIX_PG_FIRES=$(grep -cE 'FIX PG.*ALL MMIO ETH heartbeats timed out|FIX PG.*skipping FIX AY' "$CLEAN" 2>/dev/null; :)
+# FIX PY (#42429): Phase 2.5 fast-skip when relay already marked broken by a prior channel
+# on the same non-MMIO device.  Without FIX PY, each remaining channel on a dead relay
+# device also burns 3×retry×5s≈21s before the Phase 2.5 loop exits.  FIX PY skips them.
+# Log: "relay already marked broken by prior channel — skipping (FIX PY #42429)"
+FIX_PY_FIRES=$(grep -cE 'relay already marked broken by prior channel.*FIX PY|FIX PY.*relay already marked broken' "$CLEAN" 2>/dev/null; :)
+# FIX QU (#42429): FabricFirmwareInitializer::configure() re-asserts per-device degraded flags
+# after Device::configure_fabric() resets them.  configure_fabric() unconditionally clears
+# fabric_relay_path_broken_ and fabric_channels_not_ready_for_traffic_ at its top, but for
+# devices in dead_relay_devices_ or mmio_dead_master_chan_devices_ no fresh firmware was loaded —
+# the relay or master ERISC is still dead — so FIX QU restores both flags so test guards
+# (FIX QS/QW/RX) can detect the degraded cluster and SKIP instead of hanging in AllGather.
+# Without FIX QU: guards see false-healthy cluster → AllGather hangs for OPERATION_TIMEOUT.
+# Log (relay broken re-assert):  "FabricFirmwareInitializer::configure: FIX QU (#42429) — re-asserting fabric_relay_path_broken_ for Device N"
+# Log (not-ready re-assert):     "FabricFirmwareInitializer::configure: FIX QU (#42429) — setting fabric_channels_not_ready_for_traffic_ for Device N"
+FIX_QU_FIRES=$(grep -cE 'FIX QU \(#42429\).*re-asserting fabric_relay_path_broken_|FIX QU \(#42429\).*setting fabric_channels_not_ready_for_traffic_' "$CLEAN" 2>/dev/null; :)
+# FIX QV (#42429): Phase 4 MUX poll skip when fabric_channels_not_ready_for_traffic_=true
+# (MMIO dead-master-chan device).  Without FIX QV: Phase 4 times out (5000ms × N channels)
+# then throws, marking UDM tests FAILED instead of SKIPPED.
+# Log: "wait_for_fabric_workers_ready: Device N has channels not ready for traffic ... FIX QV"
+FIX_QV_FIRES=$(grep -cE 'FIX QV|channels not ready for traffic.*skipping Phase 4.*FIX QV|MMIO dead-master-chan device.*FIX QV' "$CLEAN" 2>/dev/null; :)
+# FIX QE (test_multi_tensor_ccl.cpp): GTest SKIP guard — emits GTEST_SKIP() with message
+# "FIX QE: fabric not ready (stale ETH firmware from prior teardown); skipping to avoid dispatch timeout."
+# This fires in t3k_ttnn_tests multi-tensor CCL tests when fabric is degraded.  The message is in
+# GTest format (no Metal log prefix), so the standard TIMELINE/PHASES greps won't catch it.
+# Counter searches raw cleaned log for the skip message text.
+FIX_QE_FIRES=$(grep -cE 'FIX QE.*fabric not ready|GTEST_SKIP.*FIX QE|fabric not ready.*stale ETH.*FIX QE' "$CLEAN" 2>/dev/null; :)
 # FIX SB (GAP-76): guard not_done_cores.insert for IDLE_ETH with INIT_FABRIC flag check.
 # Fires in initialize_and_launch_firmware() when IDLE_ETH cores are present but INIT_FABRIC
 # is not set in FabricManagerMode (e.g., FabricManagerMode::TERMINATE_FABRIC only).
@@ -1688,6 +1720,62 @@ if [ "${FIX_UP2_FIRES:-0}" -gt 0 ]; then
         echo "     => INFRA_ERROR: ring-sync timeout persisted after 2 reset+warm-up cycles — run aborted."
     fi
 fi
+# ─── FABRIC TELEMETRY DUMP (from dump_fabric_telemetry_on_failure in multi_device_fixture.hpp) ───
+echo ""
+echo "=== FABRIC TELEMETRY AT FAILURE ==="
+
+TELEMETRY_DUMP_BEGIN=$(grep -c '\[fabric_telemetry_dump\] BEGIN' "$CLEAN" 2>/dev/null; :)
+TELEMETRY_DUMP_END=$(grep -c '\[fabric_telemetry_dump\] END' "$CLEAN" 2>/dev/null; :)
+TELEMETRY_UNHEALTHY=$(grep -c '\[fabric_telemetry_dump\].*\[UNHEALTHY\]' "$CLEAN" 2>/dev/null; :)
+TELEMETRY_THREW=$(grep -c '\[fabric_telemetry_dump\].*threw' "$CLEAN" 2>/dev/null; :)
+BASELINE_DEGRADED=$(grep -c '\[fabric_baseline_compare\].*DEGRADED' "$CLEAN" 2>/dev/null; :)
+BASELINE_HB_STALLED=$(grep -c '\[fabric_baseline_compare\].*HEARTBEAT_STALLED' "$CLEAN" 2>/dev/null; :)
+
+if [ "${TELEMETRY_DUMP_BEGIN:-0}" -gt 0 ]; then
+    echo "  Telemetry dumps found: ${TELEMETRY_DUMP_BEGIN}"
+    echo ""
+
+    # Extract per-channel telemetry entries
+    echo "  --- Per-channel telemetry ---"
+    grep '\[fabric_telemetry_dump\]' "$CLEAN" | \
+        grep -v 'BEGIN\|END\|threw\|outer exception\|no dynamic info' | \
+        sed 's/^.*\[fabric_telemetry_dump\] /  /' | \
+        sort -t= -k2,2n -k4,4n | \
+        head -100
+    echo ""
+
+    if [ "${TELEMETRY_UNHEALTHY:-0}" -gt 0 ]; then
+        echo "  => ${TELEMETRY_UNHEALTHY} channel(s) in UNHEALTHY state (router_state != Active)"
+    fi
+    if [ "${TELEMETRY_THREW:-0}" -gt 0 ]; then
+        echo "  => ${TELEMETRY_THREW} telemetry read(s) threw exceptions (relay path broken?)"
+    fi
+
+    # Show channels with no dynamic info
+    NO_DYNAMIC=$(grep -c '\[fabric_telemetry_dump\].*no dynamic info' "$CLEAN" 2>/dev/null; :)
+    if [ "${NO_DYNAMIC:-0}" -gt 0 ]; then
+        echo "  => ${NO_DYNAMIC} channel(s) had no dynamic telemetry info"
+    fi
+else
+    echo "  (no fabric telemetry dumps found in log)"
+fi
+
+echo ""
+echo "  --- Baseline comparison (SetUp vs TearDown) ---"
+if [ "${BASELINE_DEGRADED:-0}" -gt 0 ]; then
+    grep '\[fabric_baseline_compare\]' "$CLEAN" | \
+        grep 'DEGRADED' | \
+        sed 's/^.*\[fabric_baseline_compare\] /  /' | \
+        head -50
+    echo ""
+    echo "  => ${BASELINE_DEGRADED} channel(s) degraded between SetUp and TearDown"
+    if [ "${BASELINE_HB_STALLED:-0}" -gt 0 ]; then
+        echo "  => ${BASELINE_HB_STALLED} of those had stalled heartbeats (tx+rx unchanged)"
+    fi
+else
+    echo "  (no channel degradation detected between SetUp and TearDown)"
+fi
+
 echo ""
 echo "=== AGGREGATE COUNTERS ==="
 echo "  RING_SYNC_TIMEOUT_COUNT:   ${RING_SYNC_TIMEOUT_COUNT:-0}"
@@ -1698,6 +1786,7 @@ echo "  FIX_UP2_FIRES:             ${FIX_UP2_FIRES:-0}  (pre-test-loop ring-sync
 echo "  FIX_TM2_FIRES:             ${FIX_TM2_FIRES:-0}  (ring-sync timeout in post-TL warm-up)"
 echo "  FIX_TH3_FIRES:             ${FIX_TH3_FIRES:-0}  (120s/12x ring-sync timeout extension)"
 echo "  FIX_TG2_SYNC_CLEARS:       ${FIX_TG2_SYNC_CLEARS:-0}  (stale sync-address clears for base-UMD channels)"
+echo "  FIX_EXT_FIRES:             ${FIX_EXT_FIRES:-0}  (external ETH channel skipped in ring-sync/health-check)"
 echo "  FIX_AQ_SUCCESS:            ${FIX_AQ_SUCCESS:-0}  (edm_status sentinel reached 0x49706550 in teardown)"
 echo "  FIX_AQ_TIMEOUT:            ${FIX_AQ_TIMEOUT:-0}  (edm_status sentinel poll timed out at 10s — ROM postcode persisted)"
 echo "  FIX_RP_SUCCESS:            ${FIX_RP_SUCCESS:-0}  (non-MMIO ROM postcode transitioned to base-UMD)"
@@ -1709,6 +1798,11 @@ echo "  FIX_QW_SKIP_COUNT:        ${FIX_QW_SKIP_COUNT:-0}  (test skip guards fir
 echo "  FIX_AR2_FIRES:            ${FIX_AR2_FIRES:-0}  (post-deassert delay before heartbeat poll — prevents stale 0xABCD)"
 echo "  FIX_TV_SUCCESS:            ${FIX_TV_SUCCESS:-0}  (MMIO ETH heartbeat confirmed after reset_cores)"
 echo "  FIX_TV_TIMEOUT:            ${FIX_TV_TIMEOUT:-0}  (MMIO ETH heartbeat poll timed out — probe_dead likely)"
+echo "  TELEMETRY_DUMPS:           ${TELEMETRY_DUMP_BEGIN:-0}  (fabric telemetry failure dumps)"
+echo "  TELEMETRY_UNHEALTHY_CHANS: ${TELEMETRY_UNHEALTHY:-0}  (channels with router_state != Active at failure)"
+echo "  TELEMETRY_READ_ERRORS:     ${TELEMETRY_THREW:-0}  (telemetry reads that threw exceptions)"
+echo "  BASELINE_DEGRADED_CHANS:   ${BASELINE_DEGRADED:-0}  (channels degraded between SetUp and TearDown)"
+echo "  BASELINE_HB_STALLED:       ${BASELINE_HB_STALLED:-0}  (degraded channels with stalled heartbeats)"
 echo ""
 if [ "${FIX_TH3_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH3] fabric_router_sync_timeout extended from 10s to 120s (12x) (${FIX_TH3_FIRES} occurrence(s))."
@@ -1728,6 +1822,12 @@ if [ "${FIX_TG_L1_FIRES:-0}" -gt 0 ] || [ "${FIX_TG2_SYNC_CLEARS:-0}" -gt 0 ]; t
     echo "     termination_signal) while preserving edm_status_address (0x49706550 sentinel)."
     echo "     Before FIX TG2: stale REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) survived smi resets → hang."
 fi
+if [ "${FIX_EXT_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX EXT] External ETH channel(s) detected and skipped cleanly (${FIX_EXT_FIRES} occurrence(s))."
+    echo "     Channel holds base-UMD sentinel (0x49706550) but has no in-cluster peer (e.g. wired to out-of-mesh host)."
+    echo "     Excluded from soft-reset, firmware launch, ring-sync, AND health-check by FIX EXT."
+    echo "     Without FIX EXT: these channels block ring-sync barrier or trip health-check as dead → false degraded state."
+fi
 if [ "${FIX_TI_RING_FIRES:-0}" -gt 0 ] || [ "${FIX_TJ_RING_FIRES:-0}" -gt 0 ] || [ "${FIX_TI_FIRST_TIMEOUT:-0}" -gt 0 ]; then
     echo "  => [FIX TI/TJ/TK ring-sync] base-UMD ring barrier timeout cascade detected:"
     if [ "${FIX_TI_FIRST_TIMEOUT:-0}" -gt 0 ]; then
@@ -1746,6 +1846,25 @@ if [ "${FIX_TI_RING_FIRES:-0}" -gt 0 ] || [ "${FIX_TJ_RING_FIRES:-0}" -gt 0 ] ||
     if [ "${FIX_TK_BA_GUARD:-0}" -gt 0 ]; then
         echo "     - FIX TK guard active: ${FIX_TK_BA_GUARD} device(s) had FIX BA skipped in teardown"
     fi
+fi
+if [ "${FIX_PY_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX PY] Phase 2.5 fast-skip: ${FIX_PY_FIRES} channel(s) skipped because relay already marked broken by prior channel."
+    echo "     Without FIX PY: each remaining channel on a dead non-MMIO device burns 3×retry×5s≈21s before Phase 2.5 exits."
+fi
+if [ "${FIX_QU_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX QU] Per-device degraded flags re-asserted after configure_fabric() reset: ${FIX_QU_FIRES} device(s)."
+    echo "     FIX QU restores fabric_relay_path_broken_ / fabric_channels_not_ready_for_traffic_ for dead-relay/MMIO-dead-master-chan"
+    echo "     devices so test guards (FIX QS/QW/RX) detect degraded cluster and SKIP instead of hanging in AllGather."
+    echo "     Without FIX QU: guards see false-healthy cluster → AllGather hangs for OPERATION_TIMEOUT."
+fi
+if [ "${FIX_QV_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX QV] Phase 4 MUX poll skipped for ${FIX_QV_FIRES} MMIO dead-master-chan device(s) (channels_not_ready=true)."
+    echo "     Without FIX QV: Phase 4 times out (5000ms × N channels) then throws → UDM tests FAILED instead of SKIPPED."
+fi
+if [ "${FIX_QE_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX QE] multi-tensor CCL tests skipped due to stale ETH firmware: ${FIX_QE_FIRES} occurrence(s)."
+    echo "     FIX QE guard in test_multi_tensor_ccl.cpp fires when is_fabric_degraded() returns true."
+    echo "     Note: FIX QE emits GTest SKIP format — not captured in TIMELINE/PHASES (Metal-log format only)."
 fi
 if [ "${HEALTH_CHECK_FAILED:-0}" -gt 0 ]; then
     echo "  => [HEALTH CHECK] Fabric health check failed — ${HEALTH_CHECK_FAILED} occurrence(s)."
