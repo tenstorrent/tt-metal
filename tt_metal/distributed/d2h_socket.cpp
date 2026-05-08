@@ -20,16 +20,34 @@
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
+// Host cache-flush helpers: evict a cache line and serialize subsequent reads.
+// The hugepage path bypasses CPU cache coherency, so explicit flush+fence are
+// needed to observe device writes to host-mapped hugepage memory.
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+namespace {
+inline void host_clflush(const void* p) noexcept { _mm_clflush(p); }
+inline void host_lfence() noexcept { _mm_lfence(); }
+constexpr uint32_t k_host_clflush_line_bytes = 64;
+}  // namespace
+#elif defined(__aarch64__)
+namespace {
+inline void host_clflush(const void* p) noexcept {
+    // DC CIVAC: clean+invalidate D-cache line by VA to Point of Coherency.
+    asm volatile("dc civac, %0" :: "r"(p) : "memory");
+}
+inline void host_lfence() noexcept {
+    // DSB ISH: data synchronisation barrier, inner-shareable domain.
+    asm volatile("dsb ish" ::: "memory");
+}
+constexpr uint32_t k_host_clflush_line_bytes = 64;  // typical ARM64 D-cache line
+}  // namespace
+#else
+#error "host_clflush/host_lfence: add support for this architecture"
+#endif
+
 
 namespace tt::tt_metal::distributed {
-
-namespace {
-
-// `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
-constexpr uint32_t k_x86_clflush_line_bytes = 64;
-
-}  // namespace
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -342,8 +360,8 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
         if (using_hugepage_) {
-            _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-            _mm_lfence();
+            host_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+            host_lfence();
             uint32_t bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
             bytes_recv = bytes_sent_value - bytes_acked_;
             bytes_sent_ = bytes_sent_value;
@@ -370,8 +388,8 @@ uint32_t D2HSocket::discard_pending_pages() {
     TT_FATAL(page_size_ > 0, "Page size must be set before discarding pages.");
     uint32_t bytes_sent_value;
     if (using_hugepage_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-        _mm_lfence();
+        host_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        host_lfence();
         bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
     } else {
         tt_driver_atomics::mfence();
@@ -405,8 +423,8 @@ void D2HSocket::notify_sender() {
 void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
     auto read_bytes_sent = [this]() -> uint32_t {
         if (using_hugepage_) {
-            _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-            _mm_lfence();
+            host_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+            host_lfence();
             return *hugepage_bytes_sent_host_ptr_;
         }
         tt_driver_atomics::mfence();
@@ -441,10 +459,10 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     uint32_t* src = using_hugepage_ ? hugepage_data_host_ptr_ + (read_ptr_ / sizeof(uint32_t))
                                     : host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
     if (using_hugepage_) {
-        for (uint32_t i = 0; i < num_bytes; i += k_x86_clflush_line_bytes) {
-            _mm_clflush(reinterpret_cast<char*>(src) + i);
+        for (uint32_t i = 0; i < num_bytes; i += k_host_clflush_line_bytes) {
+            host_clflush(reinterpret_cast<char*>(src) + i);
         }
-        _mm_lfence();
+        host_lfence();
     }
     std::memcpy(data, src, num_bytes);
     this->pop_bytes(num_bytes);
@@ -458,8 +476,8 @@ uint32_t D2HSocket::pages_available() {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking available pages.");
     uint32_t bytes_sent_value;
     if (using_hugepage_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
-        _mm_lfence();
+        host_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        host_lfence();
         bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
     } else {
         tt_driver_atomics::mfence();
@@ -514,3 +532,4 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
 }
 
 }  // namespace tt::tt_metal::distributed
+
