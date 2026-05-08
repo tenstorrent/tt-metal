@@ -567,7 +567,7 @@ inline void noc_async_read(
         noc_async_read_one_packet<false>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
     } else {
         WAYPOINT("NARW");
-        DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
+        // DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
         ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
         WAYPOINT("NARD");
     }
@@ -2411,8 +2411,10 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID, false, noc);
     while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid)) {
+        // DPRINT << "waiting ncrisc_noc_read_w_txn_id_flush" << ENDL();
         continue;
     }
+    // DPRINT << "ncrisc_noc_read_w_txn_id_flush flushed" << ENDL();
     invalidate_l1_cache();
     WAYPOINT("NBTD");
 }
