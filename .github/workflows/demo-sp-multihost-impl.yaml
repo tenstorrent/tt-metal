@@ -209,6 +209,16 @@ jobs:
 
       - name: Unpack artifacts & install
         run: |
+          echo "Using hostfile: ${PRTE_MCA_prte_default_hostfile}"
+          if [ ! -f "${PRTE_MCA_prte_default_hostfile}" ]; then
+            echo "::error::OpenMPI hostfile not found at ${PRTE_MCA_prte_default_hostfile}"
+            echo "Did 'Setup tt-run for test' complete successfully?"
+            ls -la /ci || true
+            ls -la /ci/ttrun || true
+            exit 1
+          fi
+          wc -l "${PRTE_MCA_prte_default_hostfile}"
+
           # Move the cloned directory to workers. TODO: Clone directly to NFS
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           mpirun --pernode cp -r /ci/tt-metal /home/user
