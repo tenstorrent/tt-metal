@@ -526,6 +526,8 @@ bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
 
 std::unique_ptr<tt::umd::ClusterDescriptor> create_cluster_descriptor_for_discovery(
     tt::umd::ClusterDescriptor& cluster_desc, tt::TargetDevice target_device_type, bool run_live_discovery) {
+    // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
+    // the caller-provided descriptor.
     return (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
                // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
                tt::umd::Cluster::create_cluster_descriptor() :
