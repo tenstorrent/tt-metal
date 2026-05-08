@@ -29,7 +29,10 @@
  *
  * LLK gap (statically rejected): `sfpu_reduce<MIN, *, REDUCE_ROW>` is not in
  * the LLK, so MIN with REDUCE_ROW is rejected at compile time and the host
- * dispatch must gate it before reaching this helper.
+ * dispatch must gate it before reaching this helper.  The host can still
+ * compute MIN via the negate-trick (`-MAX(-x)`) by passing `negate=true`
+ * and `pool_type=MAX` -- the negate path mirrors the FPU's reduce_w_neg /
+ * reduce_h_neg kernels.
  *
  * Out of Phase 1 scope (reserved for follow-up phases):
  *   - SUM (cross-tile accumulator would need INT32 add tile; the path here
@@ -56,7 +59,8 @@
  *   compute_kernel_lib::reduce_sfpu<
  *       PoolType::MAX,
  *       ReduceDim::REDUCE_ROW,
- *       DataFormat::Int32>(
+ *       DataFormat::Int32,
+ *       false>(  // negate -- pass true to lower MIN to -MAX(-x)
  *       cb_in, cb_scaler, cb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  */
@@ -72,6 +76,11 @@ namespace compute_kernel_lib {
  *                     Note: pool_type MIN with REDUCE_ROW is not in the LLK
  *                     and is statically rejected.
  * @tparam format      Currently only DataFormat::Int32 is implemented.
+ * @tparam negate      When true the helper computes `-pool_type(-x)` -- input
+ *                     tiles are negated in DST before the cross-tile fold and
+ *                     the within-tile sfpu_reduce, and the result is negated
+ *                     before pack.  The host uses this to lower MIN to MAX
+ *                     (mirrors the FPU reduce_w_neg / reduce_h_neg path).
  *
  * @param input_cb_id    Input CB containing the tiles to reduce.
  * @param scaler_cb_id   Scaler CB pushed by the reader (drained but unused).
@@ -83,7 +92,7 @@ namespace compute_kernel_lib {
 // `DataFormat` is at global scope (defined in tensix_types.h with no enclosing
 // namespace).  We use the unqualified spellings here since the function template
 // parameters resolve via standard unqualified lookup.
-template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, DataFormat format>
+template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, DataFormat format, bool negate = false>
 ALWI void reduce_sfpu(
     uint32_t input_cb_id, uint32_t scaler_cb_id, uint32_t output_cb_id, ReduceInputBlockShape input_block_shape);
 

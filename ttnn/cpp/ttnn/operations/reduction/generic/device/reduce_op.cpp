@@ -153,9 +153,15 @@ Tensor reduce(
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
+    //
+    // INT32 has no REDUCE_SCALAR primitive in the SFPU LLK, so HW reductions
+    // for INT32 always take the W-then-H decomposition regardless of tile count.
+    // This applies equally to MAX (negate=false) and MIN (lowered to MAX with
+    // negate=true by ttnn::reduction::common.cpp), since both end up calling
+    // into the SFPU INT32 program factories per-axis.
     const bool use_two_step_hw_reduce_for_int32_max = (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
                                                       (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
-                                                      (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && !negate;
+                                                      (reduce_math == tt::tt_metal::ReduceOpMath::MAX);
 
     if (is_multicore_hw || use_two_step_hw_reduce_for_int32_max ||
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {

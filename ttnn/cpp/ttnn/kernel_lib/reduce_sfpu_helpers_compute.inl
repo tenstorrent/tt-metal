@@ -11,6 +11,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 
@@ -87,7 +88,7 @@ ALWI void sfpu_reduce_binary_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
 // fold is needed -- the seed tile is the result and we only need the
 // within-tile sfpu_reduce.
 
-template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, DataFormat format>
+template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, DataFormat format, bool negate>
 ALWI void reduce_sfpu(
     uint32_t input_cb_id,
     uint32_t scaler_cb_id,
@@ -179,10 +180,28 @@ ALWI void reduce_sfpu(
             cb_wait_front(input_cb_id, onetile);
             copy_tile(input_cb_id, 0, acc_dst);
             cb_pop_front(input_cb_id, onetile);
+            if constexpr (negate) {
+                // Negate the seed tile in DST: this is the "-x" of the -MAX(-x)
+                // lowering used by the host to compute MIN.  Re-init each pass
+                // since the previous iteration's sfpu_reduce_init left the SFPU
+                // configured for reduce, not negative.  Use the int32 variant
+                // (sign-bit flip on the sign-magnitude on-chip format) to match
+                // ttnn.neg's INT32 path.
+                static_assert(format == DataFormat::Int32, "negate=true is only wired for Int32 today");
+                negative_tile_init();
+                negative_tile_int32(acc_dst);
+            }
 
             for (uint32_t k = 1; k < tiles_per_output; ++k) {
                 cb_wait_front(input_cb_id, onetile);
                 copy_tile(input_cb_id, 0, work_dst);
+                if constexpr (negate) {
+                    negative_tile_init();
+                    negative_tile_int32(work_dst);
+                    // negative_tile clobbered the binary fold's SFPCONFIG slots,
+                    // so re-issue the matching init before the fold.
+                    detail::sfpu_reduce_binary_fold_init<pool_type, format>();
+                }
                 detail::sfpu_reduce_binary_fold_tile<pool_type, format>(acc_dst, work_dst, acc_dst);
                 cb_pop_front(input_cb_id, onetile);
             }
@@ -192,6 +211,13 @@ ALWI void reduce_sfpu(
             // binary LOADMACRO templates with the reduce ones.
             sfpu_reduce_init<pool_type, format>();
             sfpu_reduce<pool_type, format, reduce_dim>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
+
+            if constexpr (negate) {
+                // Final negate: the "-(...)" of the -MAX(-x) lowering.  Reduce
+                // left the SFPU configured for reduce, so re-init to negative.
+                negative_tile_init();
+                negative_tile_int32(acc_dst);
+            }
 
             tile_regs_commit();
 

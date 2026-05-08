@@ -43,19 +43,20 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     // for INT32 (issue #26726).
     //
     // Phase 1 (SFPU INT32) supports:
-    //   - MAX along H or W (negate=false).  The repro from issue #21071 lives here.
+    //   - MAX along H or W.  The repro from issue #21071 lives here.
+    //   - MIN along H or W, lowered to MAX via the -MAX(-x) negate trick at the
+    //     SFPU compute kernel level (reduce_sfpu.cpp's REDUCE_NEGATE define), so
+    //     ttnn::reduction::common.cpp's existing negate=true path for reduce_min
+    //     also goes through the SFPU INT32 kernel instead of GMPOOL.
+    //   - HW for both MAX and MIN: decomposed at the prim layer in reduce_op.cpp
+    //     into a W reduce followed by an H reduce, both INT32, so they reach
+    //     this validator with dim ∈ {H, W} after the split.
     //
     // Out of Phase 1 scope (rejected here so they fail fast with a helpful message rather
     // than silently going through the GMPOOL zero-producing path):
     //   - SUM/AVG on INT32 (would need an INT32 binary-add tile in the cross-tile fold).
-    //   - MIN on INT32 along W (sfpu_reduce<MIN, *, REDUCE_ROW> is not in the LLK).
-    //   - MIN on INT32 along H (LLK supports it, but Phase 1 ships MAX only -- the
-    //     existing reduce_min path through the negate trick on top of the FPU MAX kernel
-    //     would still hit GMPOOL with INT32 input, so reject it for now).
-    //   - INT32 + HW reduce (composes from W then H; Phase 1 only ships the per-axis path).
     const bool is_int32 = tensor_args.dtype() == DataType::INT32;
     const bool is_int32_max_phase1 = is_int32 && operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX &&
-                                     !operation_attributes.negate &&
                                      (operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
                                       operation_attributes.dim == tt::tt_metal::ReduceOpDim::W);
     TT_FATAL(
@@ -63,8 +64,9 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
             is_int32_max_phase1,
         "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
-        "(plus INT32 for MAX along H or W in Phase 1 of issue #43736). Got dtype={}, math_op={}, "
-        "dim={}, negate={}.",
+        "(plus INT32 for MAX/MIN along H or W in Phase 1 of issue #43736; INT32 MIN reaches this "
+        "validator as MAX with negate=true, and INT32 HW is split at the prim layer into a "
+        "W-then-H sequence). Got dtype={}, math_op={}, dim={}, negate={}.",
         tensor_args.dtype(),
         operation_attributes.math_op,
         operation_attributes.dim,

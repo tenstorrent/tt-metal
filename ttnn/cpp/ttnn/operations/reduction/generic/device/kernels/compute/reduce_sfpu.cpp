@@ -12,6 +12,10 @@
 //                  (Phase 1 scope -- SUM is reserved for follow-up).
 //   REDUCE_DIM:    ckernel::ReduceDim::REDUCE_ROW (W axis) or REDUCE_COL (H axis).
 //   REDUCE_FORMAT: ckernel::DataFormat::Int32 (Phase 1 scope).
+//   REDUCE_NEGATE: when set to 1 the kernel computes `-REDUCE_OP(-x)`,
+//                  i.e. negates each input tile before the reduce and the
+//                  output tile after the reduce.  The host uses this to
+//                  lower MIN to MAX (mirrors reduce_w_neg / reduce_h_neg).
 //
 // Compile-time args:
 //   0: Ht (number of input tiles along H per batch -- per-core for W reduce)
@@ -30,12 +34,16 @@
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_sfpu_helpers_compute.hpp"
 
+#ifndef REDUCE_NEGATE
+#define REDUCE_NEGATE 0
+#endif
+
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
 
-    compute_kernel_lib::reduce_sfpu<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT>(
+    compute_kernel_lib::reduce_sfpu<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT, /*negate=*/(REDUCE_NEGATE != 0)>(
         tt::CBIndex::c_0,
         tt::CBIndex::c_2,
         tt::CBIndex::c_3,

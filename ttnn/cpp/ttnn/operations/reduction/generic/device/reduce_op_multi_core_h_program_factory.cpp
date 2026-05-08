@@ -111,7 +111,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .buffer = a.buffer(),
         });
     } else {
-        uint32_t num_input_tiles = operation_attributes.negate ? chunk_size : 2;
+        // The FPU's reduce_h_neg.cpp uses chunk_size input tiles to stage the
+        // negated/reducing pipeline; the SFPU INT32 path (selected below via
+        // use_sfpu_int32_path) reads one tile at a time and keeps the
+        // accumulator in DST, so the ordinary 2-tile double-buffered CB sizing
+        // is fine for it even when negate=true.
+        const bool fpu_negate_cbs = operation_attributes.negate && !(a.dtype() == DataType::INT32 &&
+                                                                     operation_attributes.math_op == ReduceOpMath::MAX);
+        uint32_t num_input_tiles = fpu_negate_cbs ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_input_tiles * src0_single_tile_size,
             .core_ranges = all_cores,
@@ -148,7 +155,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .buffer = output.buffer(),
         });
     } else {
-        uint32_t num_output_tiles = operation_attributes.negate ? chunk_size : 2;
+        // Same reasoning as the input CB above: the SFPU INT32 negate path packs
+        // one output tile at a time, so it does not need the FPU-style
+        // chunk_size double-buffer.
+        const bool fpu_negate_cbs = operation_attributes.negate && !(a.dtype() == DataType::INT32 &&
+                                                                     operation_attributes.math_op == ReduceOpMath::MAX);
+        uint32_t num_output_tiles = fpu_negate_cbs ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_tiles * dst_single_tile_size,
             .core_ranges = all_cores,
@@ -164,7 +176,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    if (operation_attributes.negate) {
+    // INT32 + MAX (with or without the negate-trick lowering for MIN) goes through
+    // the SFPU compute kernel below.  That kernel keeps the cross-tile accumulator
+    // in the DST register and folds via binary_max_int32_tile, so it does not need
+    // the cb_acc / cb_ineg scratch CBs that reduce_h_neg.cpp uses.  We therefore
+    // skip the FPU-only neg CB allocation for the SFPU INT32 path.
+    const bool use_fpu_negate_cbs = operation_attributes.negate && !(a.dtype() == DataType::INT32 &&
+                                                                     operation_attributes.math_op == ReduceOpMath::MAX);
+    if (use_fpu_negate_cbs) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
         // via push_back(ntiles).  The CB FIFO write pointer only wraps when
         // wr_ptr exactly reaches fifo_limit, so it is not enough for the CB
@@ -262,19 +281,26 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     // INT32 inputs go through the SFPU compute kernel because the FPU's GMPOOL primitive
     // (used by reduce_h_neg.cpp / reduce.cpp) silently produces zeros for INT32 -- see
-    // issue #26726.  Phase 1 of #43736 ships INT32 + MAX along H (negate=false); the
+    // issue #26726.  Phase 1 of #43736 covers MAX (negate=false) and MIN (lowered to MAX
+    // with negate=true at the prim layer); both go through reduce_sfpu.cpp.  The
     // device-op validation rejects every other INT32 combination before reaching here.
     //
     // The SFPU H kernel folds Ht tiles per output via binary_max_int32_tile, so it requires
     // the reader to deliver tiles column-by-column (single_col_chunk).  We share the
     // welford-style single-column reader path below by setting that compile-time flag.
-    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && !operation_attributes.negate &&
-                                     operation_attributes.math_op == ReduceOpMath::MAX;
+    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
     if (use_sfpu_int32_path) {
         // Note: `DataFormat` lives at global scope (defined in tensix_types.h, no namespace),
         // unlike `ckernel::PoolType` and `ckernel::ReduceDim`.  Functions in `namespace ckernel`
         // and `namespace compute_kernel_lib` find it via standard unqualified lookup.
         reduce_defines["REDUCE_FORMAT"] = "DataFormat::Int32";
+        if (operation_attributes.negate) {
+            // INT32 MIN is lowered to MAX with negate=true (the -MAX(-x) trick); the
+            // SFPU helper does the input/output negate in DST via negative_tile_int32
+            // when REDUCE_NEGATE is set, mirroring the FPU's reduce_h_neg.cpp pattern
+            // without needing the cb_acc / cb_ineg scratch CBs.
+            reduce_defines["REDUCE_NEGATE"] = "1";
+        }
     }
 
     KernelDescriptor reader_desc;
@@ -350,9 +376,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
-    // Pick the compute kernel: SFPU sibling for INT32 (Phase 1 of #43736), FPU GMPOOL path
-    // (with optional _h_neg negate-twice variant for signed MIN-as-MAX-of-negated-input)
-    // otherwise.
+    // Pick the compute kernel: SFPU sibling for INT32 (Phase 1 of #43736 -- handles
+    // both negate=false MAX and negate=true MIN-as-negated-MAX via REDUCE_NEGATE),
+    // FPU GMPOOL path (with optional _h_neg negate-twice variant for signed
+    // MIN-as-MAX-of-negated-input on float dtypes) otherwise.
     const std::string compute_kernel =
         use_sfpu_int32_path
             ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_sfpu.cpp")
