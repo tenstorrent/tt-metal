@@ -72,7 +72,7 @@ constexpr uint32_t w2_shard_tiles(uint32_t Ht, uint32_t core_id, uint32_t Nt, ui
     return shard_tiles(Ht, core_id, n_cores);
 }
 
-inline uint32_t compute_w2_tile_offset(uint32_t core_id, uint32_t Ht, uint32_t Nt, uint32_t n_cores) {
+constexpr uint32_t compute_w2_tile_offset(uint32_t core_id, uint32_t Ht, uint32_t Nt, uint32_t n_cores) {
     uint32_t offset = 0;
     for (uint32_t i = 0; i < core_id; ++i) {
         offset += w2_shard_tiles(Ht, i, Nt, n_cores);
