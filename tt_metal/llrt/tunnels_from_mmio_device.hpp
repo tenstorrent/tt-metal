@@ -5,9 +5,15 @@
 #pragma once
 
 #include <map>
+#include <unordered_set>
 #include <vector>
 
-#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+
+namespace tt::umd {
+class Cluster;
+class ClusterDescriptor;
+}  // namespace tt::umd
 
 namespace tt::llrt {
 
