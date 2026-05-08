@@ -97,7 +97,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    float rtol = 0.0f,
+    float atol = 0.0f,
+    bool equal_nan = false);
 
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a_arg,
@@ -113,18 +116,5 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
-
-ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng_isclose(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
-    const std::optional<const DataType>& output_dtype = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

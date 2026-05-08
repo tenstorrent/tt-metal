@@ -599,15 +599,45 @@ Tensor invoke_binary_ng_isclose(
     const auto input_a_sharded = fa.memory_config().is_sharded();
     const auto input_b_sharded = fb.memory_config().is_sharded();
 
+    using BinaryOpType = ttnn::operations::binary_ng::BinaryOpType;
+
     if (input_a_rm && input_b_rm && !input_a_sharded && !input_b_sharded) {
-        return ttnn::prim::binary_ng_isclose(
-            fa, fb, rtol, atol, equal_nan, std::nullopt, memory_config, output, {}, {}, sub_core_grids);
+        return ttnn::prim::binary_ng(
+            fa,
+            fb,
+            BinaryOpType::ISCLOSE,
+            std::nullopt,
+            memory_config,
+            output,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            rtol,
+            atol,
+            equal_nan);
     }
 
     const auto input_a = operations::binary::detail::to_layout(fa, Layout::TILE);
     const auto input_b = operations::binary::detail::to_layout(fb, Layout::TILE);
-    auto result = ttnn::prim::binary_ng_isclose(
-        input_a, input_b, rtol, atol, equal_nan, std::nullopt, memory_config, output, {}, {}, sub_core_grids);
+    auto result = ttnn::prim::binary_ng(
+        input_a,
+        input_b,
+        BinaryOpType::ISCLOSE,
+        std::nullopt,
+        memory_config,
+        output,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt,
+        sub_core_grids,
+        rtol,
+        atol,
+        equal_nan);
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option

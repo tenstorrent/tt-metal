@@ -534,7 +534,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    float rtol,
+    float atol,
+    bool equal_nan) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
 
     // Validate storage type for input tensors
@@ -654,9 +657,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         is_sfpu_op,
         is_quant_op,
         is_where_op,
-        /*rtol=*/0.0f,
-        /*atol=*/0.0f,
-        /*equal_nan=*/false,
+        rtol,
+        atol,
+        equal_nan,
         input_tensor_a.layout(),
         input_tensor_b.layout(),
         output_layout};
@@ -734,83 +737,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         output_layout};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-}
-
-ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng_isclose(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
-    using BinaryOpType = ttnn::operations::binary_ng::BinaryOpType;
-
-    TT_FATAL(
-        input_tensor_a.storage_type() == StorageType::DEVICE,
-        "Input tensor A must be on device, got storage type: {}",
-        input_tensor_a.storage_type());
-    TT_FATAL(
-        input_tensor_b.storage_type() == StorageType::DEVICE,
-        "Input tensor B must be on device, got storage type: {}",
-        input_tensor_b.storage_type());
-
-    auto subtile_broadcast_type = ttnn::operations::binary_ng::get_subtile_broadcast_type(
-        input_tensor_a.logical_shape()[-2],
-        input_tensor_a.logical_shape()[-1],
-        input_tensor_b.logical_shape()[-2],
-        input_tensor_b.logical_shape()[-1]);
-
-    DataType dtype_a = input_tensor_a.dtype();
-
-    MemoryConfig mem_config_actual = input_tensor_a.memory_config();
-    if (input_tensor_a.is_sharded()) {
-        mem_config_actual =
-            operations::binary_ng::compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
-    }
-    if (memory_config.has_value()) {
-        mem_config_actual = *memory_config;
-    } else if (output_tensor.has_value()) {
-        mem_config_actual = output_tensor->memory_config();
-    }
-
-    auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
-    if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR &&
-        input_tensor_b.layout() == Layout::ROW_MAJOR) {
-        output_layout = Layout::ROW_MAJOR;
-    }
-
-    auto operation_attributes = OperationType::operation_attributes_t{
-        BinaryOpType::ISCLOSE,
-        {lhs_activations.begin(), lhs_activations.end()},
-        {rhs_activations.begin(), rhs_activations.end()},
-        /*post_activations=*/{},
-        /*scalar=*/std::nullopt,
-        mem_config_actual,
-        dtype_a,
-        output_dtype,
-        ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, &input_tensor_b, output_tensor, memory_config, sub_core_grids, mem_config_actual),
-        std::nullopt,
-        sub_core_grids,
-        subtile_broadcast_type,
-        /*is_sfpu=*/true,
-        /*is_quant_op=*/false,
-        /*is_where_op=*/false,
-        rtol,
-        atol,
-        equal_nan,
-        input_tensor_a.layout(),
-        input_tensor_b.layout(),
-        output_layout};
-
-    auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
