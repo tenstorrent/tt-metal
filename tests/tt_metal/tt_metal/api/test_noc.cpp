@@ -691,7 +691,7 @@ TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     run_local_noc_stream_reg_inc(this, mesh_device, eth_core, HalProgrammableCoreType::IDLE_ETH);
 }
 
-// Increment and read back all DRISC Stream Registers
+// Increment and read back local DRISC Stream Registers
 TEST_F(BlackholeSingleCardFixture, DramKernelStreamRegInc) {
     const auto& hal = MetalContext::instance().hal();
     if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
@@ -712,7 +712,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
     }
 
     constexpr uint32_t kTestValue = 0x1234;
-    constexpr uint32_t kStreamId = 15;
+    constexpr uint32_t kStreamId = 15;  // last valid DRISC stream (16 total)
     constexpr uint32_t kStreamReg = 10;
 
     auto mesh_device = this->devices_[0];
@@ -757,7 +757,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
     }
 
     constexpr uint32_t kTestValue = 0x1234;
-    constexpr uint32_t kStreamId = 63;
+    constexpr uint32_t kStreamId = 63;  // last valid Tensix stream (64 total)
     constexpr uint32_t kStreamReg = 10;
 
     auto mesh_device = this->devices_[0];

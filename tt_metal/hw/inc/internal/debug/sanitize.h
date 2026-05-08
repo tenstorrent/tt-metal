@@ -465,7 +465,13 @@ uint32_t debug_sanitize_noc_addr(
     uint32_t alignment_mask =
         (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) -
         1;  // Default alignment, only override in certain cases.
-    if (core_type == AddressableCoreType::PCIE) {
+    // Reg-space targets (on DRAM/ETH/TENSIX overlay) bypass the type specific addr validator and
+    // use reg alignment instead
+    if ((core_type == AddressableCoreType::DRAM || core_type == AddressableCoreType::ETH ||
+         core_type == AddressableCoreType::TENSIX) &&
+        debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
+        alignment_mask = NOC_REG_ALIGNMENT_BYTES - 1;
+    } else if (core_type == AddressableCoreType::PCIE) {
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
         debug_sanitize_post_addr_and_hang(
@@ -478,49 +484,37 @@ uint32_t debug_sanitize_noc_addr(
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_pcie_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::DRAM) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
-            alignment_mask =
-                (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
-            debug_sanitize_post_addr_and_hang(
-                noc_id,
-                noc_addr,
-                l1_addr,
-                noc_len,
-                multicast,
-                dir,
-                DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_dram_addr(noc_local_addr, noc_len));
-        } else {
-            alignment_mask = 3;  // register access: 4-byte aligned
-        }
+        alignment_mask =
+            (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            noc_len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_TARGET,
+            debug_valid_dram_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::ETH) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
-            debug_sanitize_post_addr_and_hang(
-                noc_id,
-                noc_addr,
-                l1_addr,
-                noc_len,
-                multicast,
-                dir,
-                DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-        } else {
-            alignment_mask = 3;  // register access: 4-byte aligned
-        }
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            noc_len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_TARGET,
+            debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
     } else if (core_type == AddressableCoreType::TENSIX) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
-            debug_sanitize_post_addr_and_hang(
-                noc_id,
-                noc_addr,
-                l1_addr,
-                noc_len,
-                multicast,
-                dir,
-                DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-        } else {
-            alignment_mask = 3;  // register access: 4-byte aligned
-        }
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            noc_len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_TARGET,
+            debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
     } else {
         // Bad XY
         debug_sanitize_post_addr_and_hang(
@@ -595,7 +589,7 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
     bool is_virtual_coord = true;
     AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
     if (core_type == AddressableCoreType::DRAM) {
-        // Inline writes to DRISC Overlay registers are supported
+        // DRISC overlay stream-reg space is a valid DRAM target; skip the throw.
         uint64_t noc_local_addr = NOC_LOCAL_ADDR(addr);
         if (debug_valid_reg_addr(noc_local_addr, len, core_type)) {
             return;
