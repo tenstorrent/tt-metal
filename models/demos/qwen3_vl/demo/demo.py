@@ -766,11 +766,11 @@ def test_demo(
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
 
     # Average prefill time for each user (text prefill only, excludes vision)
-    avg_time_to_first_token = total_inference_prefill_time / batch_size
+    avg_time_to_first_token = total_inference_prefill_time / (batch_size - 1)
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * batch_size
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * (batch_size - 1)
     decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
