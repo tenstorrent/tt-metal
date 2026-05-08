@@ -80,4 +80,10 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores);
 
+// Runtime BH ring size, configurable via env var TT_MOE_BH_N. Supported values: 12, 16.
+// Default is 16. The chosen N must have a corresponding DeepSeekRingConfig<HasBias, N> /
+// GptRingConfig<HasBias, N> specialization in moe_ring_common.h. WH always uses N=12.
+// Read once and cached so a session sees a stable N for all op invocations.
+uint32_t get_bh_ring_size();
+
 }  // namespace ttnn::experimental::prim

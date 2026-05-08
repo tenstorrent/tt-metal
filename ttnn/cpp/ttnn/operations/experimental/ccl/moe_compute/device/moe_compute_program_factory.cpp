@@ -8,11 +8,14 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <numeric>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.hpp>
 
@@ -26,6 +29,30 @@
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
+namespace ttnn::experimental::prim {
+
+// Runtime BH ring size, configurable via env var TT_MOE_BH_N. Supported values: 12, 16.
+// Default is 16 (current perf-experiment default). The chosen N must have a corresponding
+// DeepSeekRingConfig<HasBias, N>/GptRingConfig<HasBias, N> specialization in moe_ring_common.h.
+// Read once and cached so back-to-back op invocations within a session see a stable N.
+uint32_t get_bh_ring_size() {
+    static const uint32_t value = []() {
+        const char* env = std::getenv("TT_MOE_BH_N");
+        if (env != nullptr) {
+            const int parsed = std::atoi(env);
+            if (parsed == 12 || parsed == 16) {
+                return static_cast<uint32_t>(parsed);
+            }
+            log_warning(
+                tt::LogOp, "moe_compute: TT_MOE_BH_N={} is not supported (must be 12 or 16); using default 16", env);
+        }
+        return 16u;
+    }();
+    return value;
+}
+
+}  // namespace ttnn::experimental::prim
 
 namespace {
 
@@ -140,24 +167,49 @@ get_cores(
     }
 
     // matmul cores come from the DRAM-bank-to-worker assignment: WH returns 12, BH returns 8.
-    // Both archs run the N=12 ring (templatize knob, see kernels/moe_ring_common.h:
-    // DeepSeekRingConfig<N>/GptRingConfig<N>). On BH we pad to 12 by appending 4 extra cores
-    // inside the existing matmul mcast bbox ({0,0},{7,9}) — INTERLEAVED weights (see Python
+    // WH instantiates the N=12 ring; BH instantiates the N=get_bh_ring_size() ring (perf knob,
+    // env var TT_MOE_BH_N). BH pads its 8 DRAM-bank cores up to N by appending extras inside
+    // the matmul mcast bbox ({0,0},{7,9}) — INTERLEAVED weights (see Python
     // `get_weight_mem_configs`) page tiles across all DRAM banks, so the ring core count is
-    // independent of bank count. Issue #41827 PR1.
+    // independent of bank count. Issue #41827 PR1 (N=12 baseline) + N=16 perf experiment.
     auto matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
     if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
-        // BH returns 8 DRAM-adjacent cores; append 4 extras inside the matmul bbox ({0,0},{7,9}).
-        // These extras don't extend the bbox (all within x=0..7, y=3..8), so tilize/combine
-        // bboxes (x=9,10) remain non-overlapping.
-        matmul_cores.push_back({0, 5});
-        matmul_cores.push_back({0, 8});
-        matmul_cores.push_back({7, 3});
-        matmul_cores.push_back({7, 8});
+        // BH 8 DRAM-adjacent cores at x=0,7 (first 4 cols x=0; next 4 cols x=7).
+        // BH DRAM-adjacent positions: (0,0)(0,3)(0,7)(0,9)(7,1)(7,4)(7,6)(7,9). Extras must avoid
+        // these, stay inside x=0..7,y=0..9 (matmul bbox), and not extend the bbox (so tilize/
+        // combine bboxes at x=9,10 remain non-overlapping). The first 4 entries reach N=12; the
+        // next 4 reach N=16. Append in order so growing N strictly extends the previous set.
+        constexpr std::array<CoreCoord, 8> kBhMatmulExtras = {{
+            // First 4 (used at N=12): free y in x=0 col {5, 8}; free y in x=7 col {3, 8}.
+            {0, 5},
+            {0, 8},
+            {7, 3},
+            {7, 8},
+            // Next 4 (used at N=16): free y in x=0 col {1, 2}; free y in x=7 col {0, 2}.
+            {0, 1},
+            {0, 2},
+            {7, 0},
+            {7, 2},
+        }};
+        const uint32_t n = ttnn::experimental::prim::get_bh_ring_size();
+        TT_FATAL(
+            n == 12 || n == 16,
+            "moe_compute: unsupported BH ring size N={} (TT_MOE_BH_N), supported values are {{12, 16}}",
+            n);
+        const uint32_t num_extras = n - 8;  // 8 DRAM-adjacent cores already in matmul_cores
+        TT_FATAL(num_extras <= kBhMatmulExtras.size(), "moe_compute: not enough BH extras for N={}", n);
+        for (uint32_t i = 0; i < num_extras; ++i) {
+            matmul_cores.push_back(kBhMatmulExtras[i]);
+        }
     }
+    const uint32_t expected_n =
+        (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? ttnn::experimental::prim::get_bh_ring_size() : 12u;
     TT_FATAL(
-        matmul_cores.size() == 12, "moe_compute: expected 12 matmul cores after padding (got {})", matmul_cores.size());
+        matmul_cores.size() == expected_n,
+        "moe_compute: expected {} matmul cores after padding (got {})",
+        expected_n,
+        matmul_cores.size());
 
     // CoreRangeSets
     const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
@@ -428,18 +480,35 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
-    // a2a_cb_pages = IN2_TILES_PER_STEP for the active workload at N=12. Both WH and BH instantiate
-    // the <12> specialization (BH pads cores; INTERLEAVED weights decouple from bank count).
-    TT_FATAL(matmul_num_cores == 12, "moe_compute: expected matmul_num_cores=12, got {}", matmul_num_cores);
-    auto get_in2_tiles_per_step = [](detail::MoEConfigType c) -> uint32_t {
+    // a2a_cb_pages = IN2_TILES_PER_STEP for the active workload. WH instantiates <12>, BH
+    // instantiates <get_bh_ring_size()> (templatize knob; INTERLEAVED weights decouple ring
+    // core count from DRAM bank count on BH). Runtime-to-compile-time switch over supported N.
+    const uint32_t expected_matmul_n =
+        (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? ttnn::experimental::prim::get_bh_ring_size() : 12u;
+    TT_FATAL(
+        matmul_num_cores == expected_matmul_n,
+        "moe_compute: expected matmul_num_cores={}, got {}",
+        expected_matmul_n,
+        matmul_num_cores);
+    auto get_in2_tiles_per_step = [](detail::MoEConfigType c, uint32_t n) -> uint32_t {
         switch (c) {
             case detail::MoEConfigType::DEEPSEEK:
-                return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
-            case detail::MoEConfigType::GPT: return moe_ring::GptRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
+                switch (n) {
+                    case 12: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
+                    case 16: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 16>::IN2_TILES_PER_STEP;
+                }
+                TT_THROW("moe_compute: no DeepSeek ring spec for N={}", n);
+            case detail::MoEConfigType::GPT:
+                switch (n) {
+                    case 12: return moe_ring::GptRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
+                    case 16: return moe_ring::GptRingConfig</*HasBias=*/false, 16>::IN2_TILES_PER_STEP;
+                }
+                TT_THROW("moe_compute: no GPT ring spec for N={}", n);
         }
         TT_THROW("moe_compute: unknown config type {}", static_cast<int>(c));
     };
-    const uint32_t a2a_cb_pages = get_in2_tiles_per_step(static_cast<detail::MoEConfigType>(config_type));
+    const uint32_t a2a_cb_pages =
+        get_in2_tiles_per_step(static_cast<detail::MoEConfigType>(config_type), matmul_num_cores);
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();

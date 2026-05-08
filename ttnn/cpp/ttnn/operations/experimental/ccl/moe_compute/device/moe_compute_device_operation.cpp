@@ -5,6 +5,7 @@
 #include "hostdevcommon/config.hpp"
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
+#include "moe_compute_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -321,17 +322,30 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
-    // Determine num_data_parallel_cores based on hidden size. Ring is templatized on N=12 for both
-    // WH and BH (BH pads its 8 DRAM-bank cores to 12 with INTERLEAVED weights — see moe_ring_common.h
-    // and issue #41827 PR1). Bias does not matter for OUTPUT_WIDTH_SHARD_DIM.
-    uint32_t num_data_parallel_cores = 0;
-    if (hidden_size == 7168) {
-        num_data_parallel_cores = moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
-    } else if (hidden_size == 2880) {
-        num_data_parallel_cores = moe_ring::GptRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
-    } else {
-        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
-    }
+    // Determine num_data_parallel_cores based on hidden size. WH uses N=12; BH uses
+    // get_bh_ring_size() (env var TT_MOE_BH_N, supported {12, 16}, default 16). Templatize
+    // machinery in moe_ring_common.h resolves OUTPUT_WIDTH_SHARD_DIM per (config, N). Bias
+    // does not affect OUTPUT_WIDTH_SHARD_DIM. Runtime-to-compile-time switch over supported N.
+    auto* mesh_device = tilize_input_tensor.device();
+    const uint32_t ring_n =
+        (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? ttnn::experimental::prim::get_bh_ring_size() : 12u;
+    auto get_output_width_shard_dim = [](uint32_t hidden, uint32_t n) -> uint32_t {
+        if (hidden == 7168) {
+            switch (n) {
+                case 12: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
+                case 16: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 16>::OUTPUT_WIDTH_SHARD_DIM;
+            }
+            TT_THROW("moe_compute: no DeepSeek ring spec for N={}", n);
+        } else if (hidden == 2880) {
+            switch (n) {
+                case 12: return moe_ring::GptRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
+                case 16: return moe_ring::GptRingConfig</*HasBias=*/false, 16>::OUTPUT_WIDTH_SHARD_DIM;
+            }
+            TT_THROW("moe_compute: no GPT ring spec for N={}", n);
+        }
+        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden);
+    };
+    const uint32_t num_data_parallel_cores = get_output_width_shard_dim(hidden_size, ring_n);
 
     // In compute_only mode, the public-layer must not pass any CCL-related optionals.
     if (compute_only) {
@@ -349,7 +363,6 @@ std::vector<ttnn::Tensor> moe_compute(
             "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
     }
 
-    auto* mesh_device = tilize_input_tensor.device();
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
