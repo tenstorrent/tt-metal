@@ -80,8 +80,10 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Forward memory_config and dtype when master had them (use __absent_keys__ guard).
-    absent_keys = set(kwargs.get("__absent_keys__") or [])
-    if "memory_config" not in absent_keys and "memory_config" not in op_kwargs:
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "memory_config" not in absent_keys and "memory_config" not in op_kwargs:
         traced_mc = kwargs.get("memory_config")
         if traced_mc is not None and traced_mc != "__ABSENT__":
             parsed_mc = parse_dict_value("memory_config", traced_mc) if isinstance(traced_mc, dict) else traced_mc
@@ -91,7 +93,7 @@ def run(
                 op_kwargs["memory_config"] = None
         else:
             op_kwargs["memory_config"] = None
-    if "dtype" not in absent_keys and "dtype" not in op_kwargs:
+    if has_absent_info and "dtype" not in absent_keys and "dtype" not in op_kwargs:
         traced_dt = kwargs.get("dtype")
         if traced_dt is not None and traced_dt != "__ABSENT__":
             parsed_dt = parse_dict_value("dtype", traced_dt) if isinstance(traced_dt, dict) else traced_dt

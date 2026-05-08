@@ -241,8 +241,10 @@ def run(
         op_kwargs["memory_config"] = mem_config
 
     # Forward sub_core_grids when master had it (use __absent_keys__ guard).
-    absent_keys = set(kwargs.get("__absent_keys__") or [])
-    if "sub_core_grids" not in absent_keys:
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "sub_core_grids" not in absent_keys:
         traced_scg = kwargs.get("sub_core_grids")
         if traced_scg is not None and traced_scg != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value

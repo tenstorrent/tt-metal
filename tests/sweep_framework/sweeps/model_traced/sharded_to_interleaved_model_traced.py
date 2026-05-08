@@ -85,8 +85,10 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Forward dtype when master had it (use __absent_keys__ guard).
-    absent_keys = set(kwargs.get("__absent_keys__") or [])
-    if "dtype" not in absent_keys and "dtype" not in op_kwargs:
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "dtype" not in absent_keys and "dtype" not in op_kwargs:
         traced_dtype = kwargs.get("dtype")
         if traced_dtype is not None and traced_dtype != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value

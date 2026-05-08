@@ -221,13 +221,15 @@ def run(
     # Only pass dtype/memory_config/layout if they were in the master trace.
     # Passing None creates extra_key diffs in validation.
     # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
-    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
     embedding_kwargs = dict(op_kwargs)
-    if "dtype" not in absent_keys:
+    if has_absent_info and "dtype" not in absent_keys:
         embedding_kwargs["dtype"] = dtype
     elif dtype is not None:
         embedding_kwargs["dtype"] = dtype
-    if "memory_config" not in absent_keys:
+    if has_absent_info and "memory_config" not in absent_keys:
         if memory_config is not None:
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 

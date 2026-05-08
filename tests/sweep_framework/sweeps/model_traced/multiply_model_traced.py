@@ -186,8 +186,10 @@ def run(
     # NOTE: memory_config and dtype are declared as named params on run(), so
     # they live in their own bindings — kwargs.get() would never see them.
     # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
-    absent_keys = set(kwargs.get("__absent_keys__") or [])
-    if "memory_config" not in absent_keys:
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "memory_config" not in absent_keys:
         if memory_config is not None:
             parsed_mc = (
                 parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
@@ -204,7 +206,7 @@ def run(
         )
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    if "dtype" not in absent_keys:
+    if has_absent_info and "dtype" not in absent_keys:
         if dtype is not None:
             parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
             if parsed_dt is not None:
