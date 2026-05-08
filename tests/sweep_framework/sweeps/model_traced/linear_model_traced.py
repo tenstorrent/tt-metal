@@ -531,41 +531,30 @@ def run(
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
-        absent_keys = kwargs.get("__absent_keys__")
-        has_absent_info = absent_keys is not None
-        absent_keys = set(absent_keys or [])
-        if has_absent_info and "memory_config" not in absent_keys:
-            if memory_config is not None:
-                linear_kwargs["memory_config"] = memory_config
-            else:
-                linear_kwargs["memory_config"] = None
-        elif memory_config is not None:
+        # Forward memory_config when master had it (not __ABSENT__)
+        if memory_config != "__ABSENT__" and memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
+        elif memory_config is None and core_grid != "__ABSENT__":
+            linear_kwargs["memory_config"] = None
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
-        if has_absent_info and "dtype" not in absent_keys:
-            linear_kwargs["dtype"] = dtype
-        elif dtype is not None:
+        if dtype is not None and dtype != "__ABSENT__":
             linear_kwargs["dtype"] = dtype
 
-        if has_absent_info and "program_config" not in absent_keys:
+        if program_config is not None and program_config != "__ABSENT__":
             linear_kwargs["program_config"] = program_config
-        elif program_config is not None:
-            linear_kwargs["program_config"] = program_config
+        elif program_config is None and memory_config != "__ABSENT__":
+            linear_kwargs["program_config"] = None
 
         # Pass compute_kernel_config even when None — the master trace records it
         # when the model explicitly passed it (including None). Use __absent_keys__
         # (injected by execute_test) to distinguish "master had ckc=None" from
         # "master never passed ckc". Falls back to value-based check for older callers.
-        if has_absent_info and "compute_kernel_config" not in absent_keys:
-            linear_kwargs["compute_kernel_config"] = compute_kernel_config
-        elif compute_kernel_config is not None:
+        if compute_kernel_config is not None and compute_kernel_config != "__ABSENT__":
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        if has_absent_info and "core_grid" not in absent_keys:
-            linear_kwargs["core_grid"] = core_grid
-        elif core_grid is not None:
+        if core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
 
         if activation is not None:
