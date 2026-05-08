@@ -88,10 +88,26 @@ void MLAQKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         dV_shape[3] == args.v_dim, "MLAQKVAssembleBw: dV dim 3 must equal v_dim = {}. Got {}", args.v_dim, dV_shape[3]);
 
-    TT_FATAL(args.qk_nope_dim % TILE_WIDTH == 0, "qk_nope_dim must be tile-aligned");
-    TT_FATAL(args.qk_rope_dim % TILE_WIDTH == 0, "qk_rope_dim must be tile-aligned");
-    TT_FATAL(args.v_dim % TILE_WIDTH == 0, "v_dim must be tile-aligned");
-    TT_FATAL(dQ_shape[2] % TILE_HEIGHT == 0, "S must be tile-aligned");
+    TT_FATAL(
+        args.qk_nope_dim % TILE_WIDTH == 0,
+        "MLAQKVAssembleBw: qk_nope_dim ({}) must be a multiple of TILE_WIDTH ({}).",
+        args.qk_nope_dim,
+        TILE_WIDTH);
+    TT_FATAL(
+        args.qk_rope_dim % TILE_WIDTH == 0,
+        "MLAQKVAssembleBw: qk_rope_dim ({}) must be a multiple of TILE_WIDTH ({}).",
+        args.qk_rope_dim,
+        TILE_WIDTH);
+    TT_FATAL(
+        args.v_dim % TILE_WIDTH == 0,
+        "MLAQKVAssembleBw: v_dim ({}) must be a multiple of TILE_WIDTH ({}).",
+        args.v_dim,
+        TILE_WIDTH);
+    TT_FATAL(
+        dQ_shape[2] % TILE_HEIGHT == 0,
+        "MLAQKVAssembleBw: S ({}) must be a multiple of TILE_HEIGHT ({}).",
+        dQ_shape[2],
+        TILE_HEIGHT);
 }
 
 MLAQKVAssembleBwDeviceOperation::spec_return_value_t MLAQKVAssembleBwDeviceOperation::compute_output_specs(
@@ -100,6 +116,7 @@ MLAQKVAssembleBwDeviceOperation::spec_return_value_t MLAQKVAssembleBwDeviceOpera
     output_specs.reserve(3U);
 
     const auto& dQ = tensor_args.dQ;
+    const auto& dK = tensor_args.dK;
     const auto dQ_shape = dQ.logical_shape();
     const uint32_t B = dQ_shape[0];
     const uint32_t S = dQ_shape[2];
@@ -109,10 +126,13 @@ MLAQKVAssembleBwDeviceOperation::spec_return_value_t MLAQKVAssembleBwDeviceOpera
     const ttnn::Shape dkv_up_shape({B, 1U, S, args.n_heads * (args.qk_nope_dim + args.v_dim)});
     const ttnn::Shape dk_pe_shape({B, 1U, S, args.qk_rope_dim});
 
-    auto layout = tt::tt_metal::TensorLayout(dQ.dtype(), tt::tt_metal::Layout::TILE, dQ.memory_config());
-    output_specs.emplace_back(dq_pre_shape, layout);
-    output_specs.emplace_back(dkv_up_shape, layout);
-    output_specs.emplace_back(dk_pe_shape, layout);
+    // Each output inherits from its primary input source. Validation requires all three
+    // inputs share dtype + memory_config, so these layouts are equal in practice.
+    auto dq_layout = tt::tt_metal::TensorLayout(dQ.dtype(), tt::tt_metal::Layout::TILE, dQ.memory_config());
+    auto dk_layout = tt::tt_metal::TensorLayout(dK.dtype(), tt::tt_metal::Layout::TILE, dK.memory_config());
+    output_specs.emplace_back(dq_pre_shape, dq_layout);
+    output_specs.emplace_back(dkv_up_shape, dk_layout);
+    output_specs.emplace_back(dk_pe_shape, dk_layout);
 
     return output_specs;
 }

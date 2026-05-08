@@ -97,11 +97,11 @@ static void assign_per_core_runtime_args(
         }
 
         // Inputs are head-major: tile_id(b, h, sb, w) = b*H*HtWt + h*HtWt + sb*Wt + w.
+        // dQ and dK share per-head head_dim (validated), so a single base addresses both.
         const uint32_t b_start = num_blocks_written / S_t;
         const uint32_t sb_start = num_blocks_written % S_t;
-        const uint32_t dQ_block_base_start = b_start * n_heads * kq_HtWt + sb_start * Th;
+        const uint32_t dQK_block_base_start = b_start * n_heads * kq_HtWt + sb_start * Th;
         const uint32_t dV_block_base_start = b_start * n_heads * v_HtWt + sb_start * Tv;
-        // dK shares dQ's layout (same per-head width).
 
         // Outputs are flat across blocks: head 0 of (b, sb) at (b*S_t + sb) * (per_block_tiles).
         const uint32_t flat_block_idx = num_blocks_written;
@@ -118,7 +118,7 @@ static void assign_per_core_runtime_args(
              dV_buffer->address(),
              num_blocks_per_core,
              sb_start,
-             dQ_block_base_start,
+             dQK_block_base_start,
              dV_block_base_start});
 
         SetRuntimeArgs(
@@ -184,6 +184,8 @@ MLAQKVAssembleBwProgramFactory::cached_program_t MLAQKVAssembleBwProgramFactory:
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
     // ── CBs ──
+    // Validation guarantees dQ / dK / dV share dtype, so any of them yields the same
+    // data_format. dQ is picked because it's also the source-of-truth for B and S above.
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dQ.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
