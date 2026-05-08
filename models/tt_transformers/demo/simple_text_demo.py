@@ -1456,7 +1456,7 @@ def test_demo_text(
     # Benchmark targets
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
-    input_seq_len = int(max(prefill_lens)) if prefill_lens else None
+    input_seq_len = int(max_seq_len) if max_seq_len is not None else None
 
     resolved_perf_targets = resolve_perf_targets(
         model_name=model_name,
@@ -1474,9 +1474,12 @@ def test_demo_text(
 
     if resolved_perf_targets:
         target_decode_tok_s_u = resolved_perf_targets.get("decode_t/s/u")
+        target_decode_tok_s = resolved_perf_targets.get("decode_t/s")
+        if target_decode_tok_s is None and target_decode_tok_s_u is not None:
+            target_decode_tok_s = target_decode_tok_s_u * global_batch_size
         targets = {
             "prefill_t/s": resolved_perf_targets.get("prefill_t/s"),
-            "decode_t/s": target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None,
+            "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
         }
     else:
@@ -1546,7 +1549,7 @@ def test_demo_text(
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
-            input_sequence_length=max(prefill_lens),
+            input_sequence_length=input_seq_len,
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
@@ -1574,9 +1577,15 @@ def test_demo_text(
                 logger.info(
                     f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}"
                 )
+                expected_measurements = {
+                    key: True
+                    for key in ci_targets
+                    if key not in {"tolerance", "decode_tolerance"} and not key.endswith("_tolerance")
+                }
                 verify_perf(
                     measurements,
                     high_tol_percentage=high_tol_percentage,
+                    expected_measurements=expected_measurements,
                     model_name=model_name,
                     sku=tt_device_name,
                     batch_size=global_batch_size,

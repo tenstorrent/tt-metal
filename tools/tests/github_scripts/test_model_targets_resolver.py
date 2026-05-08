@@ -113,3 +113,29 @@ def test_model_targets_resolver_none_query_prefers_generic_entry(tmp_path: Path,
 
     generic_entry = resolve_target_entry("demo-model", "wh_n150", batch_size=None, seq_len=None)
     assert generic_entry["perf"]["decode_t/s/u"] == 10
+
+
+def test_model_targets_resolver_requires_configured_seq_len_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {"batch_size": 1, "seq_len": 4096, "status": "active", "perf": {"decode_t/s/u": 33.0}}
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    yaml_path = tmp_path / "targets.yaml"
+    yaml_path.write_text(yaml.safe_dump(targets), encoding="utf-8")
+    monkeypatch.setattr(model_targets, "TARGETS_YAML_PATH_DEFAULT", str(yaml_path))
+
+    assert resolve_perf_targets("demo-model", "wh_n150", 1, 128) is None
+    assert resolve_perf_targets("demo-model", "wh_n150", 1, 4096)["decode_t/s/u"] == 33.0

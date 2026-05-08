@@ -622,7 +622,7 @@ def test_multimodal_demo_text(
     if is_ci_env and enable_trace:
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
-        input_seq_len = int(max(prefill_lens).item())
+        input_seq_len = int(max_seq_len) if max_seq_len is not None else None
 
         perf_targets = resolve_perf_targets(
             model_name=base_model_name,
@@ -643,10 +643,14 @@ def test_multimodal_demo_text(
 
         benchmark_targets = {}
         if perf_targets:
+            target_decode_t_s_u = perf_targets.get("decode_t/s/u")
+            target_decode_t_s = perf_targets.get("decode_t/s")
+            if target_decode_t_s is None and target_decode_t_s_u is not None:
+                target_decode_t_s = target_decode_t_s_u * max_batch_size
             benchmark_targets = {
                 "prefill_t/s": perf_targets.get("prefill_t/s"),
-                "decode_t/s": perf_targets.get("decode_t/s"),
-                "decode_t/s/u": perf_targets.get("decode_t/s/u"),
+                "decode_t/s": target_decode_t_s,
+                "decode_t/s/u": target_decode_t_s_u,
             }
         else:
             logger.warning(
@@ -666,14 +670,20 @@ def test_multimodal_demo_text(
             num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
-            input_sequence_length=max(prefill_lens).item(),
+            input_sequence_length=input_seq_len,
             output_sequence_length=max_gen_len,
         )
 
         if perf_targets:
+            expected_measurements = {
+                key: True
+                for key in perf_targets
+                if key not in {"tolerance", "decode_tolerance"} and not key.endswith("_tolerance")
+            }
             verify_perf(
                 measurements,
                 high_tol_percentage=perf_tolerance,
+                expected_measurements=expected_measurements,
                 model_name=base_model_name,
                 sku=tt_device_name,
                 batch_size=max_batch_size,

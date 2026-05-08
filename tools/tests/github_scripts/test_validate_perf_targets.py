@@ -451,6 +451,97 @@ def test_validate_perf_targets_detects_accuracy_regression(tmp_path):
     assert "top1" in result.stdout
 
 
+def test_validate_perf_targets_requires_ttft_measurement_when_target_exists(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=4096,
+        decode_tsu=100.0,
+        # Intentionally omit inference_prefill.time_to_token.
+        extra_measurements=[],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 4096,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 90.0, "prefill_time_to_token": 0.12},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1
+    assert "prefill_time_to_token" in result.stdout
+
+
+def test_validate_perf_targets_uses_decode_tps_target_without_recomputing_from_per_user_rate(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=4,
+        seq_len=1024,
+        decode_tsu=10.0,
+        extra_measurements=[
+            {"step_name": "inference_decode", "name": "tokens/s", "value": 123.0},
+        ],
+    )
+
+    # decode_t/s intentionally does not equal decode_t/s/u * batch_size.
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 4,
+                                "seq_len": 1024,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 10.0, "decode_t/s": 123.0},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_validate_perf_targets_todo_entry_respects_strict_flag(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)
