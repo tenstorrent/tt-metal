@@ -231,7 +231,6 @@ class TtPrefillTransformer(LightweightModule):
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
         on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
-        actual_isl: Optional[int] = None,
     ):
         """
         Forward pass: embed -> [block x N] -> norm -> lm_head.
@@ -249,9 +248,6 @@ class TtPrefillTransformer(LightweightModule):
                 migration in disaggregated prefill/decode. When set, MLA also zeros
                 the padding region of the cache before fill so migration sees valid KV
                 + zero padding. When None, no migration or zeroing.
-            actual_isl: actual (unpadded) input sequence length. Required when
-                on_layer_complete is set (MLA uses it to compute padding region).
-
         Returns:
             Tuple of (first_token_id, first_token_prob, intermediates_dict or None)
             - first_token_id: sampled token ID (for first temperature if list provided)
@@ -279,7 +275,7 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 on_layer_complete=on_layer_complete,
-                actual_isl=actual_isl,
+                actual_isl=number_of_non_padded_tokens,
             )
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:
