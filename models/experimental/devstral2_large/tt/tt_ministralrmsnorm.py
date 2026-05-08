@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ttnn
 
+from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import is_blackhole
 from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import TtMinistralRMSNorm
 from models.tt_transformers.tt.common import Mode
@@ -62,19 +63,51 @@ class TtDevstral2LargeRMSNorm(TtMinistralRMSNorm):
     Ministral3 RMSNorm for very wide models on Blackhole + fabric mesh.
 
     See module docstring for chunking and sharded program config behavior.
+
+    ``model_final_norm=True`` loads ``norm.weight`` (HF final ``Ministral3Model`` RMSNorm) via
+    :class:`models.common.rmsnorm.RMSNorm` instead of a layer ``attention_norm`` / ``ffn_norm`` tensor.
     """
 
-    def __init__(self, mesh_device, args, state_dict, weight_cache_path, layer_num, tt_ccl, *, post_attention=False):
+    def __init__(
+        self,
+        mesh_device,
+        args,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        tt_ccl,
+        *,
+        post_attention: bool = False,
+        model_final_norm: bool = False,
+    ):
         self._hidden_dim = args.dim
-        super().__init__(
-            mesh_device,
-            args,
-            state_dict,
-            weight_cache_path,
-            layer_num,
-            tt_ccl,
-            post_attention=post_attention,
-        )
+        if model_final_norm:
+            RMSNorm.__init__(
+                self,
+                device=mesh_device,
+                dim=args.dim,
+                state_dict=state_dict,
+                weight_key="norm",
+                layer_num=None,
+                state_dict_prefix=None,
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                is_distributed=args.is_distributed_norm,
+                eps=args.norm_eps,
+                add_unit_offset=args.rms_norm_add_unit_offset,
+                ccl_topology=args.ccl_topology(),
+                tt_ccl=tt_ccl,
+            )
+        else:
+            super().__init__(
+                mesh_device,
+                args,
+                state_dict,
+                weight_cache_path,
+                layer_num,
+                tt_ccl,
+                post_attention=post_attention,
+            )
 
     def _bh_wide_norm_program_config(self, x: ttnn.Tensor) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
         grid = _resolve_norm_core_grid(self.device, self._hidden_dim)
