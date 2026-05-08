@@ -137,26 +137,41 @@ void kernel_main() {
             cb_push_back(cb_xmm, onetile);
             tile_regs_release();
 
-            // Compute cb_y
-            // (x - mean) * rstd
-            tile_regs_acquire();
-            cb_wait_front(cb_xmm, onetile);
-
-            if (is_lastdim_layernorm) {
-                mul_bcast_cols_init_short_with_dt(cb_xmm, cb_rstd);
-                mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
-            } else {
-                mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_rstd);
-                mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
+            // Compute cb_y = (x - mean) * rstd  (T1.22)
+            {
+                using namespace compute_kernel_lib;
+                if constexpr (is_lastdim_layernorm) {
+                    eltwise_chain(
+                        onetile,
+                        BinaryFpu<
+                            cb_xmm,
+                            cb_rstd,
+                            cb_y,
+                            BinaryFpuOp::Mul,
+                            BroadcastDim::Col,
+                            BinaryDataFormatReconfig::InputAndOutput,
+                            CopyTilePolicy::WaitAndPop,
+                            CopyTilePolicy::NoWaitNoPop,
+                            CbIndexMode::FirstTile,
+                            Dst::D0>{},
+                        PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                } else {
+                    eltwise_chain(
+                        onetile,
+                        BinaryFpu<
+                            cb_xmm,
+                            cb_rstd,
+                            cb_y,
+                            BinaryFpuOp::Mul,
+                            BroadcastDim::Scalar,
+                            BinaryDataFormatReconfig::InputAndOutput,
+                            CopyTilePolicy::WaitAndPop,
+                            CopyTilePolicy::NoWaitNoPop,
+                            CbIndexMode::FirstTile,
+                            Dst::D0>{},
+                        PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_y);
-
-            cb_pop_front(cb_xmm, onetile);
-            cb_push_back(cb_y, onetile);
-            tile_regs_release();
         }  // Wt loop
 
         // Copy cb_dy to cb_dycopy
@@ -374,28 +389,42 @@ void kernel_main() {
             cb_push_back(cb_ndy, onetile);
             tile_regs_release();
 
-            // cb_ndymdysum
-            // n * dy - Sum[dy]
+            // cb_ndymdysum = n * dy - Sum[dy]  (T1.23)
             constexpr auto cb_ndymdysum = cb_tmp2;
-            tile_regs_acquire();
-            cb_wait_front(cb_ndy, onetile);
-            cb_reserve_back(cb_ndymdysum, onetile);
-
-            if (is_lastdim_layernorm) {
-                sub_bcast_cols_init_short_with_dt(cb_ndy, cb_dysum);
-                sub_tiles_bcast_cols(cb_ndy, cb_dysum, 0, 0, dst0);
-            } else {
-                sub_tiles_bcast_scalar_init_short_with_dt(cb_ndy, cb_dysum);
-                sub_tiles_bcast_scalar(cb_ndy, cb_dysum, 0, 0, dst0);
+            {
+                using namespace compute_kernel_lib;
+                if constexpr (is_lastdim_layernorm) {
+                    eltwise_chain(
+                        onetile,
+                        BinaryFpu<
+                            cb_ndy,
+                            cb_dysum,
+                            cb_ndymdysum,
+                            BinaryFpuOp::Sub,
+                            BroadcastDim::Col,
+                            BinaryDataFormatReconfig::InputAndOutput,
+                            CopyTilePolicy::WaitAndPop,
+                            CopyTilePolicy::WaitNoPop,
+                            CbIndexMode::FirstTile,
+                            Dst::D0>{},
+                        PackTile<cb_ndymdysum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                } else {
+                    eltwise_chain(
+                        onetile,
+                        BinaryFpu<
+                            cb_ndy,
+                            cb_dysum,
+                            cb_ndymdysum,
+                            BinaryFpuOp::Sub,
+                            BroadcastDim::Scalar,
+                            BinaryDataFormatReconfig::InputAndOutput,
+                            CopyTilePolicy::WaitAndPop,
+                            CopyTilePolicy::WaitNoPop,
+                            CbIndexMode::FirstTile,
+                            Dst::D0>{},
+                        PackTile<cb_ndymdysum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_ndymdysum);
-
-            cb_pop_front(cb_ndy, onetile);
-            cb_push_back(cb_ndymdysum, onetile);
-            tile_regs_release();
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
