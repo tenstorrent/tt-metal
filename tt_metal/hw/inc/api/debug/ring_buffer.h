@@ -12,6 +12,7 @@ constexpr static int16_t DEBUG_RING_BUFFER_STARTING_INDEX = -1;
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #include "hostdev/dev_msgs.h"
+#include "api/debug/dprint.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 
@@ -20,6 +21,8 @@ void push_to_ring_buffer(uint32_t val) {
     volatile tt_l1_ptr int16_t* curr_ptr = &buf->current_ptr;
     volatile tt_l1_ptr uint16_t* wrapped = &buf->wrapped;
     uint32_t* data = buf->data;
+
+    DPRINT << "data buffer is: " << " 0x" << (uint64_t)data << DEC() << ENDL();
 
     // Bounds check, set to -1 to wrap since we increment before using.
     if (*curr_ptr >= DEBUG_RING_BUFFER_ELEMENTS - 1) {
