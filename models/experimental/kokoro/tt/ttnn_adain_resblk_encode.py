@@ -77,6 +77,64 @@ class _TtConv1d:
         return ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
 
 
+class _TtDepthwiseConvTransposePool:
+    def __init__(self, device, weight_rm: ttnn.Tensor, channels: int):
+        self.device = device
+        self.weight = weight_rm
+        self.channels = channels
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.float32,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=False,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            config_tensors_in_dram=True,
+            reshard_if_not_optimal=False,
+            enable_kernel_stride_folding=False,
+            force_split_reader=False,
+            transpose_shards=False,
+            enable_activation_reuse=False,
+            full_inner_dim=False,
+        )
+        self.compute_cfg = _compute_cfg(device)
+
+    def __call__(self, x: ttnn.Tensor, batch_size: int, input_length: int) -> ttnn.Tensor:
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        if x.dtype != ttnn.float32:
+            x = ttnn.typecast(x, ttnn.float32)
+        x = ttnn.permute(x, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.reshape(x, [batch_size, 1, input_length, self.channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+        result, [oh, ow], wpair = ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=self.weight,
+            in_channels=self.channels,
+            out_channels=self.channels,
+            device=self.device,
+            bias_tensor=None,
+            kernel_size=(3, 1),
+            stride=(2, 1),
+            padding=(1, 0),
+            output_padding=(1, 0),
+            dilation=(1, 1),
+            batch_size=batch_size,
+            input_height=input_length,
+            input_width=1,
+            conv_config=self.conv_config,
+            compute_config=self.compute_cfg,
+            groups=self.channels,
+            mirror_kernel=True,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=ttnn.float32,
+        )
+        self.weight = wpair[0]
+        flat = int(oh) * int(ow)
+        result = ttnn.reshape(result, [batch_size, flat, self.channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+        result = ttnn.permute(result, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
+
+
 def _adain_instance_norm(
     x: ttnn.Tensor,
     inst_weight_1c1: ttnn.Tensor,
@@ -105,8 +163,6 @@ def _adain_instance_norm(
 
 
 class AdainResBlk1d:
-    """TTNN port of `decoder.encode` AdainResBlk1d (Kokoro ISTFTNet)."""
-
     def __init__(self, device, parameters: dict, dim_in: int, dim_out: int, style_dim: int):
         self.device = device
         self.dim_in = dim_in
@@ -114,9 +170,12 @@ class AdainResBlk1d:
         self.style_dim = style_dim
         self.eps = float(parameters.get("eps", 1e-5))
         self.compute_cfg = _compute_cfg(device)
+        self.upsample_nearest = bool(parameters.get("upsample_nearest", False))
         self.conv1 = _TtConv1d(device, parameters["conv1"]["weight"], parameters["conv1"]["bias"])
         self.conv2 = _TtConv1d(device, parameters["conv2"]["weight"], parameters["conv2"]["bias"])
         self.conv1x1 = _TtConv1d(device, parameters["conv1x1"]["weight"], parameters["conv1x1"]["bias"])
+        pool_p = parameters.get("pool")
+        self.pool = _TtDepthwiseConvTransposePool(device, pool_p["weight"], dim_in) if pool_p is not None else None
         self.norm1_fc_w = parameters["norm1"]["fc_weight"]
         self.norm1_fc_b = parameters["norm1"]["fc_bias"]
         self.norm1_inst_w = parameters["norm1"]["inst_weight"]
@@ -140,8 +199,16 @@ class AdainResBlk1d:
         s = ttnn.to_memory_config(s, ttnn.L1_MEMORY_CONFIG)
         if s.dtype != ttnn.float32:
             s = ttnn.typecast(s, ttnn.float32)
-        batch_size = x.shape[0]
-        input_length = x.shape[2]
+        batch_size = int(x.shape[0])
+        input_length = int(x.shape[2])
+
+        def shortcut(x_in: ttnn.Tensor) -> ttnn.Tensor:
+            if self.upsample_nearest:
+                x_in = ttnn.repeat_interleave(x_in, 2, dim=2)
+                seq = int(x_in.shape[2])
+            else:
+                seq = input_length
+            return self.conv1x1(x_in, batch_size, seq)
 
         def residual(x_in: ttnn.Tensor) -> ttnn.Tensor:
             h1 = ttnn.linear(
@@ -167,7 +234,12 @@ class AdainResBlk1d:
                 self.eps,
             )
             x_in = ttnn.leaky_relu(x_in, negative_slope=0.2)
-            x_in = self.conv1(x_in, batch_size, input_length)
+            if self.pool is not None:
+                x_in = self.pool(x_in, batch_size, input_length)
+                seq = int(x_in.shape[2])
+            else:
+                seq = input_length
+            x_in = self.conv1(x_in, batch_size, seq)
             x_in = _adain_instance_norm(
                 x_in,
                 self.norm2_inst_w,
@@ -177,10 +249,7 @@ class AdainResBlk1d:
                 self.eps,
             )
             x_in = ttnn.leaky_relu(x_in, negative_slope=0.2)
-            return self.conv2(x_in, batch_size, input_length)
-
-        def shortcut(x_in: ttnn.Tensor) -> ttnn.Tensor:
-            return self.conv1x1(x_in, batch_size, input_length)
+            return self.conv2(x_in, batch_size, seq)
 
         out = ttnn.add(residual(x), shortcut(x), memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.multiply(out, self.inv_sqrt2, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -190,6 +259,8 @@ class AdainResBlk1d:
 def preprocess_encode_parameters(torch_encode: nn.Module, device) -> dict:
     for name in ("conv1", "conv2", "conv1x1"):
         nn.utils.remove_weight_norm(getattr(torch_encode, name))
+    if not isinstance(torch_encode.pool, nn.Identity):
+        nn.utils.remove_weight_norm(torch_encode.pool)
 
     DRAM = ttnn.DRAM_MEMORY_CONFIG
 
@@ -203,6 +274,12 @@ def preprocess_encode_parameters(torch_encode: nn.Module, device) -> dict:
             "bias": None
             if bias_t is None
             else ttnn.from_torch(bias_t, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        }
+
+    def conv_transpose_rm(m: nn.ConvTranspose1d):
+        w = m.weight.data.unsqueeze(-1)
+        return {
+            "weight": ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT),
         }
 
     def lin_params(linear: nn.Linear):
@@ -243,6 +320,8 @@ def preprocess_encode_parameters(torch_encode: nn.Module, device) -> dict:
     p["norm1"] = {**lin_params(torch_encode.norm1.fc), **inst_params(torch_encode.norm1.norm)}
     p["norm2"] = {**lin_params(torch_encode.norm2.fc), **inst_params(torch_encode.norm2.norm)}
     p["eps"] = float(torch_encode.norm1.norm.eps)
+    p["upsample_nearest"] = torch_encode.upsample_type != "none"
+    p["pool"] = None if isinstance(torch_encode.pool, nn.Identity) else conv_transpose_rm(torch_encode.pool)
     return p
 
 
