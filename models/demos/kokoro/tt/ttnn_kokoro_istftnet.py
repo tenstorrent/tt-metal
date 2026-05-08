@@ -30,6 +30,8 @@ from models.demos.kokoro.tt.ttnn_kokoro_generator import (
     TtKokoroGeneratorCore,
     preprocess_generator_core,
 )
+from models.demos.kokoro.tt.ttnn_kokoro_hnnsf import HnNsfSourceParams, hnnsf_source, preprocess_hnnsf_source
+from models.demos.kokoro.tt.ttnn_kokoro_istft import CustomIstftParams, custom_istft_inverse, preprocess_custom_istft
 from models.demos.kokoro.tt.ttnn_kokoro_stft import (
     CustomStftTransformParams,
     custom_stft_transform,
@@ -41,11 +43,12 @@ from models.demos.kokoro.tt.ttnn_kokoro_stft import (
 class IstftNetVocoderParams:
     decoder_front: DecoderFrontParams
     generator_core: GeneratorCoreParams
-    # host-side helpers
     post_n_fft: int
     hop_size: int
     upsample_scale: int
     stft: CustomStftTransformParams
+    istft: CustomIstftParams
+    source: HnNsfSourceParams
 
 
 def preprocess_istftnet_vocoder(
@@ -59,6 +62,8 @@ def preprocess_istftnet_vocoder(
         filter_length=int(g.post_n_fft), hop_length=int(g.stft.hop_length), win_length=int(g.post_n_fft)
     ).eval()
     stft_params = preprocess_custom_stft_transform(stft_host, device, weights_dtype=weights_dtype)
+    istft_params = preprocess_custom_istft(stft_host, device, weights_dtype=weights_dtype)
+    source_params = preprocess_hnnsf_source(g.m_source, device, weights_dtype=weights_dtype)
     return IstftNetVocoderParams(
         decoder_front=dec_front,
         generator_core=gen_core,
@@ -66,6 +71,8 @@ def preprocess_istftnet_vocoder(
         hop_size=int(g.stft.hop_length),
         upsample_scale=upsample_scale,
         stft=stft_params,
+        istft=istft_params,
+        source=source_params,
     )
 
 
@@ -86,22 +93,27 @@ def _build_har_per_stage_ttnn(
     *,
     device: ttnn.Device,
     stft_params: CustomStftTransformParams,
+    source_params: HnNsfSourceParams,
     torch_generator,
     f0_curve_bt: torch.Tensor,
     x_len: int,
 ) -> list[ttnn.Tensor]:
     """
-    Hybrid for now:
-      - host: f0 upsample + m_source (HN-NSF)
-      - device: STFT transform + har_per_stage slicing/padding
+    Device build:
+      - device: f0 upsample, hn-nsf source, STFT transform, har_per_stage slicing/padding
     """
-    with torch.no_grad():
-        f0_up = torch_generator.f0_upsamp(f0_curve_bt[:, None]).transpose(1, 2)  # [B, T_up, 1]
-        har_source, _, _uv = torch_generator.m_source(f0_up)
-        har_source = har_source.transpose(1, 2).squeeze(1)  # [B, T_up]
+    f0_tt = ttnn.from_torch(
+        f0_curve_bt.detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    f0_nhwc = ttnn.reshape(f0_tt, (f0_tt.shape[0], f0_tt.shape[1], 1, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    f0_up_nhwc = ttnn.upsample(f0_nhwc, scale_factor=(torch_generator.f0_upsamp.scale_factor, 1), mode="bilinear")
+    f0_up_btl = ttnn.reshape(
+        f0_up_nhwc, (f0_tt.shape[0], f0_up_nhwc.shape[1], 1), memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
-    har_source_tt = ttnn.from_torch(
-        har_source.detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    sine_merge_btl, _uv = hnnsf_source(f0_btl=f0_up_btl, params=source_params, device=device)
+    har_source_tt = ttnn.reshape(
+        sine_merge_btl, (sine_merge_btl.shape[0], sine_merge_btl.shape[1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     har_spec_tt, har_phase_tt = custom_stft_transform(waveform_bt=har_source_tt, params=stft_params, device=device)
     har_tt = ttnn.concat([har_spec_tt, har_phase_tt], dim=1)  # [B, n_fft+2, T_stft]
@@ -183,11 +195,7 @@ class TtKokoroIstftNetVocoder:
         self.params = params
         self.tt_decoder_front = TtKokoroDecoderFront(device, params.decoder_front)
         self.tt_generator_core = TtKokoroGeneratorCore(device, params.generator_core)
-        # host-side: iSTFT inverse
-        self._stft = CustomSTFT(
-            filter_length=params.post_n_fft, hop_length=params.hop_size, win_length=params.post_n_fft
-        ).eval()
-        # keep torch modules for host-only helper computations
+        # keep torch modules for shape metadata (kernel/stride)
         self._torch_generator = torch_decoder.generator
 
     @torch.no_grad()
@@ -206,17 +214,37 @@ class TtKokoroIstftNetVocoder:
         har_per_stage = _build_har_per_stage_ttnn(
             device=self.device,
             stft_params=self.params.stft,
+            source_params=self.params.source,
             torch_generator=self._torch_generator,
             f0_curve_bt=f0_pred,
             x_len=int(x_feat_bct.shape[-1]),
         )
 
         x_logits_bct = self.tt_generator_core(x_bct=x_feat_bct, style_s=ref_s[:, :128], har_per_stage=har_per_stage)
-        x_logits = ttnn.to_torch(x_logits_bct).to(torch.float32)
-
-        # host: final spec/phase + iSTFT inverse
+        # device: final spec/phase + iSTFT inverse
         freq_bins = self.params.post_n_fft // 2 + 1
-        spec = torch.exp(x_logits[:, :freq_bins, :])
-        phase = torch.sin(x_logits[:, freq_bins:, :])
-        audio = self._stft.inverse(spec, phase).squeeze(1)  # [B, T]
-        return audio
+        spec = ttnn.exp(
+            ttnn.slice(
+                x_logits_bct,
+                (0, 0, 0),
+                (x_logits_bct.shape[0], freq_bins, x_logits_bct.shape[2]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        phase = ttnn.sin(
+            ttnn.slice(
+                x_logits_bct,
+                (0, freq_bins, 0),
+                (x_logits_bct.shape[0], x_logits_bct.shape[1], x_logits_bct.shape[2]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        audio_tt = custom_istft_inverse(
+            magnitude_bft=spec,
+            phase_bft=phase,
+            params=self.params.istft,
+            device=self.device,
+        )
+        return ttnn.to_torch(audio_tt).to(torch.float32)
