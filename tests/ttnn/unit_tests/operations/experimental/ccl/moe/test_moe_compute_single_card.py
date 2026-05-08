@@ -279,6 +279,7 @@ def _run_moe_compute_single_card_test(
         w2_shard_map,
         dram_core_range_set,
         has_bias=has_bias,
+        mesh_device=mesh_device,
     )
 
     torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(

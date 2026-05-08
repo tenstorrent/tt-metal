@@ -35,7 +35,8 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
-    // Ring is templatized on num_cores: 12 on Wormhole, 8 on Blackhole. See moe_ring_common.h.
+    // Ring is templatized on num_cores: 12 on Wormhole, 12 on Blackhole (BH pads from 8
+    // DRAM-bank cores to 12 with INTERLEAVED weights). See moe_ring_common.h.
     using config_t = moe_ring::ConfigType_t<has_bias, config_type, num_cores>;
 
     // For synchronization with tilize cores
@@ -58,6 +59,13 @@ void kernel_main() {
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+#if defined(ARCH_BLACKHOLE)
+    // BH-only: starting global page_id of this ring core's slice in the INTERLEAVED weight
+    // buffer (in tiles). On WH the weight buffers are HEIGHT_SHARDED so each core's slice
+    // lives in its own dedicated DRAM bank; the start_page_id concept doesn't apply.
+    const auto w0_w1_core_start_page_id = get_arg_val<uint32_t>(argidx++);
+    const auto w2_core_start_page_id = get_arg_val<uint32_t>(argidx++);
+#endif
 
     // CBs
     constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
@@ -117,12 +125,38 @@ void kernel_main() {
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
-    // Offsets for expert_id
+#if defined(ARCH_BLACKHOLE)
+    // BH: weights are INTERLEAVED across DRAM banks (BH has 8 banks but ring uses 12 cores).
+    // TensorAccessor pages tiles by global page_id; bank selection is automatic.
+    // Tile counts (per core) for layer/expert striding in tile units.
+    constexpr uint32_t w0_w1_pages_per_expert = w0_w1_total_size_per_expert / w0_w1_tile_size;
+    constexpr uint32_t w0_w1_pages_per_layer = w0_w1_total_size_per_layer / w0_w1_tile_size;
+    constexpr uint32_t w0_w1_layer_page_offset = layer_id * w0_w1_pages_per_layer;
+    constexpr uint32_t w0_w1_pages_per_txn = w0_w1_tiles_per_txn;
+
+    constexpr uint32_t w2_pages_per_expert = w2_total_size_per_expert / w2_tile_size;
+    constexpr uint32_t w2_pages_per_layer = w2_total_size_per_layer / w2_tile_size;
+    constexpr uint32_t w2_layer_page_offset = layer_id * w2_pages_per_layer;
+    constexpr uint32_t w2_pages_per_txn = w2_tiles_per_txn;
+
+    // TensorAccessors for INTERLEAVED weight buffers. Page size = tile size.
+    const auto w0_w1_acc = TensorAccessor(w0_w1_args, w0_w1_addr, w0_w1_tile_size);
+    const auto w2_acc = TensorAccessor(w2_args, w2_addr, w2_tile_size);
+
+    // Starting global page_id for this ring core's first expert in the current layer
+    uint32_t w0_w1_expert_page_offset = w0_w1_core_start_page_id + w0_w1_layer_page_offset;
+    uint32_t w2_expert_page_offset = w2_core_start_page_id + w2_layer_page_offset;
+    // Mark unused for BH
+    (void)dram_bank_id;
+    (void)vchannel;
+#else
+    // Offsets for expert_id (WH HEIGHT_SHARDED — byte offsets within this core's bank slice)
     uint32_t w0_w1_expert_offset = w0_w1_layer_offset + w0_w1_addr;
     uint32_t w2_expert_offset = w2_layer_offset + w2_addr;
 
     // DRAM bank's base NOC address
     const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
+#endif
 
     //-------------------------------------------------------------------------
     // CB addresses
@@ -137,8 +171,11 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
-    // Set w0_w1 state once before loop (will be reused for all experts)
+#if !defined(ARCH_BLACKHOLE)
+    // WH only: set w0_w1 state once before loop (will be reused for all experts).
+    // BH path issues per-tile reads and cannot reuse a single base address.
     noc_async_read_one_packet_set_state<true>(dram_noc_addr, w0_w1_bytes_per_txn, vchannel);
+#endif
 
     //-------------------------------------------------------------------------
     // Variables to track pipeline state
@@ -178,11 +215,39 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             // Pipelined reading of W0/W1
             //-------------------------------------------------------------------------
+#if defined(ARCH_BLACKHOLE)
+            // BH: per-tile reads via TensorAccessor (INTERLEAVED layout).
+            uint32_t w0_w1_page_id = w0_w1_expert_page_offset;
+#else
             uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
+#endif
 
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
-                // Issue reads with current trid
+                // Issue reads with current trid (set_trid persists in NOC_PACKET_TAG cmd_buf
+                // register; subsequent fast_reads inherit the trid until next set_trid).
                 noc_async_read_set_trid(trid_to_issue);
+#if defined(ARCH_BLACKHOLE)
+                // BH: 2 transactions per block, each = w0_w1_pages_per_txn (=14) per-tile reads.
+                // Each tile is on a (potentially) different bank — TensorAccessor::get_noc_addr
+                // resolves bank automatically. trid is reused across all per-tile issues until
+                // the next set_trid call.
+                {
+                    uint32_t l1_dst_addr = slot_addr[slot_to_issue];
+                    for (uint32_t t = 0; t < w0_w1_pages_per_txn; ++t) {
+                        noc_async_read_one_packet(w0_w1_acc.get_noc_addr(w0_w1_page_id), l1_dst_addr, w0_w1_tile_size);
+                        l1_dst_addr += w0_w1_tile_size;
+                        ++w0_w1_page_id;
+                    }
+                }
+                {
+                    uint32_t l1_dst_addr = slot_addr[slot_to_issue] + w0_w1_bytes_per_txn;
+                    for (uint32_t t = 0; t < w0_w1_pages_per_txn; ++t) {
+                        noc_async_read_one_packet(w0_w1_acc.get_noc_addr(w0_w1_page_id), l1_dst_addr, w0_w1_tile_size);
+                        l1_dst_addr += w0_w1_tile_size;
+                        ++w0_w1_page_id;
+                    }
+                }
+#else
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                     dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
                 w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
@@ -193,6 +258,7 @@ void kernel_main() {
                     slot_addr[slot_to_issue] + w0_w1_bytes_per_txn,
                     trid_to_issue);
                 w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+#endif
 
                 ADVANCE_SLOT(slot_to_issue);
                 ADVANCE_TRID(trid_to_issue);
@@ -215,11 +281,33 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             // Pipelined reading of W2
             //-------------------------------------------------------------------------
+#if defined(ARCH_BLACKHOLE)
+            uint32_t w2_page_id = w2_expert_page_offset;
+#else
             uint32_t w2_dram_read_offset = w2_expert_offset;
+#endif
 
             for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
                 // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
+#if defined(ARCH_BLACKHOLE)
+                {
+                    uint32_t l1_dst_addr = slot_addr[slot_to_issue];
+                    for (uint32_t t = 0; t < w2_pages_per_txn; ++t) {
+                        noc_async_read_one_packet(w2_acc.get_noc_addr(w2_page_id), l1_dst_addr, w2_tile_size);
+                        l1_dst_addr += w2_tile_size;
+                        ++w2_page_id;
+                    }
+                }
+                {
+                    uint32_t l1_dst_addr = slot_addr[slot_to_issue] + w2_bytes_per_txn;
+                    for (uint32_t t = 0; t < w2_pages_per_txn; ++t) {
+                        noc_async_read_one_packet(w2_acc.get_noc_addr(w2_page_id), l1_dst_addr, w2_tile_size);
+                        l1_dst_addr += w2_tile_size;
+                        ++w2_page_id;
+                    }
+                }
+#else
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                     dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
                 w2_dram_read_offset += w2_bytes_per_txn;
@@ -227,6 +315,7 @@ void kernel_main() {
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                     dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue] + w2_bytes_per_txn, trid_to_issue);
                 w2_dram_read_offset += w2_bytes_per_txn;
+#endif
 
                 ADVANCE_SLOT(slot_to_issue);
                 ADVANCE_TRID(trid_to_issue);
@@ -244,8 +333,13 @@ void kernel_main() {
         }
 
         // Update offsets for next expert
+#if defined(ARCH_BLACKHOLE)
+        w0_w1_expert_page_offset += w0_w1_pages_per_expert;
+        w2_expert_page_offset += w2_pages_per_expert;
+#else
         w0_w1_expert_offset += w0_w1_total_size_per_expert;
         w2_expert_offset += w2_total_size_per_expert;
+#endif
     }
 
     // Drain the pipeline - the last txn in flight

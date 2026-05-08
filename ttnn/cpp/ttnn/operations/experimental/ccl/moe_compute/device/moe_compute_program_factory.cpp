@@ -140,10 +140,24 @@ get_cores(
     }
 
     // matmul cores come from the DRAM-bank-to-worker assignment: WH returns 12, BH returns 8.
-    // The ring kernel templatizes on the matmul core count via the named CT arg "num_cores"
-    // (see kernels/moe_ring_common.h: DeepSeekRingConfig<N>/GptRingConfig<N> specializations).
-    const auto matmul_cores =
+    // Both archs run the N=12 ring (templatize knob, see kernels/moe_ring_common.h:
+    // DeepSeekRingConfig<N>/GptRingConfig<N>). On BH we pad to 12 by appending 4 extra cores
+    // inside the existing matmul mcast bbox ({0,0},{7,9}) — INTERLEAVED weights (see Python
+    // `get_weight_mem_configs`) page tiles across all DRAM banks, so the ring core count is
+    // independent of bank count. Issue #41827 PR1.
+    auto matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+    if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
+        // BH returns 8 DRAM-adjacent cores; append 4 extras inside the matmul bbox ({0,0},{7,9}).
+        // These extras don't extend the bbox (all within x=0..7, y=3..8), so tilize/combine
+        // bboxes (x=9,10) remain non-overlapping.
+        matmul_cores.push_back({0, 5});
+        matmul_cores.push_back({0, 8});
+        matmul_cores.push_back({7, 3});
+        matmul_cores.push_back({7, 8});
+    }
+    TT_FATAL(
+        matmul_cores.size() == 12, "moe_compute: expected 12 matmul cores after padding (got {})", matmul_cores.size());
 
     // CoreRangeSets
     const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
@@ -414,29 +428,16 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
-    // a2a_cb_pages = IN2_TILES_PER_STEP for the active workload at the current ring size.
-    // Selected per (config_type, matmul_num_cores) so the host CB sizing matches the kernel's
-    // arch-specialized DeepSeekRingConfig<N>::IN2_TILES_PER_STEP / GptRingConfig<N>::IN2_TILES_PER_STEP.
-    auto get_in2_tiles_per_step = [matmul_num_cores](detail::MoEConfigType c) -> uint32_t {
-        if (c == detail::MoEConfigType::DEEPSEEK) {
-            if (matmul_num_cores == 12) {
+    // a2a_cb_pages = IN2_TILES_PER_STEP for the active workload at N=12. Both WH and BH instantiate
+    // the <12> specialization (BH pads cores; INTERLEAVED weights decouple from bank count).
+    TT_FATAL(matmul_num_cores == 12, "moe_compute: expected matmul_num_cores=12, got {}", matmul_num_cores);
+    auto get_in2_tiles_per_step = [](detail::MoEConfigType c) -> uint32_t {
+        switch (c) {
+            case detail::MoEConfigType::DEEPSEEK:
                 return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
-            }
-            if (matmul_num_cores == 8) {
-                return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 8>::IN2_TILES_PER_STEP;
-            }
-        } else {
-            if (matmul_num_cores == 12) {
-                return moe_ring::GptRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
-            }
-            if (matmul_num_cores == 8) {
-                return moe_ring::GptRingConfig</*HasBias=*/false, 8>::IN2_TILES_PER_STEP;
-            }
+            case detail::MoEConfigType::GPT: return moe_ring::GptRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
         }
-        TT_THROW(
-            "moe_compute: ring not specialized for ({}, {} matmul cores); expected 12 (WH) or 8 (BH)",
-            static_cast<int>(c),
-            matmul_num_cores);
+        TT_THROW("moe_compute: unknown config type {}", static_cast<int>(c));
     };
     const uint32_t a2a_cb_pages = get_in2_tiles_per_step(static_cast<detail::MoEConfigType>(config_type));
 
@@ -1291,6 +1292,32 @@ MoEComputeMeshWorkloadFactory::create_at(
     matmul_runtime_args.push_back(0);                  // Neighbor physical x
     matmul_runtime_args.push_back(0);                  // Neighbor physical y
 
+    // BH-only extra args: per-core start page_id for INTERLEAVED weight buffers.
+    // The prepared weight tensors have the leading num_cores dim, so each ring core's
+    // slice is a contiguous range of `pages_per_core` page_ids. On WH (HEIGHT_SHARDED)
+    // these are unused — dm0.cpp doesn't even read them in the WH branch.
+    const bool is_blackhole = mesh_device->arch() == tt::ARCH::BLACKHOLE;
+    uint32_t w0_w1_pages_per_core = 0;
+    uint32_t w2_pages_per_core = 0;
+    if (is_blackhole) {
+        const uint32_t w0_w1_total_pages = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
+        const uint32_t w2_total_pages = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
+        TT_FATAL(
+            w0_w1_total_pages % matmul_num_cores == 0,
+            "BH INTERLEAVED weights: w0_w1 total pages ({}) must be divisible by matmul_num_cores ({})",
+            w0_w1_total_pages,
+            matmul_num_cores);
+        TT_FATAL(
+            w2_total_pages % matmul_num_cores == 0,
+            "BH INTERLEAVED weights: w2 total pages ({}) must be divisible by matmul_num_cores ({})",
+            w2_total_pages,
+            matmul_num_cores);
+        w0_w1_pages_per_core = w0_w1_total_pages / matmul_num_cores;
+        w2_pages_per_core = w2_total_pages / matmul_num_cores;
+        matmul_runtime_args.push_back(0);  // w0_w1_core_start_page_id placeholder
+        matmul_runtime_args.push_back(0);  // w2_core_start_page_id placeholder
+    }
+
     // matmul cores ordered by core ID, this will be used by selective combine to direct semaphore signaling
     std::vector<CoreCoord> ring_pos2core(matmul_num_cores);
     std::vector<uint32_t> vchannels;
@@ -1325,6 +1352,13 @@ MoEComputeMeshWorkloadFactory::create_at(
         matmul_runtime_args[6] = ring_pos;
         matmul_runtime_args[7] = static_cast<uint32_t>(next_physical.x);
         matmul_runtime_args[8] = static_cast<uint32_t>(next_physical.y);
+        if (is_blackhole) {
+            // INTERLEAVED weight buffers: each ring core's slice starts at ring_pos * pages_per_core.
+            // dm1.cpp/compute.cpp don't read these args (they only read 9 args); pushing extras to all
+            // three SetRuntimeArgs calls is harmless because each kernel only reads what it knows about.
+            matmul_runtime_args[9] = ring_pos * w0_w1_pages_per_core;
+            matmul_runtime_args[10] = ring_pos * w2_pages_per_core;
+        }
 
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm0_kernel_handle, core, matmul_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm1_kernel_handle, core, matmul_runtime_args);
