@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.bge_m3.tt.embeddings import BgeM3Embedding, BgeM3EmbeddingsConfig
@@ -24,7 +26,7 @@ class BgeM3Model(LightweightModule):
     _ADDITIVE_UNMASKED_VALUE = 0.0
     _MASK_DTYPE = ttnn.bfloat16
 
-    def __init__(self, args, mesh_device, dtype, state_dict):
+    def __init__(self, args, mesh_device, dtype, state_dict, optimizations=None):
         super().__init__()
         self.mesh_device = mesh_device
         self.pad_token_id = int(args.pad_token_id)
@@ -54,6 +56,7 @@ class BgeM3Model(LightweightModule):
             mesh_device=mesh_device,
             max_seq_len=args.max_seq_len,
             max_batch_size=args.max_batch_size,
+            optimizations=optimizations,
         )
         self.layers = [
             BgeM3TransformerBlock(
@@ -62,6 +65,7 @@ class BgeM3Model(LightweightModule):
                 dtype=dtype,
                 state_dict=state_dict,
                 layer_num=layer_num,
+                optimizations=optimizations,
             )
             for layer_num in range(args.n_layers)
         ]
@@ -288,20 +292,29 @@ def _build_optional_layer_norm(
     mesh_device,
     max_seq_len: int | None = None,
     max_batch_size: int | None = None,
+    optimizations=None,
 ) -> LayerNorm1D | None:
     if layer_norm_weights is None:
         return None
 
-    return LayerNorm1D.from_config(
-        LayerNorm1DConfig(
-            weight=layer_norm_weights.weight,
-            bias=layer_norm_weights.bias,
-            eps=eps,
-            mesh_device=mesh_device,
-            max_seq_len=max_seq_len,
-            max_batch_size=max_batch_size,
-        )
+    config = LayerNorm1DConfig(
+        weight=layer_norm_weights.weight,
+        bias=layer_norm_weights.bias,
+        eps=eps,
+        mesh_device=mesh_device,
+        max_seq_len=max_seq_len,
+        max_batch_size=max_batch_size,
     )
+    if optimizations is not None and optimizations.norm is not None:
+        norm_opts = optimizations.norm
+        config = replace(
+            config,
+            compute_kernel_config=norm_opts.compute_kernel_config,
+            output_memcfg=norm_opts.output_memcfg,
+            program_config=norm_opts.program_config,
+            sharded_memcfg=norm_opts.sharded_memcfg,
+        )
+    return LayerNorm1D.from_config(config)
 
 
 BGEModel = BgeM3Model
