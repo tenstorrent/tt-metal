@@ -227,7 +227,8 @@ def run_test_rotary_embedding_llama(
             rope_setup_decode = RotarySetup(device, batch, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None)
 
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
-            cos, sin = rope_setup_decode.get_rot_mats(position_ids)
+            with device.cache_entries_counter.measure():
+                cos, sin = rope_setup_decode.get_rot_mats(position_ids)
 
             grid = ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True)
             input_mem_configs = [
@@ -585,7 +586,7 @@ def test_rotary_embedding_llama_with_program_cache(
         if batch % ttnn.TILE_SIZE != 0:
             num_ops += 1  # slice
 
-    assert device.num_program_cache_entries() == num_ops
+    assert device.cache_entries_counter.total == num_ops
 
 
 def apply_rotary_emb_qk_real(
@@ -685,12 +686,23 @@ def _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, 
     assert direct_out.shape == host_out.shape
     assert torch.equal(direct_out, host_out)
 
+    tail_start = nearest_32(rope_seq_len)
+    if q_seq_len > tail_start:
+        tail = direct_out[:, :, tail_start:, :]
+        assert torch.equal(tail, torch.zeros_like(tail))
+
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "q_seq_len, rope_seq_len",
-    ((33, 32),),
-    ids=("q33_rope32",),
+    (
+        (33, 32),
+        (128, 16),
+    ),
+    ids=(
+        "q33_rope32",
+        "q128_rope16",
+    ),
 )
 @pytest.mark.parametrize("cos_sin_sharded", (False, True), ids=("interleaved_cos_sin", "sharded_cos_sin"))
 def test_rotary_embedding_llama_direct_cos_padding_tail(q_seq_len, rope_seq_len, cos_sin_sharded, device):
