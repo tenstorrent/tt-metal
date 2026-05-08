@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import pytest
 import torch
 from loguru import logger
@@ -1085,37 +1083,17 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
     mesh_shape = tuple(mesh_device.shape)
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # Use real weights only when HF_MODEL points to an existing local directory
-    # (Galaxy runners with weights on disk).  When HF_MODEL is an HF Hub ID
-    # (pipeline_functional runners that only cache the config), fall through to
-    # dummy weights so no actual checkpoint download is triggered.
-    hf_model_path = os.environ.get("HF_MODEL")
+    # Build a small random-init reference. ``setup_test`` already pulled the
+    # HF config (a tiny JSON) so we have the correct architecture; we don't
+    # download or load any actual checkpoint. Accuracy testing against real
+    # weights lives in ``tests/accuracy/test_model.py`` — keep this unit test
+    # cheap so it can run anywhere the HF config resolves (offline or via
+    # cache).
     tensor_cache_path = None
-    if hf_model_path and os.path.isdir(hf_model_path):
-        from models.demos.gpt_oss.tt.model_config import ModelArgs
-
-        _model_args = ModelArgs(mesh_device)
-        tensor_cache_path = str(_model_args.weight_cache_path(ttnn.bfloat8_b))
-        state_dict_hf = _model_args.load_state_dict(
-            weights_path=_model_args.model_path,
-            dummy_weights=False,
-            convert_to_meta_format=False,
-        )
-        from transformers import AutoConfig
-
-        _hf_config = AutoConfig.from_pretrained(hf_model_path, trust_remote_code=True)
-        _hf_config.num_hidden_layers = num_layers
-        _hf_config._attn_implementation = "eager"
-        reference_model_hf = GptOssForCausalLM(_hf_config)
-        reference_model_hf.load_state_dict(state_dict_hf, strict=False)
-        reference_model_hf.eval()
-        state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
-        logger.info(f"Using real weights from {hf_model_path}, cache: {tensor_cache_path}")
-    else:
-        reference_model_hf = GptOssForCausalLM(config)
-        reference_model_hf.eval()
-        state_dict_hf = reference_model_hf.state_dict()
-        state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
+    reference_model_hf = GptOssForCausalLM(config)
+    reference_model_hf.eval()
+    state_dict_hf = reference_model_hf.state_dict()
+    state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
 
     logger.info(f"Running {mode} test with batch_size={batch_size}, seq_len={seq_len}, num_layers={num_layers}")
 
