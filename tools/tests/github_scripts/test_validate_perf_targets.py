@@ -112,6 +112,69 @@ def test_validate_perf_targets_success(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_validate_perf_targets_supports_split_batch_perf_and_accuracy_entries(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    # Token-matching style artifact: batch=1 reports accuracy.
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=1024,
+        decode_tsu=80.0,
+        extra_measurements=[
+            {"step_name": "inference_decode", "name": "top1_token_accuracy", "value": 91.0},
+        ],
+    )
+
+    # Eval-32 style artifact: batch=32 reports perf only (no top-k accuracy metrics).
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_2.json",
+        model="demo-model",
+        batch_size=32,
+        seq_len=1024,
+        decode_tsu=105.0,
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 1024,
+                                "status": "active",
+                                "perf": {},
+                                "accuracy": {"top1": 90.0},
+                            },
+                            {
+                                "batch_size": 32,
+                                "seq_len": 1024,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 100.0},
+                                "accuracy": {},
+                            },
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_validate_gap_coverage_accepts_concrete_dims_only_entry(tmp_path):
     validator = _load_validator_module()
     tests_yaml_path = tmp_path / "models_e2e_tests.yaml"

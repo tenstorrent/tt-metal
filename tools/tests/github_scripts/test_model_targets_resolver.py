@@ -137,3 +137,38 @@ def test_model_targets_resolver_requires_configured_seq_len_match(tmp_path: Path
 
     assert resolve_perf_targets("demo-model", "wh_n150", 1, 128) is None
     assert resolve_perf_targets("demo-model", "wh_n150", 1, 4096)["decode_t/s/u"] == 33.0
+
+
+def test_model_targets_resolver_distinguishes_batch_perf_vs_accuracy_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {"batch_size": 1, "seq_len": 1024, "status": "active", "perf": {}, "accuracy": {"top1": 91.0}},
+                            {
+                                "batch_size": 32,
+                                "seq_len": 1024,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 99.0},
+                                "accuracy": {},
+                            },
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    yaml_path = tmp_path / "targets.yaml"
+    yaml_path.write_text(yaml.safe_dump(targets), encoding="utf-8")
+    monkeypatch.setattr(model_targets, "TARGETS_YAML_PATH_DEFAULT", str(yaml_path))
+
+    assert resolve_accuracy_targets("demo-model", "wh_n150", 1, 1024)["top1"] == 91.0
+    assert resolve_accuracy_targets("demo-model", "wh_n150", 32, 1024) == {}
+    assert resolve_perf_targets("demo-model", "wh_n150", 32, 1024)["decode_t/s/u"] == 99.0
+    assert resolve_perf_targets("demo-model", "wh_n150", 1, 1024) == {}

@@ -14,6 +14,11 @@ targets:
               decode_t/s/u: 66.0
               decode_t/s: 2112.0
               decode_tolerance: 1.15
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 79.0
               top5: 97.0
@@ -31,6 +36,11 @@ targets:
               decode_t/s/u: 35.0
               decode_t/s: 1120.0
               decode_tolerance: 1.15
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 89.0
               top5: 98.0
@@ -48,6 +58,11 @@ targets:
               decode_t/s/u: 21.0
               decode_t/s: 672.0
               decode_tolerance: 1.15
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 90.0
               top5: 97.0
@@ -82,6 +97,11 @@ targets:
               prefill_time_to_token: 0.035
               decode_t/s/u: 22.0
               decode_t/s: 704.0
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 95.0
               top5: 99.0
@@ -98,6 +118,11 @@ targets:
               prefill_time_to_token: 0.09
               decode_t/s/u: 21.0
               decode_t/s: 672.0
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 84.0
               top5: 96.0
@@ -131,6 +156,11 @@ targets:
               prefill_time_to_token: 0.1
               decode_t/s/u: 20.0
               decode_t/s: 640.0
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 96.0
               top5: 99.0
@@ -147,6 +177,11 @@ targets:
               prefill_time_to_token: 0.043
               decode_t/s/u: 24.0
               decode_t/s: 768.0
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 89.0
               top5: 97.0
@@ -163,6 +198,11 @@ targets:
               prefill_time_to_token: 0.073
               decode_t/s/u: 16.0
               decode_t/s: 512.0
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 96.0
               top5: 100.0
@@ -472,6 +512,11 @@ targets:
               decode_t/s/u: 22.4
               decode_t/s: 716.8
               decode_tolerance: 1.27
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 98.0
               top5: 99.0
@@ -512,6 +557,11 @@ targets:
               decode_t/s/u: 20.7
               decode_t/s: 662.4
               decode_tolerance: 1.27
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 96.0
               top5: 100.0
@@ -528,6 +578,11 @@ targets:
               decode_t/s/u: 67.82
               decode_t/s: 2170.24
               decode_tolerance: 1.4
+            accuracy: {}
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
             accuracy:
               top1: 98.0
               top5: 100.0

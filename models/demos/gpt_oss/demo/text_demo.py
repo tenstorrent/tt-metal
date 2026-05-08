@@ -912,7 +912,7 @@ def test_gpt_oss_demo(
 
         with open(Path(__file__).parent.parent.joinpath("perf_targets.json"), "r") as f:
             perf_targets = json.load(f)
-        prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
+        prefill_pad_length = get_padded_prefill_len(max(prefill_lens))
         targets = {}
         if (
             f"batch_{batch_size}" in perf_targets["targets"]
@@ -969,7 +969,7 @@ def test_gpt_oss_demo(
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
-            input_sequence_length=max_seq_len,
+            input_sequence_length=prefill_pad_length,
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
