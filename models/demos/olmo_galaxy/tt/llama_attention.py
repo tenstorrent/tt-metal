@@ -516,15 +516,19 @@ class TtLlamaAttention(LightweightModule):
                 )
             )
 
+        # KV cache dtype: keep bf16 for OLMo to reduce decode logit drift over long contexts.
+        # Bf8 KV cache produces visible degeneration (thinking-loops, symbol garble) by ~600-1000
+        # decode tokens, even with weights still in bf8.
+        kv_cache_dtype = ttnn.bfloat16 if getattr(configuration, "is_olmo", False) else self.dtype
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                dtype=self.dtype,
+                dtype=kv_cache_dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}_bf16"
                 if weight_cache_path and not configuration.dummy_weights
                 else None,
             )
@@ -630,7 +634,7 @@ class TtLlamaAttention(LightweightModule):
             self.wqkv,
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if self.prefetcher_setup is not None else None,
@@ -899,6 +903,17 @@ class TtLlamaAttention(LightweightModule):
         if False:  # Non-fused path disabled — OLMo now uses fused path with expanded K/V [1,8,8,128]
             pass
         else:
+            # paged_fused_update_cache requires input.dtype matches cache.dtype OR
+            # cache is bf8/bf4. With OLMo's bf16 KV cache (to reduce decode drift),
+            # we must promote bf8 K/V to bf16 before write.
+            if keys.dtype == ttnn.bfloat16 and k_heads_1BKD.dtype != ttnn.bfloat16:
+                k_heads_1BKD_bf16 = ttnn.typecast(k_heads_1BKD, dtype=ttnn.bfloat16)
+                ttnn.deallocate(k_heads_1BKD)
+                k_heads_1BKD = k_heads_1BKD_bf16
+            if values.dtype == ttnn.bfloat16 and v_heads_1BKD.dtype != ttnn.bfloat16:
+                v_heads_1BKD_bf16 = ttnn.typecast(v_heads_1BKD, dtype=ttnn.bfloat16)
+                ttnn.deallocate(v_heads_1BKD)
+                v_heads_1BKD = v_heads_1BKD_bf16
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
             )
@@ -996,8 +1011,9 @@ class TtLlamaAttention(LightweightModule):
                 attn_output_cat,
                 wo_decode,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 program_config=wo_progcfg,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)
@@ -1342,6 +1358,16 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(v_heads_1VSD)
 
         v_fill = v_heads_1VSD_8b
+
+        # Same KV-cache dtype gate as decode: if KV cache is bf16, promote bf8 K/V to bf16 before write.
+        if keys_BKSD.dtype == ttnn.bfloat16 and k_fill.dtype != ttnn.bfloat16:
+            k_fill_bf16 = ttnn.typecast(k_fill, dtype=ttnn.bfloat16)
+            ttnn.deallocate(k_fill)
+            k_fill = k_fill_bf16
+        if values_BKSD.dtype == ttnn.bfloat16 and v_fill.dtype != ttnn.bfloat16:
+            v_fill_bf16 = ttnn.typecast(v_fill, dtype=ttnn.bfloat16)
+            ttnn.deallocate(v_fill)
+            v_fill = v_fill_bf16
 
         if page_table and batch_size > 1:
             # Batched prefill: fan out per-user. paged_fill_cache writes one user

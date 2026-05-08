@@ -49,6 +49,9 @@ class TtLlamaMLP(LightweightModule):
         self.model_config = model_config
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
+        # PCC-debug capture: parent test sets this to True; otherwise no-op.
+        self.capture_intermediates = False
+        self.captured = {}
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
 
@@ -93,20 +96,21 @@ class TtLlamaMLP(LightweightModule):
         w1_dim = (-1, -2)
         w2_dim = (-2, -1)
 
-        # sharded
-        self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
-        )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
-        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
+        # OLMo: experimental — load W1/W3 in bf16 to test whether bf8 weight quantization
+        # is the source of the +4% per-layer ff1ff3 magnitude bias. Toggle via env var.
+        import os as _os
 
-        self.w1_interleaved = as_interleaved_tensor(
-            "w1_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
-        )
+        _olmo_bf16_w1w3 = is_olmo and _os.environ.get("OLMO_BF16_W1W3", "0") == "1"
+        w1w3_dtype = ttnn.bfloat16 if _olmo_bf16_w1w3 else (ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
+
+        # sharded
+        self.w1 = as_sharded_tensor("w1_sharded", w1w3_dtype, dim=w1_dim)
+        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
+        self.w3 = as_sharded_tensor("w3_sharded", w1w3_dtype, dim=w1_dim)
+
+        self.w1_interleaved = as_interleaved_tensor("w1_interleaved", w1w3_dtype, dim=w1_dim)
         self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
-        self.w3_interleaved = as_interleaved_tensor(
-            "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
-        )
+        self.w3_interleaved = as_interleaved_tensor("w3_interleaved", w1w3_dtype, dim=w1_dim)
 
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
@@ -118,6 +122,23 @@ class TtLlamaMLP(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.w3)
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
+
+    def _capture_mlp(self, name, tensor):
+        """Capture an MLP intermediate as CPU torch for PCC debug."""
+        if not self.capture_intermediates:
+            return
+        try:
+            t = ttnn.to_torch(
+                tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape
+                ),
+            ).float()
+            self.captured[name] = t
+        except Exception as e:
+            from loguru import logger
+
+            logger.warning(f"  [mlp capture] {name}: failed — {e}")
 
     def _debug_check_mlp(self, name, tensor):
         """Check tensor for Inf/NaN and log stats."""
@@ -177,13 +198,16 @@ class TtLlamaMLP(LightweightModule):
                     self.args.intermediate_dim_per_tp_padded_for_agmm if use_agmm else self.args.intermediate_dim_per_tp
                 )
 
+                # OLMo: matmul output bf16 to test whether bf8 quant is the +1.7% bias source.
+                # Requires the decode RS persistent buffer to also be bf16 (set in llama_ccl.py).
+                ff_out_dtype = ttnn.bfloat16
                 w1_out = ttnn.linear(
                     x,
                     self.w1,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi2,
-                    dtype=ttnn.bfloat8_b,
+                    else self.args.compute_kernel_config_hifi4,
+                    dtype=ff_out_dtype,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
@@ -207,8 +231,8 @@ class TtLlamaMLP(LightweightModule):
                     self.w3,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi2,
-                    dtype=ttnn.bfloat8_b,
+                    else self.args.compute_kernel_config_hifi4,
+                    dtype=ff_out_dtype,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
@@ -233,7 +257,7 @@ class TtLlamaMLP(LightweightModule):
                     self.w1,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi2,
+                    else self.args.compute_kernel_config_hifi4,
                     dtype=ttnn.bfloat8_b,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -254,7 +278,7 @@ class TtLlamaMLP(LightweightModule):
                     self.w3,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi2,
+                    else self.args.compute_kernel_config_hifi4,
                     dtype=ttnn.bfloat8_b,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -273,6 +297,7 @@ class TtLlamaMLP(LightweightModule):
                 self._debug_check_mlp("w3_out_reduced", w3_out_reduced)
         else:
             # Standard path: Use fused double_matmul_line_reduce_scatter with prefetcher
+            ff_out_dtype = ttnn.bfloat16 if is_olmo else ttnn.bfloat8_b
             w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
                 x,
                 self.w1,
@@ -282,8 +307,8 @@ class TtLlamaMLP(LightweightModule):
                 RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
                 compute_kernel_config=self.args.compute_kernel_config_lofi
                 if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2,
-                dtype=ttnn.bfloat8_b,
+                else self.args.compute_kernel_config_hifi4,
+                dtype=ff_out_dtype,
                 program_config=pc_1_3,
                 memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
@@ -304,6 +329,10 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(w3_out)
 
+        # PCC-debug captures (no-op unless capture_intermediates=True)
+        self._capture_mlp("w1_out_reduced", w1_out_reduced)
+        self._capture_mlp("w3_out_reduced", w3_out_reduced)
+
         ff1ff3_mem_config = ttnn.DRAM_MEMORY_CONFIG if is_olmo else self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
         # OLMo: use bfloat16 for SwiGLU output (ff1ff3) in both prefill and decode to preserve
         # precision feeding W2 matmul.  bfloat8_b quantizes ff1ff3 per layer causing ~3-8%
@@ -317,6 +346,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=ff1ff3_mem_config,
         )
         self._debug_check_mlp("ff1ff3 (silu*gate)", ff1ff3)
+        self._capture_mlp("ff1ff3", ff1ff3)
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
@@ -329,7 +359,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out_sharded = self.tt_ccl.olmo_ff2_all_gather_matmul(
                 ff1ff3,
                 self.w2_interleaved,  # DRAM-interleaved; moved to L1 inside AGMM call
-                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                compute_kernel_config=self.args.compute_kernel_config_hifi4,
                 sub_device_id=self.tt_ccl.worker_sub_device_id,
             )
             ttnn.deallocate(ff1ff3)
@@ -388,8 +418,8 @@ class TtLlamaMLP(LightweightModule):
                 w2_out = ttnn.linear(
                     w2_in,
                     self.w2_interleaved,
-                    compute_kernel_config=self.args.compute_kernel_config_hifi2,
-                    dtype=ttnn.bfloat8_b,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi4,
+                    dtype=ttnn.bfloat16,
                     program_config=self.model_config["FF2_DRAM_SHARDED_PROGCFG_OLMO"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
@@ -398,10 +428,11 @@ class TtLlamaMLP(LightweightModule):
                 w2_out = ttnn.linear(
                     w2_in,
                     self.w2_interleaved,
-                    compute_kernel_config=self.args.compute_kernel_config_hifi2,
-                    dtype=ttnn.bfloat8_b,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi4,
+                    dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+            self._capture_mlp("w2_out_pre_ar", w2_out)
             # w2_in IS the BINARY_MUL_BF16 persistent buffer — do NOT deallocate it.
             self._debug_check_mlp("w2_out", w2_out)
             w2_out_sharded = ttnn.to_memory_config(w2_out, self.model_config["FF2_OUT_RING_MEMCFG_OLMO"])
@@ -418,7 +449,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in,
                 self.w2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                compute_kernel_config=self.args.compute_kernel_config_hifi4,
                 dtype=ttnn.bfloat8_b,
                 program_config=pc_2,
                 memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],

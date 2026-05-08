@@ -562,11 +562,14 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
+        # OLMo: keep axis-0 all-reduce (WO + W2 decode) in bf16 to preserve precision in
+        # the residual stream. Costs 2× L1 (32 KB → 64 KB per shard) per persistent buffer.
+        ar_buffer_dtype = ttnn.bfloat16 if self.is_olmo else ttnn.bfloat8_b
         tt_buffer = ttnn.from_torch(
             torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ar_buffer_dtype,
             memory_config=buffer_mem_cfg,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
@@ -638,6 +641,9 @@ class TT_CCL:
         # Create persistent buffers for cluster axis 1
         cluster_axis = 1
         buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
+        # OLMo: bf16 to preserve W1/W3 matmul output precision (bf8 quant adds ~+1.7% per
+        # matmul, ff1ff3 sees ~+4% bias — root cause of long-decode magnitude inflation).
+        rs_buf_dtype = ttnn.bfloat16 if self.is_olmo else ttnn.bfloat8_b
         for _ in range(self.num_cbs):
             tt_buffer = (
                 # 512 = 4 devices * 4 pages per packet * 32 tile_width
@@ -645,7 +651,7 @@ class TT_CCL:
                     torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=rs_buf_dtype,
                     memory_config=buffer_mem_cfg,
                     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
                 )
