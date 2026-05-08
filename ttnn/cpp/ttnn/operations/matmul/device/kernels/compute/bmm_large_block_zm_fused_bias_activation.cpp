@@ -17,7 +17,7 @@
 
 #include "api/compute/eltwise_binary.h"
 #ifdef SFPU_ACTIVATION
-#include "bmm_fused_activation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 #endif
 
 // Please update

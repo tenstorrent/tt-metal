@@ -23,6 +23,7 @@ target_sources(
             device/matmul_device_operation_types.hpp
             device/config/matmul_program_config.hpp
             device/config/matmul_program_config_types.hpp
+            device/config/matmul_auto_tuner.hpp
             shared_with_host/activation_type.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -32,6 +33,7 @@ target_sources(
         matmul.cpp
         #
         device/config/matmul_program_config.cpp
+        device/config/matmul_auto_tuner.cpp
         device/matmul_device_operation.cpp
         device/utilities/matmul_utilities.cpp
         #factories

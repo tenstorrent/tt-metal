@@ -11,11 +11,20 @@
 #include "api/compute/eltwise_unary/selu.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "internal/risc_attribs.h"
-#include <cstring>  // for memcpy
 
+// KernelActivation is the host/device shared enum; kept at global scope so
+// the matmul kernels can reference it unqualified (matches the prior
+// bmm_fused_activation.hpp surface).
 using ttnn::operations::matmul::KernelActivation;
 
-// Helper templates to select activation variants based on parameters
+namespace compute_kernel_lib {
+
+// Helper templates to select activation variants based on parameters.
+//
+// All three abstractions run on the PACKER thread (TRISC2): SFPU activation
+// is fused into the pack stage so it overlaps with the math thread starting
+// the next K-block. Math-thread post-compute hooks (PostComputeFn) run before
+// tile_regs_commit and are unaffected.
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
 struct ActivationInitHelper {
     // Compile-time validation
@@ -99,6 +108,9 @@ struct ActivationApplyHelper {
     }
 };
 
+// Bulk packer-thread activation. Wraps the math/pack semaphore wait, packer
+// dest-offset flip, per-tile apply loop, and final SFPU stall — replaces a
+// plain tile_regs_wait() at the same spot in the kernel pipeline.
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
 FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
     PACK(TTI_SEMWAIT(
@@ -114,3 +126,5 @@ FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
     // Wait for SFPU completion before packing
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 }
+
+}  // namespace compute_kernel_lib
