@@ -28,27 +28,6 @@ void kernel_main() {
         return;
     }
 
-    // Pick the best NOC for this worker based on its location.
-    //
-    // Wormhole B0 has a 10x12 NOC torus with DRAM columns at physical x=0 and x=5.
-    // NOC 0 routes +x (with wrap); NOC 1 routes -x. Because the input buffers are
-    // interleaved across all 12 DRAM banks, the best NOC is the one whose routing
-    // direction reaches the nearer DRAM column in fewer hops.
-    //
-    // The 8 worker columns map to logical x as:
-    //   logical_x : 0  1 | 2  3 | 4  5 | 6  7
-    //   phys_x    : 1  2 | 3  4 | 6  7 | 8  9
-    //   best_noc  : 1  1 | 0  0 | 1  1 | 0  0
-    //
-    // i.e. the decision is bit 1 of logical_x.
-    // const uint8_t logical_x = get_absolute_logical_x();
-    // const uint8_t logical_y = get_absolute_logical_y();
-    // uint8_t noc = ((logical_x >> 1) & 1u) ? 1u : 0u;
-    // if ((logical_y == 7 && logical_x == 7)) {
-    //     noc = 1;
-    // }
-    // uint8_t noc = 0;
-
     const uint32_t a_tile_size = get_tile_size(cb_a);
     const uint32_t b_tile_size = get_tile_size(cb_b);
 

@@ -6,7 +6,10 @@
 
 #include <cstdint>
 
+#include "ckernel_addrmod.h"
+#include "ckernel_defs.h"
 #include "lltt.h"
+#include "sfpi.h"
 
 namespace ckernel
 {
@@ -17,17 +20,18 @@ namespace ckernel
 // Mirrors the FP multiply replay path (`mul_binary_tile_replay` above), but
 // for the integer dispatch normally served by `mul_int_tile<DataFormat>`.
 // The recorded body is the per-iteration sequence of the upstream:
-//   * INT32 / UINT32: `ckernel::sfpu::mul_int32`
-//                     (sfpu/ckernel_sfpu_mul_int32.h, 30 instructions/iter)
+//   * INT32 / UINT32 (Blackhole): discrete SFPMUL24 sequence matching the
+//     `DISABLE_SFPLOADMACRO` branch of `sfpu::mul_int32` (`ckernel_sfpu_mul_int32.h`).
+//     (Default builds use the macro pipeline for non-replay `mul_int32`; macro ops are not
+//      reliably replayable — recording them can hang the math thread.)
 //   * UINT16        : DISABLE_SFPLOADMACRO branch of
 //                     `ckernel::sfpu::_mul_int_`
 //                     (sfpu/ckernel_sfpu_mul_int.h, 20 instructions/iter)
 //
-// Both bodies depend on programmable LREG12-14 constants set by the upstream
-// `mul_int_tile_init<DataFormat>` (which in turn calls `mul_int32_init` /
-// `_init_mul_int_`):
-//   INT32 / UINT32: vConstIntPrgm0 = 0x7ff, vConstIntPrgm1 = -11,
-//                   vConstFloatPrgm2 = 8388608.0
+// INT32 / UINT32 depend on `mul_int_tile_init` -> `mul_int32_init` (macro
+// templates + templates on Blackhole when SFPLOADMACRO is enabled).
+//
+// UINT16 init notes:
 //   UINT16        : vConstIntPrgm0 = 0xff, vConstIntPrgm1 = -8
 //
 // For UINT16, the non-DISABLE_SFPLOADMACRO build of `_init_mul_int_` instead
@@ -53,26 +57,11 @@ namespace ckernel
 
 constexpr std::uint32_t SFPU_BINARY_MUL_INT_DST_TILE_ROWS = 64;
 
-// INT32 / UINT32 (30 instructions/iter):
-//   SFPLOAD (in0)
-//   + SFPSHFT2 x2 (a1 raw, a2 raw)
-//   + SFPAND + SFPCAST + SFPCAST + SFPAND + SFPCAST  (a0/a1/a2 -> fp32 chunks)
-//   + SFPLOAD (in1)
-//   + SFPSHFT2 x2 (b1 raw, b2 raw)
-//   + SFPCAST                                       (b2 -> fp32)
-//   + SFPMAD                                        (top  = a0*b2 + 2**23)
-//   + SFPAND + SFPCAST                              (b1 -> fp32)
-//   + SFPMAD                                        (top += a1*b1)
-//   + SFPAND + SFPCAST                              (b0 -> fp32)
-//   + SFPMAD                                        (top += a2*b0)
-//   + SFPMAD                                        (mid = a0*b1 + 2**23)
-//   + SFPMAD                                        (low = a0*b0 + 2**23)
-//   + SFPMAD                                        (mid += a1*b0)
-//   + SFPEXMAN x3                                   (extract integer mantissas)
-//   + SFPSHFT x2                                    (top <<= 22, mid <<= 11)
-//   + SFPIADD x2                                    (low += mid + top)
-//   + SFPSTORE                                      (auto-advance via ADDR_MOD_6)
-constexpr std::uint32_t SFPU_BINARY_MUL_INT32_REPLAY_LEN = 30;
+// Discrete SFPMUL24 body (same as `mul_int32` when DISABLE_SFPLOADMACRO is set in
+// `ckernel_sfpu_mul_int32.h`). Replay hardware records a linear SFPU insn stream;
+// SFPLOADMACRO-based sequences from the default macro path are not safe to record/replay
+// and can hang the math thread — use this discrete body for replay init only.
+constexpr std::uint32_t SFPU_BINARY_MUL_INT32_REPLAY_LEN = 13;
 
 // UINT16 discrete body (20 instructions/iter):
 //   SFPLOAD (in0)
@@ -87,67 +76,31 @@ constexpr std::uint32_t SFPU_BINARY_MUL_INT32_REPLAY_LEN = 30;
 //   + SFPSTORE                                      (auto-advance via ADDR_MOD_6)
 constexpr std::uint32_t SFPU_BINARY_MUL_UINT16_REPLAY_LEN = 20;
 
-// One-iteration body of `ckernel::sfpu::mul_int32`. Inputs are split into
-// 11-bit chunks (a0/a1/a2, b0/b1/b2), promoted to fp32 (lossless), multiplied
-// via three FMA streams (top/mid/low), then reassembled into a 32-bit int via
-// SFPEXMAN + SFPSHFT + SFPIADD. Bit-exact with the upstream non-replay path.
+// Blackhole int32 multiply replay: must stay aligned with
+// `hw/ckernels/blackhole/.../ckernel_sfpu_mul_int32.h` (`mul_int32`).
 ALWI void _init_replay_binary_sfpu_mul_int32_()
 {
+    constexpr std::uint32_t offset_in0 = 0;
+    constexpr std::uint32_t offset_in1 = SFPU_BINARY_MUL_INT_DST_TILE_ROWS;
+    constexpr std::uint32_t offset_out = 0;
+
     lltt::record<lltt::NoExec>(0, SFPU_BINARY_MUL_INT32_REPLAY_LEN);
 
-    // a -> a0 (LREG0), a1 (LREG2), a2 (LREG4) as fp32. LREG12 = 0x7ff,
-    // LREG13 = -11 (logical right shift amount).
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
-    TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SHFT_LREG); // a >> 11
-    TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_LREG); // a >> 22
-    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);                                           // a1 = (a >> 11) & 0x7ff
-    TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);                                              // a1 -> fp32
-    TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG4, 0);                                              // a2 -> fp32 (top 10 bits, no mask)
-    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                                           // a0 = a & 0x7ff
-    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);                                              // a0 -> fp32
-
-    // b -> b0 (LREG1), b1 (LREG3), b2 (LREG5) as fp32.
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 1 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
-    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
-    TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG13, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
-    TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, 0); // b2 -> fp32
-
-    // top = a0*b2 + 2**23 (LREG14 = 8388608.0). FMA writes back into LREG5.
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG14, p_sfpu::LREG5, 0);
-
-    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG3, 0); // b1 = (b >> 11) & 0x7ff
-    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);    // b1 -> fp32
-    // top += a1*b1
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG5, 0);
-
-    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // b0 = b & 0x7ff
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);    // b0 -> fp32
-    // top += a2*b0
-    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG5, 0);
-
-    // mid = a0*b1 + 2**23 (into LREG6)
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG6, 0);
-    // low = a0*b0 + 2**23 (overwrites LREG0)
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG0, 0);
-    // mid += a1*b0
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
-
-    // Extract the integer mantissas (PAD9 zero-extends bit 23 = 0).
-    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);
-    TTI_SFPEXMAN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPEXMAN_MOD1_PAD9);
-    TTI_SFPEXMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPEXMAN_MOD1_PAD9);
-
-    // SFPSHFT mod=1 = immediate-shift, logical fill (matches the rest of this
-    // file's `TTI_SFPSHFT(..., 1)` usage; the named sfpi constants for SHIFT
-    // mode use a different encoding convention than the SFPSHFT op).
-    TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);                                     // top <<= 22
-    TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);                                     // mid <<= 11
-    TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE); // low += mid
-    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE); // low += top
-
-    // ADDR_MOD_6 (configured by mul_int_tile_init
-    // with .dest.incr = 2) auto-advances dst_reg by 2 rows after the store.
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
+    // Mirrors `#ifdef DISABLE_SFPLOADMACRO` branch of Blackhole `sfpu::mul_int32`
+    // (see `ckernel_sfpu_mul_int32.h`): discrete SFPMUL24 multiply only.
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in0);
+    TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 5);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1);
+    TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, 5);
+    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+    TTI_SFPMUL24(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG5, 1);
+    TTI_SFPMUL24(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
+    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+    TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 5);
+    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_6, offset_out);
 }
 
 // One-iteration body of `ckernel::sfpu::_mul_int_` (DISABLE_SFPLOADMACRO

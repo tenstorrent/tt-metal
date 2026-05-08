@@ -31,13 +31,10 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::IDevice;
 
-bool is_op_memory_bound(ttnn::operations::binary::BinaryOpType op, bool is_sfpu) {
+bool is_wh_op_memory_bound(ttnn::operations::binary::BinaryOpType op) {
     using namespace ttnn::operations::binary_ng;
-    if (!is_sfpu) {
-        return false;
-    }
 
-    // The following ops are not memory bound
+    // Enable the DRAM-optimized program only for memory-bound operations.
     return !(
         op == BinaryOpType::MUL || op == BinaryOpType::ADD || op == BinaryOpType::SUB ||
         op == BinaryOpType::RIGHT_SHIFT || op == BinaryOpType::LOGICAL_RIGHT_SHIFT || op == BinaryOpType::LEFT_SHIFT ||
@@ -78,17 +75,12 @@ std::map<std::string, std::string> get_compute_defines(
 }
 
 // For compute bound operations, we need to get multiple cores per bank for optimal performance.
+// optimal list of cores minimizing NOC congestion and the number of NOC hops required to complete a DRAM read or write.
 CoreRangeSet get_optimal_wh_dram_core_coords(std::size_t num_cores_per_bank) {
-    /*
-    The problem: that "optimal DRAM bank → logical worker" mapping is a fixed physical layout. When
-    dispatch_core_axis = COL, the fast‑dispatch firmware reserves a column of Tensix cores; if any of the
-    DRAM‑bank‑adjacent workers happen to land in that reserved column, the subsequent CreateKernel placement
-    collides with a dispatch core and ProgramImpl::compile fatally asserts. In the ROW configuration those same
-    workers are outside the dispatch row, so the identical program compiles fine. That's exactly why only the COL
-    parametrization fails.
-    */
     std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = [num_cores_per_bank]() {
         if (num_cores_per_bank == 1) {
+            // the list of cores is slightly different compared to cores returned by
+            // get_optimal_dram_bank_to_logical_worker_assignment().
             return std::vector<std::vector<CoreCoord>>{// (y,x) physical core coords
                                                        // (11,0)
                                                        {{0, 1}},
@@ -176,7 +168,6 @@ CoreRangeSet get_optimal_wh_dram_core_coords(std::size_t num_cores_per_bank) {
     const uint32_t num_wh_banks = 12;
     std::vector<CoreRange> all_cores(num_wh_banks * num_of_cores_per_bank, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    // TODO: Remove extra loop and provide coords in x,y format
     for (auto idx = 0; idx < num_of_cores_per_bank; ++idx) {
         for (auto bank_id = 0; bank_id < dram_worker_cores_ordered.size(); ++bank_id) {
             const auto& dram_cores = dram_worker_cores_ordered[bank_id];
@@ -188,20 +179,44 @@ CoreRangeSet get_optimal_wh_dram_core_coords(std::size_t num_cores_per_bank) {
     return CoreRangeSet(all_cores);
 }
 
-// TODO: Move to utilities?
+CoreRangeSet get_optimal_bh_dram_core_coords(IDevice* device, std::size_t num_cores_per_bank) {
+    (void)num_cores_per_bank;
+    auto all_worker_cores_ordered =
+        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(all_worker_cores_ordered.size());
+    for (const auto& c : all_worker_cores_ordered) {
+        core_ranges.emplace_back(c, c);
+    }
+
+    return CoreRangeSet(core_ranges);
+}
+
+CoreRangeSet get_optimal_dram_core_coords(IDevice* device, std::size_t num_cores_per_bank) {
+    switch (device->arch()) {
+        case tt::ARCH::WORMHOLE_B0: return get_optimal_wh_dram_core_coords(num_cores_per_bank);
+        case tt::ARCH::BLACKHOLE: return get_optimal_bh_dram_core_coords(device, num_cores_per_bank);
+        default:
+            TT_THROW(
+                "DRAM-optimized binary_ng: optimal DRAM worker placement is only defined for Wormhole B0 and "
+                "Blackhole; got arch {}",
+                device->arch());
+    }
+}
+
 uint32_t get_noc_max_burst_size(const ttnn::MeshDevice& mesh_device) {
-    // TODO: What about QUASAR?
     uint32_t noc_max_burst_size;
     const auto arch = mesh_device.arch();
     if (arch == tt::ARCH::BLACKHOLE) {
         noc_max_burst_size = 16384;
-        // ttsim doesn't support 16384 bytes burst size( ERROR: UnimplementedFunctionality: tensix_execute_elw_op:
-        // dst_row=1024)
+        // ttsim doesn't support 16384 bytes burst size
+        //  ERROR: UnimplementedFunctionality: tensix_execute_elw_op: dst_row=1024
         noc_max_burst_size /= 2;
     } else if (arch == tt::ARCH::WORMHOLE_B0) {
         noc_max_burst_size = 8192;
     } else {
-        TT_THROW("Unsupported architecture for zero-init: {}", arch);
+        TT_THROW("Unsupported architecture for {} architecture", arch);
     }
     return noc_max_burst_size;
 }
@@ -217,22 +232,25 @@ uint32_t compute_num_tiles_per_batches(
 
     uint32_t single_tile_size = tt::tile_size(dtype);
 
-    // const auto b_data_format =
-    //     args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
-    // const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
-
-    // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
-    // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
-    // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
-    // num_tiles_per_batch = 4 supposed to match NOC_MAX_BURST_SIZE (bytes)
-    // bool fp32_dest_acc_en =
-    //     ttnn::operations::binary_ng::program::is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
-
     const uint32_t max_tiles_per_dst = dtype == tt::DataFormat::Bfp4_b ? 8 : 16;
 
-    return std::min(
+    uint32_t num_tiles_per_batch = std::min(
         max_tiles_per_dst,
         CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / single_tile_size);
+
+    // eltwise_binary_sfpu_dram_optimized.cpp unpacks LHS/RHS to DST indices (i*2, i*2+1), so each batch uses 2*n
+    // slots. With fp32_dest_acc_en (Int32/UInt32/Float32 and related cases), DST holds 4 tiles → n <= 2. Larger
+    // batches overwrite DST and disagree with the full-grid DRAM path (conservative num_tiles_per_cycle).
+    if (operation_attributes.is_sfpu) {
+        const auto b_data_format =
+            args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
+        const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
+        if (ttnn::operations::binary_ng::program::is_fp32_dest_acc_en(dtype, b_data_format, c_data_format)) {
+            num_tiles_per_batch = std::min(num_tiles_per_batch, 2u);
+        }
+    }
+
+    return num_tiles_per_batch;
 }
 
 template <bool initialize_args>
@@ -250,12 +268,9 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
+    const bool row_major = true;
     uint32_t num_tiles = static_cast<uint32_t>(a_tensor.physical_volume() / TILE_HW);
-
     uint32_t num_cores_total = all_device_cores.num_cores();
-
-    // vector of cores
-    bool row_major = true;  // TODO: make this configurable
     auto cores = corerange_to_cores(all_device_cores, std::nullopt, row_major);
 
     std::vector<std::vector<uint32_t>> reader_args_array{cores.size()};
@@ -265,8 +280,6 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_eltwise_args = GetRuntimeArgs(program, compute_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
-
-    std::vector<uint32_t> core_ids;
 
     const auto num_dram_banks =
         a_tensor.device()->get_mesh_device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
@@ -334,97 +347,6 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     }
 }
 
-[[maybe_unused]] CoreRangeSet get_dram_optimal_cores(IDevice* device) {
-    auto all_worker_cores_ordered =
-        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
-
-    // The DRAM-bank-adjacent worker list is a fixed physical layout. Depending on DispatchCoreAxis
-    // (ROW vs. COL), some of those cores can be reserved as dispatch cores and are therefore both
-    // illegal for kernel placement and outside the compute-with-storage grid. Build the set of
-    // available compute cores from compute_with_storage_grid_size() (which already excludes
-    // dispatch-reserved rows/columns), optionally subtract any additional known dispatch cores,
-    // and, for any DRAM-bank worker that is not usable or is a duplicate, substitute the nearest
-    // free worker core so that every DRAM bank still has a 1:1 core assignment.
-    const auto compute_grid = device->compute_with_storage_grid_size();
-    const auto& dispatch_cores = tt::tt_metal::get_logical_dispatch_cores_on_user_chips();
-
-    std::vector<CoreCoord> available_workers_vec;
-    available_workers_vec.reserve(compute_grid.x * compute_grid.y);
-    for (uint32_t y = 0; y < compute_grid.y; ++y) {
-        for (uint32_t x = 0; x < compute_grid.x; ++x) {
-            CoreCoord w{x, y};
-            if (std::ranges::find(dispatch_cores, w) == dispatch_cores.end()) {
-                available_workers_vec.push_back(w);
-            }
-        }
-    }
-    std::unordered_set<CoreCoord> available_set(available_workers_vec.begin(), available_workers_vec.end());
-
-    // To handle scenarios where some of the optimal cores are used as dispatch cores
-    auto find_nearest_free_worker = [&](const CoreCoord& target,
-                                        const std::unordered_set<CoreCoord>& used) -> std::optional<CoreCoord> {
-        std::optional<CoreCoord> best;
-        int best_dist = std::numeric_limits<int>::max();
-        int best_dx = std::numeric_limits<int>::max();
-        for (const auto& w : available_workers_vec) {
-            if (used.contains(w)) {
-                continue;
-            }
-            int dx = std::abs(static_cast<int>(w.x) - static_cast<int>(target.x));
-            int dy = std::abs(static_cast<int>(w.y) - static_cast<int>(target.y));
-            int dist = dx + dy;
-            // Prefer the closest core; on ties prefer the one with the smallest column delta
-            // (DRAM banks run along columns on WH/BH, so staying in the same row preserves locality).
-            if (dist < best_dist || (dist == best_dist && dx < best_dx)) {
-                best_dist = dist;
-                best_dx = dx;
-                best = w;
-            }
-        }
-        return best;
-    };
-
-    std::unordered_set<CoreCoord> used_cores;
-    std::vector<CoreRange> core_ranges;
-    core_ranges.reserve(all_worker_cores_ordered.size());
-    for (const auto& c : all_worker_cores_ordered) {
-        CoreCoord chosen = c;
-        auto& w = chosen;
-        if (w.x == 3 && w.y == 7) {
-            w.x = 1;
-            w.y = 0;
-        }
-        if (w.x == 7 && w.y == 3) {
-            w.x = 5;
-            w.y = 0;
-        }
-        const bool is_reserved = !available_set.contains(c);
-        const bool is_duplicate = used_cores.contains(c);
-        if (is_reserved || is_duplicate) {
-            auto replacement = find_nearest_free_worker(c, used_cores);
-            TT_FATAL(
-                replacement.has_value(),
-                "No free worker core available to substitute for DRAM-bank-adjacent core ({}, {}){}.",
-                c.x,
-                c.y,
-                is_reserved ? " (reserved as dispatch core)" : " (duplicate)");
-            log_warning(
-                tt::LogOp,
-                "DRAM-bank-adjacent core ({}, {}) is {}; substituting nearest free worker ({}, {}).",
-                c.x,
-                c.y,
-                is_reserved ? "reserved as dispatch" : "already used",
-                replacement->x,
-                replacement->y);
-            chosen = *replacement;
-        }
-        used_cores.insert(chosen);
-        core_ranges.emplace_back(chosen, chosen);
-    }
-
-    return CoreRangeSet(core_ranges);
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -437,15 +359,21 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
     const auto& a = tensor_args.input_tensor_a;
 
     if (a.device()->arch() != tt::ARCH::WORMHOLE_B0) {
+        // The Blackhole architecture has different hardware characteristics
+        // (memory bandwidth, number of DRAM banks, and operation performance),
+        // which require additional tuning.
+        //
+        // Equivalent LLK functions for Blackhole are provided to enable
+        // future optimizations.
         return "Only WH architecture is supported for DRAM optimized program";
     }
 
-    if (CMAKE_UNIQUE_NAMESPACE::is_op_memory_bound(operation_attributes.binary_op_type, operation_attributes.is_sfpu)) {
+    if (CMAKE_UNIQUE_NAMESPACE::is_wh_op_memory_bound(operation_attributes.binary_op_type)) {
         return "Op is memory bound and not supported for DRAM optimized program";
     }
 
     auto dram_optimal_cores =
-        CMAKE_UNIQUE_NAMESPACE::get_optimal_wh_dram_core_coords(operation_attributes.is_sfpu ? 3 : 1);
+        CMAKE_UNIQUE_NAMESPACE::get_optimal_dram_core_coords(a.device(), operation_attributes.is_sfpu ? 3 : 1);
     const auto& dispatch_cores = CoreRangeSet(tt::tt_metal::get_logical_dispatch_cores_on_user_chips());
 
     if (dram_optimal_cores.intersects(dispatch_cores)) {
@@ -525,8 +453,8 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     using namespace tt;
     using namespace tt::tt_metal;
 
-    //  auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_dram_optimal_cores(args.input_tensor_a.device());
-    auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_optimal_wh_dram_core_coords(is_sfpu_op ? 3 : 1);
+    auto dram_optimal_cores =
+        CMAKE_UNIQUE_NAMESPACE::get_optimal_dram_core_coords(args.input_tensor_a.device(), is_sfpu_op ? 3 : 1);
 
     Program program{};
     auto dtype = tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
@@ -566,7 +494,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     tt::tt_metal::TensorAccessorArgs(args.input_tensor_a.buffer()).append_to(reader_compile_time_vec);
     tt::tt_metal::TensorAccessorArgs(args.input_tensor_b->buffer()).append_to(reader_compile_time_vec);
 
-    // READER
     std::map<std::string, std::string> reader_defines;
     if (args.input_tensor_a.dtype() == DataType::BFLOAT4_B) {
         reader_defines["BFLOAT4_B_TILES"] = "1";
@@ -618,7 +545,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
     auto compute_kernel_defines = CMAKE_UNIQUE_NAMESPACE::get_compute_defines(a_dtype, op_config);
 
-    // TODO: create a common func and merge with op_config.as_defines(a_dtype);
     {
         const auto c_dtype = output.dtype();
         const auto input_dtype = operation_attributes.input_dtype;

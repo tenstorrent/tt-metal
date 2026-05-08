@@ -50,15 +50,14 @@ ALWI void mul_int_tile_init() {
 // clang-format off
 /**
  *  One-shot replay-buffer programming helpers. Must be called once per kernel,
- *  after `mul_int_tile_init<data_format>()`, on the MATH thread. The init
- *  configures sfpi prgm constants (LREG12-14) and addr_mods (ADDR_MOD_6/7);
- *  the helper records the body into replay slot 0 with `lltt::NoExec`.
+ *  after `mul_int_tile_init<data_format>()`, on the MATH thread. Records into
+ *  replay slot 0 with `lltt::NoExec` the same per-iteration SFPU sequence as
+ *  `mul_int_tile` / `mul_int32` for the target chip (see architecture-specific
+ *  `ckernel_sfpu_mul_replay.h`; Blackhole Int32 matches `ckernel_sfpu_mul_int32.h`).
  *
- *  `data_format` selects the body: UInt16 -> 8-bit-chunk discrete body,
- *  Int32 / UInt32 -> 11-bit-chunk fp32 body. UINT32 multiplication aliases
- *  INT32 because two's-complement multiplication of equal-width integers
- *  produces the same low 32 bits regardless of signedness.
-*/
+ *  UInt16 uses the discrete body in `ckernel_sfpu_mul_replay.h`. Int32 / UInt32
+ *  share the Int32 recording; UINT32 aliases INT32 at the low 32 bits.
+ */
 // clang-format on
 template <DataFormat data_format>
 ALWI void init_replay_binary_sfpu_mul_integer() {
