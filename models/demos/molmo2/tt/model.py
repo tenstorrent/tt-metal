@@ -155,6 +155,40 @@ class TtMolmo2DecoderBlock(LightweightModule):
         ttnn.deallocate(ff_out)
         return out
 
+    def forward_decode(
+        self,
+        x: ttnn.Tensor,
+        current_pos=None,
+        rot_mats=None,
+        kv_cache=None,
+    ) -> ttnn.Tensor:
+        """Dedicated decode path: L1 residual adds, L1 QKV/MLP projections.
+
+        Keeps activations in L1 throughout to minimize DRAM round-trips for
+        the single-token [1,1,1,dim] decode tensors.
+        """
+        # Attention with L1 residual
+        attn_in = self.attention_norm(x, mode=Mode.DECODE)
+        attn_out = self.attention.forward(
+            attn_in,
+            current_pos=current_pos,
+            rot_mats=rot_mats,
+            mode="decode",
+            kv_cache=kv_cache,
+        )
+        ttnn.deallocate(attn_in)
+        h = ttnn.add(x, attn_out, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        ttnn.deallocate(attn_out)
+        ttnn.deallocate(x)
+
+        # MLP with dedicated L1 decode path
+        ff_in = self.ff_norm(h, mode=Mode.DECODE)
+        ff_out = self.feed_forward.forward_decode(ff_in)
+        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        ttnn.deallocate(h)
+        ttnn.deallocate(ff_out)
+        return out
+
 
 class TtMolmo2Model(LightweightModule):
     """Full Molmo2-8B TTNN model."""
@@ -627,7 +661,7 @@ class TtMolmo2Model(LightweightModule):
             x = ttnn.reshape(x, [1, 1, 1, cfg.dim])
             rot_mats = [cos_t, sin_t]
             for layer in self.layers:
-                x = layer.forward(x, current_pos=cur_pos_t, rot_mats=rot_mats, mode="decode")
+                x = layer.forward_decode(x, current_pos=cur_pos_t, rot_mats=rot_mats)
             x = self.ln_f(x, mode=Mode.PREFILL)
             return ttnn.linear(
                 x,
@@ -1105,13 +1139,12 @@ class TtMolmo2Model(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        # ---- Decoder blocks (decode mode uses KV cache) ----
+        # ---- Decoder blocks (dedicated decode path with L1 projections) ----
         for layer in self.layers:
-            x_ttnn = layer.forward(
+            x_ttnn = layer.forward_decode(
                 x_ttnn,
                 current_pos=cur_pos_ttnn,
                 rot_mats=rot_mats,
-                mode="decode",
             )
         ttnn.deallocate(cur_pos_ttnn)
 

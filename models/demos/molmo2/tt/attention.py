@@ -208,11 +208,11 @@ class TtMolmo2TextAttention(LightweightModule):
 
     def forward_decode(self, x, current_pos, rot_mats=None, kv_cache=None):
         """x: [1, 1, batch, dim] replicated on all devices."""
-        # Column-parallel QKV — each device gets its local heads, no AllReduce
+        # Column-parallel QKV — L1 output keeps tensor on-chip for subsequent ops
         xqkv = ttnn.linear(
             x,
             self.wqkv,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
         )
