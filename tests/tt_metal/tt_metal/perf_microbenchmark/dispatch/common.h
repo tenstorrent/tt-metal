@@ -933,8 +933,14 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE;
-static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+// Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB);
+// 50/50 split. Production FD splits ~75/25 (issue/completion); SD often needs more completion
+// (host-readback tests), so the even split is a reasonable middle ground.
+static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+static_assert(
+    SD_HUGEPAGE_ISSUE_BUFFER_SIZE + SD_COMPLETION_QUEUE_SIZE <= DispatchSettings::MAX_DEV_CHANNEL_SIZE,
+    "SD issue + completion exceed per-device hugepage slot");
 inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
 
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.

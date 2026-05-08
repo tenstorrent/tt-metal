@@ -23,6 +23,7 @@
 #include <umd/device/pcie/tlb_window.hpp>
 
 #include <chrono>
+#include <functional>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -1871,7 +1872,6 @@ public:
         return commands_per_iteration;
     }
 
-public:
     // Ring Buffer operates differently than others
     // Data is first staged (cached) into Ringbuffer (L1) from DRAM
     // Then, we relay command header + data into dispatcher
@@ -2646,6 +2646,11 @@ public:
         // Hugepage addressing
         // Use the same hugepage region that the FD runtime uses for the issue queue
         // (safe since SD mode never runs the FD runtime concurrently).
+        // Assumption: SD always runs on device 0 / cq_id 0 (see SetUp's CreateDevice(0)).
+        // For that configuration, get_absolute_cq_offset(channel, cq_id, cq_size) = 0, so
+        // dev_hugepage_base == get_host_command_queue_addr(UNRESERVED) lands in the same
+        // PCIe region the FD runtime would use.  If SD is ever extended to non-zero channel/
+        // cq_id, switch to get_absolute_cq_offset(...) + cq_start (mirroring topology.cpp).
         const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
         const ChipId mmio_id =
@@ -2668,6 +2673,11 @@ public:
         // Initialise to the ring base so the host-side fence logic sees the ring as empty.
         const uint32_t init_rd_ptr = prefetch_q_base;
         cluster.write_core(&init_rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
+
+        // Zero the FetchQ ring so cq_prefetch.cpp (which treats a 0 entry as "no work") doesn't
+        // pick up stale L1 values from a prior run.  Mirrors PrefetchKernel::ConfigureCore.
+        const std::vector<uint32_t> prefetch_q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
+        cluster.write_core(prefetch_q_zeros.data(), prefetch_q_size, prefetch_cxy, prefetch_q_base);
 
         // FetchQ entries go through the static TLB so each 2-byte write hits L1 directly
         // instead of round-tripping through the cluster API.
@@ -2830,11 +2840,10 @@ private:
     // Orchestrates exec_buf execution: builds DRAM payload, writes to DRAM, then issues the
     // exec_buf command with the MSB stall flag so the prefetcher switches to DRAM mode.
     // Mirrors BasePrefetcherTestFixture::execute_generated_commands_exec_buff for SD.
-    template <typename WriteCmd>
     void execute_generated_commands_exec_buf(
         const std::vector<HostMemDeviceCommand>& commands_per_iteration,
         uint32_t num_iterations,
-        WriteCmd&& write_cmd) {
+        const std::function<void(const HostMemDeviceCommand&, bool)>& write_cmd) {
         const uint32_t num_pages = this->build_and_write_exec_buf_to_dram(commands_per_iteration, num_iterations);
 
         DeviceCommandCalculator exec_buf_calc;
