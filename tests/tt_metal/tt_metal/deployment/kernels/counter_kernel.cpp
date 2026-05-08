@@ -26,7 +26,7 @@ void kernel_main() {
     while (remaining) {
         // TODO double buffer?
         for (uint32_t i = 0; i < transfer_size / 4; i++) {
-            buf[i] = curr_addr + i + 1;
+            buf[i] = curr_addr + i * sizeof buf[0] + 1;
         }
 
         const uint32_t to_send = transfer_size < remaining ? transfer_size : remaining;

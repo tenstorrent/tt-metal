@@ -11,7 +11,8 @@
     X(uint32_t, buffer_addr1)       \
     X(uint32_t, transfer_size)      \
     X(uint32_t, error_counter_addr) \
-    X(uint32_t, first_error_addr_p)
+    X(uint32_t, first_error_addr_p) \
+    X(uint32_t, last_error_addr_p)
 
 #define RUNTIME_ARGS(X)     \
     X(uint32_t, kernel_id)  \
@@ -28,8 +29,11 @@ void kernel_main() {
     uint32_t* buff1 = (uint32_t*)buffer_addr1;
     uint32_t* errorcnt = (uint32_t*)error_counter_addr;
     uint32_t* first_error_addr = (uint32_t*)first_error_addr_p;
+    uint32_t* last_error_addr = (uint32_t*)last_error_addr_p;
+
     *errorcnt = 0;
     *first_error_addr = -1;
+    *last_error_addr = 0;
 
     for (uint32_t i = 0; i < transfer_size / 4; i++) {
         buff0[i] = i;
@@ -51,9 +55,15 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < to_read / 4; i++) {
             if (buff0[i] != buff1[i]) {
-                if (!*errorcnt) {
-                    *first_error_addr = i + curr_addr;
+                uint32_t addr = i * sizeof buff0[0] + curr_addr;
+
+                if (addr < *first_error_addr) {
+                    *first_error_addr = addr;
                 }
+                if (addr > *last_error_addr) {
+                    *last_error_addr = addr;
+                }
+
                 (*errorcnt)++;
             }
         }

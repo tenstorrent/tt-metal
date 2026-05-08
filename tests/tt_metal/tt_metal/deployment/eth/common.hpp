@@ -266,7 +266,7 @@ static bool data_dram_check(
     uint32_t dram_start_addr,
     uint32_t dram_end_addr,
     uint32_t dram_bank_id,
-    std::span<uint32_t>& inputs) {
+    std::span<uint32_t> inputs) {
     /* ==================== */
     uint64_t total_transferred = dram_end_addr - dram_start_addr;
     std::vector<uint32_t> outputs;
@@ -420,7 +420,7 @@ static void tensix_counter_dram(
             CoreCoord core = CoreCoord(x, y);
 
             uint32_t id = kernel_id++;
-            uint32_t start_addr = dram_start_addr + id * per_core_bytes;
+            uint32_t start_addr = dram_start_addr + id * per_core_bytes / sizeof(uint32_t);
             uint32_t end_addr =
                 start_addr + per_core_bytes > dram_end_addr ? dram_end_addr : start_addr + per_core_bytes;
 
@@ -478,11 +478,12 @@ static bool tensix_compare_dram_banks(
     TT_FATAL((per_core_bytes % 16) == 0, "Per core size must be divisible by 16");
 
     uint32_t transfer_size = 160 * 1024;
-    struct l1_allocator alloc = new_erisc_allocator();
+    struct l1_allocator alloc = new_tensix_allocator();
     uint32_t error_counter = l1_alloc(&alloc, sizeof(uint32_t));
     uint32_t first_error_addr = l1_alloc(&alloc, sizeof(uint32_t));
-    uint32_t buffer0 = l1_alloc(&alloc, transfer_size);
-    uint32_t buffer1 = l1_alloc(&alloc, transfer_size);
+    uint32_t last_error_addr = l1_alloc(&alloc, sizeof(uint32_t));
+    uint32_t buffer0 = l1_alloc(&alloc, transfer_size + 64);
+    uint32_t buffer1 = l1_alloc(&alloc, transfer_size + 64);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -499,6 +500,7 @@ static bool tensix_compare_dram_banks(
                 transfer_size,
                 error_counter,
                 first_error_addr,
+                last_error_addr,
             },
     };
 
@@ -541,16 +543,23 @@ static bool tensix_compare_dram_banks(
 
     uint64_t total_errors = 0;
     uint32_t first_error = -1;
+    uint32_t last_error = 0;
 
     for (uint32_t x = 0; x < core_grid.x; x++) {
         for (uint32_t y = 0; y < core_grid.y; y++) {
             CoreCoord core = CoreCoord(x, y);
             uint32_t errors = read_l1_u32(device, core, error_counter);
             total_errors += errors;
+
             if (errors) {
                 uint32_t t = read_l1_u32(device, core, first_error_addr);
                 if (t < first_error) {
                     first_error = t;
+                }
+
+                t = read_l1_u32(device, core, last_error_addr);
+                if (t > last_error) {
+                    last_error = t;
                 }
             }
         }
@@ -559,11 +568,12 @@ static bool tensix_compare_dram_banks(
     if (total_errors) {
         log_critical(
             tt::LogTest,
-            "      done comparing bank {} and {} with {} mismatched words starting at {:x}",
+            "      done comparing bank {} and {} with {} mismatched words starting at {:x}, ending at {:x}",
             dram_bank_id0,
             dram_bank_id1,
             total_errors,
-            first_error);
+            first_error,
+            last_error);
     }
     return !total_errors;
 }
