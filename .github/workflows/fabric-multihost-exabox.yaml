@@ -12,6 +12,11 @@ on:
         default: ''
 
 run-name: Fabric Test on a BH Quad
+
+# TTOP worker pods (reset + test env) use this image; build tarball/wheel still come from build-artifact.
+env:
+  FABRIC_WORKER_IMAGE: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:latest
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -95,7 +100,7 @@ jobs:
       - name: Parse docker image
         id: parse-image
         run: |
-          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
+          IMAGE="${{ env.FABRIC_WORKER_IMAGE }}"
           REPOSITORY="${IMAGE%:*}"
           TAG="${IMAGE##*:}"
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
@@ -162,7 +167,7 @@ jobs:
       - name: Parse docker image
         id: parse-image
         run: |
-          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
+          IMAGE="${{ env.FABRIC_WORKER_IMAGE }}"
           REPOSITORY="${IMAGE%:*}"
           TAG="${IMAGE##*:}"
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
