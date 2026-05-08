@@ -33,6 +33,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
 
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
+    TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
+    TT_FATAL(
+        operation_attributes.dim == ReduceOpDim::HW,
+        "ReduceSingleCoreHwProgramFactory supports HW dim only, got dim enum value {}",
+        static_cast<int>(operation_attributes.dim));
 
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
     // scaler twice internally (once per dimension). Here we compensate with
@@ -42,12 +47,25 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
     float scaler = std::sqrt(operation_attributes.scaler);
 
+    TT_FATAL(
+        H % tile_height == 0 && W % tile_width == 0, "Reduce HW expects tile-aligned padded shape H={}, W={}", H, W);
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
+    const uint32_t num_tensor_tiles_ht_wt = NC * Ht * Wt;
+    TT_FATAL(
+        num_tensor_tiles == num_tensor_tiles_ht_wt,
+        "Reduce HW tile count mismatch: tile_hw path={} vs Ht*Wt path={}",
+        num_tensor_tiles,
+        num_tensor_tiles_ht_wt);
 
     CoreCoord selected_core_coord = {0, 0};
     if (operation_attributes.sub_core_grids.has_value() && !operation_attributes.sub_core_grids->ranges().empty()) {
         const auto& r = operation_attributes.sub_core_grids->ranges().front();
         selected_core_coord = r.start_coord;
+        TT_FATAL(
+            operation_attributes.sub_core_grids->contains(selected_core_coord),
+            "Selected core {} must be contained in provided sub_core_grids {}",
+            selected_core_coord,
+            *operation_attributes.sub_core_grids);
     }
     CoreRange core(selected_core_coord, selected_core_coord);
     CoreRangeSet core_set(core);
@@ -191,6 +209,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
 
     TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
     uint32_t out_dim_divider = Ht * Wt;
+    TT_FATAL(
+        num_tensor_tiles % out_dim_divider == 0,
+        "Reduce HW per-core input tiles {} must be divisible by Ht*Wt={}",
+        num_tensor_tiles,
+        out_dim_divider);
 
     writer_desc.emplace_runtime_args(selected_core_coord, {output.buffer(), num_tensor_tiles / out_dim_divider, 0u});
 

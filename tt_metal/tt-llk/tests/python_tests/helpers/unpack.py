@@ -40,7 +40,9 @@ def unpack_fp32(packed_list):
     return np.frombuffer(bytes(packed_list), dtype=np.float32).tolist()
 
 
-def unpack_int32(packed_list):
+def unpack_int32(packed_list, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
     # INT32 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 31 = sign, bits 30:0 = magnitude
     uint32_array = np.frombuffer(bytes(packed_list), dtype=np.uint32)
@@ -53,7 +55,9 @@ def unpack_uint32(packed_list):
     return np.frombuffer(bytes(packed_list), dtype=np.uint32).tolist()
 
 
-def unpack_int16(packed_list):
+def unpack_int16(packed_list, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(bytes(packed_list), dtype=np.int16).tolist()
     # INT16 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 15 = sign, bits 14:0 = magnitude
     uint16_array = np.frombuffer(bytes(packed_list), dtype=np.uint16)
@@ -74,7 +78,9 @@ def unpack_fp8_e4m3(packed_list):
     )
 
 
-def unpack_int8(packed_list):
+def unpack_int8(packed_list, twos_complement=False):
+    if twos_complement:
+        return np.frombuffer(bytes(packed_list), dtype=np.int8).tolist()
     # INT8 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 7 = sign, bits 6:0 = magnitude
     uint8_array = np.frombuffer(bytes(packed_list), dtype=np.uint8)
@@ -379,6 +385,7 @@ def unpack_res_tiles(
     tile_stride_bytes: int = None,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    twos_complement: bool = False,
 ):
     output_dtype = format_dict[output_format]
 
@@ -433,6 +440,12 @@ def unpack_res_tiles(
                 use_srcs=use_srcs,
                 dest_acc=dest_acc,
             )
+        elif twos_complement and unpack_func in (
+            unpack_int32,
+            unpack_int16,
+            unpack_int8,
+        ):
+            unpacked_tile = unpack_func(tile_data, twos_complement=True)
         else:
             unpacked_tile = unpack_func(tile_data)
 

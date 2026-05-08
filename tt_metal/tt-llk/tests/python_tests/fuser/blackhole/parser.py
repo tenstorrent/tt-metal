@@ -18,6 +18,7 @@ from helpers.llk_params import (
     EnforceFP32Accumulation,
     MathFidelity,
     MathOperation,
+    PackerReluType,
     ReduceDimension,
     ReducePool,
     Tilize,
@@ -435,6 +436,8 @@ class OperationSchema(BaseModel):
     packer: PackerEnum = PackerEnum.Packer
     dest_sync: Optional[DestSync] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
+    pack_relu: PackerReluType = PackerReluType.NoRelu
+    relu_threshold: float = 0.0
     bh_tilize: Optional[Tilize] = None
 
     @field_validator("packer", mode="before")
@@ -494,6 +497,10 @@ class OperationSchema(BaseModel):
             kwargs["dest_sync"] = self.dest_sync
         if self.block_size:
             kwargs["block_size"] = self.block_size
+        if self.pack_relu:
+            kwargs["pack_relu"] = self.pack_relu
+        if self.relu_threshold:
+            kwargs["relu_threshold"] = self.relu_threshold
         if self.bh_tilize:
             kwargs["bh_tilize"] = self.bh_tilize
 
