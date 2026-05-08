@@ -101,6 +101,13 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "ctcache S3 folder: ct${CT_VERSION}"
 
+          # Diagnose connectivity at the HTTP level before boto3
+          echo "--- Garage HTTP probe ---"
+          curl -s -o /dev/null -w "Garage root HTTP status: %{http_code}\n" \
+            http://garage.garage.svc.cluster.local:3900/ || echo "Garage root: curl failed (unreachable)"
+          curl -s -o /dev/null -w "Garage /ctcache HTTP status: %{http_code}\n" \
+            http://garage.garage.svc.cluster.local:3900/ctcache || echo "Garage /ctcache: curl failed (unreachable)"
+
           # Verify connectivity — warn but don't fail if Garage is unreachable
           AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
           AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
@@ -108,6 +115,10 @@ jobs:
           AWS_DEFAULT_REGION="us-east-1" \
           python3 - << 'PYEOF'
           import boto3, botocore, os, sys
+          key_id = os.environ.get("AWS_ACCESS_KEY_ID", "")
+          print(f"Key ID prefix: {key_id[:4]!r}, length: {len(key_id)}")
+          print(f"Secret length: {len(os.environ.get('AWS_SECRET_ACCESS_KEY', ''))}")
+          print(f"Endpoint: {os.environ.get('AWS_ENDPOINT_URL', '')}")
           try:
               s3 = boto3.client("s3",
                   endpoint_url=os.environ["AWS_ENDPOINT_URL"],
