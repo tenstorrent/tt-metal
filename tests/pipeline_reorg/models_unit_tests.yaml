@@ -358,7 +358,7 @@
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit
   model: gpt-oss-120b
   skus:
-    wh_galaxy_perf:
+    wh_galaxy:
       timeout: 25
       tier: 1
     bh_quietbox_2:
