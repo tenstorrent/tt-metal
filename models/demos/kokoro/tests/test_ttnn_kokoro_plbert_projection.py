@@ -18,14 +18,14 @@ if str(_TT_METAL_ROOT) not in sys.path:
 
 from models.common.utility_functions import comp_pcc
 from models.demos.kokoro.reference import KokoroConfig, load_plbert_from_huggingface
-from models.demos.kokoro.tt import TtKokoroPlBertHybrid
+from models.demos.kokoro.tt import TtKokoroPlBert
 
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_hybrid_plbert_projection_matches_torch(mesh_device):
-    """ALBERT on CPU; `bert_encoder` linear on device — `d_en` should match reference PCC."""
+    """Full PL-BERT on device — `d_en` should match reference PCC."""
     torch_ref = load_plbert_from_huggingface(repo_id=KokoroConfig.repo_id, device="cpu")
-    hybrid = TtKokoroPlBertHybrid(mesh_device, torch_ref)
+    hybrid = TtKokoroPlBert(mesh_device, torch_ref)
 
     torch.manual_seed(0)
     input_ids = torch.randint(0, 50, (1, 32), dtype=torch.long)

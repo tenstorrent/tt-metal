@@ -64,3 +64,15 @@ pytest models/demos/kokoro/tests/test_reference_vs_official.py
 ```
 
 Or run all sections with prints: `python models/demos/kokoro/tests/test_reference_vs_official.py`.
+
+### TTNN / device tests (run from this directory)
+
+Hardware PCC tests use `pytest.ini` and `conftest.py` here so collection does **not** load `tt-metal/conftest.py` (which imports `ttnn` before Kokoro can patch older `_ttnn` builds). Use `python_env` and run from `models/demos/kokoro`:
+
+```bash
+cd tt-metal/models/demos/kokoro
+source ../../../python_env/bin/activate
+export PYTHONPATH=/path/to/tt-metal
+./scripts/run_pytest.sh
+# or: pytest tests/
+```
