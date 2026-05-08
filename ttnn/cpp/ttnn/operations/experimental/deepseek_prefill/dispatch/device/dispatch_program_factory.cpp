@@ -141,8 +141,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     uint32_t num_cores = effective_num_links;
 
     // ==================== Core layout: senders + idle groups ====================
-    // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
+    // Collect all cores in the last row (max y in subdevice_cores), sorted by x.
     uint32_t sender_row_y = subdevice_cores.at(0).y;
+    for (const auto& core : subdevice_cores) {
+        if (core.y > sender_row_y) {
+            sender_row_y = core.y;
+        }
+    }
     std::vector<CoreCoord> all_row_cores;
     for (const auto& core : subdevice_cores) {
         if (core.y == sender_row_y) {
@@ -908,8 +913,16 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         effective_num_links,
         tokens_per_device,
         num_cores);
+    // Start allocation from the leftmost core in the last row of subdevice_cores so the
+    // dispatch occupies the bottom row instead of the top row.
+    CoreCoord row_major_start_core = subdevice_cores.at(0);
+    for (const auto& core : subdevice_cores) {
+        if (core.y > row_major_start_core.y || (core.y == row_major_start_core.y && core.x < row_major_start_core.x)) {
+            row_major_start_core = core;
+        }
+    }
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
+        row_major_start_core, num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
     log_debug(
         tt::LogOp,
