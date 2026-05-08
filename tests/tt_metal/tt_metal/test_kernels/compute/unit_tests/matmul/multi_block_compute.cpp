@@ -7,8 +7,11 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#ifdef ARCH_QUASAR
+#include "api/dataflow/dataflow_buffer.h"
+#else
+#include "api/dataflow/circular_buffer.h"
+#endif
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -24,93 +27,105 @@ void kernel_main() {
     const uint32_t num_blocks = get_compile_time_arg_val(10);
     const uint32_t last_block_id = num_blocks - 1;
 
-    CircularBuffer cb0(in0_cb);
-    CircularBuffer cb1(in1_cb);
+#ifdef ARCH_QUASAR
+    DataflowBuffer cb_in0(in0_cb);
+    DataflowBuffer cb_in1(in1_cb);
+    DataflowBuffer cb_partials(partials_cb);
+    DataflowBuffer cb_out(out_cb);
+    const uint32_t in0_id = cb_in0.get_id();
+    const uint32_t in1_id = cb_in1.get_id();
+    const uint32_t out_id = cb_out.get_id();
+    const uint32_t partials_id = cb_partials.get_id();
+#else
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
     CircularBuffer cb_partials(partials_cb);
     CircularBuffer cb_out(out_cb);
+    const uint32_t in0_id = in0_cb;
+    const uint32_t in1_id = in1_cb;
+    const uint32_t out_id = out_cb;
+    const uint32_t partials_id = partials_cb;
+#endif
 
-    // we are looking at block
     // out = in0[r x k]*in1[k x c]
-    mm_init(in0_cb, in1_cb, out_cb);
+    mm_init(in0_id, in1_id, out_id);
+
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         acquire_dst();
-#ifndef PACKER_L1_ACC
+#ifdef PACKER_L1_ACC
         if (block_id > 0) {
-            copy_tile_to_dst_init_short(partials_cb);
+            cb_partials.wait_front(out_block_num_tiles);
+            cb_partials.pop_front(out_block_num_tiles);
+        }
+#else
+        if (block_id > 0) {
+            copy_tile_to_dst_init_short(partials_id);
             cb_partials.wait_front(out_block_num_tiles);
             for (uint32_t i = 0; i < out_block_num_tiles; i++) {
-                copy_tile(partials_cb, i, i);
+                copy_tile(partials_id, i, i);
             }
             cb_partials.pop_front(out_block_num_tiles);
-            mm_init_short(in0_cb, in1_cb);
+            mm_init_short(in0_id, in1_id);
         }
 #endif
 
         uint32_t out_tile_index = 0;
         uint32_t in0_index_r_offset = 0;
-        cb0.wait_front(in0_block_num_tiles);
-        cb1.wait_front(in1_block_num_tiles);
+        cb_in0.wait_front(in0_block_num_tiles);
+        cb_in1.wait_front(in1_block_num_tiles);
         for (uint32_t r = 0; r < out_r; r++) {
             for (uint32_t c = 0; c < out_c; c++) {
                 uint32_t in1_index_c_offset = 0;
                 for (uint32_t k = 0; k < in0_k; k++) {
                     int in0_tile_index = in0_index_r_offset + k;
                     int in1_tile_index = in1_index_c_offset + c;
-                    matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
+                    matmul_tiles(in0_id, in1_id, in0_tile_index, in1_tile_index, out_tile_index);
                     in1_index_c_offset += out_c;
                 }
                 out_tile_index++;
             }
             in0_index_r_offset += in0_k;
         }
-        cb0.pop_front(in0_block_num_tiles);
-        cb1.pop_front(in1_block_num_tiles);
+        cb_in0.pop_front(in0_block_num_tiles);
+        cb_in1.pop_front(in1_block_num_tiles);
 
 #ifdef PACKER_L1_ACC
         pack_reconfig_l1_acc(block_id == 0 ? 0 : 1);
         cb_partials.reserve_back(out_block_num_tiles);
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-            pack_tile(tile_index, partials_cb);
+            pack_tile(tile_index, partials_id);
         }
         cb_partials.push_back(out_block_num_tiles);
         release_dst();
-
-        if (block_id < last_block_id) {
-            cb_partials.wait_front(out_block_num_tiles);
-            cb_partials.pop_front(out_block_num_tiles);
-        }
-
-        if (block_id == last_block_id) {
-            pack_reconfig_l1_acc(0);
-            copy_tile_to_dst_init_short(partials_cb);
-            cb_partials.wait_front(out_block_num_tiles);
-            acquire_dst();
-            for (uint32_t i = 0; i < out_block_num_tiles; i++) {
-                copy_tile(partials_cb, i, i);
-            }
-            cb_partials.pop_front(out_block_num_tiles);
-            cb_out.reserve_back(out_block_num_tiles);
-            for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-                pack_tile(tile_index, out_cb);
-            }
-            cb_out.push_back(out_block_num_tiles);
-            release_dst();
-        }
 #else
-        if (block_id == last_block_id) {
-            cb_out.reserve_back(out_block_num_tiles);
-            for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-                pack_tile(tile_index, out_cb);
-            }
-            cb_out.push_back(out_block_num_tiles);
-        } else {
-            cb_partials.reserve_back(out_block_num_tiles);
-            for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-                pack_tile(tile_index, partials_cb);
-            }
-            cb_partials.push_back(out_block_num_tiles);
+        const bool is_last = (block_id == last_block_id);
+        auto& cb_acc = is_last ? cb_out : cb_partials;
+        const uint32_t acc_id = is_last ? out_id : partials_id;
+        cb_acc.reserve_back(out_block_num_tiles);
+        for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
+            pack_tile(tile_index, acc_id);
         }
+        cb_acc.push_back(out_block_num_tiles);
         release_dst();
 #endif
     }
+
+#ifdef PACKER_L1_ACC
+    pack_reconfig_l1_acc(0);
+
+    copy_tile_to_dst_init_short(partials_id);
+    cb_partials.wait_front(out_block_num_tiles);
+    acquire_dst();
+    for (uint32_t i = 0; i < out_block_num_tiles; i++) {
+        copy_tile(partials_id, i, i);
+    }
+    cb_partials.pop_front(out_block_num_tiles);
+
+    cb_out.reserve_back(out_block_num_tiles);
+    for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
+        pack_tile(tile_index, out_id);
+    }
+    cb_out.push_back(out_block_num_tiles);
+    release_dst();
+#endif
 }

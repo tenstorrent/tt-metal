@@ -192,11 +192,7 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
  * | Function   | l1_acc_en | L1 accumulation enable flag        | uint32_t | 0 or 1      | True     |
  */
 // clang-format on
-ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
-#ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_l1_acc(l1_acc_en)));
-#endif  // TODO: AM; add Quasar implementation
-}
+ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
 // clang-format off
 /**

@@ -21,6 +21,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -491,19 +492,17 @@ bool single_block_matmul(
     }
     return pass;
 }
-// blocked matmul has blocking on output, spill/reloads using intermediate
+// blocked matmul has blocking on output, spill/reloads or does l1 accumulation using intermediate
 bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BlockedMatmulConfig& cfg) {
     const uint32_t M = cfg.M;
     const uint32_t K = cfg.K;
     const uint32_t N = cfg.N;
     const uint32_t num_blocks = cfg.num_blocks;
 
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+
     bool pass = true;
     CoreCoord core(0, 0);
-    const uint32_t in0_cb_index = 0;
-    const uint32_t in1_cb_index = 1;
-    const uint32_t out_cb_index = 16;
-    const uint32_t partials_cb_index = 24;
     const size_t cb_page_size = 2 * 32 * 32;
     const size_t in0_block_byte_size = M * K * cb_page_size;
     const size_t in1_block_byte_size = K * N * cb_page_size;
@@ -548,56 +547,143 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto output_dram_buffer = CreateBuffer(dram_config_out);
     const uint32_t out_dram_addr = output_dram_buffer->address();
 
-    tt_metal::CircularBufferConfig l1_input0_cb_config =
-        tt_metal::CircularBufferConfig(in0_block_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in0_cb_index, cb_page_size);
-    tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
+    uint32_t in0_id = 0;
+    uint32_t in1_id = 0;
+    uint32_t out_id = 0;
+    uint32_t partials_id = 0;
 
-    tt_metal::CircularBufferConfig l1_input1_cb_config =
-        tt_metal::CircularBufferConfig(in1_block_byte_size, {{in1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in1_cb_index, cb_page_size);
-    tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
+    if (is_quasar) {
+        auto make_dfb = [&](uint32_t entry_size, uint32_t num_entries, uint16_t producer_mask, uint16_t consumer_mask) {
+            return tt_metal::experimental::dfb::CreateDataflowBuffer(
+                program_,
+                core,
+                tt_metal::experimental::dfb::DataflowBufferConfig{
+                    .entry_size = entry_size,
+                    .num_entries = num_entries,
+                    .producer_risc_mask = producer_mask,
+                    .num_producers = 1,
+                    .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+                    .consumer_risc_mask = consumer_mask,
+                    .num_consumers = 1,
+                    .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+                    .enable_implicit_sync = false,
+                    .data_format = tt::DataFormat::Float16_b});
+        };
+        in0_id = make_dfb(cb_page_size, M * K, 0x1, 0x100);
+        in1_id = make_dfb(cb_page_size, K * N, 0x1, 0x100);
+        out_id = make_dfb(cb_page_size, M * N, 0x100, 0x2);
+        partials_id = tt_metal::experimental::dfb::CreateDataflowBuffer(
+            program_,
+            core,
+            tt_metal::experimental::dfb::DataflowBufferConfig{
+                .entry_size = cb_page_size,
+                .num_entries = M * N,
+                .num_producers = 1,
+                .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+                .num_consumers = 1,
+                .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+                .enable_implicit_sync = false,
+                .data_format = tt::DataFormat::Float16_b,
+                .tensix_scope = tt_metal::experimental::dfb::TensixScope::INTRA});
+    } else {
+        const uint32_t in0_cb_index = 0;
+        const uint32_t in1_cb_index = 1;
+        const uint32_t out_cb_index = 16;
+        const uint32_t partials_cb_index = 24;
 
-    tt_metal::CircularBufferConfig l1_output_cb_config =
-        tt_metal::CircularBufferConfig(out_byte_size, {{out_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(out_cb_index, cb_page_size);
-    tt_metal::CreateCircularBuffer(program_, core, l1_output_cb_config);
+        tt_metal::CircularBufferConfig l1_input0_cb_config =
+            tt_metal::CircularBufferConfig(in0_block_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in0_cb_index, cb_page_size);
+        tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
 
-    tt_metal::CircularBufferConfig l1_partials_cb_config =
-        tt_metal::CircularBufferConfig(out_byte_size, {{partials_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(partials_cb_index, cb_page_size);
-    tt_metal::CreateCircularBuffer(program_, core, l1_partials_cb_config);
+        tt_metal::CircularBufferConfig l1_input1_cb_config =
+            tt_metal::CircularBufferConfig(in1_block_byte_size, {{in1_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in1_cb_index, cb_page_size);
+        tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
 
-    auto reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {in0_cb_index, in1_cb_index}});
+        tt_metal::CircularBufferConfig l1_output_cb_config =
+            tt_metal::CircularBufferConfig(out_byte_size, {{out_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(out_cb_index, cb_page_size);
+        tt_metal::CreateCircularBuffer(program_, core, l1_output_cb_config);
 
-    auto writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {out_cb_index}});
+        tt_metal::CircularBufferConfig l1_partials_cb_config =
+            tt_metal::CircularBufferConfig(out_byte_size, {{partials_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(partials_cb_index, cb_page_size);
+        tt_metal::CreateCircularBuffer(program_, core, l1_partials_cb_config);
+
+        in0_id = in0_cb_index;
+        in1_id = in1_cb_index;
+        out_id = out_cb_index;
+        partials_id = partials_cb_index;
+    }
 
     std::map<std::string, std::string> compute_defines;
     if (cfg.packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
-        core,
-        tt_metal::ComputeConfig{
-            .compile_args =
-                {in0_cb_index, in1_cb_index, out_cb_index, partials_cb_index, M * K, K * N, M * N, M, N, K, num_blocks},
-            .defines = compute_defines});
+
+    std::vector<uint32_t> compute_compile_args = {
+        in0_id, in1_id, out_id, partials_id, M * K, K * N, M * N, M, N, K, num_blocks};
+
+    KernelHandle reader_kernel;
+    KernelHandle writer_kernel;
+    KernelHandle compute_kernel;
+
+    if (is_quasar) {
+        reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = {in0_id, in1_id}});
+
+        writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = {out_id}});
+
+        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1, .compile_args = compute_compile_args, .defines = compute_defines});
+
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, in0_id, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, in1_id, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, out_id, compute_kernel, writer_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, partials_id, compute_kernel, compute_kernel);
+    } else {
+        reader_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = {in0_id, in1_id}});
+
+        writer_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = {out_id}});
+
+        compute_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
+            core,
+            tt_metal::ComputeConfig{.compile_args = compute_compile_args, .defines = compute_defines});
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -653,8 +739,11 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             (uint32_t)(M * N),
         });
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    auto blocking = is_quasar;
+    distributed::EnqueueMeshWorkload(cq, workload, blocking);
+    if (not blocking) {
+        distributed::Finish(cq);
+    }
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
@@ -694,9 +783,15 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumula
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
     }
 }
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreBlockedComputeMatmul) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{.M = 2, .K = 2, .N = 2, .num_blocks = 1};
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
+    }
+}
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 2, .K = 2, .N = 2, .num_blocks = 2 .packer_l1_acc = false};
+        .M = 2, .K = 2, .N = 2, .num_blocks = 2, .packer_l1_acc = false};
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
