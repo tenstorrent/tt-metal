@@ -31,8 +31,9 @@ void kernel_main() {
     constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
     constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(23);
 
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<24>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -82,24 +83,11 @@ void kernel_main() {
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
-    // Non-causal: 1 tile (neginf). Causal: 2 tiles (neginf + diagonal).
+    // Layout: [neginf(0)] [causal_diag?(1)] [k_partial?].
     if constexpr (use_lightweight_mask) {
-        constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
-        constexpr uint32_t lw_mask_tiles = is_causal ? 2 : 1;
-        cb_reserve_back(cb_mask_in, lw_mask_tiles);
-
-        // Tile 0: all -inf
-        auto* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mask_in));
-        for (uint32_t i = 0; i < mask_tile_size_bytes / sizeof(uint32_t); i++) {
-            ptr[i] = 0xFF80FF80;  // -inf in bfloat16
-        }
-
-        // Tile 1: causal diagonal (0 where col<=row, -inf where col>row)
-        if constexpr (is_causal) {
-            fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, 1);
-        }
-
-        cb_push_back(cb_mask_in, lw_mask_tiles);
+        // is_causal handles K-partial via causal stamp; skip emitting partial tile in causal mode.
+        constexpr uint32_t writer_partial_col = is_causal ? 0u : k_partial_col;
+        generate_lightweight_mask_tiles<writer_partial_col, /*joint_l*/ 0u, cb_mask_in, is_causal>();
     }
 
     if constexpr (is_chunked) {

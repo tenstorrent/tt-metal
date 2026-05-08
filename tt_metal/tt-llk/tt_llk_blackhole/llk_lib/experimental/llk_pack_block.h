@@ -44,8 +44,7 @@ using namespace ckernel::packer;
 
 // Program the REPLAY buffer and MOP for block-contiguous packing.
 template <bool zero_output = false>
-inline void _llk_pack_block_contiguous_mop_config_(
-    [[maybe_unused]] const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 

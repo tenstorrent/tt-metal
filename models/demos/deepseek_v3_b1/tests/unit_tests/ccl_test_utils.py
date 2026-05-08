@@ -71,6 +71,38 @@ def get_num_links_env_params(
     return [parsed]
 
 
+def compile_trace_op(mesh_device, op: Callable[[], Any]) -> Any:
+    logger.info("Compiling model")
+    result = op()
+    ttnn.synchronize_device(mesh_device)
+    return result
+
+
+def capture_trace(mesh_device, op: Callable[[], Any], *, trace_body_iters: int, cq_id: int = 0) -> tuple[Any, Any]:
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=cq_id)
+    result = None
+    for _ in range(trace_body_iters):
+        result = op()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=cq_id)
+    ttnn.synchronize_device(mesh_device)
+    return trace_id, result
+
+
+def execute_trace_replays(
+    mesh_device,
+    trace_id,
+    *,
+    replays: int,
+    blocking: bool,
+    cq_id: int = 0,
+    release: bool = True,
+) -> None:
+    for _ in range(replays):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=cq_id, blocking=blocking)
+    if release:
+        ttnn.release_trace(mesh_device, trace_id)
+
+
 def run_trace_benchmark(
     mesh_device,
     op: Callable[[], Any],
@@ -81,38 +113,48 @@ def run_trace_benchmark(
     cq_id: int = 0,
 ):
     profiler = BenchmarkProfiler()
-
-    logger.info("Compiling model")
-    result = op()
-    ttnn.synchronize_device(mesh_device)
-
+    compile_trace_op(mesh_device, op)
     logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=cq_id)
-    for _ in range(num_warmup_iter):
-        result = op()
-    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=cq_id)
-    ttnn.synchronize_device(mesh_device)
+    warmup_trace_id, result = capture_trace(
+        mesh_device,
+        op,
+        trace_body_iters=num_warmup_iter,
+        cq_id=cq_id,
+    )
 
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=cq_id)
-    for _ in range(num_iter):
-        result = op()
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=cq_id)
-    ttnn.synchronize_device(mesh_device)
+    logger.info("Capturing perf trace")
+    perf_trace_id, result = capture_trace(
+        mesh_device,
+        op,
+        trace_body_iters=num_iter,
+        cq_id=cq_id,
+    )
 
-    logger.info("Executing warmup trace...")
+    logger.info("Executing warmup trace")
     profiler.start(f"{profiler_name}-warmup")
-    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
-    ttnn.release_trace(mesh_device, trace_id_warmup)
+    execute_trace_replays(
+        mesh_device,
+        warmup_trace_id,
+        replays=1,
+        blocking=False,
+        cq_id=cq_id,
+        release=True,
+    )
     ttnn.synchronize_device(mesh_device)
     profiler.end(f"{profiler_name}-warmup")
 
-    logger.info("Starting Trace perf test...")
+    logger.info("Starting Trace perf test")
     signpost("start")
     try:
         profiler.start(f"{profiler_name}-trace")
-        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-        ttnn.release_trace(mesh_device, trace_id)
+        execute_trace_replays(
+            mesh_device,
+            perf_trace_id,
+            replays=1,
+            blocking=False,
+            cq_id=cq_id,
+            release=True,
+        )
         ttnn.synchronize_device(mesh_device)
         profiler.end(f"{profiler_name}-trace")
     finally:

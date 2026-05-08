@@ -339,7 +339,6 @@ Tensor deg2rad(
         {},
         {},
         std::nullopt,
-        std::nullopt,
         sub_core_grids);
 }
 
@@ -358,7 +357,6 @@ Tensor rad2deg(
         {},
         {},
         {},
-        std::nullopt,
         std::nullopt,
         sub_core_grids);
 }

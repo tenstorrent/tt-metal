@@ -31,7 +31,7 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
         transpose, true /*transpose within 16x16 face*/, cbid)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
+          DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
@@ -1758,7 +1758,11 @@ void sdpa_inner_loop(
             }
             q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
-                q_high_tile = q_start_tile + Sq_chunk_t;
+                // Clamp to total K-tile extent. Mirrors reader_interleaved's clamp; without
+                // both, the reader and compute disagree on K-chunk count when Q-chunk extends
+                // past total K (Sq_chunk_t > Skt) → CB deadlock.
+                const uint32_t q_high_unclamped = q_start_tile + Sq_chunk_t;
+                q_high_tile = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {
                 q_high_tile = Skt;
             }

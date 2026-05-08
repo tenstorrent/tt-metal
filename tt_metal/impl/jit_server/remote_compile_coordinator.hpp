@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -49,7 +50,8 @@ public:
     // Submit a kernel for remote compilation.
     // Deduplicates against prior submissions (even from previous batches in this process).
     // Sends the RPC immediately for new kernels; deduped kernels just record the future.
-    void submit(KernelCompileDescriptor descriptor);
+    // make_descriptor() is invoked only by the owning caller.
+    void submit(std::size_t kernel_hash, const std::function<KernelCompileDescriptor()>& make_descriptor);
 
     // Collect all outstanding RPC responses, write ELF blobs to disk,
     // and wait for any dedup'd kernels to complete.

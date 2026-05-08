@@ -29,7 +29,6 @@ def test_to_memory_config(shape, layout, dtype, device):
 
     ttnn.to_memory_config(input, input_b.memory_config(), output_tensor=input_b)
     assert input_b.shape == input.shape
-    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 1)
     assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
 
 
@@ -84,7 +83,6 @@ def test_to_memory_config_block_sharded(device, layout, shape, shard_scheme, dty
     ttnn.to_memory_config(input_tensor, output_mem_config, output_tensor=output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(input_tensor, outout_tensor, 1)
     assert_equal(input_tensor, outout_tensor)
 
 
@@ -143,7 +141,6 @@ def test_to_memory_config_width_sharded(device, layout, shape, shard_scheme, dty
     ttnn.to_memory_config(input_tensor, output_mem_config, output_tensor=output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(input_tensor, outout_tensor, 1)
     assert_equal(input_tensor, outout_tensor)
 
 
@@ -203,7 +200,6 @@ def test_to_memory_config_height_sharded(device, layout, shape, shard_scheme, dt
     ttnn.to_memory_config(input_tensor, output_mem_config, output_tensor=output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(input_tensor, outout_tensor, 1)
     assert_equal(input_tensor, outout_tensor)
 
 
