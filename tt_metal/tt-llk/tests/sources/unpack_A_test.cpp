@@ -90,7 +90,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
     _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false, is_int_fpu_en>(params.num_faces, formats.math);
 #else
-    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en>(params.num_faces, formats.math);
+    const bool partial_face = (params.TEST_FACE_R_DIM < FACE_R_DIM);
+    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en>(params.num_faces, formats.math, partial_face);
 #endif
     _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
