@@ -46,12 +46,12 @@ namespace compute_kernel_lib {
 // BlockCopyTile — N CB → DEST loads in one acquire/release window.
 // =============================================================================
 
-template <uint32_t Cb,
-          uint32_t BlockSize,
-          Dst BaseDst                = Dst::D0,
-          CopyTilePolicy Policy      = CopyTilePolicy::WaitAndPop,
-          CopyTileReconfig Reconfig  = CopyTileReconfig::None,
-          uint32_t OldCb             = 0>
+template <
+    uint32_t Cb,
+    uint32_t BlockSize,
+    Dst BaseDst = Dst::D0,
+    CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
+    CopyTileReconfig Reconfig = CopyTileReconfig::None>
 struct BlockCopyTile : CopyTileTag {
     static_assert(to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT,
                   "BlockCopyTile: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
@@ -67,13 +67,18 @@ struct BlockCopyTile : CopyTileTag {
     static constexpr bool           clashes_with_fpu= true;
     static constexpr uint32_t       block_size      = BlockSize;
 
-    static ALWI void init() {
-        if constexpr (Reconfig == CopyTileReconfig::Input) {
-            copy_tile_to_dst_init_short_with_dt(OldCb, Cb, /*transpose=*/0);
-        } else {
-            copy_tile_init(Cb);
-        }
-    }
+    // Prev-CB fold (D7): BlockCopyTile loads Cb to srca only.
+    static constexpr uint32_t reconfig_srca_cb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_CB;
+    static constexpr uint32_t reconfig_srcb_cb = NO_PREV_CB;
+    static constexpr uint32_t reconfig_pack_cb = NO_PREV_CB;
+
+    // F-PERF-3 (D7): srca reconfig is fold-driven via the chain's
+    // `emit_pre_element_transitions`. init() programs only `copy_tile_init`
+    // — `copy_tile_to_dst_init_short_with_dt` is no longer needed because the
+    // fold emits the equivalent `reconfig_data_format_srca(curr) + copy_tile_to_dst_init_short(curr)`
+    // sequence at chain-derived prev-CB boundaries. For chains that didn't opt
+    // into reconfig (Reconfig == None) we keep the simple `copy_tile_init`.
+    static ALWI void init() { copy_tile_init(Cb); }
 
     ALWI void wait_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
@@ -104,22 +109,20 @@ struct BlockCopyTile : CopyTileTag {
 // BlockBinaryFpu — N FPU binary ops in one acquire/release window.
 // =============================================================================
 
-template <uint32_t CbA,
-          uint32_t CbB,
-          BinaryFpuOp Op,
-          uint32_t BlockSize,
-          Dst BaseDst                  = Dst::D0,
-          BroadcastDim Bcast           = BroadcastDim::None,
-          BinaryDataFormatReconfig DF  = BinaryDataFormatReconfig::None,
-          CopyTilePolicy APolicy       = CopyTilePolicy::WaitAndPop,
-          CopyTilePolicy BPolicy       = CopyTilePolicy::WaitAndPop,
-          CbIndexMode AIndex           = CbIndexMode::BlockIter,
-          CbIndexMode BIndex           = CbIndexMode::BlockIter,
-          uint32_t BWaitTiles          = 0,  // override for B wait count when BIndex == FirstTile (e.g. 1 for scalar)
-          uint32_t OldCbA              = 0,
-          uint32_t OldCbB              = 0,
-          uint32_t OldCbOut            = 0,
-          uint32_t CbOut               = 0>
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    BinaryFpuOp Op,
+    uint32_t BlockSize,
+    Dst BaseDst = Dst::D0,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig DF = BinaryDataFormatReconfig::None,
+    CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
+    CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
+    CbIndexMode AIndex = CbIndexMode::BlockIter,
+    CbIndexMode BIndex = CbIndexMode::BlockIter,
+    uint32_t BWaitTiles = 0,  // override for B wait count when BIndex == FirstTile (e.g. 1 for scalar)
+    uint32_t CbOut = 0>
 struct BlockBinaryFpu : BinaryFpuTag {
     static_assert(to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT,
                   "BlockBinaryFpu: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
@@ -135,17 +138,21 @@ struct BlockBinaryFpu : BinaryFpuTag {
     static constexpr bool            same_cb           = (CbA == CbB);
     static constexpr uint32_t        block_size        = BlockSize;
 
+    // Prev-CB fold (D7): BlockBinaryFpu touches srca (CbA), srcb (CbB), and pack
+    // (CbOut) when the corresponding reconfig is opted in. Reconfig is fold-driven
+    // — `emit_pre_element_transitions` emits the elided sequence before init().
+    static constexpr uint32_t reconfig_srca_cb =
+        (DF == BinaryDataFormatReconfig::Input || DF == BinaryDataFormatReconfig::InputAndOutput) ? CbA : NO_PREV_CB;
+    static constexpr uint32_t reconfig_srcb_cb =
+        (DF == BinaryDataFormatReconfig::Input || DF == BinaryDataFormatReconfig::InputAndOutput) ? CbB : NO_PREV_CB;
+    static constexpr uint32_t reconfig_pack_cb =
+        ((DF == BinaryDataFormatReconfig::Output || DF == BinaryDataFormatReconfig::InputAndOutput) && CbOut != 0)
+            ? CbOut
+            : NO_PREV_CB;
+
+    // F-PERF-3 (D7): srca / srcb / pack reconfig are fold-driven; init() programs
+    // only the per-op LLK shape.
     static ALWI void init() {
-        // Single-arg reconfig — no previous-CB tracking.
-        if constexpr (DF == BinaryDataFormatReconfig::Input ||
-                      DF == BinaryDataFormatReconfig::InputAndOutput) {
-            reconfig_data_format_srca(CbA);
-            reconfig_data_format_srcb(CbB);
-        }
-        if constexpr ((DF == BinaryDataFormatReconfig::Output ||
-                       DF == BinaryDataFormatReconfig::InputAndOutput) && CbOut != 0) {
-            pack_reconfig_data_format(CbOut);
-        }
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles_init(CbA, CbB);
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_init(CbA, CbB);
@@ -213,12 +220,12 @@ struct BlockBinaryFpu : BinaryFpuTag {
 // BlockPackTile — N DEST → CB packs in one acquire/release window.
 // =============================================================================
 
-template <uint32_t Cb,
-          uint32_t BlockSize,
-          Dst BaseDst                  = Dst::D0,
-          PackTilePolicy Policy        = PackTilePolicy::PerTileReserveAndPush,
-          PackTileReconfig Reconfig    = PackTileReconfig::None,
-          uint32_t OldCb               = 0>
+template <
+    uint32_t Cb,
+    uint32_t BlockSize,
+    Dst BaseDst = Dst::D0,
+    PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
+    PackTileReconfig Reconfig = PackTileReconfig::None>
 struct BlockPackTile : PackTileTag {
     static_assert(to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT,
                   "BlockPackTile: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
@@ -229,12 +236,17 @@ struct BlockPackTile : PackTileTag {
     static constexpr bool           is_upfront          = (Policy == PackTilePolicy::UpfrontReservePushAtEnd);
     static constexpr uint32_t       block_size          = BlockSize;
 
+    // Prev-CB fold (D7): BlockPackTile writes pack-side; mark Cb under reconfig
+    // only when the user opted in. The fold then handles single-arg vs two-arg
+    // pack_reconfig_data_format dispatch based on the chain-derived prev_pack_cb.
+    static constexpr uint32_t reconfig_srca_cb = NO_PREV_CB;
+    static constexpr uint32_t reconfig_srcb_cb = NO_PREV_CB;
+    static constexpr uint32_t reconfig_pack_cb =
+        (Reconfig == PackTileReconfig::Output || Reconfig == PackTileReconfig::OutputConditional) ? Cb : NO_PREV_CB;
+
+    // F-PERF-3 (D7): pack reconfig is fold-driven; init() is a no-op.
     static ALWI void init() {
-        if constexpr (Reconfig == PackTileReconfig::Output) {
-            pack_reconfig_data_format(Cb);
-        } else if constexpr (Reconfig == PackTileReconfig::OutputConditional) {
-            pack_reconfig_data_format(OldCb, Cb);
-        }
+        // Pack reconfig fold-driven via `emit_pre_element_transitions`.
     }
 
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
