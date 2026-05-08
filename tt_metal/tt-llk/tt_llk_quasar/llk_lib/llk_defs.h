@@ -91,7 +91,15 @@ enum class SfpuType : std::uint32_t
     silu,
     abs,
     fill,
+    swiglu,
     where
+};
+
+enum class BinaryOp : std::uint8_t
+{
+    ADD,
+    SUB,
+    MUL,
 };
 
 enum class DstSync : std::uint8_t
