@@ -5,6 +5,8 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -59,6 +61,38 @@ ALWI void moreh_copy_chain() {
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
             PackTileReconfig::Output>{});
+}
+
+// Unary SFPU chain: CopyTile(in, FirstTile, WaitAndPop) -> Sfpu(D0) -> PackTile(out).
+template <typename Sfpu, uint32_t CbIn, uint32_t CbOut>
+ALWI void moreh_unary_chain() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        Sfpu{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+// BinaryFpu(Mul, None) + Negative + PackTile chain (compile-time FirstTile indices).
+template <uint32_t CbA, uint32_t CbB, uint32_t CbOut, bool PopA, bool PopB>
+ALWI void moreh_mul_neg_chain() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1,
+        BinaryFpu<
+            CbA,
+            CbB,
+            CbOut,
+            BinaryFpuOp::Mul,
+            BroadcastDim::None,
+            BinaryDataFormatReconfig::InputAndOutput,
+            PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+            PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+            CbIndexMode::FirstTile,
+            Dst::D0>{},
+        Negative<Dst::D0>{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
 }  // namespace
@@ -126,9 +160,9 @@ void kernel_main() {
             cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
-            // exp(y)
+            // exp(y)  (T1.09)
             constexpr auto cb_exp = tt::CBIndex::c_24;
-            exp_tile_to_cb(cb_y, cb_exp, 0);
+            moreh_unary_chain<compute_kernel_lib::Exp<>, cb_y, cb_exp>();
             // sum * exp(y)
             moreh_bin_chain<
                 compute_kernel_lib::BinaryFpuOp::Mul,
@@ -221,8 +255,8 @@ void kernel_main() {
                 /*popA=*/true,
                 /*popB=*/true>();
 #else
-            // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx);
+            // -(dy - sum) * y  (T1.10)
+            moreh_mul_neg_chain<cb_y, cb_inter2, cb_dx, /*PopA=*/true, /*PopB=*/true>();
 #endif
         }
 
