@@ -188,29 +188,41 @@ void kernel_main() {
                 cb_push_back(cb_xmm, onetile);
                 tile_regs_release();
 
-                // Compute cb_y
-                // (x - mean) * rstd
-                tile_regs_acquire();
-                cb_wait_front(cb_xmm, onetile);
-                cb_wait_front(cb_rstd, onetile);  // comes from the reader
-                cb_reserve_back(cb_y, onetile);
-
-                if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short_with_dt(cb_xmm, cb_rstd);
-                    mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
-                } else {
-                    mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_rstd);
-                    mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
+                // Compute cb_y = (x - mean) * rstd  (T1.24)
+                {
+                    using namespace compute_kernel_lib;
+                    if constexpr (is_lastdim_layernorm) {
+                        eltwise_chain(
+                            onetile,
+                            BinaryFpu<
+                                cb_xmm,
+                                cb_rstd,
+                                cb_y,
+                                BinaryFpuOp::Mul,
+                                BroadcastDim::Col,
+                                BinaryDataFormatReconfig::InputAndOutput,
+                                CopyTilePolicy::WaitAndPop,
+                                CopyTilePolicy::WaitAndPop,
+                                CbIndexMode::FirstTile,
+                                Dst::D0>{},
+                            PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    } else {
+                        eltwise_chain(
+                            onetile,
+                            BinaryFpu<
+                                cb_xmm,
+                                cb_rstd,
+                                cb_y,
+                                BinaryFpuOp::Mul,
+                                BroadcastDim::Scalar,
+                                BinaryDataFormatReconfig::InputAndOutput,
+                                CopyTilePolicy::WaitAndPop,
+                                CopyTilePolicy::WaitAndPop,
+                                CbIndexMode::FirstTile,
+                                Dst::D0>{},
+                            PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    }
                 }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_y);
-
-                cb_pop_front(cb_xmm, onetile);
-                cb_pop_front(cb_rstd, onetile);
-                cb_push_back(cb_y, onetile);
-                tile_regs_release();
 
                 // PARTIAL migration: cb_ydy = cb_y * cb_dycopy.
                 //   migrated: BinaryFpu(Mul) + PackTile chain.
