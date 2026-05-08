@@ -14,7 +14,7 @@ void kernel_main() {
     // Per-core array named RT arg — each core receives its own array
     uint32_t sum = 0;
     for (uint32_t i = 0; i < NUM_ELEMENTS; i++) {
-        sum += rt_args::get<rt_args::my_kernel::weights>(i);
+        sum += rt_args::get<ct_args::my_kernel::weights>(i);
     }
 
     l1_ptr[0] = sum;
