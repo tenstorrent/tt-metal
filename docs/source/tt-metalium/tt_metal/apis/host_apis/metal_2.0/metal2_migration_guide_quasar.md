@@ -1,6 +1,6 @@
 # Metal 2.0 Migration Guide — From the Temporary Quasar APIs
 
-This guide is for Quasar developers migrating from the temporary placeholder APIs in `tt_metal/api/tt-metalium/experimental/host_api.hpp` and `tt_metal/api/tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp` to the new Metal 2.0 host APIs in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`.
+This guide is for Quasar developers migrating from the temporary placeholder APIs in `tt_metal/api/tt-metalium/experimental/host_api.hpp` and `tt_metal/api/tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp` to the new Metal 2.0 host APIs in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`. (For WH/BH migration to Metal 2.0, look [here instead](metal2_migration_guide.md).)
 
 > **Audience**: Internal-only. The temporary Quasar APIs were always meant to be short-lived.
 
@@ -8,7 +8,7 @@ This guide is for Quasar developers migrating from the temporary placeholder API
 
 The temporary Quasar APIs (`experimental::quasar::CreateKernel`, `experimental::dfb::CreateDataflowBuffer`) will soon be moved out of the public API surface — they will remain accessible to tests, but customer-facing code (i.e. IP customer deliverables) should use the Metal 2.0 APIs covered in this guide. Metal 2.0 has feature parity with the temporary Quasar APIs.
 
-> **Prerequisites**: Before moving to Metal 2.0, ensure your device DM code is Device 2.0 compliant [Device 2.0 Data Movement migration](../kernel_apis/data_movement/device_api_migration_guide.md).
+> **Prerequisites**: Before moving to Metal 2.0, ensure your device DM code is Device 2.0 compliant [Device 2.0 Data Movement migration](../../kernel_apis/data_movement/device_api_migration_guide.md).
 
 ## Table of Contents
 
