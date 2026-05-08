@@ -214,8 +214,16 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     use_cpu_linear_attn = os.environ.get("TT_QWEN_CPU_LINEAR_ATTN", "0").lower() in ("1", "true", "yes")
     # Allow disabling the RMSNorm port for A/B comparison.
     use_cpu_rms_norm = os.environ.get("TT_QWEN_CPU_RMS_NORM", "0").lower() in ("1", "true", "yes")
-    # Allow disabling the embedding port for A/B comparison.
-    use_cpu_embedding = os.environ.get("TT_QWEN_CPU_EMBEDDING", "0").lower() in ("1", "true", "yes")
+    # BISECT-REVERT (cc6a1df): TTNNEmbedding swap disabled by default.
+    # The TTNN embedding shards the weight along hidden_size via
+    # `ShardTensor2dMesh(dims=(None, 1))`, so the per-device output is
+    # col-sharded. The downstream consumers (first decoder layer's
+    # input_layernorm, etc.) were wired against the original `nn.Embedding`
+    # contract that hands them a full-hidden-size tensor, so they interpret
+    # the col-sharded TTNN output with the wrong layout and the model "sees"
+    # a corrupted prompt -- producing fluent but off-topic generation.
+    # Opt back in once the layout is reconciled by setting TT_QWEN_TTNN_EMBEDDING=1.
+    use_ttnn_embedding = os.environ.get("TT_QWEN_TTNN_EMBEDDING", "0").lower() in ("1", "true", "yes")
 
     nn_to_ttnn = {}
     if linear_attn_class:
@@ -240,34 +248,37 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     # token lookup runs on device and emits a TTNN-backed tensor directly.
     # Without this, every step re-runs the embedding on CPU and pays a
     # host->device transfer of a `[B, S, hidden_size]` tensor before the first
-    # decoder layer can touch it.
-    if embedding_class and not use_cpu_embedding:
+    # decoder layer can touch it. Currently disabled (see BISECT-REVERT note
+    # above) -- the col-sharded output layout doesn't match what downstream
+    # consumers expect from the original `nn.Embedding`.
+    if embedding_class and use_ttnn_embedding:
         nn_to_ttnn[embedding_class] = TTNNEmbedding
-    elif use_cpu_embedding:
-        print("[DEBUG] TT_QWEN_CPU_EMBEDDING=1: Using PyTorch for nn.Embedding")
+        print("[DEBUG] TT_QWEN_TTNN_EMBEDDING=1: opting into TTNNEmbedding (currently broken)")
+    else:
+        print("[DEBUG] embed_tokens left as torch nn.Embedding (TTNN col-sharded layout mismatch workaround)")
 
     print(f"Module mappings: {nn_to_ttnn}")
 
-    # Second-pass dict: this MUST be a separate `register_module_replacement_dict`
-    # call because the recursion in `register_module_replacement_dict` does NOT
-    # descend into a subtree once it matches a class. If we put
-    # `Qwen3_5MoeDecoderLayer` in the first pass the inner RMSNorm / attention
-    # / MoE replacements would never happen, since the decoder layer would be
-    # swapped before its children were visited.
-    use_cpu_decoder_residual_add = os.environ.get("TT_QWEN_CPU_DECODER_RESIDUAL_ADD", "0").lower() in (
+    # BISECT-REVERT (cc6a1df): TTNNQwen3MoeDecoderLayer wrapper disabled.
+    # The wrapper's `_residual_add` calls `ttnn.add(a, b)` directly between
+    # the inner ttnn.Tensors of two TorchTTNNTensor wrappers, but the per-device
+    # mesh layouts of the two operands don't always match (embedding output uses
+    # ShardTensor2dMesh(dims=(None,1)); attn/MoE outputs use ShardTensorToMesh(dim=-1)
+    # plus a logical_shape_fn that the bare ttnn.add op knows nothing about).
+    # Forcing the legacy torch-dispatcher path for the residual adds restores
+    # correct numerics. Leaving the env-var hatch in place so the wrapper can be
+    # re-enabled (with its bug fixed) by setting TT_QWEN_DECODER_RESIDUAL_ADD=1.
+    use_ttnn_decoder_residual_add = os.environ.get("TT_QWEN_DECODER_RESIDUAL_ADD", "0").lower() in (
         "1",
         "true",
         "yes",
     )
     nn_to_ttnn_second_pass = {}
-    if decoder_layer_class and not use_cpu_decoder_residual_add:
-        # Replacing the decoder layer routes the two `residual + hidden_states`
-        # ops through `ttnn.add` instead of the torch dispatcher, eliminating
-        # ~10,240 `aten::add.Tensor` calls / 128 generated tokens in the
-        # captured pivot CSV (and the matching `_unwrap_to_torch` overhead).
+    if decoder_layer_class and use_ttnn_decoder_residual_add:
         nn_to_ttnn_second_pass[decoder_layer_class] = TTNNQwen3MoeDecoderLayer
-    elif use_cpu_decoder_residual_add:
-        print("[DEBUG] TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1: leaving residual adds on torch")
+        print("[DEBUG] TT_QWEN_DECODER_RESIDUAL_ADD=1: opting into TTNNQwen3MoeDecoderLayer (currently broken)")
+    else:
+        print("[DEBUG] decoder residual adds left on torch (ttnn.add layout-mismatch workaround)")
 
     # TODO: Selective linear replacement - don't replace small gating layers
     # The generic nn.Linear replacement breaks small linear layers like shared_expert_gate
