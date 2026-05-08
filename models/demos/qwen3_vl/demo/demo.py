@@ -537,31 +537,32 @@ def test_demo(
                 page_table_user = None
 
             # Warmup/compile on first user
-            # if user_id == 0:
-            #     profiler.start(f"compile_prefill", iteration=batch_idx)
-            #     _ = generator.prefill_forward_single_user_text(
-            #         ttnn.unsqueeze(input_prefill, 0),
-            #         page_table=page_table_user,
-            #         user_id=user_id,
-            #         last_token_idx=decoding_pos - 1,
-            #         rot_mats=(cos, sin),
-            #         kv_cache=tt_kv_cache,
-            #         deepstack_visual_embeds=deepstack_visual_embeds_processed,
-            #     )
-            #     profiler.end(f"compile_prefill", iteration=batch_idx)
+            if user_id == 0:
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                logits = generator.prefill_forward_single_user_text(
+                    ttnn.unsqueeze(input_prefill, 0),
+                    page_table=page_table_user,
+                    user_id=user_id,
+                    last_token_idx=decoding_pos - 1,
+                    rot_mats=(cos, sin),
+                    kv_cache=tt_kv_cache,
+                    deepstack_visual_embeds=deepstack_visual_embeds_processed,
+                )
+                profiler.end(f"compile_prefill", iteration=batch_idx)
 
             # Run prefill for this user (timed per-user)
-            profiler.start(f"inference_prefill_user_{user_id}", iteration=batch_idx)
-            logits = generator.prefill_forward_single_user_text(
-                ttnn.unsqueeze(input_prefill, 0),
-                page_table=page_table_user,
-                user_id=user_id,
-                last_token_idx=decoding_pos - 1,
-                rot_mats=(cos, sin),
-                kv_cache=tt_kv_cache,
-                deepstack_visual_embeds=deepstack_visual_embeds_processed,
-            )
-            profiler.end(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+            else:
+                profiler.start(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+                logits = generator.prefill_forward_single_user_text(
+                    ttnn.unsqueeze(input_prefill, 0),
+                    page_table=page_table_user,
+                    user_id=user_id,
+                    last_token_idx=decoding_pos - 1,
+                    rot_mats=(cos, sin),
+                    kv_cache=tt_kv_cache,
+                    deepstack_visual_embeds=deepstack_visual_embeds_processed,
+                )
+                profiler.end(f"inference_prefill_user_{user_id}", iteration=batch_idx)
             output_logits[user_id] = logits
 
             # === DEALLOCATE === (free memory before next user)
@@ -758,7 +759,7 @@ def test_demo(
 
     # Sum up per-user prefill times (excludes vision model time)
     total_inference_prefill_time = sum(
-        profiler.get_duration(f"inference_prefill_user_{i}", iteration=batch_idx) for i in range(batch_size)
+        profiler.get_duration(f"inference_prefill_user_{i}", iteration=batch_idx) for i in range(1, batch_size)
     )
     total_inference_decode_time = 0
     for i in range(1, iteration):  # i == 0 is the compile time
