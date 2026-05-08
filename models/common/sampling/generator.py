@@ -674,6 +674,11 @@ class SeedManager:
             # this, get_new_values() would advance the shared object
             # twice per decode step (once for each slot).
             self.rngs[new_slot] = copy.copy(old_rngs[old_slot])
+        moved_to = {new_slot for _, new_slot in moves}
+        for old_slot, _ in moves:
+            if old_slot not in moved_to:
+                self.seeds[old_slot] = None
+                self.rngs[old_slot].seed(secrets.randbits(64))
         self._seed_active = any(s is not None for s in self.seeds)
 
     def reset_seed(self, seeds, user_ids):

@@ -554,7 +554,7 @@ class TTSampling(LightweightModule):
 
         # Untilize indices for sampling operation
         topk_global_indices_interleaved_untilised = ttnn.untilize(
-            topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
+            topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self._sampling_core_grid
         )
         # Seed exactly the cores used by ttnn.sampling; Galaxy worker grids can be larger than batch cores.
         ttnn.manual_seed(

@@ -306,7 +306,7 @@ class Sampling1D(LightweightModule):
         # Use distinct names so we can free the interleaved intermediate after untilize
         topk_global_indices_interleaved = ttnn.to_memory_config(topk_global_indices, ttnn.DRAM_MEMORY_CONFIG)
         topk_global_indices = ttnn.untilize(
-            topk_global_indices_interleaved, use_multicore=True, sub_core_grids=cfg.sub_core_grids
+            topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self._sampling_sub_core_grids
         )
         ttnn.deallocate(topk_global_indices_interleaved)
 
@@ -315,7 +315,7 @@ class Sampling1D(LightweightModule):
         ttnn.manual_seed(
             seeds=seeds_tensor,
             user_ids=self._user_ids,
-            sub_core_grids=cfg.sub_core_grids,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
 
         # Sample
