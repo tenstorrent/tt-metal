@@ -141,14 +141,20 @@ def triage_singleton(run_method: Callable[[ScriptArguments, Context], T], /) -> 
         len(signature.parameters) == 2 and "args" in signature.parameters and "context" in signature.parameters
     ), "run_method must have two arguments (args, context)."
 
-    # Create simple cache
-    cache: dict[tuple[int, int], T] = {}
+    # Cache results and exceptions so repeat calls don't re-run on already-failed setup.
+    cache: dict[tuple[int, int], tuple[bool, Any]] = {}
 
     def cache_wrapper(args: ScriptArguments, context: Context) -> T:
         cache_key = (id(args), id(context))
         if cache_key not in cache:
-            cache[cache_key] = run_method(args, context)
-        return cache[cache_key]
+            try:
+                cache[cache_key] = (True, run_method(args, context))
+            except Exception as e:
+                cache[cache_key] = (False, e)
+        ok, payload = cache[cache_key]
+        if not ok:
+            raise payload
+        return payload
 
     return cache_wrapper
 

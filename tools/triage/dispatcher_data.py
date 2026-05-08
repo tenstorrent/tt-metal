@@ -95,7 +95,7 @@ class DispatcherData:
         metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
-        self._metal_device_id_mapping = metal_device_id_mapping
+        self.metal_device_id_mapping = metal_device_id_mapping
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
@@ -268,18 +268,18 @@ class DispatcherData:
             )
         return self._build_env_cache[device_unique_id]
 
-    def _kernel_missing_hint_for_chip(self, metal_device_id: int) -> str | None:
+    def _kernel_missing_hint_for_device(self, metal_device_id: int) -> str | None:
         mesh_devices = self.inspector_data.getMeshDevices().meshDevices
         containing = [md for md in mesh_devices if metal_device_id in md.devices]
         disabled = [md.meshId for md in containing if not md.programCacheEnabled]
         if disabled:
             return (
-                f"Program cache is disabled on MeshDevice(s) {disabled} containing this chip. "
+                f"Program cache is disabled on MeshDevice(s) {disabled} containing this device. "
                 f"Enable program cache to see the callstack."
             )
         return (
-            "No live program owns the kernel on this chip — the program should remain alive "
-            "while its kernel is running."
+            "No host-side live program owns the kernel on this device —"
+            " the program should remain alive on host while its kernel is running."
         )
 
     def find_kernel(self, watcher_kernel_id):
@@ -425,9 +425,9 @@ class DispatcherData:
         try:
             kernel = self.find_kernel(watcher_kernel_id)
         except Exception:
-            if watcher_kernel_id != -1:
-                metal_device_id = self._metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
-                kernel_lookup_warning = self._kernel_missing_hint_for_chip(metal_device_id)
+            if watcher_kernel_id != -1 and self._etal_device_id_mapping.has_unique_id(location._device.unique_id):
+                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
+                kernel_lookup_warning = self._kernel_missing_hint_for_device(metal_device_id)
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)
         except Exception:
