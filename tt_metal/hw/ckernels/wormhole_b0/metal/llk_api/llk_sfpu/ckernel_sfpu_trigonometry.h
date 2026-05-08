@@ -148,7 +148,7 @@ inline void calculate_tangent() {
 
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
 
-        if constexpr (is_fp32_dest_acc_en) {
+        if constexpr (!is_fp32_dest_acc_en) {
             a = sfpi::float_to_fp16b(a, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg[0] = a;
