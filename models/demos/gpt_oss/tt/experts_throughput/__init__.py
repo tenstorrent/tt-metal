@@ -361,10 +361,12 @@ class ThroughputExperts:
             # routing). Instead, slice a pad_len-sized chunk from the
             # precomputed round-robin index tensor (built at init) and concat.
             # This keeps the forward path host-write-free for trace capture.
-            assert self._round_robin_pad_indices is not None, (
-                "ThroughputExperts._round_robin_pad_indices was not initialized; "
-                "did the prefill_config get set after __init__?"
-            )
+            if self._round_robin_pad_indices is None:
+                raise RuntimeError(
+                    "ThroughputExperts._round_robin_pad_indices was not "
+                    "initialized; did the prefill_config get set after "
+                    "__init__?"
+                )
             pad_idx_slice = ttnn.slice(
                 self._round_robin_pad_indices,
                 [0, 0, 0, 0],
@@ -376,6 +378,11 @@ class ThroughputExperts:
             target_shape = list(topk_expert_indices.shape)
             target_shape[0] = pad_len
             pad_idx_slice = ttnn.reshape(pad_idx_slice, target_shape)
+            # ttnn.concat requires matching layouts; the cached round-robin
+            # tensor is ROW_MAJOR but runtime topk indices may be TILE
+            # (depending on the upstream router output). Align before concat.
+            if pad_idx_slice.layout != topk_expert_indices.layout:
+                pad_idx_slice = ttnn.to_layout(pad_idx_slice, topk_expert_indices.layout)
             topk_expert_indices = ttnn.concat([topk_expert_indices, pad_idx_slice], dim=0)
             # Convert to TILE_LAYOUT to match what ttnn.topk normally produces.
             # The chunk function does "idx_for_routing = to_layout(topk_expert_indices,
