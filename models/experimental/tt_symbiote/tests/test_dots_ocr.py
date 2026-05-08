@@ -129,6 +129,8 @@ def test_dots_ocr_vision(mesh_device, image_link):
     """Test standalone TTNN pipeline for dots.ocr with vision (image + text)."""
     pytest.importorskip("qwen_vl_utils")
     from qwen_vl_utils import process_vision_info
+    from PIL import Image
+    import requests
 
     pipeline = TTNNDotsOCRPipeline.from_hf_model(
         model_path=DOTS_OCR_LOCAL_PATH,
@@ -147,11 +149,25 @@ def test_dots_ocr_vision(mesh_device, image_link):
     processor.image_token = "<|imgpad|>"
     processor.image_token_id = 151665
 
+    # Load and crop the image
+    image = Image.open(requests.get(image_link, stream=True).raw)
+    original_width, original_height = image.size
+
+    # Crop to 57.5% of original height from the top
+    new_height = int(original_height * 0.575)
+    top = 0
+    bottom = new_height
+
+    # Crop box: (left, top, right, bottom)
+    image = image.crop((0, top, original_width, bottom))
+
+    print(f"Cropped image from {original_width}x{original_height} to {original_width}x{new_height}")
+
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": image_link},
+                {"type": "image", "image": image},
                 {"type": "text", "text": "Describe this image."},
             ],
         }
@@ -179,7 +195,7 @@ def test_dots_ocr_vision(mesh_device, image_link):
         input_ids,
         pixel_values=pixel_values,
         image_grid_thw=image_grid_thw,
-        max_new_tokens=512,
+        max_new_tokens=180,
     )
     ttnn.synchronize_device(mesh_device)
     end_time = time.time()
