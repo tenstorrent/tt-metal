@@ -55,7 +55,10 @@ class VisionBlock(LightweightModule):
         )
         # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
         extra_rmsnorm_kwargs = {}
-        if args.base_model_name in ("Qwen2.5-VL-7B",):
+        if args.base_model_name in (
+            "Qwen2.5-VL-7B",
+            "olmOCR-2-7B",
+        ):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = RMSNorm(
             device=mesh_device,
@@ -86,6 +89,7 @@ class VisionBlock(LightweightModule):
         x: ttnn.Tensor,
         cu_seqlens,
         rot_mats,
+        window_info=None,
     ) -> ttnn.Tensor:
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
@@ -100,6 +104,7 @@ class VisionBlock(LightweightModule):
             attn_in,
             cu_seqlens=cu_seqlens,
             rot_mats=rot_mats,
+            window_info=window_info,
         )
 
         # Here x and attn_out are both fractured across devices

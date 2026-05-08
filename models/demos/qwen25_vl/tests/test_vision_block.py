@@ -29,9 +29,11 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, stand
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_block_inference(
     mesh_device,
+    qwen25_vl_mesh_device,
     reset_seeds,
     ensure_gc,
 ):
+    mesh_device = qwen25_vl_mesh_device
     n_layers = 32
     dtype = ttnn.bfloat8_b
     pccs = [0.99] * n_layers
