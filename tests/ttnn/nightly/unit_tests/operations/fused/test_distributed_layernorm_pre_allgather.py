@@ -702,7 +702,18 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
 
 @pytest.mark.parametrize(
     "inp_shape",
-    [(1, 1, 32, 128), (1, 1, 32, 1024)],
+    [
+        (1, 1, 32, 128),
+        (1, 1, 32, 1024),
+        pytest.param(
+            (1, 1, 37, 72),
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="Welford pre-all-gather overflows to inf on non-tile-aligned H shapes; "
+                "torch comparison fails on mean and var. Issue #43935",
+            ),
+        ),
+    ],
 )
 @pytest.mark.parametrize(
     "inp_dtype, stats_dtype",
@@ -814,20 +825,34 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
         atol = 0.01
         rtol = 0.01
         pcc = 0.999
-    # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference.
-    assert_numeric_metrics(torch_mean, fused_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
-    assert_numeric_metrics(torch_var, fused_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
-    # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Independently
-    # exercises the welford path without the in-kernel add, so a regression isolated to
-    # either side is caught.
-    assert_numeric_metrics(torch_mean, combined_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
-    assert_numeric_metrics(torch_var, combined_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
+    # Run every check independently and collect results, so a single test report identifies
+    # all failing comparisons instead of stopping at the first one. Each entry is
+    # (label, expected, actual). Labels describe what the comparison covers.
+    checks = [
+        # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference.
+        ("fused vs torch: mean", torch_mean, fused_mean),
+        ("fused vs torch: var", torch_var, fused_var),
+        # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Independently
+        # exercises the welford path without the in-kernel add, so a regression isolated to
+        # either side is caught.
+        ("combined vs torch: mean", torch_mean, combined_mean),
+        ("combined vs torch: var", torch_var, combined_var),
+        # Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs
+        # whose magnitude is below the bf16 torch tolerance: the shared kernel/quantization
+        # noise that limits that tolerance cancels between the two paths.
+        ("fused vs combined: mean", combined_mean, fused_mean),
+        ("fused vs combined: var", combined_var, fused_var),
+    ]
 
-    # Fused-pre-add output vs manually-pre-added output. Catches
-    # fused-add-specific bugs whose magnitude is below the bf16 torch tolerance: the shared
-    # kernel/quantization noise that limits that tolerance cancels between the two paths.
-    assert_numeric_metrics(combined_mean, fused_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
-    assert_numeric_metrics(combined_var, fused_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
+    failures = []
+    for label, expected, actual in checks:
+        passed, message = assert_numeric_metrics(
+            expected, actual, rtol=rtol, atol=atol, pcc_threshold=pcc, assert_on_fail=False
+        )
+        if not passed:
+            failures.append(f"[{label}] {message}")
+
+    assert not failures, "Welford comparison(s) failed:\n\n  " + "\n\n  ".join(failures)
 
 
 @pytest.mark.parametrize(
