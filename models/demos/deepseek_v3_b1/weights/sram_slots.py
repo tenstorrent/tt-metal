@@ -677,31 +677,6 @@ def prepare_compressed_sram_slots(
     )
     grids = core_grids
     requested_experts = list(initial_expert_indices)
-    logger.info(
-        "Preparing up to {} compressed SRAM slots for layer {} (experts: {})",
-        len(requested_experts),
-        layer_idx,
-        requested_experts,
-    )
-    logger.info(
-        "  SRAM core grids: gate={} cores, up={} cores, down={} cores",
-        grids.gate.num_cores(),
-        grids.up.num_cores(),
-        grids.down.num_cores(),
-    )
-    # Lowest pre-existing per-core address tells us how much room is left
-    # above boundary_addr at the start; min over cores is the tightest
-    # initial headroom.
-    initial_min_addr = min(initial_lowest_addr.values(), default=l1_top_addr)
-    logger.info(
-        "  SRAM trim boundary_addr={} (l1_top={}, headroom={} bytes), "
-        "initial_min_lowest_addr={} (initial headroom above boundary={} bytes)",
-        boundary_addr,
-        l1_top_addr,
-        l1_top_addr - boundary_addr,
-        initial_min_addr,
-        initial_min_addr - boundary_addr,
-    )
     t0 = time.perf_counter()
 
     device_for_torch = device if move_to_device else None

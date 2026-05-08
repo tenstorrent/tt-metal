@@ -21,10 +21,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors, encode_expert_indices
+from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.sram_slots import (
     SramCompressedExpertSlots,
