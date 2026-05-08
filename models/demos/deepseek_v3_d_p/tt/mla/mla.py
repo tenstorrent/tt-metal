@@ -646,9 +646,9 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
-        print(" pre sdpa synchronize_device started")
-        ttnn.synchronize_device(self.mesh_device)
-        print(" pre sdpa synchronize_device done")
+        # print(" pre sdpa synchronize_device started")
+        # ttnn.synchronize_device(self.mesh_device)
+        # print(" pre sdpa synchronize_device done")
 
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
@@ -676,9 +676,9 @@ class ttMLA:
             scale=self.scale,
             is_balanced=self.is_balanced,
         )
-        print(" post sdpa synchronize_device started")
-        ttnn.synchronize_device(self.mesh_device)
-        print(" post sdpa synchronize_device done")
+        # print(" post sdpa synchronize_device started")
+        # ttnn.synchronize_device(self.mesh_device)
+        # print(" post sdpa synchronize_device done")
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
