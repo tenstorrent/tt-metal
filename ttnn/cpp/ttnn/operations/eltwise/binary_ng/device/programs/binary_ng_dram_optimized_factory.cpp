@@ -680,8 +680,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
          b_tensor_cb_handle,
          cb_output,
          dram_optimal_cores,
-         single_tile_size,
-         single_tile_size,
          single_tile_size}};
 }
 

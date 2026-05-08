@@ -17,10 +17,7 @@ struct BinaryNgDramOptimizedProgram {
         tt::tt_metal::CBHandle b_tensor_cb{};
         tt::tt_metal::CBHandle output_cb{};
         CoreRangeSet dram_device_cores;
-        // TODO: Add check for tile/page size for input/output tensro and reduce num of variables in the struct
-        uint32_t a_tensor_tile_size{};
-        uint32_t b_tensor_tile_size{};
-        uint32_t dst_tile_size{};
+        uint32_t tile_size{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
