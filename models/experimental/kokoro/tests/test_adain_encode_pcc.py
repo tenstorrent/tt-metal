@@ -4,9 +4,9 @@
 """
 Kokoro ISTFTNet AdainResBlk1d PCC (TTNN vs PyTorch)
 
-TTNN `AdainResBlk1d` against the PyTorch reference for `decoder.encode` and
-`decoder.decode[0..2]`. `decode[3]` uses `upsample=True` (non-identity pool) and
-is not covered. Expect PCC > 0.99 vs CPU reference.
+TTNN `AdainResBlk1d` against PyTorch for `decoder.encode`, `decoder.decode[0..2]`,
+and `decoder.decode[3]` (nearest 2× shortcut + depthwise `ConvTranspose1d` pool).
+Expect PCC >= 0.99 vs CPU reference (`comp_pcc`).
 
 Setup:
     cd <tt-metal-root>
@@ -77,6 +77,7 @@ def assert_adain_resblk_pcc(device, pytorch_block, batch: int, time_len: int, se
     y_tt = tt_block(x_tt, s_tt)
     y_hat = ttnn.to_torch(y_tt).reshape(y_ref.shape)
     ok, p = comp_pcc(y_ref, y_hat, pcc=0.99)
+    print(f"PCC={p:.6f} dim_in={dim_in} dim_out={dim_out} pass={ok}")
     assert ok, f"PCC {p} expected >= 0.99"
 
 
@@ -88,11 +89,16 @@ def test_adain_resblk_encode_pcc(ttnn_device, kokoro_decoder_cpu):
     assert_adain_resblk_pcc(ttnn_device, block, batch=2, time_len=64, seed=0)
 
 
-@pytest.mark.parametrize("decode_idx", (0, 1, 2))
+@pytest.mark.parametrize("decode_idx", (0, 1, 2, 3))
 def test_adain_resblk_decode_stage_pcc(ttnn_device, kokoro_decoder_cpu, decode_idx: int):
-    """decoder.decode[0..2]: 1090→1024 (KokoroModules decode stages)."""
+    """decoder.decode[*]: KokoroModules decode ModuleList (1090→1024 or 1090→512 + upsample on [3])."""
     block = kokoro_decoder_cpu.decoder.decode[decode_idx]
-    assert block.upsample_type == "none"
     dim_in, dim_out, style_dim = infer_adain_resblk1d_dims(block)
-    assert dim_in == 1090 and dim_out == 1024 and style_dim == 128
+    assert dim_in == 1090 and style_dim == 128
+    if decode_idx == 3:
+        assert block.upsample_type != "none"
+        assert dim_out == 512
+    else:
+        assert block.upsample_type == "none"
+        assert dim_out == 1024
     assert_adain_resblk_pcc(ttnn_device, block, batch=2, time_len=64, seed=1 + decode_idx)
