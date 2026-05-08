@@ -478,6 +478,12 @@ class TtMoe(LightweightModule):
 
         logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
+        # NOTE: expert_outputs aliases dispatched_buffer_tiled — TtRoutedExpert.forward sets
+        # expert_outputs = dispatched_buffer and then writes per-expert FFN results back
+        # in-place via deepseek_prefill.insert. The two names point at the same device buffer.
+        # Therefore we must NOT call ttnn.deallocate(dispatched_buffer_tiled) here; doing so
+        # would free the storage that expert_outputs still depends on, and the subsequent
+        # ttnn.unsqueeze / combine_module calls would raise "Tensor is not allocated".
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
