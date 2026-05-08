@@ -182,11 +182,17 @@ void kernel_main() {
      */
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
+    volatile tt_l1_ptr uint32_t* debug_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(0x1220);
+    for (uint32_t i = 0; i < 32; i++) {
+        debug_ptr[i] = 0xffffffff;
+    }
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
-        WATCHER_RING_BUFFER_PUSH(ring_iter);
+        // WATCHER_RING_BUFFER_PUSH(ring_iter);
+        debug_ptr[ring_iter * 2] = ring_iter;
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
-        WATCHER_RING_BUFFER_PUSH(ring_id);
+        // WATCHER_RING_BUFFER_PUSH(ring_id);
+        debug_ptr[ring_iter * 2 + 1] = ring_id;
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
