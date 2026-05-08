@@ -35,6 +35,30 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
     return config
 
 
+def log_blitz_decode_pipeline_config(pipeline_config: list) -> None:
+    """Log Blitz entry/exit mesh coordinates per stage (rank 0 only).
+
+    ``pipeline_config`` is the list returned by ``generate_blitz_decode_pipeline``.
+    With fabric loopback, ``len == num_procs + 1`` and the last entry is the loopback hop.
+    """
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+    num_procs = int(ttnn.distributed_context_get_size())
+    loopback = len(pipeline_config) == num_procs + 1
+    for i, stage in enumerate(pipeline_config):
+        entry = tuple(int(stage.entry_node_coord[j]) for j in range(stage.entry_node_coord.dims()))
+        exit_ = tuple(int(stage.exit_node_coord[j]) for j in range(stage.exit_node_coord.dims()))
+        suffix = " (loopback hop)" if loopback and i == num_procs else ""
+        logger.info(
+            "Blitz pipeline_config[{}]{}: stage_index={} entry={} exit={}",
+            i,
+            suffix,
+            stage.stage_index,
+            entry,
+            exit_,
+        )
+
+
 def create_passthrough_pipeline_configuration(
     weight_provider: WeightProvider,
     num_procs: int,
@@ -163,7 +187,7 @@ def create_spec_decode_pipeline_configuration(
     #     stage_factories[1 + k] = base_lm_head_factory(k)
     for k in range(1, num_procs):
         stage_factories[k] = lambda _d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
-    # stage_factories[1] = base_lm_head_factory(0)
+    # stage_factories[2] = base_lm_head_factory(0)
     stage_factories[3] = base_lm_head_factory(0)
     return PipelineConfiguration(stage_factories)
 
@@ -636,6 +660,7 @@ class Pipeline:
             self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(
                 not host_loopback
             )
+        log_blitz_decode_pipeline_config(self._pipeline_config)
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,

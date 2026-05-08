@@ -304,20 +304,20 @@ class PassthroughStage(StageKind):
         else:
             up_fifo = down_fifo = TOKEN_META_FIFO_SIZE
             up_page = down_page = TOKEN_META_PAGE_SIZE_BYTES
-        if self._host_loopback:
-            # d2h_core must differ from PIPELINE_CORE_COORD: both land on the same chip
-            # (no_loopback sets exit_node_coord = entry_node_coord), so using the same
-            # core would dispatch two persistent kernels to the same Tensix.
-            loopback = LoopbackConfig.host_loopback(
-                HostIoPlacement(
-                    h2d_core=PIPELINE_CORE_COORD,
-                    d2h_core=SECOND_PIPELINE_CORE_COORD,
-                    fwd_d2d_core=PIPELINE_CORE_COORD,
-                    lb_d2d_core=PIPELINE_CORE_COORD,
-                )
-            )
-        else:
-            loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
+        # if self._host_loopback:
+        #     # d2h_core must differ from PIPELINE_CORE_COORD: both land on the same chip
+        #     # (no_loopback sets exit_node_coord = entry_node_coord), so using the same
+        #     # core would dispatch two persistent kernels to the same Tensix.
+        #     loopback = LoopbackConfig.host_loopback(
+        #         HostIoPlacement(
+        #             h2d_core=PIPELINE_CORE_COORD,
+        #             d2h_core=SECOND_PIPELINE_CORE_COORD,
+        #             fwd_d2d_core=PIPELINE_CORE_COORD,
+        #             lb_d2d_core=PIPELINE_CORE_COORD,
+        #         )
+        #     )
+        # else:
+        loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,

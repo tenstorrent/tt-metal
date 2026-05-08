@@ -858,7 +858,7 @@ _trace_region_size = (
     ],
     indirect=True,
 )
-def test_demo_text(
+def test_demo_text(>
     input_prompts,
     instruct,
     repeat_batches,

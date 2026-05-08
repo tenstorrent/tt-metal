@@ -99,6 +99,8 @@ struct Core {
     static constexpr uint32_t fabric_gate_bcast_noc_y = get_named_compile_time_arg_val("fabric_gate_bcast_noc_y");
     static constexpr uint32_t fabric_gate_argmax_noc_x = get_named_compile_time_arg_val("fabric_gate_argmax_noc_x");
     static constexpr uint32_t fabric_gate_argmax_noc_y = get_named_compile_time_arg_val("fabric_gate_argmax_noc_y");
+    static constexpr uint32_t token_bcast_turn_semaphore_id =
+        get_named_compile_time_arg_val("token_bcast_turn_semaphore_id");
     static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
     static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
 
@@ -766,6 +768,7 @@ void kernel_main() {
     // LM HEAD SAMPLING Lambda
     // ====================================================================
     auto lm_head_sampling = [&]() {
+        
         // ====================================================================
         // Phase 0: CCL Broadcast (multi-device only) (NCRISC only)
         // ====================================================================
@@ -905,6 +908,20 @@ void kernel_main() {
     // MTP Lambda
     // ====================================================================
     auto mtp = [&]() {
+
+#if defined(COMPILE_FOR_BRISC)
+        // MTP: release token MTP Broadcast path after main sampling (separate from activation CCL gate).
+        if constexpr (Core::sampling_is_final_core && !Core::skip_ccl) {
+            auto token_turn_sem_noc_addr = get_noc_addr(
+                Core::fabric_gate_bcast_noc_x,
+                Core::fabric_gate_bcast_noc_y,
+                get_semaphore(Core::token_bcast_turn_semaphore_id));
+            noc_semaphore_inc(token_turn_sem_noc_addr, 1);
+            noc_async_atomic_barrier();
+        }
+#endif
+
+
     // ====================================================================
     // [MTP] Token unicast from argmax_final_core to input_core on exit device
     // ====================================================================
@@ -923,6 +940,16 @@ void kernel_main() {
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_inc(sem_addr, 1);
             noc_async_atomic_barrier();
+        }
+#endif
+
+
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_input_core && !Core::skip_ccl) {
+            auto* token_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(Core::token_bcast_turn_semaphore_id));
+            noc_semaphore_wait(token_turn_sem, 1);
+            noc_semaphore_set(token_turn_sem, 0);
         }
 #endif
 
