@@ -38,7 +38,6 @@ void kernel_main() {
         cb_wait_front(cb_dst, n_tiles_proc);
         uint32_t l1_read_addr = get_read_ptr(cb_dst);
 
-        // TODO: Can we send n_tiles_proc for one noc_async_write transaction?
         for (uint32_t k = 0; k < n_tiles_proc; k++) {
             noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size, noc);
             dst_noc_ofs += tile_size;

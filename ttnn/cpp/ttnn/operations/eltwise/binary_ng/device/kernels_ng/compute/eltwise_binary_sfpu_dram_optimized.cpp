@@ -31,8 +31,6 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 
-#include "tools/profiler/kernel_profiler.hpp"
-
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(1);
@@ -74,47 +72,35 @@ void kernel_main() {
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        {
-            copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
-            DeviceZoneScopedN("copy_tile_ lhs");
-            for (uint32_t i = 0; i < n_tiles; ++i) {
-                copy_tile(cb_post_lhs, i, i * 2);
-            }
+
+        copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
+
+        for (uint32_t i = 0; i < n_tiles; ++i) {
+            copy_tile(cb_post_lhs, i, i * 2);
         }
+
         copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
         {
-            {
-                DeviceZoneScopedN("copy_tile rhs");
-                for (uint32_t i = 0; i < n_tiles; ++i) {
-                    copy_tile(cb_post_rhs, i, i * 2 + 1);
-                }
+            for (uint32_t i = 0; i < n_tiles; ++i) {
+                copy_tile(cb_post_rhs, i, i * 2 + 1);
             }
-            {
-                DeviceZoneScopedN("compute");
 
-                for (uint32_t i = 0; i < n_tiles; ++i) {
+            for (uint32_t i = 0; i < n_tiles; ++i) {
 #if HAS_ACTIVATIONS(POST)
-                    BINARY_SFPU_INIT
+                BINARY_SFPU_INIT
 #endif
-                    {
-                        DeviceZoneScopedN("mul_replay");
-                        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
-                    }
-
-                    PROCESS_POST_ACTIVATIONS(i * 2);
-                }
+                BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+                PROCESS_POST_ACTIVATIONS(i * 2);
             }
         }
         tile_regs_commit();
 
         tile_regs_wait();
-        {
-            DeviceZoneScopedN("pack_tile");
-            for (uint32_t i = 0; i < n_tiles; ++i) {
-                pack_tile(i * 2, cb_out);
-            }
-            tile_regs_release();
+
+        for (uint32_t i = 0; i < n_tiles; ++i) {
+            pack_tile(i * 2, cb_out);
         }
+        tile_regs_release();
 
         cb_push_back(cb_out, n_tiles);
         cb_pop_front(cb_post_lhs, n_tiles);
