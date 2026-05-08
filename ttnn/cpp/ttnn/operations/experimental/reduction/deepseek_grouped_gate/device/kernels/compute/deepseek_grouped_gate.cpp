@@ -323,23 +323,30 @@ void normalize_scores(
     tile_regs_release();
 }
 
-void scale(const uint32_t cb_normalized_scores, const uint32_t cb_route_scale_scalar, const uint32_t cb_out_weights) {
-    cb_wait_front(cb_normalized_scores, 1);
+template <uint32_t cb_normalized_scores, uint32_t cb_route_scale_scalar, uint32_t cb_out_weights>
+void scale() {
+    using namespace compute_kernel_lib;
+    // T1.37 migration: BinaryFpu(Mul, Scalar) + PackTile chain.
+    // Caller-side wait on the held scalar B-side (NoWaitNoPop policy on B). A side
+    // is popped per iter via WaitAndPop. Multi-stage kernel — relies on chain's
+    // init_bcast() which is a heavy hw_configure but matches the prior block's
+    // pack output (cb_normalized_scores → cb_out_weights both written by this
+    // kernel using the same engine config).
     cb_wait_front(cb_route_scale_scalar, 1);
-    mul_tiles_bcast_scalar_init_short(cb_normalized_scores, cb_route_scale_scalar);
-
-    tile_regs_acquire();
-
-    mul_tiles_bcast<BroadcastType::SCALAR>(cb_normalized_scores, cb_route_scale_scalar, 0, 0, 0);
-    tile_regs_commit();
-
-    cb_reserve_back(cb_out_weights, 1);
-    tile_regs_wait();
-    pack_tile(0, cb_out_weights);
-    cb_push_back(cb_out_weights, 1);
-    tile_regs_release();
-
-    cb_pop_front(cb_normalized_scores, 1);
+    eltwise_chain(
+        1,
+        BinaryFpu<
+            cb_normalized_scores,
+            cb_route_scale_scalar,
+            cb_out_weights,
+            BinaryFpuOp::Mul,
+            BroadcastDim::Scalar,
+            BinaryDataFormatReconfig::InputAndOutput,
+            CopyTilePolicy::WaitAndPop /* A: pre-waited normalized scores, popped per iter */,
+            CopyTilePolicy::NoWaitNoPop /* B: held scalar, caller-managed lifecycle */,
+            CbIndexMode::FirstTile,
+            Dst::D0>{},
+        PackTile<cb_out_weights, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
 }  // namespace blocks
@@ -427,6 +434,6 @@ void kernel_main() {
             cb_reciprocal_sums,
             cb_epsilon_scalar,
             cb_normalized_scores);
-        blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
+        blocks::scale<cb_normalized_scores, cb_route_scale_scalar, cb_out_weights>();
     }
 }
