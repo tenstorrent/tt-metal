@@ -5,7 +5,10 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
 #include "api/compute/compute_kernel_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -31,6 +34,7 @@ void kernel_main() {
     mm_init(in0_cb, in1_cb, out_cb);
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         acquire_dst();
+#ifndef PACKER_L1_ACC
         if (block_id > 0) {
             copy_tile_to_dst_init_short(partials_cb);
             cb_partials.wait_front(out_block_num_tiles);
@@ -40,6 +44,8 @@ void kernel_main() {
             cb_partials.pop_front(out_block_num_tiles);
             mm_init_short(in0_cb, in1_cb);
         }
+#endif
+
         uint32_t out_tile_index = 0;
         uint32_t in0_index_r_offset = 0;
         cb0.wait_front(in0_block_num_tiles);
@@ -51,7 +57,7 @@ void kernel_main() {
                     int in0_tile_index = in0_index_r_offset + k;
                     int in1_tile_index = in1_index_c_offset + c;
                     matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
-                    in1_index_c_offset += k;
+                    in1_index_c_offset += out_c;
                 }
                 out_tile_index++;
             }
@@ -60,17 +66,51 @@ void kernel_main() {
         cb0.pop_front(in0_block_num_tiles);
         cb1.pop_front(in1_block_num_tiles);
 
+#ifdef PACKER_L1_ACC
+        pack_reconfig_l1_acc(block_id == 0 ? 0 : 1);
+        cb_partials.reserve_back(out_block_num_tiles);
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-            if (block_id == last_block_id) {
-                cb_out.reserve_back(out_block_num_tiles);
-                pack_tile(tile_index, out_cb);
-                cb_out.push_back(out_block_num_tiles);
-            } else {
-                cb_partials.reserve_back(out_block_num_tiles);
-                pack_tile(tile_index, partials_cb);
-                cb_partials.push_back(out_block_num_tiles);
+            pack_tile(tile_index, partials_cb);
+        }
+        cb_partials.push_back(out_block_num_tiles);
+        release_dst();
+
+        if (block_id < last_block_id) {
+            cb_partials.wait_front(out_block_num_tiles);
+            cb_partials.pop_front(out_block_num_tiles);
+        }
+
+        if (block_id == last_block_id) {
+            pack_reconfig_l1_acc(0);
+            copy_tile_to_dst_init_short(partials_cb);
+            cb_partials.wait_front(out_block_num_tiles);
+            acquire_dst();
+            for (uint32_t i = 0; i < out_block_num_tiles; i++) {
+                copy_tile(partials_cb, i, i);
             }
+            cb_partials.pop_front(out_block_num_tiles);
+            cb_out.reserve_back(out_block_num_tiles);
+            for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
+                pack_tile(tile_index, out_cb);
+            }
+            cb_out.push_back(out_block_num_tiles);
+            release_dst();
+        }
+#else
+        if (block_id == last_block_id) {
+            cb_out.reserve_back(out_block_num_tiles);
+            for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
+                pack_tile(tile_index, out_cb);
+            }
+            cb_out.push_back(out_block_num_tiles);
+        } else {
+            cb_partials.reserve_back(out_block_num_tiles);
+            for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
+                pack_tile(tile_index, partials_cb);
+            }
+            cb_partials.push_back(out_block_num_tiles);
         }
         release_dst();
+#endif
     }
 }

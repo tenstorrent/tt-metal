@@ -47,6 +47,18 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::matmul {
 
+// Per-block matmul: out[M x N] = in0[M x K] * in1[K x N]
+// Repeated num_blocks times along K with partials accumulation.
+// If K > 1 -> dest accumulation within each block
+// If num_blocks > 1 -> partials accumulation (either l1 accumulation or spill and reload)
+struct BlockedMatmulConfig {
+    uint32_t M = 1;           // per-block rows (tiles)
+    uint32_t K = 1;           // per-block inner dim (tiles)
+    uint32_t N = 1;           // per-block cols (tiles)
+    uint32_t num_blocks = 1;  // number of K-blocks
+    bool packer_l1_acc = false;
+};
+
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
     const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
@@ -480,19 +492,24 @@ bool single_block_matmul(
     return pass;
 }
 // blocked matmul has blocking on output, spill/reloads using intermediate
-bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t M, uint32_t K, uint32_t N) {
+bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BlockedMatmulConfig& cfg) {
+    const uint32_t M = cfg.M;
+    const uint32_t K = cfg.K;
+    const uint32_t N = cfg.N;
+    const uint32_t num_blocks = cfg.num_blocks;
+
     bool pass = true;
-    // FIXME: Convert to config
     CoreCoord core(0, 0);
     const uint32_t in0_cb_index = 0;
     const uint32_t in1_cb_index = 1;
     const uint32_t out_cb_index = 16;
     const uint32_t partials_cb_index = 24;
     const size_t cb_page_size = 2 * 32 * 32;
-    const size_t in0_byte_size = M * K * cb_page_size;
-    const size_t in1_byte_size = K * N * cb_page_size;
+    const size_t in0_block_byte_size = M * K * cb_page_size;
+    const size_t in1_block_byte_size = K * N * cb_page_size;
+    const size_t in0_total_byte_size = num_blocks * in0_block_byte_size;
+    const size_t in1_total_byte_size = num_blocks * in1_block_byte_size;
     const size_t out_byte_size = M * N * cb_page_size;
-    const size_t num_blocks = 1;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -504,14 +521,14 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,
-        .size = in0_byte_size,
-        .page_size = in0_byte_size,
+        .size = in0_total_byte_size,
+        .page_size = in0_total_byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_1{
         .device = device,
-        .size = in1_byte_size,
-        .page_size = in1_byte_size,
+        .size = in1_total_byte_size,
+        .page_size = in1_total_byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_out{
@@ -531,12 +548,13 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto output_dram_buffer = CreateBuffer(dram_config_out);
     const uint32_t out_dram_addr = output_dram_buffer->address();
 
-    tt_metal::CircularBufferConfig l1_input0_cb_config = tt_metal::CircularBufferConfig(in0_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(in0_cb_index, cb_page_size);
+    tt_metal::CircularBufferConfig l1_input0_cb_config =
+        tt_metal::CircularBufferConfig(in0_block_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(in0_cb_index, cb_page_size);
     tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
-        tt_metal::CircularBufferConfig(in1_byte_size, {{in1_cb_index, tt::DataFormat::Float16_b}})
+        tt_metal::CircularBufferConfig(in1_block_byte_size, {{in1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(in1_cb_index, cb_page_size);
     tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
 
@@ -568,40 +586,38 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {out_cb_index}});
 
+    std::map<std::string, std::string> compute_defines;
+    if (cfg.packer_l1_acc) {
+        compute_defines["PACKER_L1_ACC"] = "1";
+    }
     tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
         core,
         tt_metal::ComputeConfig{
-            .compile_args = {
-                in0_cb_index,
-                in1_cb_index,
-                out_cb_index,
-                partials_cb_index,
-                M * K,
-                K * N,
-                M * N,
-                M,
-                N,
-                K,
-                num_blocks}});
+            .compile_args =
+                {in0_cb_index, in1_cb_index, out_cb_index, partials_cb_index, M * K, K * N, M * N, M, N, K, num_blocks},
+            .defines = compute_defines});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, in0_byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+        1.0f,
+        1.0f,
+        in0_total_byte_size / sizeof(bfloat16),
+        std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0.03125f,
         0.03125f,
-        in1_byte_size / sizeof(bfloat16),
+        in1_total_byte_size / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
     auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f * K,
-        1.0f * K,
+        1.0f * K * num_blocks,
+        1.0f * K * num_blocks,
         (out_byte_size) / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -621,11 +637,11 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             (uint32_t)0,
             (uint32_t)in1_dram_addr,
             (uint32_t)0,
-            (uint32_t)1,              // num_blocks
-            (uint32_t)M * K,          // in0_block_tile_cnt
-            (uint32_t)K * N,          // in1_block_tile_cnt
-            (uint32_t)in0_byte_size,  // in0_block_size_bytes
-            (uint32_t)in1_byte_size,  // in1_block_size_bytes
+            (uint32_t)num_blocks,
+            (uint32_t)(M * K),
+            (uint32_t)(K * N),
+            (uint32_t)in0_block_byte_size,
+            (uint32_t)in1_block_byte_size,
         });
     tt_metal::SetRuntimeArgs(
         program_,
@@ -634,7 +650,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         {
             (uint32_t)out_dram_addr,
             (uint32_t)0,
-            (uint32_t)M * N,
+            (uint32_t)(M * N),
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -676,6 +692,20 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulati
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
+    }
+}
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{
+        .M = 2, .K = 2, .N = 2, .num_blocks = 2 .packer_l1_acc = false};
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
+    }
+}
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{
+        .M = 2, .K = 2, .N = 2, .num_blocks = 2, .packer_l1_acc = true};
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
 }
 
