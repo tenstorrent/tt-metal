@@ -416,7 +416,7 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
 inline void _calculate_exponential_tti_bf16_(const std::uint16_t exp_base_scale_factor)
 {
     constexpr std::uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
@@ -449,14 +449,18 @@ inline void _calculate_exponential_tti_bf16_(const std::uint16_t exp_base_scale_
         // xlog2 = val * (1/ln2) + 127.0f
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
 
-        // Clamp xlog2 to [0, 255]. SFPSWAP cannot use the LCONST_0 fixed
-        // register directly, so we materialize 0.0 in LREG1 first.
-        // After the two SFPSWAPs (mode VEC_MIN_MAX = "max into lreg_dest"):
-        //   LREG0 = max(xlog2, 0)              (lower-clamp)
-        //   LREG0 = min(LREG0, 255)            (upper-clamp; LREG2 holds 255)
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        if constexpr (CLAMP_NEGATIVE)
+        {
+            // Clamp xlog2 to [0, 255]. SFPSWAP cannot use the LCONST_0 fixed
+            // register directly, so we materialize 0.0 in LREG1 first.
+            // After the two SFPSWAPs (mode VEC_MIN_MAX = "max into lreg_dest"):
+            //   LREG0 = max(xlog2, 0)              (lower-clamp)
+            //   LREG0 = min(LREG0, 255)            (upper-clamp; LREG2 holds 255)
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        }
         TTI_SFPNOP;
+
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         TTI_SFPNOP;
 
@@ -537,7 +541,7 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
             // CLAMP_NEGATIVE is implicit (always clamps via min/max).
             // SCALE_EN is handled inside the TTI kernel via SFPMULI.
-            _calculate_exponential_tti_bf16_<SCALE_EN, is_fp32_dest_acc_en, ITERATIONS>(exp_base_scale_factor);
+            _calculate_exponential_tti_bf16_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         }
         else
         {

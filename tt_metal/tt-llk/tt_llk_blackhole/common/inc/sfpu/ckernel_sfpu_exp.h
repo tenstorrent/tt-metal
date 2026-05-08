@@ -427,7 +427,7 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
 inline void _calculate_exponential_tti_bf16_(const std::uint16_t exp_base_scale_factor)
 {
     constexpr std::uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
@@ -565,7 +565,7 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
             // CLAMP_NEGATIVE is implicit (always clamps via min/max).
             // SCALE_EN is handled inside the TTI kernel via SFPMULI.
-            _calculate_exponential_tti_bf16_<SCALE_EN, is_fp32_dest_acc_en, ITERATIONS>(exp_base_scale_factor);
+            _calculate_exponential_tti_bf16_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         }
         else
         {
