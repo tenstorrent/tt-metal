@@ -47,8 +47,8 @@ def main() -> int:
     except ImportError:
         sf = None
 
-    from models.demos.kokoro.reference import KokoroConfig
-    from models.demos.kokoro.reference.kokoro_full_model import load_full_reference_from_huggingface
+    from models.experimental.kokoro.reference import KokoroConfig
+    from models.experimental.kokoro.reference.kokoro_full_model import load_full_reference_from_huggingface
 
     torch_device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using torch device={torch_device}")
