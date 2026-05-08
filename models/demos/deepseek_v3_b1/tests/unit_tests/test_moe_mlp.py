@@ -998,11 +998,16 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("enable_sram", [True, False], ids=["sram", "no_sram"])
+# SRAM scenario coverage. Winners (rigged) = [1, 4, 7, 11, 15, 19, 23, 28].
+# Each scenario tests a different (T, n_sram_active) combination.
+@pytest.mark.parametrize(
+    "sram_scenario",
+    ["no_sram", "t1_picked", "t1_not_picked", "t2_both_picked", "t2_partial", "t2_none_picked"],
+)
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(
-    bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, enable_sram, get_reference_model_state_dict
+    bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, sram_scenario, get_reference_model_state_dict
 ):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
@@ -1047,11 +1052,23 @@ def test_moe_fused_with_reduce(
 
     # ── Create MoE tensors (routed weights TP8-sharded; other tensors replicated) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
-    # enable_sram=True  → place expert 1 in L1 (SRAM pipeline exercised).
-    # enable_sram=False → empty list = DRAM-only path (regression coverage:
-    #   r.sram_*_weights become None, MoeOp setup skips SRAM params, kernel's
-    #   per-iter scan_n_sram_active stays 0 → SRAM ops early-return uniformly).
-    sram_expert_ids = [1] if enable_sram else []
+    # SRAM scenario → sram_expert_ids. Winners are [1, 4, 7, 11, 15, 19, 23, 28].
+    #   no_sram        : T=0, n_active=0 every iter (DRAM-only path)
+    #   t1_picked      : T=1, n_active=1 every iter (canonical SRAM-fires path)
+    #   t1_not_picked  : T=1, n_active=0 every iter (helper early-return path
+    #                    with SRAM CBs allocated host-side — production hits
+    #                    this whenever a TopK doesn't include the SRAM expert)
+    #   t2_both_picked : T=2, n_active=2 (multi-SRAM dispatch)
+    #   t2_partial     : T=2, n_active=1 (mixed; tests is_sram_expert filter)
+    #   t2_none_picked : T=2, n_active=0 (multi-SRAM CBs allocated, none fire)
+    sram_expert_ids = {
+        "no_sram": [],
+        "t1_picked": [1],
+        "t1_not_picked": [2],
+        "t2_both_picked": [1, 4],
+        "t2_partial": [1, 2],
+        "t2_none_picked": [2, 3],
+    }[sram_scenario]
     r = create_routed_expert_tensors(
         submesh,
         mesh_mapper=mesh_mapper,
