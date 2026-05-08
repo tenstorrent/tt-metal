@@ -63,7 +63,7 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
 
 // On Quasar, accesses to L1 semaphores must bypass the L1 D$ via the uncached alias so that
 // updates from other RISCs/cores are visible. No-op on BH/WH.
-FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
+constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
     return addr + MEM_L1_UNCACHED_BASE;
 #else
@@ -73,7 +73,7 @@ FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 
 // Inverse of l1_uncached_addr — converts an uncached-alias address back to its cached form.
 // Used when storing a pointer that the host (or NOC) will resolve via the cached-form base.
-FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
+constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
     return addr - MEM_L1_UNCACHED_BASE;
 #else
