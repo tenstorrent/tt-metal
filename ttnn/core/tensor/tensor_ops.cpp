@@ -409,7 +409,7 @@ ttnn::Tensor view(const ttnn::Tensor& input_tensor, const Shape& new_logical_sha
 
     ttnn::Tensor output;
     if (is_cpu_tensor(input_tensor)) {
-        output = ttnn::Tensor(tensor_impl::view(input_tensor.host_tensor(), new_logical_shape, new_padded_shape));
+        output = ttnn::Tensor(ttnn::tensor_impl::view(input_tensor.host_tensor(), new_logical_shape, new_padded_shape));
     } else {
         output = view_device(input_tensor, new_logical_shape, new_padded_shape);
     }
@@ -469,6 +469,6 @@ ttnn::Tensor to_dtype(const ttnn::Tensor& input_tensor, DataType dtype) {
     return output_tensor;
 }
 
-std::string to_string(const ttnn::Tensor& tensor) { return tensor_impl::to_string(tensor); }
+std::string to_string(const ttnn::Tensor& tensor) { return ttnn::tensor_impl::to_string(tensor); }
 
 }  // namespace tt::tt_metal

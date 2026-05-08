@@ -344,15 +344,13 @@ Tensor Tensor::extract_shard(const tt::tt_metal::CoreCoord& core) const {
     return this->extract_shard(core_id);
 }
 
-Tensor Tensor::extract_shard(const uint32_t& core_id) const {
-    return tt::tt_metal::tensor_impl::extract_shard(*this, core_id);
-}
+Tensor Tensor::extract_shard(const uint32_t& core_id) const { return tensor_impl::extract_shard(*this, core_id); }
 
 Tensor Tensor::to_layout(tt::tt_metal::Layout target_layout) const {
     return tt::tt_metal::to_layout(*this, target_layout);
 }
 
-std::string Tensor::write_to_string() const { return tt::tt_metal::tensor_impl::to_string(*this); }
+std::string Tensor::write_to_string() const { return tensor_impl::to_string(*this); }
 
 Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,

@@ -39,7 +39,7 @@
 
 using namespace tt::tt_metal;
 
-namespace tt::tt_metal::tensor_impl {
+namespace ttnn::tensor_impl {
 
 PrintOptions TTNN_PRINT_OPTIONS;
 
@@ -318,17 +318,17 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
 }
 
 template <>
-std::string to_string_impl<bfloat8_b>(const ttnn::Tensor& tensor) {
+std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat8_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
 template <>
-std::string to_string_impl<bfloat4_b>(const ttnn::Tensor& tensor) {
+std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat4_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
 std::string to_string(const ttnn::Tensor& tensor) {
-    return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
+    return tt::tt_metal::tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
 
 // ======================================================================================
@@ -440,17 +440,20 @@ ttnn::Tensor extract_shard_impl(const ttnn::Tensor& tensor, const uint32_t& core
 }
 
 template <>
-ttnn::Tensor extract_shard_impl<bfloat8_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat8_b>(
+    const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 template <>
-ttnn::Tensor extract_shard_impl<bfloat4_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat4_b>(
+    const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 ttnn::Tensor extract_shard(const ttnn::Tensor& tensor, const uint32_t& core_id) {
-    return dispatch(tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
+    return tt::tt_metal::tensor_impl::dispatch(
+        tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
 }
 
-}  // namespace tt::tt_metal::tensor_impl
+}  // namespace ttnn::tensor_impl

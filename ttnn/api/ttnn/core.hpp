@@ -22,8 +22,8 @@ namespace ttnn {
 using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
 using Tensors = std::vector<Tensor>;
-using TensorPrintProfile = tt::tt_metal::tensor_impl::TensorPrintProfile;
-using SciMode = tt::tt_metal::tensor_impl::SciMode;
+using TensorPrintProfile = tensor_impl::TensorPrintProfile;
+using SciMode = tensor_impl::SciMode;
 
 }  // namespace ttnn
 
