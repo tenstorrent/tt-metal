@@ -5,6 +5,7 @@
 #include "tt_metal/api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp"
 
 #include <algorithm>
+#include <cstdio>
 
 #include <tt_stl/assert.hpp>
 
@@ -100,6 +101,107 @@ const std::string& KvChunkAddressTable::get_host(const tt::tt_fabric::FabricNode
 
 bool KvChunkAddressTable::has_host(const tt::tt_fabric::FabricNodeId& node_id) const {
     return fabric_node_to_host_.contains(node_id);
+}
+
+void KvChunkAddressTable::dump(const std::string& tag) const {
+    const char* t = tag.empty() ? "" : tag.c_str();
+    std::fprintf(
+        stderr,
+        "[KvChunkAddressTable.dump] tag='%s' config: num_layers=%u max_sequence_length=%u "
+        "num_slots=%u chunk_n_tokens=%u chunk_size_bytes=%u num_position_chunks=%u total_entries=%zu\n",
+        t,
+        config_.num_layers,
+        config_.max_sequence_length,
+        config_.num_slots,
+        config_.chunk_n_tokens,
+        config_.chunk_size_bytes,
+        num_position_chunks_,
+        entries_.size());
+
+    // Device groups
+    std::fprintf(stderr, "[KvChunkAddressTable.dump] tag='%s' device_groups: %zu\n", t, device_groups_.size());
+    for (size_t g = 0; g < device_groups_.size(); g++) {
+        const auto& nodes = device_groups_[g].fabric_node_ids;
+        std::fprintf(stderr, "[KvChunkAddressTable.dump] tag='%s'   group[%zu]: %zu nodes:", t, g, nodes.size());
+        for (const auto& fnid : nodes) {
+            std::fprintf(stderr, " (m=%u,c=%u)", *fnid.mesh_id, fnid.chip_id);
+        }
+        std::fprintf(stderr, "\n");
+    }
+
+    // Fabric-node host mapping
+    std::fprintf(
+        stderr,
+        "[KvChunkAddressTable.dump] tag='%s' fabric_node_to_host: %zu entries\n",
+        t,
+        fabric_node_to_host_.size());
+    for (const auto& [fnid, host] : fabric_node_to_host_) {
+        std::fprintf(
+            stderr,
+            "[KvChunkAddressTable.dump] tag='%s'   (m=%u,c=%u) -> '%s'\n",
+            t,
+            *fnid.mesh_id,
+            fnid.chip_id,
+            host.c_str());
+    }
+
+    // Every entry. Iterate in storage order: [slot][layer][position_chunk].
+    // Skip entries with size_bytes==0 (uninitialized — table.set never called
+    // for that triple) so the dump stays compact for sparse tables.
+    std::fprintf(
+        stderr,
+        "[KvChunkAddressTable.dump] tag='%s' entries (slot, layer, position) -> "
+        "KvCacheLocation{noc_addr, size_bytes, device_group_index}:\n",
+        t);
+    size_t printed = 0;
+    for (uint32_t slot = 0; slot < config_.num_slots; slot++) {
+        for (uint32_t layer = 0; layer < config_.num_layers; layer++) {
+            for (uint32_t chunk_idx = 0; chunk_idx < num_position_chunks_; chunk_idx++) {
+                const auto& loc = entries_[flat_index(layer, chunk_idx, slot)];
+                if (loc.size_bytes == 0) {
+                    continue;
+                }
+                uint32_t position = chunk_idx * config_.chunk_n_tokens;
+                std::fprintf(
+                    stderr,
+                    "[KvChunkAddressTable.dump] tag='%s'   (slot=%u, layer=%u, position=%u) -> "
+                    "noc_addr=%llu (channel=%llu, local_addr=%llu) size_bytes=%u dg_idx=%u\n",
+                    t,
+                    slot,
+                    layer,
+                    position,
+                    static_cast<unsigned long long>(loc.noc_addr),
+                    static_cast<unsigned long long>(loc.noc_addr >> 32),
+                    static_cast<unsigned long long>(loc.noc_addr & 0xFFFFFFFFull),
+                    loc.size_bytes,
+                    static_cast<uint32_t>(*loc.device_group_index));
+                printed++;
+            }
+        }
+    }
+    std::fprintf(
+        stderr,
+        "[KvChunkAddressTable.dump] tag='%s' printed %zu populated entries (of %zu total slots)\n",
+        t,
+        printed,
+        entries_.size());
+    std::fflush(stderr);
+}
+
+void KvChunkAddressTable::for_each_populated_entry(const EntryVisitFn& fn) const {
+    for (uint32_t slot = 0; slot < config_.num_slots; slot++) {
+        for (uint32_t layer = 0; layer < config_.num_layers; layer++) {
+            for (uint32_t chunk_idx = 0; chunk_idx < num_position_chunks_; chunk_idx++) {
+                const auto& loc = entries_[flat_index(layer, chunk_idx, slot)];
+                if (loc.size_bytes == 0) {
+                    continue;
+                }
+                uint32_t position = chunk_idx * config_.chunk_n_tokens;
+                const auto& group = device_groups_[*loc.device_group_index];
+                fn(slot, layer, position, loc, group);
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal::experimental::disaggregation
