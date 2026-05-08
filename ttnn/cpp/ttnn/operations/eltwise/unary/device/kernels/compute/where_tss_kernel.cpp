@@ -6,6 +6,16 @@
 #include "api/compute/common.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
+
+// U5: collapse #ifdef-gated chain branches into a single chain definition where
+// one of two OptionalChainElement pairs is live. The fold's `<false, Inner>`
+// specialisation inherits Inner's tag and emits no-ops.
+#if defined(INP_INT32) || defined(INP_UINT32)
+constexpr bool USE_INT_FILL = true;
+#else
+constexpr bool USE_INT_FILL = false;
+#endif
 
 namespace {
 
@@ -29,27 +39,17 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    // D5/D8: caller-side BIG init at the top of MAIN().
-    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
-
-#if defined(INP_INT32) || defined(INP_UINT32)
-    eltwise_chain(
+    // U5: single chain — exactly one of the two OptionalChainElement pairs is live.
+    // The `<false, Inner>` specialisation is tag-only no-op (variadic ctor swallows
+    // the args); dead branches cost zero at runtime. After this rewrite where_tss
+    // is single-stage and uses U4's deduced wrapper.
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        FillInt<DataFormat::Int32, Dst::D1>{packed_scalar1},
-        FillInt<DataFormat::Int32, Dst::D2>{packed_scalar2},
+        OptionalChainElement<USE_INT_FILL, FillInt<DataFormat::Int32, Dst::D1>>{packed_scalar1},
+        OptionalChainElement<USE_INT_FILL, FillInt<DataFormat::Int32, Dst::D2>>{packed_scalar2},
+        OptionalChainElement<!USE_INT_FILL, FillScalar<Dst::D1>>{*true_value},
+        OptionalChainElement<!USE_INT_FILL, FillScalar<Dst::D2>>{*false_value},
         WhereSfpu{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
-    );
-#endif
-#if defined(INP_FLOAT) || defined(INP_FLOAT32)
-    eltwise_chain(
-        num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        FillScalar<Dst::D1>{*true_value},
-        FillScalar<Dst::D2>{*false_value},
-        WhereSfpu{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
-    );
-#endif
+        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

@@ -262,7 +262,18 @@ BINARY_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu.cpp"
 
 
 def _run_binary_with_kernel(
-    device, num_tiles, kernel_path, defines, torch_op, range_a, range_b, pcc, fp32_dest_acc=False, label="", single_core=False, cb_pages=None
+    device,
+    num_tiles,
+    kernel_path,
+    defines,
+    torch_op,
+    range_a,
+    range_b,
+    pcc,
+    fp32_dest_acc=False,
+    label="",
+    single_core=False,
+    cb_pages=None,
 ):
     shape = [1, num_tiles, 32, 32]
     la, ha = range_a
@@ -607,7 +618,8 @@ def test_14_5_copy_exp_sqrt_pack(device, num_tiles, fp32_dest_acc):
 @pytest.mark.parametrize("reuse_type", ["DEST_TO_SRCA", "DEST_TO_SRCB"])
 def test_8_dest_reuse_binary(device, num_tiles, fp32_dest_acc, op_name, torch_op, pcc, reuse_type):
     out, golden = _run_unary_chain(
-        device, num_tiles,
+        device,
+        num_tiles,
         kernel_path="ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/dest_reuse.cpp",
         torch_op=torch_op,
         input_range=(-2.0, 2.0),
@@ -861,6 +873,7 @@ def test_1_copy_upfront_block_iter(device, upfront_n, fp32_dest_acc):
 # Block-mode binary FPU (multi-tile DEST scratch)
 # =============================================================================
 
+
 @pytest.mark.parametrize("num_tiles", [4, 16])
 @pytest.mark.parametrize("fp32_dest_acc", [False, True])
 @pytest.mark.parametrize("block_size", [2, 4])
@@ -876,10 +889,15 @@ def test_block_binary_fpu(device, num_tiles, fp32_dest_acc, block_size, op_name,
     if num_tiles % block_size != 0:
         pytest.skip("num_tiles must be divisible by block_size")
     _run_binary_with_kernel(
-        device, num_tiles,
+        device,
+        num_tiles,
         "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_block.cpp",
         {"BLOCK_SIZE": str(block_size), "BINARY_OP_NAME": op_name},
-        torch_op, (-2.0, 2.0), (-2.0, 2.0), pcc, fp32_dest_acc,
+        torch_op,
+        (-2.0, 2.0),
+        (-2.0, 2.0),
+        pcc,
+        fp32_dest_acc,
         label=f"block_binary_fpu {op_name} N={block_size}",
         single_core=True,
         cb_pages=block_size * 2,
@@ -920,14 +938,12 @@ def test_6_binary_fpu_bcast_scalar(device, num_tiles, fp32_dest_acc, op_name, bc
 
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     work_per_core = num_tiles
-    cb_a   = _make_cb(0, core_grid)
-    cb_b   = _make_cb(1, core_grid)
+    cb_a = _make_cb(0, core_grid)
+    cb_b = _make_cb(1, core_grid)
     cb_out = _make_cb(16, core_grid)
 
     reader_compile_args = (
-        [0]
-        + ttnn.TensorAccessorArgs(a).get_compile_time_args()
-        + ttnn.TensorAccessorArgs(b).get_compile_time_args()
+        [0] + ttnn.TensorAccessorArgs(a).get_compile_time_args() + ttnn.TensorAccessorArgs(b).get_compile_time_args()
     )
     writer_compile_args = [16] + ttnn.TensorAccessorArgs(out).get_compile_time_args()
 
@@ -953,7 +969,9 @@ def test_6_binary_fpu_bcast_scalar(device, num_tiles, fp32_dest_acc, op_name, bc
         config=ttnn.WriterConfigDescriptor(),
     )
     compute_kd = _build_compute_kd(
-        core_grid, BINARY_BCAST_KERNEL, work_per_core,
+        core_grid,
+        BINARY_BCAST_KERNEL,
+        work_per_core,
         {"BINARY_OP_NAME": op_name, "BCAST_DIM": bcast_dim},
         fp32_dest_acc,
     )
@@ -981,3 +999,51 @@ def test_1_copy_upfront_RAW_REFERENCE(device, upfront_n):
         single_core=True,
     )
     _check_pcc(out, golden, 0.9999, f"copy_upfront_RAW UPFRONT_N={upfront_n}")
+
+
+# =============================================================================
+# Test plan §X — OptionalChainElement<COND, Inner> (U5 / Q5)
+# =============================================================================
+#
+# Validates both COND=true (forwards to Inner) and COND=false (tag-only no-op)
+# specialisations. Uses Eqz<Dst::D0> as the inner — a default-constructible
+# DEST-only SFPU op-struct via the UnaryOp CRTP base.
+#
+# Golden:
+#   - COND=true:  out = (in == 0)   (Eqz applied to the copied tile)
+#   - COND=false: out = in          (identity copy — Inner emits no LLK)
+
+
+@pytest.mark.parametrize("num_tiles", [1, 8])
+@pytest.mark.parametrize("fp32_dest_acc", [False])
+@pytest.mark.parametrize("optional_cond", [0, 1])
+@pytest.mark.parametrize(
+    "inner_type",
+    [
+        "compute_kernel_lib::Eqz<compute_kernel_lib::Dst::D0>",
+    ],
+)
+def test_optional_chain_element(device, num_tiles, fp32_dest_acc, optional_cond, inner_type):
+    """U5 / Q5 — exercises OptionalChainElement<COND, Inner> for COND in {0, 1}."""
+
+    def torch_eqz(x):
+        return (x == 0).to(x.dtype)
+
+    if optional_cond == 1:
+        torch_op = torch_eqz
+    else:
+        torch_op = lambda x: x  # identity (no-op when COND=false)
+
+    out, golden = _run_unary_chain(
+        device,
+        num_tiles,
+        kernel_path="ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/optional_element.cpp",
+        torch_op=torch_op,
+        input_range=(-2.0, 2.0),
+        defines={
+            "OPTIONAL_COND": str(optional_cond),
+            "OPTIONAL_INNER_TYPE": inner_type,
+        },
+        fp32_dest_acc=fp32_dest_acc,
+    )
+    _check_pcc(out, golden, 0.99, f"optional_chain_element COND={optional_cond} n={num_tiles}")

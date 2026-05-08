@@ -53,3 +53,6 @@
 {"event":"test_run","status":"fail","test_path":"tests/ttnn/unit_tests/kernel_lib/test_eltwise.py","details":"Still failing. Check actual error details.","ts":"2026-05-08T13:26:45+00:00"}
 {"event":"test_run","status":"pass","test_path":"tests/ttnn/unit_tests/kernel_lib/test_eltwise.py","params":"commit-6 gate","details":"Tests PASS after fix: relaxed has_any_cb_reader requirement to allow fill-only chains, falling back to cb_out for boot triple.","ts":"2026-05-08T13:31:18+00:00"}
 {"event":"commit_hook_reformat","details":"Not a hang — clang-format hook reformatted 3 files. Re-staging.","ts":"2026-05-08T13:32:01+00:00"}
+{"event":"commit_landed","commit":"20bd8b4d9d2","title":"eltwise v2: add eltwise_chain_with_init deduced wrapper; sweep callers","details":"Commit 6 of 8 landed. 18 files changed, 162 insertions, 52 deletions.","ts":"2026-05-08T13:32:39+00:00"}
+{"event":"test_run","status":"pass","test_path":"tests/ttnn/unit_tests/kernel_lib/test_eltwise.py","params":"commit-7 gate","details":"Tests PASS after U5: logit + where_tss adopted OptionalChainElement; new optional_element.cpp test kernel + test_optional_chain_element parametrize.","ts":"2026-05-08T13:38:27+00:00"}
+{"event":"commit_hook_reformat","details":"Not a hang — black + clang-format reformatted 2 files. Re-staging.","ts":"2026-05-08T13:39:10+00:00"}

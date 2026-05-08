@@ -8,6 +8,15 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"     // Log
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"   // RsubUnary, Clamp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // DivBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+
+// U5: collapse the #ifdef CLAMP branch into a constexpr bool that gates an
+// OptionalChainElement<DO_CLAMP, Clamp<...>> inside the stage-1 chain.
+#ifdef CLAMP
+constexpr bool DO_CLAMP = true;
+#else
+constexpr bool DO_CLAMP = false;
+#endif
 
 void kernel_main() {
     using namespace compute_kernel_lib;
@@ -26,18 +35,14 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_input, cb_input, cb_tmp0);
 
     // Stage 1: copy input → DEST[0] (with optional clamp), pack to cb_tmp0.
-#ifdef CLAMP
+    // The Clamp element is wrapped in OptionalChainElement<DO_CLAMP, ...> —
+    // when DO_CLAMP is false the wrapper inherits the inner's tag (DestOnly via
+    // the SfpuOp CRTP base) but every hook is a no-op (zero runtime cost).
     eltwise_chain(
         num_tiles,
         CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        Clamp<Dst::D0>{packed_scalar1, packed_scalar2},
+        OptionalChainElement<DO_CLAMP, Clamp<Dst::D0>>{packed_scalar1, packed_scalar2},
         PackTile<cb_tmp0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-#else
-    eltwise_chain(
-        num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        PackTile<cb_tmp0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-#endif
 
     // D5 row 4: re-boot for stage 2's CB triple (cb_tmp0 → cb_output).
     compute_kernel_hw_startup(cb_tmp0, cb_tmp0, cb_output);

@@ -71,6 +71,13 @@ struct OptionalChainElement<false, Inner>
     static constexpr CopyTilePolicy a_policy()  { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr CopyTilePolicy b_policy()  { return CopyTilePolicy::NoWaitNoPop; }
 
+    // Variadic ctor swallows any args the caller would pass to the inner element
+    // so kernel-side construction `OptionalChainElement<false, Inner>{...}` doesn't
+    // need to gate the ctor args on COND. Provides a default ctor too.
+    constexpr OptionalChainElement() noexcept = default;
+    template <class... Ignored>
+    constexpr explicit OptionalChainElement(Ignored&&...) noexcept {}
+
     static ALWI void init() {}
     ALWI void wait_per_tile(uint32_t) const {}
     ALWI void wait_upfront(uint32_t) const {}
