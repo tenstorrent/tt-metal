@@ -43,6 +43,7 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
+@pytest.mark.timeout(1000)
 def test_mochi_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
