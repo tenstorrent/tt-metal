@@ -66,7 +66,14 @@ class TTSeamlessM4Tv2Decoder:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self._ffn_linear_compute_cfg = ttnn.init_device_compute_kernel_config(
+        self._ffn_fc1_compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self._ffn_fc2_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
@@ -300,7 +307,7 @@ class TTSeamlessM4Tv2Decoder:
                 normed,
                 layer.ffn.fc1.weight,
                 layer.ffn.fc1.bias,
-                compute_cfg=self._ffn_linear_compute_cfg,
+                compute_cfg=self._ffn_fc1_compute_cfg,
             )
             ttnn.deallocate(normed)
             ff_in = ff
@@ -311,7 +318,7 @@ class TTSeamlessM4Tv2Decoder:
                 ff_in,
                 layer.ffn.fc2.weight,
                 layer.ffn.fc2.bias,
-                compute_cfg=self._ffn_linear_compute_cfg,
+                compute_cfg=self._ffn_fc2_compute_cfg,
             )
             ttnn.deallocate(ff_in)
             residual = hidden
