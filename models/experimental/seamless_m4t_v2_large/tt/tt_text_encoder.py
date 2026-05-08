@@ -44,14 +44,21 @@ class TTSeamlessM4Tv2Encoder:
         self.hidden_size = hidden_size
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
         self._linear_ln_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self._layernorm_compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -84,19 +91,8 @@ class TTSeamlessM4Tv2Encoder:
             bias=bias,
             epsilon=self.layer_norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._layernorm_compute_cfg,
         )
-
-    @staticmethod
-    def _heads(x: ttnn.Tensor, batch: int, seq: int, num_heads: int, head_dim: int) -> ttnn.Tensor:
-        x = ttnn.reshape(x, (batch, seq, num_heads, head_dim))
-        return ttnn.permute(x, (0, 2, 1, 3))
-
-    @staticmethod
-    def _merge_heads(
-        x: ttnn.Tensor, batch: int, seq: int, num_heads: int, head_dim: int, hidden_size: int
-    ) -> ttnn.Tensor:
-        x = ttnn.permute(x, (0, 2, 1, 3))
-        return ttnn.reshape(x, (batch, seq, hidden_size))
 
     def _attention(
         self,
@@ -112,49 +108,51 @@ class TTSeamlessM4Tv2Encoder:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
-        q = self._linear(hidden_states, attn_module.q_proj.weight, attn_module.q_proj.bias)
-        k = self._linear(hidden_states, attn_module.k_proj.weight, attn_module.k_proj.bias)
-        v = self._linear(hidden_states, attn_module.v_proj.weight, attn_module.v_proj.bias)
+        # Fused QKV projection (Stage 3a): one matmul producing
+        # ``[B, S, 3 * hidden]`` instead of three separate Q/K/V matmuls.
+        qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias)
 
-        qh = self._heads(q, batch, seq_q, num_heads, head_dim)
-        kh = self._heads(k, batch, seq_k, num_heads, head_dim)
-        vh = self._heads(v, batch, seq_k, num_heads, head_dim)
+        # ``nlp_create_qkv_heads`` consumes a 4-D ``[B, 1, S, 3*H]`` input and
+        # returns Q/K/V already shaped as ``[B, num_heads, S, head_dim]`` --
+        # this fuses the per-tensor reshape + permute (HC transpose) into a
+        # single device kernel.
+        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, 3 * hidden_size))
+        ttnn.deallocate(qkv)
 
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_4d,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv_4d)
 
-        qh = ttnn.to_memory_config(qh, ttnn.DRAM_MEMORY_CONFIG)
-        kh = ttnn.to_memory_config(kh, ttnn.DRAM_MEMORY_CONFIG)
-        vh = ttnn.to_memory_config(vh, ttnn.DRAM_MEMORY_CONFIG)
-
-        # Match HF ``SeamlessM4Tv2Attention``: scale Q by head_dim**-0.5 before QKᵀ.
-        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        # Scale is folded into SDPA so we drop the explicit ``ttnn.multiply``.
         attn_out = ttnn.transformer.scaled_dot_product_attention(
-            qh,
-            kh,
-            vh,
+            q,
+            k,
+            v,
             attn_mask=attn_mask,
             is_causal=False,
-            scale=1.0,
+            scale=1.0 / math.sqrt(head_dim),
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(qh)
-        ttnn.deallocate(kh)
-        ttnn.deallocate(vh)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
-        attn_out = ttnn.slice(
-            attn_out,
-            [0, 0, 0, 0],
-            [batch, num_heads, seq_q, head_dim],
-            [1, 1, 1, 1],
-        )
-
-        merged = self._merge_heads(attn_out, batch, seq_q, num_heads, head_dim, hidden_size)
+        # ``nlp_concat_heads`` undoes ``nlp_create_qkv_heads``: it merges heads
+        # back into ``[B, 1, S, hidden]``. We then drop the singleton batch-1
+        # axis so the residual ``ttnn.add`` consumes the same 3-D layout as
+        # the rest of the encoder.
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
+        merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
+        ttnn.deallocate(merged_4d)
+
         proj = self._linear(merged, attn_module.out_proj.weight, attn_module.out_proj.bias)
         ttnn.deallocate(merged)
         return proj

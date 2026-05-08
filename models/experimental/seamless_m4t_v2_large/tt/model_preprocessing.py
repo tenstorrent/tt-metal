@@ -80,9 +80,39 @@ def _ln_to_device(param: torch.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
     )
 
 
-def _linear_pair(linear: torch.nn.Linear, *, device: ttnn.Device) -> dict:
-    w = preprocess_linear_weight(linear.weight.detach(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+def _linear_pair(
+    linear: torch.nn.Linear,
+    *,
+    device: ttnn.Device,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+) -> dict:
+    w = preprocess_linear_weight(linear.weight.detach(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
     b = preprocess_linear_bias(linear.bias.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    return {
+        "weight": ttnn.to_device(w, device),
+        "bias": ttnn.to_device(b, device),
+    }
+
+
+def _fused_qkv_pair(
+    q_proj: torch.nn.Linear,
+    k_proj: torch.nn.Linear,
+    v_proj: torch.nn.Linear,
+    *,
+    device: ttnn.Device,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+) -> dict:
+    """Concatenate Q/K/V projection weights into a single fused QKV linear.
+
+    Produced tensor pairs feed ``ttnn.linear`` followed by
+    ``ttnn.experimental.nlp_create_qkv_heads`` (Stage 3a head-fusion path).
+    Concatenation is along the output dimension so the fused matmul
+    output is laid out as ``[..., 3 * hidden]`` (Q | K | V).
+    """
+    qkv_weight = torch.cat([q_proj.weight.detach(), k_proj.weight.detach(), v_proj.weight.detach()], dim=0).contiguous()
+    qkv_bias = torch.cat([q_proj.bias.detach(), k_proj.bias.detach(), v_proj.bias.detach()], dim=0).contiguous()
+    w = preprocess_linear_weight(qkv_weight, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
+    b = preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return {
         "weight": ttnn.to_device(w, device),
         "bias": ttnn.to_device(b, device),
@@ -166,28 +196,62 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
     return make_parameter_dict(out)
 
 
-def _m4t_encoder_self_attn_ffn_layers(encoder, *, device: ttnn.Device) -> list:
-    """Layer parameter dicts shared by text encoder and text-to-unit encoder stacks."""
+def _m4t_encoder_self_attn_ffn_layers(
+    encoder,
+    *,
+    device: ttnn.Device,
+    ffn_weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    attn_weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    fuse_qkv: bool = False,
+) -> list:
+    """Layer parameter dicts shared by text encoder and text-to-unit encoder stacks.
+
+    ``ffn_weight_dtype`` controls the storage dtype of ``fc1.weight`` /
+    ``fc2.weight``. ``attn_weight_dtype`` controls the storage dtype of
+    ``q_proj``/``k_proj``/``v_proj``/``out_proj`` weights. Pass
+    ``ttnn.bfloat8_b`` for memory-bound matmuls (Stage 1 bandwidth optimization);
+    biases and LayerNorm parameters always stay at ``bfloat16``.
+
+    When ``fuse_qkv=True`` the per-layer ``self_attn`` dict exposes a single
+    ``qkv`` entry with concatenated Q|K|V weights/biases (consumed by
+    ``ttnn.experimental.nlp_create_qkv_heads`` in the encoder forward) instead
+    of separate ``q_proj``/``k_proj``/``v_proj`` entries. ``out_proj`` is
+    always exposed as a separate linear pair.
+    """
     layers = []
     for layer in encoder.layers:
+        if fuse_qkv:
+            self_attn = {
+                "qkv": _fused_qkv_pair(
+                    layer.self_attn.q_proj,
+                    layer.self_attn.k_proj,
+                    layer.self_attn.v_proj,
+                    device=device,
+                    weight_dtype=attn_weight_dtype,
+                ),
+                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device, weight_dtype=attn_weight_dtype),
+            }
+        else:
+            self_attn = {
+                "q_proj": _linear_pair(layer.self_attn.q_proj, device=device, weight_dtype=attn_weight_dtype),
+                "k_proj": _linear_pair(layer.self_attn.k_proj, device=device, weight_dtype=attn_weight_dtype),
+                "v_proj": _linear_pair(layer.self_attn.v_proj, device=device, weight_dtype=attn_weight_dtype),
+                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device, weight_dtype=attn_weight_dtype),
+            }
+
         layer_dict = {
             "self_attn_layer_norm": {
                 "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
             },
-            "self_attn": {
-                "q_proj": _linear_pair(layer.self_attn.q_proj, device=device),
-                "k_proj": _linear_pair(layer.self_attn.k_proj, device=device),
-                "v_proj": _linear_pair(layer.self_attn.v_proj, device=device),
-                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device),
-            },
+            "self_attn": self_attn,
             "ffn_layer_norm": {
                 "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
             },
             "ffn": {
-                "fc1": _linear_pair(layer.ffn.fc1, device=device),
-                "fc2": _linear_pair(layer.ffn.fc2, device=device),
+                "fc1": _linear_pair(layer.ffn.fc1, device=device, weight_dtype=ffn_weight_dtype),
+                "fc2": _linear_pair(layer.ffn.fc2, device=device, weight_dtype=ffn_weight_dtype),
             },
         }
         layers.append(make_parameter_dict(layer_dict))
@@ -207,7 +271,7 @@ def create_text_encoder_parameters(encoder, *, device: ttnn.Device) -> dict:
     embed_tokens_weight = ttnn.from_torch(
         scaled_emb,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -218,12 +282,18 @@ def create_text_encoder_parameters(encoder, *, device: ttnn.Device) -> dict:
     embed_positions_weight = ttnn.from_torch(
         pos_w,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    layers = _m4t_encoder_self_attn_ffn_layers(encoder, device=device)
+    layers = _m4t_encoder_self_attn_ffn_layers(
+        encoder,
+        device=device,
+        ffn_weight_dtype=ttnn.bfloat8_b,
+        attn_weight_dtype=ttnn.bfloat8_b,
+        fuse_qkv=True,
+    )
 
     out = {
         "embed_tokens": make_parameter_dict({"weight": embed_tokens_weight}),
