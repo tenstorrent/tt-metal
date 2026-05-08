@@ -28,24 +28,14 @@ from typing import Union
 
 from loguru import logger
 
-if __package__ in (None, ""):
-    from stack_trace_source import (
-        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
-        CREATE_SOURCE_FILES_TABLE_SQL,
-        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
-        get_source_file_id,
-        normalize_source_path_from_stack_trace,
-        read_source_file,
-    )
-else:
-    from .stack_trace_source import (
-        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
-        CREATE_SOURCE_FILES_TABLE_SQL,
-        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
-        get_source_file_id,
-        normalize_source_path_from_stack_trace,
-        read_source_file,
-    )
+from .stack_trace_source import (
+    CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+    CREATE_SOURCE_FILES_TABLE_SQL,
+    CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+    get_source_file_id,
+    normalize_source_path_from_stack_trace,
+    read_source_file,
+)
 
 SUPPORTED_REPORT_VERSION = 1
 DATABASE_SCHEMA_VERSION = 2.1
