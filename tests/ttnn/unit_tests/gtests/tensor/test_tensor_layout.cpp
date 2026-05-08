@@ -336,7 +336,8 @@ struct TilePaddedAlignmentTestParams {
     tt::tt_metal::Shape2D expected_physical_shape;
 };
 
-class TensorLayoutTilePaddedAlignmentTests : public ::testing::TestWithParam<TilePaddedAlignmentTestParams> {};
+class TensorLayoutTilePaddedAlignmentTests : public ttnn::TTNNUnitMeshCQSharedFixture,
+                                             public ::testing::WithParamInterface<TilePaddedAlignmentTestParams> {};
 
 TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegression) {
     const auto& params = GetParam();
@@ -366,7 +367,7 @@ TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegressio
     // host buffer of `compute_packed_buffer_size_bytes` into it must succeed.
     // (With the buggy alignment the device allocation would be smaller than
     // the host buffer, triggering the buffer.cpp TT_FATAL.)
-    test_utils::test_tensor_on_device(params.shape, layout);
+    test_utils::test_tensor_on_device(params.shape, layout, device_);
 }
 
 INSTANTIATE_TEST_SUITE_P(
