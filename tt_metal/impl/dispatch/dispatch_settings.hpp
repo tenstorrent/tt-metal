@@ -79,7 +79,7 @@ public:
 
     // Prefetch Queue entry type
     // Same as the one in cq_prefetch.cpp
-    using prefetch_q_entry_type = uint16_t;
+    using prefetch_q_entry_type = uint32_t;
 
     // Prefetch Queue pointer type
     // Same as the one in cq_prefetch.cpp

@@ -41,7 +41,7 @@ union CQPrefetchHToPrefetchDHeader {
 };
 static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);
 
-using prefetch_q_entry_type = uint16_t;
+using prefetch_q_entry_type = uint32_t;
 
 #define ENABLE_PREFETCH_DPRINTS 1
 
