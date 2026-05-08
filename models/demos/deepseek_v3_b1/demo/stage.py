@@ -628,7 +628,6 @@ class BaseLMHeadStage(StageKind):
         persistent_mode: bool = True,
         mtp_weights: DeepSeekV3MTPWeights | None = None,
         embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
-        send_mtp_output_downstream: bool = False,
         seed: int = 2005,
         mtp_level: int = 0,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
@@ -645,7 +644,6 @@ class BaseLMHeadStage(StageKind):
             raise ValueError("embedding_weights are required when mtp_weights are provided")
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
-        self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
         self._seed = seed
         self._lmhead_state: dict[str, Any] = {}
 
@@ -661,13 +659,13 @@ class BaseLMHeadStage(StageKind):
         )
         up_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         up_fifo = activation_fifo_size_bytes(up_page, self._upstream_fifo_pages)
-        # MTP: forward activation+metadata downstream; non-MTP: only the token result goes downstream.
-        if self._send_mtp_output_downstream:
-            down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-            down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
-        else:
-            down_page = TOKEN_META_PAGE_SIZE_BYTES
-            down_fifo = TOKEN_META_FIFO_SIZE
+        down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
+
+        # Match PassthroughStage: fabric multi-host ring uses loopback; without this,
+        # loopback=None becomes no_loopback and the last rank hits _init_last_stage_with_d2h
+        # without d2h_socket_* (e.g. num_mtp_levels == num_procs - 1 → final stage is Base).
+        loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -677,6 +675,7 @@ class BaseLMHeadStage(StageKind):
             downstream_d2d_socket_page_size=down_page,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
+            loopback=loopback,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,

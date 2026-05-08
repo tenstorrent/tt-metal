@@ -120,6 +120,11 @@ def create_spec_decode_pipeline_configuration(
     Limits:
       single galaxy  (4 procs) → up to 3 MTP levels
       single pod    (16 procs) → up to 4 MTP levels
+
+    ``generate_blitz_decode_pipeline`` assigns fabric entry/exit nodes by **MPI rank index**
+    (``pipeline_config[rank]``). Base LMHead stages must occupy consecutive ranks
+    ``1 .. num_mtp_levels``; inserting passthrough before the first base (e.g. base only at
+    rank 2) is a different topology and is not supported by this factory.
     """
     num_procs = int(ttnn.distributed_context_get_size())
     max_mtp = min(num_procs - 1, 4)
@@ -148,18 +153,18 @@ def create_spec_decode_pipeline_configuration(
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 persistent_mode=persistent_mode,
                 mtp_weights=weight_provider.load_mtp(device),
-                send_mtp_output_downstream=True,
                 embedding_weights=weight_provider.load_embedding(device),
                 mtp_level=level,
             )
-
         return factory
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {0: stage_0}
-    for k in range(num_mtp_levels):
-        stage_factories[1 + k] = base_lm_head_factory(k)
-    for k in range(num_mtp_levels + 1, num_procs):
+    # for k in range(num_mtp_levels):
+    #     stage_factories[1 + k] = base_lm_head_factory(k)
+    for k in range(1, num_procs):
         stage_factories[k] = lambda _d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+    # stage_factories[1] = base_lm_head_factory(0)
+    stage_factories[3] = base_lm_head_factory(0)
     return PipelineConfiguration(stage_factories)
 
 
