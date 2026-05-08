@@ -65,7 +65,7 @@ def test_pipeline_inference(
     # AniSora upstream defaults (anisoraV3.2/wan/configs/wan_i2v_A14B.py):
     #   sample_steps=40, boundary=0.9, sample_guide_scale=(3.5, 3.5).
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "40"))
     guidance_scale = 3.5
     guidance_scale_2 = 3.5
 
