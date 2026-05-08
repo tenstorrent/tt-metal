@@ -46,6 +46,14 @@ void validate_kernel_config_defines(const std::map<std::string, std::string>& de
     }
 }
 
+void validate_output_dir(const std::string& output_dir) {
+    if (output_dir.empty()) {
+        throw std::invalid_argument(
+            "OfflineKernelCompileParams::output_dir must be non-empty; an empty string would emit "
+            "artifacts relative to the process current working directory.");
+    }
+}
+
 void validate_cb_compile_configs(const std::vector<CBCompileConfig>& cb_compile_configs) {
     std::unordered_set<uint8_t> seen_cb_indices;
     for (const auto& config : cb_compile_configs) {
@@ -197,6 +205,7 @@ void CompileKernelOffline(
     const OfflineKernelCompileParams& params) {
     std::visit([](const auto& cfg) { validate_kernel_config_defines(cfg.defines); }, config);
     validate_cb_compile_configs(params.cb_compile_configs);
+    validate_output_dir(params.output_dir);
 
     // Mode is presently a single-alternative variant (AllSupportedProducts). std::visit + the
     // static_assert below let future alternatives (e.g. OneSpecificProduct) be added without

@@ -160,6 +160,16 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsInvalidExplic
     EXPECT_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params), std::invalid_argument);
 }
 
+TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsEmptyOutputDir) {
+    using Params = experimental::OfflineKernelCompileParams;
+    Params params{
+        .mode = Params::AllSupportedProducts{},
+        .output_dir = "",
+        .cb_compile_configs = {},
+    };
+    EXPECT_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params), std::invalid_argument);
+}
+
 // Returns the number of subdirectories directly under `dir` whose names parse as decimal digits
 // (i.e. compile-hash buckets). Returns 0 if `dir` does not exist.
 size_t count_compile_hash_subdirs(const fs::path& dir) {
@@ -172,7 +182,8 @@ size_t count_compile_hash_subdirs(const fs::path& dir) {
             continue;
         }
         const std::string name = entry.path().filename().string();
-        if (!name.empty() && std::all_of(name.begin(), name.end(), [](char c) { return std::isdigit(c); })) {
+        if (!name.empty() &&
+            std::all_of(name.begin(), name.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); })) {
             ++count;
         }
     }

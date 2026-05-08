@@ -49,7 +49,8 @@ struct OfflineKernelCompileParams {
 
     /// Target-selection mode. Default: all supported products.
     Mode mode = AllSupportedProducts{};
-    /// Root directory for emitted offline kernel artifacts.
+    /// Root directory for emitted offline kernel artifacts. Must be non-empty;
+    /// otherwise CompileKernelOffline throws std::invalid_argument.
     std::string output_dir;
     /// Per-CB compile configuration used to populate compile metadata.
     std::vector<CBCompileConfig> cb_compile_configs;
@@ -146,7 +147,7 @@ std::vector<OfflineKernelCompileParams::CBCompileConfig> CBCompileConfigsFromPro
  * Compile one kernel offline and emit runtime-compatible artifacts.
  *
  * This API validates compile parameters and writes binaries under
- * `params.output_dir` for the selected compile mode.
+ * `params.output_dir` for the selected compile mode. `params.output_dir` must be non-empty.
  *
  * @param file_name Kernel source file path.
  * @param config    Kernel config: DataMovementConfig or ComputeConfig.
