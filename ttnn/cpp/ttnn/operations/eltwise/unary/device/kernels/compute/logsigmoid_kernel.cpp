@@ -33,16 +33,11 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
+
     // logsigmoid(x):
     //   D0 = x; D1 = x; D1 = -D1; D1 = exp(D1) (fast); logsigmoid(D0, D1) -> D0
-    using Chain = EltwiseChain<
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>,
-        CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitPop>,
-        Negative<Dst::D1>,
-        Exp<Approx::Fast, Approx::Exact, Dst::D1>,
-        LogSigmoidBinary<Dst::D0, Dst::D1, Dst::D0>,
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>{},

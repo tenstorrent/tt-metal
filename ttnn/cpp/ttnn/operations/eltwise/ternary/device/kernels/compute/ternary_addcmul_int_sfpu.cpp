@@ -44,18 +44,11 @@ void kernel_main() {
     constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
     constexpr auto cb_out = tt::CBIndex::c_3;
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_in0, cb_in0, cb_out);
+
     // out = input_a + scalar * input_b * input_c, integer dtype.
     // Mirrors the original 4-DST-slot layout (D3 reused as scratch).
-    using Chain = EltwiseChain<
-        CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop>,
-        CopyTile<cb_in2, Dst::D2, CopyTilePolicy::WaitAndPop>,
-        FillInt<ADDCMUL_DATA_FORMAT, Dst::D3>,
-        MulIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D3, Dst::D1, Dst::D3>,
-        MulIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D3, Dst::D2, Dst::D2>,
-        AddIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D0, Dst::D2, Dst::D0>,
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},

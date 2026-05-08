@@ -29,14 +29,25 @@ void kernel_main() {
 
     // cb_b is fan-out: wait/pop once per (b, h) row, used for all Wt inner tiles.
     // Use NoWaitNoPop on B (caller manages); chain runs Wt streaming iters on A.
-    using BinElt = BinaryFpu<cb_a, cb_b, FPU_OP, BroadcastDim::Col,
-                             BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                             CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-                             CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                             Dst::D0,
-                             0, 0, 0, cb_out>;
-    using Chain = EltwiseChain<BinElt, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
+    using BinElt = BinaryFpu<
+        cb_a,
+        cb_b,
+        FPU_OP,
+        BroadcastDim::Col,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPop,
+        CopyTilePolicy::NoWaitNoPop,
+        CbIndexMode::FirstTile,
+        CbIndexMode::FirstTile,
+        Dst::D0,
+        0,
+        0,
+        0,
+        cb_out>;
 
     for (uint32_t b = 0; b < B; ++b) {
         for (uint32_t h = 0; h < Ht; ++h) {

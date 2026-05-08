@@ -62,15 +62,11 @@ void kernel_main() {
     constexpr auto cb_pre_in2 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_3;
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_pre_in1, cb_pre_in2, cb_out);
+
     if constexpr (scalar_is_true) {
         // TST: tensor=false (D2), scalar=true (D1)
-        using Chain = EltwiseChain<
-            CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>,
-            CopyTile<cb_pre_in2, Dst::D2, CopyTilePolicy::WaitAndPop>,
-            FillLlk<Dst::D1>,
-            TernarySfpuOp<Dst::D0, Dst::D1, Dst::D2, Dst::D0>,
-            PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-        eltwise_pipeline_init<Chain>();
         eltwise_chain(
             num_tiles,
             CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>{},
@@ -80,13 +76,6 @@ void kernel_main() {
             PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
     } else {
         // TTS: tensor=true (D1), scalar=false (D2)
-        using Chain = EltwiseChain<
-            CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>,
-            CopyTile<cb_pre_in2, Dst::D1, CopyTilePolicy::WaitAndPop>,
-            FillLlk<Dst::D2>,
-            TernarySfpuOp<Dst::D0, Dst::D1, Dst::D2, Dst::D0>,
-            PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-        eltwise_pipeline_init<Chain>();
         eltwise_chain(
             num_tiles,
             CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>{},

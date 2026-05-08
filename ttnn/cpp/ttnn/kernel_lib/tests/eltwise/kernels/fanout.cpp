@@ -23,14 +23,10 @@ void kernel_main() {
     const uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     const uint32_t num_tiles = per_core_block_count * per_core_block_dim;
 
-    using Chain = EltwiseChain<
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitNoPop>,
-        CopyTile<cb_in, Dst::D1, CopyTilePolicy::NoWaitPop>,
-        Exp<Approx::Exact, Approx::Fast, Dst::D0>,
-        Sin<Dst::D1>,
-        PackTile<cb_outA, Dst::D0, PackTilePolicy::PerTileReserveAndPush>,
-        PackTile<cb_outB, Dst::D1, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    // Fan-out: two output CBs share the engine boot — first writer's pack CB
+    // (cb_outA) is enough; the second pack programs its own reconfig at element-time.
+    compute_kernel_hw_startup(cb_in, cb_in, cb_outA);
 
     eltwise_chain(
         num_tiles,

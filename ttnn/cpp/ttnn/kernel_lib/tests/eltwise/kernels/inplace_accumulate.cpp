@@ -21,12 +21,12 @@ void kernel_main() {
     const uint32_t per_core_block_dim   = get_compile_time_arg_val(1);
     const uint32_t num_iters            = per_core_block_count * per_core_block_dim;
 
+    // D5/D8: caller-side BIG init at the top of MAIN(). The first chain (seed) is
+    // a unary copy from cb_in to cb_acc; the second is binary (cb_in + cb_acc) to
+    // cb_acc. The boot covers the binary triple — both sides of the same CB pool.
+    compute_kernel_hw_startup(cb_in, cb_acc, cb_acc);
+
     // First iter: seed cb_acc from cb_in (stage 1 — pure copy).
-    using SeedChain = EltwiseChain<
-        CopyTile<cb_in,  Dst::D0, CopyTilePolicy::WaitAndPop>,
-        PackTile<cb_acc, Dst::D0, PackTilePolicy::PerTileReserveAndPush>
-    >;
-    eltwise_pipeline_init<SeedChain>();
     eltwise_chain(
         1,
         CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
@@ -34,13 +34,22 @@ void kernel_main() {
     );
 
     // Subsequent iters: cb_acc <- cb_acc + cb_in (in-place accumulate).
-    using AccumElt = BinaryFpu<cb_in, cb_acc, BinaryFpuOp::Add, BroadcastDim::None,
-                               BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                               CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
-                               CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                               Dst::D0, 0, 0, 0, cb_acc>;
-    using AccumChain = EltwiseChain<AccumElt,
-                                    PackTile<cb_acc, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
+    using AccumElt = BinaryFpu<
+        cb_in,
+        cb_acc,
+        BinaryFpuOp::Add,
+        BroadcastDim::None,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPop,
+        CopyTilePolicy::WaitAndPop,
+        CbIndexMode::FirstTile,
+        CbIndexMode::FirstTile,
+        Dst::D0,
+        0,
+        0,
+        0,
+        cb_acc>;
 
     if (num_iters > 1) {
         eltwise_chain(

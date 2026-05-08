@@ -40,6 +40,11 @@ void kernel_main() {
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
+    // D5/D8: caller-side BIG init at the top of MAIN(). Both branches need the engine
+    // booted; the activations branch additionally programs binary state via
+    // `binary_op_init_common` (which assumes hw_startup has already run).
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
+
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
     // Activations path — keep raw (chain doesn't yet wrap PREPROCESS / PROCESS_POST_ACTIVATIONS).
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
@@ -73,8 +78,6 @@ void kernel_main() {
     // No-activations fast path — block-mode chain.
     using BinElt = BlockBinaryFpu<cb_post_lhs, cb_post_rhs, FPU_OP, num_tiles_per_cycle>;
     using PackElt = BlockPackTile<cb_out, num_tiles_per_cycle>;
-    using Chain = EltwiseChain<BinElt, PackElt>;
-    eltwise_pipeline_init<Chain>();
 
     const uint32_t num_blocks = num_tiles / num_tiles_per_cycle;
     eltwise_chain(num_blocks, BinElt{}, PackElt{});

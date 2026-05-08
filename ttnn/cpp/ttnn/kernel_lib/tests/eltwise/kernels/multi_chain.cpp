@@ -26,14 +26,13 @@ void kernel_main() {
     const uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     const uint32_t num_tiles = per_core_block_count * per_core_block_dim;
 
+    // D5/D8: caller-side BIG init at the top of MAIN(). Variants 0/3 are unary on cb_a;
+    // variants 1/2 are binary on (cb_a, cb_b). Either way the boot covers all variants
+    // (binary triple is a superset of the unary triple for hw_startup purposes).
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
 #if CHAIN_VARIANT == 0
     // 14.2: Copy + Sigmoid + Tanh + Pack (two SFPU ops in series)
-    using Chain = EltwiseChain<
-        CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        Sigmoid<Dst::D0>,
-        Tanh<Dst::D0>,
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop>{},
@@ -54,8 +53,6 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0>;
-    using Chain = EltwiseChain<BinElt, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(num_tiles, BinElt{}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #elif CHAIN_VARIANT == 2
     // 14.4: 2-input BinaryFpu Add + post-SFPU Sqrt + Pack — sqrt(a+b)
@@ -71,11 +68,6 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0>;
-    using Chain = EltwiseChain<
-        BinElt,
-        Sqrt<Approx::Exact, Dst::D0>,
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         BinElt{},
@@ -83,12 +75,6 @@ void kernel_main() {
         PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #elif CHAIN_VARIANT == 3
     // 14.5: Copy + Exp + Sqrt + Pack (chain-length 4 SFPU back-to-back)
-    using Chain = EltwiseChain<
-        CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        Exp<>,
-        Sqrt<Approx::Exact, Dst::D0>,
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop>{},

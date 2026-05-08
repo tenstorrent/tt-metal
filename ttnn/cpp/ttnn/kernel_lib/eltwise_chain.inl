@@ -754,68 +754,20 @@ ALWI void elem_pack_init() {
 
 }  // namespace detail
 
-// Find the first CB id from a pack of element types matching a predicate.
-namespace detail {
-
-template <template <class> class Pred, class... Es>
-constexpr uint32_t first_cb_a() {
-    uint32_t r = 0;
-    auto try_one = [&]<class E>() {
-        if (r == 0 && Pred<E>::value) r = E::cb_a_id();
-    };
-    (try_one.template operator()<Es>(), ...);
-    return r;
-}
-
-template <template <class> class Pred, class... Es>
-constexpr uint32_t first_pack_cb() {
-    uint32_t r = 0;
-    auto try_one = [&]<class E>() {
-        if (r == 0 && Pred<E>::value) r = E::pack_cb_id();
-    };
-    (try_one.template operator()<Es>(), ...);
-    return r;
-}
-
-template <class T> using is_reader_pred = std::is_base_of<CbReaderTag, T>;
-template <class T> using is_writer_pred = std::is_base_of<CbWriterTag, T>;
-
-}  // namespace detail
-
-// One-time hardware boot per chain shape.
-template <class... Es>
-struct EltwiseChainPipelineInit {
-    static ALWI void run() {
-        constexpr uint32_t in_cb  = detail::first_cb_a   <detail::is_reader_pred, Es...>();
-        constexpr uint32_t out_cb = detail::first_pack_cb<detail::is_writer_pred, Es...>();
-        static_assert(in_cb != 0 || out_cb != 0,
-                      "eltwise_pipeline_init: chain must have at least one CB-reader or CB-writer");
-        if constexpr (in_cb != 0 && out_cb != 0) compute_kernel_hw_startup(in_cb, in_cb, out_cb);
-        else if constexpr (in_cb != 0)            compute_kernel_hw_startup(in_cb, in_cb);
-        else                                       compute_kernel_hw_startup(out_cb, out_cb);
-    }
-};
-
-}  // namespace compute_kernel_lib
-
-// Specialization in the public namespace — unwrap EltwiseChain<Es...>.
-namespace compute_kernel_lib {
-
-template <class Chain>
-struct EltwisePipelineInitDispatch;
-
-template <class... Es>
-struct EltwisePipelineInitDispatch<EltwiseChain<Es...>> {
-    static ALWI void run() { EltwiseChainPipelineInit<Es...>::run(); }
-};
-
-template <class Chain>
-ALWI void eltwise_pipeline_init() {
-    EltwisePipelineInitDispatch<Chain>::run();
-}
-
 // =============================================================================
 // 11. Public eltwise_chain()
+//
+// D1/D5/D8 caller-init contract:
+//   - Caller writes `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` (or its
+//     unary/binary variant) as the FIRST statement of `MAIN()`.
+//   - Helper does NOT wrap any "BIG init" (`compute_kernel_hw_startup`,
+//     `binary_op_init_common`, `mm_init`, `reduce_init`).
+//   - Helper owns per-element init only — `add_tiles_init`, `*_tile_init`,
+//     `init_bcast`, `copy_tile_to_dst_init_short`, `reconfig_data_format_*`,
+//     `tile_regs_*` lifecycle.
+//   - Per `compute_kernel_hw_startup.h:26-30`, mid-`MAIN()` boot is undefined.
+//     Multi-stage kernels are the only exception (one boot per stage,
+//     immediately before that stage's chain call).
 // =============================================================================
 
 template <EltwiseChainOptions Opts, class... Es>

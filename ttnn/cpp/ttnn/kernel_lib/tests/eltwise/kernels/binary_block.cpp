@@ -30,11 +30,11 @@ void kernel_main() {
     const uint32_t num_tiles            = per_core_block_count * per_core_block_dim;
     const uint32_t num_blocks           = num_tiles / block_size;
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
     using BinElt = BlockBinaryFpu<cb_a, cb_b, op, block_size>;
     using PackElt = BlockPackTile<cb_out, block_size>;
-
-    using Chain = EltwiseChain<BinElt, PackElt>;
-    eltwise_pipeline_init<Chain>();
 
     eltwise_chain(num_blocks, BinElt{}, PackElt{});
 }

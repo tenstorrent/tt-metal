@@ -28,15 +28,27 @@ void kernel_main() {
     uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t num_tiles = B * Ht * Wt;
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
 #ifdef BCAST_SCALAR
     // cb_b is a single scalar tile, persistent across all iters.
-    using BinElt = BinaryFpu<cb_a, cb_b, FPU_OP, BroadcastDim::Scalar,
-                             BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                             CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-                             CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                             Dst::D0, 0, 0, 0, cb_out>;
-    using Chain = EltwiseChain<BinElt, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    using BinElt = BinaryFpu<
+        cb_a,
+        cb_b,
+        FPU_OP,
+        BroadcastDim::Scalar,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPop,
+        CopyTilePolicy::NoWaitNoPop,
+        CbIndexMode::FirstTile,
+        CbIndexMode::FirstTile,
+        Dst::D0,
+        0,
+        0,
+        0,
+        cb_out>;
 
     cb_wait_front(cb_b, 1);
     eltwise_chain(
@@ -46,13 +58,22 @@ void kernel_main() {
     );
 #else
     // cb_b: per-tile wait/pop (paired with cb_a one-to-one).
-    using BinElt = BinaryFpu<cb_a, cb_b, FPU_OP, BroadcastDim::Scalar,
-                             BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                             CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
-                             CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                             Dst::D0, 0, 0, 0, cb_out>;
-    using Chain = EltwiseChain<BinElt, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    using BinElt = BinaryFpu<
+        cb_a,
+        cb_b,
+        FPU_OP,
+        BroadcastDim::Scalar,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPop,
+        CopyTilePolicy::WaitAndPop,
+        CbIndexMode::FirstTile,
+        CbIndexMode::FirstTile,
+        Dst::D0,
+        0,
+        0,
+        0,
+        cb_out>;
 
     eltwise_chain(
         num_tiles,

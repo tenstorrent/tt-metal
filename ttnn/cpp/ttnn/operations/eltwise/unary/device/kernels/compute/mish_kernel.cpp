@@ -18,16 +18,6 @@ inline void run_mish(uint32_t num_tiles) {
     constexpr cklib::Approx approx = USE_APPROX ? cklib::Approx::Fast : cklib::Approx::Exact;
 
 #ifdef INP_FLOAT32
-    using Chain = cklib::EltwiseChain<
-        cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>,
-        cklib::Exp<approx, approx, cklib::Dst::D0>,
-        cklib::Log1p<approx, cklib::Dst::D0>,
-        cklib::Tanh<cklib::Dst::D0>,
-        cklib::CopyTile<cb_input, cklib::Dst::D1, cklib::CopyTilePolicy::NoWaitPop>,
-        cklib::MulBinary<cklib::Dst::D0, cklib::Dst::D1, cklib::Dst::D0>,
-        cklib::PackTile<cb_output, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>
-    >;
-    cklib::eltwise_pipeline_init<Chain>();
     cklib::eltwise_chain(
         num_tiles,
         cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>{},
@@ -40,17 +30,6 @@ inline void run_mish(uint32_t num_tiles) {
     );
 #endif
 #ifdef INP_FLOAT
-    using Chain = cklib::EltwiseChain<
-        cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>,
-        cklib::Exp<approx, approx, cklib::Dst::D0>,
-        cklib::Log1p<approx, cklib::Dst::D0>,
-        cklib::Tanh<cklib::Dst::D0>,
-        cklib::DestReuseBinary<cb_input, cklib::BinaryFpuOp::Mul, cklib::DestReuseType::DEST_TO_SRCA,
-                               cklib::Dst::D0, cklib::Dst::D0, cklib::DestReuseReconfig::None,
-                               cklib::CopyTilePolicy::NoWaitPop, cklib::CbIndexMode::FirstTile>,
-        cklib::PackTile<cb_output, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>
-    >;
-    cklib::eltwise_pipeline_init<Chain>();
     cklib::eltwise_chain(
         num_tiles,
         cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>{},
@@ -66,6 +45,12 @@ inline void run_mish(uint32_t num_tiles) {
 }
 
 void kernel_main() {
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+    // D5/D8: caller-side BIG init at the top of MAIN(). Unary chain — boot the engine
+    // for the (cb_input, cb_input, cb_output) triple.
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t approx_arg = get_arg_val<uint32_t>(1);
     if (approx_arg != 0u) {

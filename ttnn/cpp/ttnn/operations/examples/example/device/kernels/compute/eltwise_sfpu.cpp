@@ -26,12 +26,9 @@ void kernel_main() {
     constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     constexpr uint32_t num_tiles = per_core_block_cnt * per_core_block_dim;
 
-    using Chain = EltwiseChain<
-        CopyTile<tt::CBIndex::c_0, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        SfpuOpChain,
-        PackTile<tt::CBIndex::c_2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>
-    >;
-    eltwise_pipeline_init<Chain>();
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_2);
+
     eltwise_chain(
         num_tiles,
         CopyTile<tt::CBIndex::c_0, Dst::D0, CopyTilePolicy::WaitAndPop>{},

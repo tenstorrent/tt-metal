@@ -25,6 +25,9 @@ void kernel_main() {
     const uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     const uint32_t num_tiles = per_core_block_count * per_core_block_dim;
 
+    // D5/D8: caller-side BIG init at the top of MAIN(). Same-CB binary — boot for (cb_in, cb_in, cb_out).
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
+
     using BinElt = BinaryFpu<
         cb_in,
         cb_in,
@@ -37,9 +40,6 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0>;
-
-    using Chain = EltwiseChain<BinElt, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
 
     eltwise_chain(num_tiles, BinElt{}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

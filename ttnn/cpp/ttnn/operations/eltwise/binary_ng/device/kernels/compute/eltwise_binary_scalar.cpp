@@ -39,6 +39,9 @@ void kernel_main() {
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
+
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
     // Activations path — keep raw.
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
@@ -75,8 +78,6 @@ void kernel_main() {
                                   CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
                                   CbIndexMode::BlockIter, CbIndexMode::FirstTile>;
     using PackElt = BlockPackTile<cb_out, num_tiles_per_cycle>;
-    using Chain = EltwiseChain<BinElt, PackElt>;
-    eltwise_pipeline_init<Chain>();
 
     cb_wait_front(cb_post_rhs, 1);
     const uint32_t num_blocks = num_tiles / num_tiles_per_cycle;

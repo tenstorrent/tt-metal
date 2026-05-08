@@ -39,13 +39,11 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
 
-    using Chain = EltwiseChain<
-        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        Dropout<Dst::D0>,
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
     // Dropout requires a one-time seed init beyond the chain element's per-tile init.
     dropout_kernel_init(seed);
+
     eltwise_chain(
         total_tiles,
         CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},

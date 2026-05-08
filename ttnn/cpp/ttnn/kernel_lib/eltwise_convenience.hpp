@@ -31,8 +31,9 @@ ALWI void binary_op(uint32_t n_tiles) {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0>;
-    using Chain = EltwiseChain<BinElt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    // D8: caller-side BIG init. The convenience wrapper boots the engine for the
+    // (CbA, CbB, CbOut) triple it owns, then runs the chain (per-element-init only).
+    compute_kernel_hw_startup(CbA, CbB, CbOut);
     eltwise_chain(n_tiles, BinElt{}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
@@ -54,11 +55,8 @@ ALWI void binary_mul(uint32_t n_tiles) {
 // ---- Unary SFPU streaming ----
 template <class SfpuOp, uint32_t CbIn, uint32_t CbOut>
 ALWI void unary_op(uint32_t n_tiles) {
-    using Chain = EltwiseChain<
-        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        SfpuOp,
-        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    // D8 caller-side BIG init.
+    compute_kernel_hw_startup(CbIn, CbIn, CbOut);
     eltwise_chain(
         n_tiles,
         CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},
@@ -69,10 +67,8 @@ ALWI void unary_op(uint32_t n_tiles) {
 // ---- Pure copy ----
 template <uint32_t CbIn, uint32_t CbOut>
 ALWI void copy(uint32_t n_tiles) {
-    using Chain = EltwiseChain<
-        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    // D8 caller-side BIG init.
+    compute_kernel_hw_startup(CbIn, CbIn, CbOut);
     eltwise_chain(
         n_tiles,
         CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},

@@ -29,14 +29,25 @@ void kernel_main() {
     uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t num_tiles = B * Ht * Wt;
 
-    using BinElt = BinaryFpu<cb_a, cb_b, FPU_OP, BroadcastDim::Row,
-                             BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                             CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
-                             CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                             Dst::D0,
-                             0, 0, 0, cb_out>;
-    using Chain = EltwiseChain<BinElt, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
+    using BinElt = BinaryFpu<
+        cb_a,
+        cb_b,
+        FPU_OP,
+        BroadcastDim::Row,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPop,
+        CopyTilePolicy::WaitAndPop,
+        CbIndexMode::FirstTile,
+        CbIndexMode::FirstTile,
+        Dst::D0,
+        0,
+        0,
+        0,
+        cb_out>;
 
     eltwise_chain(
         num_tiles,

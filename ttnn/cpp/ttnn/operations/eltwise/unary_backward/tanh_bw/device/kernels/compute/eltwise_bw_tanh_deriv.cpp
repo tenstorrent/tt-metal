@@ -22,14 +22,10 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_grad_out, cb_input, cb_grad_in);
+
     // grad_in[i] = grad_out[i] * sech²(input[i])
-    using Chain = EltwiseChain<
-        CopyTile<cb_grad_out, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitAndPop>,
-        TanhDerivative<Dst::D1>,
-        MulBinary<Dst::D0, Dst::D1, Dst::D0>,
-        PackTile<cb_grad_in, Dst::D0, PackTilePolicy::PerTileReserveAndPush>>;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         CopyTile<cb_grad_out, Dst::D0, CopyTilePolicy::WaitAndPop>{},

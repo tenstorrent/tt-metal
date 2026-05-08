@@ -29,15 +29,10 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
+
 #if defined(INP_INT32) || defined(INP_UINT32)
-    using Chain = EltwiseChain<
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        FillInt<DataFormat::Int32, Dst::D1>,
-        FillInt<DataFormat::Int32, Dst::D2>,
-        WhereSfpu,
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>
-    >;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
@@ -48,14 +43,6 @@ void kernel_main() {
     );
 #endif
 #if defined(INP_FLOAT) || defined(INP_FLOAT32)
-    using Chain = EltwiseChain<
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>,
-        FillScalar<Dst::D1>,
-        FillScalar<Dst::D2>,
-        WhereSfpu,
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>
-    >;
-    eltwise_pipeline_init<Chain>();
     eltwise_chain(
         num_tiles,
         CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},

@@ -13,18 +13,22 @@
 
 namespace compute_kernel_lib {
 
-template <Dst DstSlot>
-struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {
+/// RandTile chain element.
+///
+/// `Seed` is a compile-time NTTP — the chain pipeline calls `RandTile::init()` statically
+/// (matches `eltwise_chain.inl`'s `E::init()` dispatch). Per-instance runtime payload covers
+/// `from` / `scale` (the uniform [from, from+scale] range) only — those are read from the
+/// instance in `exec()`.
+template <Dst DstSlot, uint32_t Seed>
+struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot, Seed>, DstSlot> {
     /// Runtime payload — `from` and `scale` define the uniform [from, from+scale] range.
     uint32_t from_;
     uint32_t scale_;
-    /// Optional seed (passed to `rand_tile_init`). Default 0.
-    uint32_t seed_;
 
-    constexpr RandTile(uint32_t f, uint32_t s, uint32_t seed = 0) noexcept : from_(f), scale_(s), seed_(seed) {}
-    constexpr RandTile() noexcept : from_(0), scale_(0), seed_(0) {}
+    constexpr RandTile(uint32_t f, uint32_t s) noexcept : from_(f), scale_(s) {}
+    constexpr RandTile() noexcept : from_(0), scale_(0) {}
 
-    ALWI void init() const { rand_tile_init(seed_); }  // seed is runtime-bound
+    static ALWI void init() { rand_tile_init(Seed); }  // seed is compile-time NTTP
     static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { rand_tile(to_u32(DstSlot), from_, scale_); }
 };

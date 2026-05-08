@@ -149,7 +149,7 @@ struct RandTileTag : DestOnlyTag {};
 //                                                              | is_dest_reuse_binary_op_v ‖
 //                                                              | is_unary_bcast_op_v
 //  Hoist exclusion: element issues a pack inside the loop      | is_pack_tile_op_v
-//  No CB lifecycle to validate (pure DEST internal)            | is_dest_only_op_v
+//  No CB lifecycle to check — pure DEST internal               | is_dest_only_op_v
 template <class T>
 inline constexpr bool is_cb_reader_op_v = std::is_base_of_v<CbReaderTag, T>;
 template <class T>
@@ -505,7 +505,7 @@ template <DataFormat DF, Dst DstSlot>
 struct FillInt;
 template <Dst DstSlot = Dst::D0>
 struct FillBitcast;
-template <Dst DstSlot = Dst::D0>
+template <Dst DstSlot = Dst::D0, uint32_t Seed = 0>
 struct RandTile;
 
 // =============================================================================
@@ -554,20 +554,24 @@ template <class Chain>
 inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 
 // =============================================================================
-// 9. Public API — eltwise_pipeline_init + eltwise_chain
+// 9. Public API — eltwise_chain
 // =============================================================================
-
-/// One-time hardware boot per chain shape. Standardises on `compute_kernel_hw_startup` per HQ rule.
-/// `Chain` is `EltwiseChain<E0, E1, ...>` — usually deduced from a sample chain instance via
-/// the `eltwise_pipeline_init_for(chain)` helper.
-template <class Chain>
-ALWI void eltwise_pipeline_init();
-
-/// Convenience: deduce the chain type from a sample chain instance.
-template <class... Es>
-ALWI void eltwise_pipeline_init_for(const EltwiseChain<Es...>&) {
-    eltwise_pipeline_init<EltwiseChain<Es...>>();
-}
+//
+// **Caller-init contract (D8).** The chain helper does NOT wrap any "BIG init"
+// (`compute_kernel_hw_startup`, `binary_op_init_common`, `mm_init`, `reduce_init`).
+// Engine-wide setup is the caller's responsibility. The chain owns ONLY per-element
+// init (`add_tiles_init`, `*_tile_init`, `init_bcast`, `copy_tile_to_dst_init_short`,
+// `reconfig_data_format_*`, `tile_regs_*` lifecycle).
+//
+// **D5 placement.** Caller calls `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` as the
+// FIRST statement of `MAIN()` for chains that require it (chains with at least one
+// CB-reader and one CB-writer). Multi-stage kernels emit one boot per stage. Mid-`MAIN()`
+// placement is undefined per `compute_kernel_hw_startup.h:26-30` (MMIO writes unsafe to
+// call mid-kernel).
+//
+// **D8 grep gate (manual one-liner; full doxygen lives in U6):**
+//   grep -nE 'init_common|compute_kernel_hw_startup|mm_init|reduce_init' eltwise_{chain.hpp,chain.inl,block.hpp}
+// Result: header `#include` only; zero call sites in helper bodies.
 
 /// Run the chain over `n_tiles` iterations.
 ///

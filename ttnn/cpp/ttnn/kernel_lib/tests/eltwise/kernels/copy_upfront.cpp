@@ -28,9 +28,9 @@ void kernel_main() {
 
     using CopyElt = CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd, CbIndexMode::BlockIter>;
     using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::UpfrontReservePushAtEnd, PackTileIndexMode::BlockIter>;
-    using Chain = EltwiseChain<CopyElt, Exp<>, PackElt>;
 
-    eltwise_pipeline_init<Chain>();
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
 
     constexpr EltwiseChainOptions opts = []() {
         EltwiseChainOptions o{};
