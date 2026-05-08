@@ -30,14 +30,13 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
 
-  # Numeric mismatches, not root caused
-  # https://github.com/tenstorrent/tt-metal/issues/41530
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
+  # Residual ttsim-only failures originally tagged under #41530; LLK root cause fixed by
+  # tt-llk reduce_row_perform_transpose change, but these suites still surface separate
+  # ttsim limitations that are out of scope for #41530:
+  # - test_moe.py: ttsim UnsupportedFunctionality on tensix_execute_gmpool with src_b!=1.0f
+  # - test_reduction.py: ttsim failure on test_2d_topk[dim2=8128] (large-topk path)
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
   # ERROR: UndefinedBehavior: tensix_execute_pacr: intermediate_format=5 mismatches late_from_format=0
   # https://github.com/tenstorrent/tt-metal/issues/42525
@@ -87,9 +86,10 @@ blackhole:
   - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
 
-  # Numeric mismatches, not root caused
-  # https://github.com/tenstorrent/tt-metal/issues/41530
+  # Residual ttsim-only failures originally tagged under #41530; LLK root cause fixed by
+  # tt-llk reduce_row_perform_transpose change, but these suites still surface separate
+  # ttsim limitations that are out of scope for #41530:
+  # - test_moe.py: ttsim UnsupportedFunctionality on tensix_execute_gmpool with src_b!=1.0f
+  # - test_reduction.py: ttsim failure on test_2d_topk[dim2=8128] (large-topk path)
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
-  - tests/ttnn/unit_tests/operations/reduce/test_sum.py

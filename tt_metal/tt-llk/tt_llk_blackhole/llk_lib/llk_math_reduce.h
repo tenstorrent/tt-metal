@@ -28,9 +28,19 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
+        // tt-metal#41530 / tt-llk#1512: MOVB2D and MOVA2D with UseDst32bLo=0 (DEST_NORM)
+        // are permitted by the ISA to leave the lo16 of dst32b in an unspecified state;
+        // BH HW deterministically zeros it. The previous implementation read lo16 from
+        // dst AFTER the hi16 MOVB2D writes, so the lo16 reads observed zeros. Fix: stage
+        // the transposed hi16 in srcA, finish the lo16 round-trip while dst lo16 is
+        // still intact, then write hi16 first (lo16 corruption is overwritten by the
+        // lo16 MOVB2D in the next 4 instructions). Same pattern as the is_32bit
+        // !transpose_of_faces branch in llk_math_transpose_dest.h. SrcA scratch is safe:
+        // last consumed by reduce_pool_op<...,CLR_NONE> immediately above and re-supplied
+        // by the unpacker before any subsequent GAPOOL/MVMUL.
+
         // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
 
         // move hi16 bits D2B
         // we avoid clobbering weights in src B by moving to rows 16 - 31
@@ -40,24 +50,30 @@ inline void reduce_row_perform_transpose()
         // move row D2B again for cases of reducing across multiple tiles
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move hi16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        // save the post-transpose hi16 face from srcB rows 16..31 to srcA rows 0..15
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
 
-        // move lo16 bits D2B
+        // move lo16 bits D2B - dst lo16 is still intact because no MOVB2D has run yet
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         // transpose face
         TTI_TRNSPSRCB;
         // move row again for cases of reducing multiple tiles
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move lo16 bits B2D
+        // write hi16 first from srcA scratch. MOVA2D(DEST_NORM) zeros dst lo16 on BH,
+        // but the lo16 MOVB2D writes immediately below restore it.
+        TTI_MOVA2D(p_mov::DEST_NORM, p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_NORM, p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
+
+        // move lo16 bits B2D - per ISA, MOVB2D(DEST_32B_LOW) preserves dst hi16
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
     }
     else
