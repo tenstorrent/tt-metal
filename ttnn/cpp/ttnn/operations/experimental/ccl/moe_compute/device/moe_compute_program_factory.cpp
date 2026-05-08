@@ -32,20 +32,23 @@
 
 namespace ttnn::experimental::prim {
 
-// Runtime BH ring size, configurable via env var TT_MOE_BH_N. Supported values: 12, 16.
+// Runtime BH ring size, configurable via env var TT_MOE_BH_N. Supported values: 8, 12, 16.
 // Default is 16 (current perf-experiment default). The chosen N must have a corresponding
 // DeepSeekRingConfig<HasBias, N>/GptRingConfig<HasBias, N> specialization in moe_ring_common.h.
+// N=8 selects HEIGHT_SHARDED weights (1:1 with BH's 8 DRAM banks); N=12/16 select INTERLEAVED.
 // Read once and cached so back-to-back op invocations within a session see a stable N.
 uint32_t get_bh_ring_size() {
     static const uint32_t value = []() {
         const char* env = std::getenv("TT_MOE_BH_N");
         if (env != nullptr) {
             const int parsed = std::atoi(env);
-            if (parsed == 12 || parsed == 16) {
+            if (parsed == 8 || parsed == 12 || parsed == 16) {
                 return static_cast<uint32_t>(parsed);
             }
             log_warning(
-                tt::LogOp, "moe_compute: TT_MOE_BH_N={} is not supported (must be 12 or 16); using default 16", env);
+                tt::LogOp,
+                "moe_compute: TT_MOE_BH_N={} is not supported (must be 8, 12, or 16); using default 16",
+                env);
         }
         return 16u;
     }();
@@ -168,10 +171,13 @@ get_cores(
 
     // matmul cores come from the DRAM-bank-to-worker assignment: WH returns 12, BH returns 8.
     // WH instantiates the N=12 ring; BH instantiates the N=get_bh_ring_size() ring (perf knob,
-    // env var TT_MOE_BH_N). BH pads its 8 DRAM-bank cores up to N by appending extras inside
-    // the matmul mcast bbox ({0,0},{7,9}) — INTERLEAVED weights (see Python
-    // `get_weight_mem_configs`) page tiles across all DRAM banks, so the ring core count is
-    // independent of bank count. Issue #41827 PR1 (N=12 baseline) + N=16 perf experiment.
+    // env var TT_MOE_BH_N, supported {8, 12, 16}).
+    //   - N=8: keep only the 8 DRAM-adjacent cores; weights HEIGHT_SHARDED 1:1 with banks
+    //     (M1 pattern, dm0.cpp set_state + with_state fast path).
+    //   - N=12/16: append extras inside the matmul mcast bbox ({0,0},{7,9}); weights
+    //     INTERLEAVED (see Python `get_weight_mem_configs`) page tiles across all DRAM banks
+    //     so the ring core count is independent of bank count.
+    // Issue #41827 PR1 (N=12 baseline) + N=16/N=8 perf experiments.
     auto matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
     if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
@@ -194,13 +200,16 @@ get_cores(
         }};
         const uint32_t n = ttnn::experimental::prim::get_bh_ring_size();
         TT_FATAL(
-            n == 12 || n == 16,
-            "moe_compute: unsupported BH ring size N={} (TT_MOE_BH_N), supported values are {{12, 16}}",
+            n == 8 || n == 12 || n == 16,
+            "moe_compute: unsupported BH ring size N={} (TT_MOE_BH_N), supported values are {{8, 12, 16}}",
             n);
-        const uint32_t num_extras = n - 8;  // 8 DRAM-adjacent cores already in matmul_cores
-        TT_FATAL(num_extras <= kBhMatmulExtras.size(), "moe_compute: not enough BH extras for N={}", n);
-        for (uint32_t i = 0; i < num_extras; ++i) {
-            matmul_cores.push_back(kBhMatmulExtras[i]);
+        // N=8: no extras (the 8 DRAM-adjacent cores are exactly the ring). N>8: pad up.
+        if (n > 8) {
+            const uint32_t num_extras = n - 8;
+            TT_FATAL(num_extras <= kBhMatmulExtras.size(), "moe_compute: not enough BH extras for N={}", n);
+            for (uint32_t i = 0; i < num_extras; ++i) {
+                matmul_cores.push_back(kBhMatmulExtras[i]);
+            }
         }
     }
     const uint32_t expected_n =
@@ -494,12 +503,14 @@ MoEComputeMeshWorkloadFactory::create_at(
         switch (c) {
             case detail::MoEConfigType::DEEPSEEK:
                 switch (n) {
+                    case 8: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 8>::IN2_TILES_PER_STEP;
                     case 12: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
                     case 16: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 16>::IN2_TILES_PER_STEP;
                 }
                 TT_THROW("moe_compute: no DeepSeek ring spec for N={}", n);
             case detail::MoEConfigType::GPT:
                 switch (n) {
+                    case 8: return moe_ring::GptRingConfig</*HasBias=*/false, 8>::IN2_TILES_PER_STEP;
                     case 12: return moe_ring::GptRingConfig</*HasBias=*/false, 12>::IN2_TILES_PER_STEP;
                     case 16: return moe_ring::GptRingConfig</*HasBias=*/false, 16>::IN2_TILES_PER_STEP;
                 }
@@ -1252,11 +1263,19 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::experimental::prim::detail::MoEActivationFunction activation_type = args.activation_type;
 
     const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
+    // weight_is_height_sharded: controls dm0.cpp's read path. WH always uses HEIGHT_SHARDED
+    // (M1 byte-identical baseline). BH uses HEIGHT_SHARDED at N=8 (1:1 with 8 DRAM banks)
+    // and INTERLEAVED at N=12/16 (per-tile reads via TensorAccessor). Must agree with the
+    // weight memory configs constructed in moe_compute_utils.py.
+    const bool weight_is_height_sharded =
+        (mesh_device->arch() == tt::ARCH::WORMHOLE_B0) ||
+        (mesh_device->arch() == tt::ARCH::BLACKHOLE && ttnn::experimental::prim::get_bh_ring_size() == 8u);
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
         {"layer_id", args.layer_id},
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
+        {"weight_is_height_sharded", weight_is_height_sharded ? 1u : 0u},
         {"activation_function", static_cast<uint32_t>(activation_type)},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
@@ -1361,14 +1380,15 @@ MoEComputeMeshWorkloadFactory::create_at(
     matmul_runtime_args.push_back(0);                  // Neighbor physical x
     matmul_runtime_args.push_back(0);                  // Neighbor physical y
 
-    // BH-only extra args: per-core start page_id for INTERLEAVED weight buffers.
+    // BH INTERLEAVED-only extra args: per-core start page_id for INTERLEAVED weight buffers.
     // The prepared weight tensors have the leading num_cores dim, so each ring core's
-    // slice is a contiguous range of `pages_per_core` page_ids. On WH (HEIGHT_SHARDED)
-    // these are unused — dm0.cpp doesn't even read them in the WH branch.
+    // slice is a contiguous range of `pages_per_core` page_ids. HEIGHT_SHARDED paths
+    // (WH, BH N=8) do not need these — dm0.cpp doesn't read them in that branch.
     const bool is_blackhole = mesh_device->arch() == tt::ARCH::BLACKHOLE;
+    const bool weights_interleaved = is_blackhole && !weight_is_height_sharded;
     uint32_t w0_w1_pages_per_core = 0;
     uint32_t w2_pages_per_core = 0;
-    if (is_blackhole) {
+    if (weights_interleaved) {
         const uint32_t w0_w1_total_pages = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
         const uint32_t w2_total_pages = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
         TT_FATAL(
@@ -1421,7 +1441,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         matmul_runtime_args[6] = ring_pos;
         matmul_runtime_args[7] = static_cast<uint32_t>(next_physical.x);
         matmul_runtime_args[8] = static_cast<uint32_t>(next_physical.y);
-        if (is_blackhole) {
+        if (weights_interleaved) {
             // INTERLEAVED weight buffers: each ring core's slice starts at ring_pos * pages_per_core.
             // dm1.cpp/compute.cpp don't read these args (they only read 9 args); pushing extras to all
             // three SetRuntimeArgs calls is harmless because each kernel only reads what it knows about.

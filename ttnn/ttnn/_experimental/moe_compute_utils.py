@@ -79,15 +79,16 @@ import ttnn
 
 
 def _get_bh_ring_size():
-    """BH ring size, configurable via env var TT_MOE_BH_N. Supported: {12, 16}; default 16.
+    """BH ring size, configurable via env var TT_MOE_BH_N. Supported: {8, 12, 16}; default 16.
 
     Must align with C++ get_bh_ring_size() in moe_compute_program_factory.cpp. WH always uses N=12.
+    N=8 selects HEIGHT_SHARDED weights (1:1 with BH's 8 DRAM banks); N=12/16 select INTERLEAVED.
     """
     env = os.environ.get("TT_MOE_BH_N")
     if env is not None:
         try:
             n = int(env)
-            if n in (12, 16):
+            if n in (8, 12, 16):
                 return n
         except ValueError:
             pass
@@ -352,6 +353,19 @@ DS_W2_SHARD_VALS_BH_16 = {False: (2, 2), True: (2, 2)}  # 14 W2 tiles/core: last
 GPT_PAD_CORES_BH_16 = {10, 11, 12, 13, 14, 15}  # 6 cores get the "5" value
 GPT_W0_W1_SHARD_VALS_BH_16 = [6, 5]
 GPT_W2_SHARD_VALS_BH_16 = {False: (2, 2), True: (1, 3)}  # 6 → (2, 2); 5 → (1, 3) so all sum to 4
+
+# BH N=8 perf-experiment shard vals — 1:1 with BH's 8 DRAM banks (HEIGHT_SHARDED, M1
+# pattern). DeepSeek balances 64 W tiles / 8 cores = 8 each (no pad/non-pad split). W2:
+# Kt=64, gpc=2, last_group=(4, 0) for every core → 8*(4 + 4) = 64. GPT: 90 W tiles / 8
+# cores = 11.25 → 2 cores get 12, 6 cores get 11 (matches GptRingConfig<*,8> row 0). W2:
+# Kt=90, gpc=3, "12"-cores → (4, 0) (real=12), "11"-cores → (3, 1) (real=11); total=90.
+DS_PAD_CORES_BH_8 = set()  # all 8 cores get the "non-pad" value (=8)
+DS_W0_W1_SHARD_VALS_BH_8 = [8, 8]  # both pad and non-pad → 8 each
+DS_W2_SHARD_VALS_BH_8 = {False: (4, 0), True: (4, 0)}  # 8 K-tiles/core: 1 full group (4) + last (4, 0)
+
+GPT_PAD_CORES_BH_8 = {1, 2, 3, 5, 6, 7}  # 6 cores get the "11" value (the "12"s are at positions 0, 4)
+GPT_W0_W1_SHARD_VALS_BH_8 = [12, 11]
+GPT_W2_SHARD_VALS_BH_8 = {False: (4, 0), True: (3, 1)}  # 12 → (4, 0); 11 → (3, 1) so sums to 90
 ####################################################################################################
 
 
@@ -744,17 +758,18 @@ def get_weight_core_shard_maps(mesh_device, pad_cores, w0_w1_shard_vals, w2_shar
     """Return per-ring-core shard maps for the W0/W1 and W2 weight tensors.
 
     The ring size is N=12 on WH and N=_get_bh_ring_size() on BH (perf knob: TT_MOE_BH_N env var,
-    supported {12, 16}, default 16). On WH the 12 ring positions map 1:1 to the 12 DRAM banks
-    (HEIGHT_SHARDED). On BH there are only 8 DRAM banks; the prepare functions emit a leading
-    dim of N regardless, and the kernel uses INTERLEAVED + per-tile reads to page them across
-    all banks. The `dram_core_range_set` is meaningful only for the WH HEIGHT_SHARDED path; on
-    BH it is returned for API compatibility but is unused (INTERLEAVED memcfg ignores the shard
-    spec).
+    supported {8, 12, 16}, default 16).
+    - WH (N=12): 12 ring positions map 1:1 to the 12 DRAM banks (HEIGHT_SHARDED).
+    - BH N=8: 8 ring positions map 1:1 to the 8 DRAM banks (HEIGHT_SHARDED, like WH M1).
+    - BH N=12/16: prepare functions emit leading dim of N; kernel uses INTERLEAVED + per-tile
+      reads to page them across all 8 banks. `dram_core_range_set` is unused in the
+      INTERLEAVED memcfg (returned for API compatibility only).
 
     On BH at N=16 the shard distribution is rebalanced (sum(shard_map) must still equal Nt).
     The caller passes WH-baseline (`pad_cores`, `w0_w1_shard_vals`, `w2_shard_vals`); we
     substitute BH-N=16 versions internally based on which pattern was passed in. On BH at
-    N=12 the WH-baseline values are reused unchanged (sum already equals Nt at N=12).
+    N=12 the WH-baseline values are reused unchanged (sum already equals Nt at N=12). On BH
+    at N=8 we use the dedicated BH-N=8 shard vals.
     """
     is_blackhole = mesh_device is not None and mesh_device.arch() == ttnn.Arch.BLACKHOLE
     target_ring_size = _get_bh_ring_size() if is_blackhole else 12  # must match C++ get_bh_ring_size()
@@ -762,6 +777,7 @@ def get_weight_core_shard_maps(mesh_device, pad_cores, w0_w1_shard_vals, w2_shar
     # On BH-N=16 we need different shard vals so that sum(w0_w1_shard_map) == Nt at the new
     # ring length. Detect which workload the caller passed in and substitute the BH-N=16 set.
     # BH-N=12 reuses the WH-baseline values unchanged (12 cores → identical sum).
+    # BH-N=8 substitutes dedicated BH-N=8 shard vals (8 cores, sum == Nt).
     if is_blackhole and target_ring_size == 16:
         if pad_cores == DS_PAD_CORES and w0_w1_shard_vals == DS_W0_W1_SHARD_VALS:
             pad_cores = DS_PAD_CORES_BH_16
@@ -771,6 +787,15 @@ def get_weight_core_shard_maps(mesh_device, pad_cores, w0_w1_shard_vals, w2_shar
             pad_cores = GPT_PAD_CORES_BH_16
             w0_w1_shard_vals = GPT_W0_W1_SHARD_VALS_BH_16
             w2_shard_vals = GPT_W2_SHARD_VALS_BH_16
+    elif is_blackhole and target_ring_size == 8:
+        if pad_cores == DS_PAD_CORES and w0_w1_shard_vals == DS_W0_W1_SHARD_VALS:
+            pad_cores = DS_PAD_CORES_BH_8
+            w0_w1_shard_vals = DS_W0_W1_SHARD_VALS_BH_8
+            w2_shard_vals = DS_W2_SHARD_VALS_BH_8
+        elif pad_cores == GPT_PAD_CORES and w0_w1_shard_vals == GPT_W0_W1_SHARD_VALS:
+            pad_cores = GPT_PAD_CORES_BH_8
+            w0_w1_shard_vals = GPT_W0_W1_SHARD_VALS_BH_8
+            w2_shard_vals = GPT_W2_SHARD_VALS_BH_8
 
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     core2dram = {}
@@ -789,11 +814,12 @@ def get_weight_core_shard_maps(mesh_device, pad_cores, w0_w1_shard_vals, w2_shar
         w2_shard_map.append(w2_shard_vals[ring_pos in pad_cores])
 
     # BH (8 DRAM banks) padding to N-core ring. The C++ program_factory pads matmul_cores
-    # from 8 up to N (TT_MOE_BH_N: 12 default-12, 16 perf experiment); the shard_map must
-    # mirror that so prepare_w0_w1/prepare_w2 emit a matching N-core leading-dim tensor. The
-    # synthetic ring_pos values for the appended slots reuse the pad_cores semantics. The
-    # dram_core_range_set is only used for HEIGHT_SHARDED on WH; on BH the INTERLEAVED memcfg
-    # ignores it.
+    # from 8 up to N (TT_MOE_BH_N: 8/12/16). At N=8 no padding is needed (natural 8-bank
+    # shard_map already matches). At N=12/16 the shard_map must mirror the C++ extras so
+    # prepare_w0_w1/prepare_w2 emit a matching N-core leading-dim tensor. The synthetic
+    # ring_pos values for the appended slots reuse the pad_cores semantics. The
+    # dram_core_range_set is meaningful for HEIGHT_SHARDED (WH N=12, BH N=8); on BH N=12/16
+    # the INTERLEAVED memcfg ignores it.
     while len(w0_w1_shard_map) < target_ring_size:
         ring_pos = len(w0_w1_shard_map)
         w0_w1_shard_map.append(w0_w1_shard_vals[ring_pos in pad_cores])
@@ -870,11 +896,16 @@ def get_weight_mem_configs(
         w2_N_total = math.ceil(Nt / BLOCK_TILES_H) * BLOCK_TILES_H * ttnn.TILE_SIZE
 
     # Arch-conditional memory layout:
-    # - BH: INTERLEAVED (8 banks, 12-core ring, dm0.cpp uses TensorAccessor per-tile reads)
-    # - WH/default: HEIGHT_SHARDED (12 banks aligned to 12-core ring, byte-identical to M1 baseline)
+    # - WH (N=12): HEIGHT_SHARDED 1:1 with 12 DRAM banks (byte-identical to M1 baseline).
+    # - BH N=8: HEIGHT_SHARDED 1:1 with 8 DRAM banks (M1 pattern). dm0.cpp set_state fast path.
+    # - BH N=12/16: INTERLEAVED across all 8 banks (ring core count > bank count). dm0.cpp
+    #   uses TensorAccessor per-tile reads.
+    # The C++ get_bh_ring_size() reads TT_MOE_BH_N to pick N; the layout switch must mirror
+    # the same logic in dm0.cpp's `weight_is_height_sharded` named CT arg.
     is_blackhole = mesh_device is not None and mesh_device.arch() == ttnn.Arch.BLACKHOLE
+    bh_use_height_sharded = is_blackhole and _get_bh_ring_size() == 8
 
-    if is_blackhole:
+    if is_blackhole and not bh_use_height_sharded:
         w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     else:

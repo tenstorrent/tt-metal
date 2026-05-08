@@ -323,7 +323,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
     // Determine num_data_parallel_cores based on hidden size. WH uses N=12; BH uses
-    // get_bh_ring_size() (env var TT_MOE_BH_N, supported {12, 16}, default 16). Templatize
+    // get_bh_ring_size() (env var TT_MOE_BH_N, supported {8, 12, 16}, default 16). Templatize
     // machinery in moe_ring_common.h resolves OUTPUT_WIDTH_SHARD_DIM per (config, N). Bias
     // does not affect OUTPUT_WIDTH_SHARD_DIM. Runtime-to-compile-time switch over supported N.
     auto* mesh_device = tilize_input_tensor.device();
@@ -332,12 +332,14 @@ std::vector<ttnn::Tensor> moe_compute(
     auto get_output_width_shard_dim = [](uint32_t hidden, uint32_t n) -> uint32_t {
         if (hidden == 7168) {
             switch (n) {
+                case 8: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 8>::OUTPUT_WIDTH_SHARD_DIM;
                 case 12: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
                 case 16: return moe_ring::DeepSeekRingConfig</*HasBias=*/false, 16>::OUTPUT_WIDTH_SHARD_DIM;
             }
             TT_THROW("moe_compute: no DeepSeek ring spec for N={}", n);
         } else if (hidden == 2880) {
             switch (n) {
+                case 8: return moe_ring::GptRingConfig</*HasBias=*/false, 8>::OUTPUT_WIDTH_SHARD_DIM;
                 case 12: return moe_ring::GptRingConfig</*HasBias=*/false, 12>::OUTPUT_WIDTH_SHARD_DIM;
                 case 16: return moe_ring::GptRingConfig</*HasBias=*/false, 16>::OUTPUT_WIDTH_SHARD_DIM;
             }
