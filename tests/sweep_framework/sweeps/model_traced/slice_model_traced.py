@@ -2,22 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
-
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -120,6 +125,20 @@ def run(
         exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
         output_memory_config=output_memory_config,
     )
+    # Forward slice_dim, num_devices, and output_tensor when master had them.
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    if "num_devices" not in absent_keys and "num_devices" not in op_kwargs:
+        traced_num_devices = kwargs.get("num_devices")
+        if traced_num_devices is not None and traced_num_devices != "__ABSENT__":
+            op_kwargs["num_devices"] = int(traced_num_devices)
+        else:
+            op_kwargs["num_devices"] = None
+    if "slice_dim" not in absent_keys and "slice_dim" not in op_kwargs:
+        traced_slice_dim = kwargs.get("slice_dim")
+        if traced_slice_dim is not None and traced_slice_dim != "__ABSENT__":
+            op_kwargs["slice_dim"] = int(traced_slice_dim)
+        else:
+            op_kwargs["slice_dim"] = None
     # Re-add memory_config kwarg when the master config recorded it. build_op_kwargs
     # strips memory_config by default; sweeps that need it must inject it here.
     # Validation-vector runs deliver memory_config as a serialized dict, parse
@@ -187,6 +206,33 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Pre-allocate output tensor if the master config recorded one
+    output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    if output_tensor_info and output_tensor_info.get("shape"):
+        ot_shape = tuple(output_tensor_info["shape"])
+        ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
+        if isinstance(ot_dtype, dict):
+            ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+        ot_layout = output_tensor_info.get("layout") or input_a_layout
+        if isinstance(ot_layout, dict):
+            ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+        ot_mem_cfg_raw = output_tensor_info.get("memory_config")
+        ot_mem_cfg = (
+            parse_dict_value("memory_config", ot_mem_cfg_raw)
+            if isinstance(ot_mem_cfg_raw, dict)
+            else (ot_mem_cfg_raw or input_a_memory_config)
+        )
+        ot_placement = output_tensor_info.get("tensor_placement")
+        torch_out_alloc = torch.zeros(ot_shape, dtype=torch.float32)
+        if is_mesh_device and input_a_tensor_placement:
+            op_kwargs["output_tensor"] = create_tensor_on_mesh(
+                torch_out_alloc, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement or input_a_tensor_placement
+            )
+        elif not is_host:
+            op_kwargs["output_tensor"] = ttnn.from_torch(
+                torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
+            )
 
     start_time = start_measuring_time()
     if use_named_kwargs:

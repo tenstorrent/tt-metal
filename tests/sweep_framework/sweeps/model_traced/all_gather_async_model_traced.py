@@ -9,12 +9,12 @@ from math import prod
 from typing import Optional, Tuple
 
 import torch
-import ttnn
-from ttnn import ShardTensor2dMesh
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
-
-from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
+
+import ttnn
+
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.ccl_common import (
     device_context,
     get_mem_configs,
@@ -22,10 +22,10 @@ from tests.sweep_framework.sweep_utils.ccl_common import (
     mesh_shape_iterator,
     validate_serializable_shard_spec,
 )
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-
-# Import V2 master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
+from ttnn import ShardTensor2dMesh
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -686,8 +686,10 @@ def run(
                             "multi_device_global_semaphore": ccl_semaphore_handles[i],
                             "num_links": num_links,
                             "topology": topology,
-                            "cluster_axis": cluster_axis,
                         }
+                        # Only pass cluster_axis when the master trace had it.
+                        if "cluster_axis" not in absent_keys:
+                            op_kwargs["cluster_axis"] = cluster_axis
 
                         if memory_config_was_traced:
                             op_kwargs["memory_config"] = output_memory_config

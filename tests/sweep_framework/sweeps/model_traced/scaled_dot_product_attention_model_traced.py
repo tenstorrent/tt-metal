@@ -213,16 +213,28 @@ def run(
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
 
-    # Validate program_config grid fits current device
+    # Validate program_config grid fits current device.
+    # Only remove if the grid genuinely exceeds the device; keep it (even if None)
+    # when the master trace had it, to avoid missing_key diffs.
     pc = op_kwargs.get("program_config")
     if pc is not None:
         try:
             device_grid = device.compute_with_storage_grid_size()
             pc_grid = pc.compute_with_storage_grid_size
             if pc_grid.x > device_grid.x or pc_grid.y > device_grid.y:
-                del op_kwargs["program_config"]
+                # Grid doesn't fit — set to None rather than removing entirely,
+                # so the trace still records the kwarg presence.
+                op_kwargs["program_config"] = None
         except Exception:
-            del op_kwargs["program_config"]
+            op_kwargs["program_config"] = None
+    elif "program_config" not in absent_keys and "program_config" not in op_kwargs:
+        # Master had program_config (possibly None) but build_op_kwargs didn't include it
+        traced_pc = kwargs.get("program_config")
+        if traced_pc is not None and traced_pc != "__ABSENT__":
+            parsed_pc = parse_dict_value("program_config", traced_pc) if isinstance(traced_pc, dict) else traced_pc
+            op_kwargs["program_config"] = parsed_pc
+        else:
+            op_kwargs["program_config"] = None
 
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     # Also check kwargs for shapes in case they're passed as extra kwargs

@@ -2,22 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from models.common.utility_functions import torch_random
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
-    mesh_tensor_to_torch,
     get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
 )
-
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -73,6 +78,59 @@ def run(
     input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Forward memory_config and dtype when master had them (use __absent_keys__ guard).
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    if "memory_config" not in absent_keys and "memory_config" not in op_kwargs:
+        traced_mc = kwargs.get("memory_config")
+        if traced_mc is not None and traced_mc != "__ABSENT__":
+            parsed_mc = parse_dict_value("memory_config", traced_mc) if isinstance(traced_mc, dict) else traced_mc
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+            else:
+                op_kwargs["memory_config"] = None
+        else:
+            op_kwargs["memory_config"] = None
+    if "dtype" not in absent_keys and "dtype" not in op_kwargs:
+        traced_dt = kwargs.get("dtype")
+        if traced_dt is not None and traced_dt != "__ABSENT__":
+            parsed_dt = parse_dict_value("dtype", traced_dt) if isinstance(traced_dt, dict) else traced_dt
+            if parsed_dt is not None:
+                op_kwargs["dtype"] = parsed_dt
+            else:
+                op_kwargs["dtype"] = None
+        else:
+            op_kwargs["dtype"] = None
+
+    # Pre-allocate output tensor if the master config recorded one
+    output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    if output_tensor_info and output_tensor_info.get("shape"):
+        ot_shape = tuple(output_tensor_info["shape"])
+        ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
+        if isinstance(ot_dtype, dict):
+            ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+        ot_layout = output_tensor_info.get("layout") or input_a_layout
+        if isinstance(ot_layout, dict):
+            ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+        ot_mem_cfg_raw = output_tensor_info.get("memory_config")
+        ot_mem_cfg = (
+            parse_dict_value("memory_config", ot_mem_cfg_raw)
+            if isinstance(ot_mem_cfg_raw, dict)
+            else (ot_mem_cfg_raw or input_a_memory_config)
+        )
+        ot_placement = output_tensor_info.get("tensor_placement")
+        import torch as _torch_ot
+
+        torch_out_alloc = _torch_ot.zeros(ot_shape, dtype=_torch_ot.float32)
+        is_host_check = storage_type and "HOST" in str(storage_type)
+        if is_mesh_device and ot_placement:
+            op_kwargs["output_tensor"] = create_tensor_on_mesh(
+                torch_out_alloc, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement
+            )
+        elif not is_host_check:
+            op_kwargs["output_tensor"] = ttnn.from_torch(
+                torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
+            )
 
     is_ternary_tensor = input_b_dtype is not None and input_c_dtype is not None
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape

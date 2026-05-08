@@ -3,24 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    reconcile_golden_to_actual,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_mesh_shape,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -493,6 +495,17 @@ def run(
                 memory_config=sink_mem_config,
             )
         op_kwargs["attention_sink"] = sink_tensor
+
+    # Forward program_config when master had it (use __absent_keys__ guard).
+    if "program_config" not in absent_keys and "program_config" not in op_kwargs:
+        traced_pc = kwargs.get("program_config")
+        if traced_pc is not None and traced_pc != "__ABSENT__":
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value as _pdv_pc
+
+            parsed_pc = _pdv_pc("program_config", traced_pc) if isinstance(traced_pc, dict) else traced_pc
+            op_kwargs["program_config"] = parsed_pc
+        else:
+            op_kwargs["program_config"] = None
 
     # Pass memory_config from V2 vector when present (master records it).
     v2_memory_config = kwargs.get("memory_config")

@@ -2,26 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
-from functools import partial
-
 import random
+from functools import partial
+from typing import Optional, Tuple
+
 import torch
+
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    reconcile_golden_to_actual,
-)
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -219,10 +220,24 @@ def run(
 
     # Only pass dtype/memory_config/layout if they were in the master trace.
     # Passing None creates extra_key diffs in validation.
+    # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
     embedding_kwargs = dict(op_kwargs)
-    if dtype is not None:
+    if "dtype" not in absent_keys:
         embedding_kwargs["dtype"] = dtype
-    if memory_config is not None:
+    elif dtype is not None:
+        embedding_kwargs["dtype"] = dtype
+    if "memory_config" not in absent_keys:
+        if memory_config is not None:
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+            parsed_mc = (
+                parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
+            )
+            embedding_kwargs["memory_config"] = parsed_mc
+        else:
+            embedding_kwargs["memory_config"] = None
+    elif memory_config is not None:
         embedding_kwargs["memory_config"] = memory_config
     if layout is not None:
         from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value

@@ -3,22 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    reconcile_golden_to_actual,
-)
 
 # Import V2 master config loader and helpers for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import (
     MasterConfigLoader,
     dict_to_memory_config,
 )
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
@@ -530,15 +531,24 @@ def run(
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
-        if memory_config is not None:
+        if "memory_config" not in absent_keys:
+            if memory_config is not None:
+                linear_kwargs["memory_config"] = memory_config
+            else:
+                linear_kwargs["memory_config"] = None
+        elif memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
-        if dtype is not None:
+        if "dtype" not in absent_keys:
+            linear_kwargs["dtype"] = dtype
+        elif dtype is not None:
             linear_kwargs["dtype"] = dtype
 
-        if program_config is not None:
+        if "program_config" not in absent_keys:
+            linear_kwargs["program_config"] = program_config
+        elif program_config is not None:
             linear_kwargs["program_config"] = program_config
 
         # Pass compute_kernel_config even when None — the master trace records it
@@ -551,7 +561,9 @@ def run(
         elif compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        if core_grid is not None:
+        if "core_grid" not in absent_keys:
+            linear_kwargs["core_grid"] = core_grid
+        elif core_grid is not None:
             linear_kwargs["core_grid"] = core_grid
 
         if activation is not None:
