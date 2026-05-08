@@ -43,9 +43,19 @@ namespace ckernel::sfpu {
 // LRA budget. Returns sign(x_signed) · exp(|x|) · 1/sqrt(|x|) · P(1/|x|).
 // Note: this function must stay minimalist — SFPU LRA is limited.
 // Every operation here competes with the main loop.
-template <bool APPROXIMATION_MODE>
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
-    const sfpi::vFloat inv_abs_x = sfpu_reciprocal<APPROXIMATION_MODE>(abs_x);
+    // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
+    // Computed first so that 1/|x| can be derived as rsqrt_y² without a
+    // separate sfpu_reciprocal call.
+    const sfpi::vInt rsqrt_i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(abs_x) >> 1);
+    sfpi::vFloat rsqrt_y = sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
+    sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
+    rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
+    c0 = sfpi::vConst1 + (-rsqrt_y) * (abs_x * rsqrt_y);
+    rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
+
+    // 1/|x| = (1/√|x|)² — reuses the refined rsqrt instead of a fresh reciprocal.
+    const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
 
     // P(y), degree-5 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-9.
     // This outlined function does not stress the main loop's LRA, so full precision is safe.
@@ -58,21 +68,14 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
         -1.9748322314e-02f,
         -3.3467922914e-01f);
 
-    // exp(|x|) — accurate variant for FP32 (<1 FP32 ULP), 21-bit for BF16.
-    // |x|≤88.5, no overflow possible.
+    // exp(|x|) — unsafe FP32 variant: |x|∈[10,88.5] precludes overflow/underflow,
+    // so the safe-path's v_if guards are dead and skipped. BF16 path uses the
+    // 21-bit approximation as before.
 #ifdef INP_FLOAT32
-    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_(abs_x);
+    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
 #else
     const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_<true>(abs_x);
 #endif
-
-    // 1/sqrt(|x|) via Quake-style magic constant + Newton refinement.
-    const sfpi::vInt rsqrt_i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(abs_x) >> 1);
-    sfpi::vFloat rsqrt_y = sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
-    sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
-    c0 = sfpi::vConst1 + (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
 
     // i1 is odd: copy sign of original x onto positive magnitude.
     return sfpi::setsgn(exp_abs * rsqrt_y * correction, x_signed);
@@ -139,10 +142,9 @@ inline void calculate_i1() {
         // ─── Asymptotic overwrite for OOD lanes (|x| > 10) ───────────────
         v_if(abs_x > I1_THRESHOLD) {
 #ifdef INP_FLOAT32
-            sfpi::dst_reg[0] = calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x);
+            sfpi::dst_reg[0] = calculate_i1_asymptotic_(abs_x, x);
 #else
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(
-                calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x), sfpi::RoundMode::NearestEven);
+            sfpi::dst_reg[0] = sfpi::float_to_fp16b(calculate_i1_asymptotic_(abs_x, x), sfpi::RoundMode::NearestEven);
 #endif
         }
         v_endif;
