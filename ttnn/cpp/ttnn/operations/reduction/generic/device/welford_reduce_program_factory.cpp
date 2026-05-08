@@ -273,7 +273,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // Welford processes one column at a time (SFPU can only track one running
         // mean/M2 state), so the reader must deliver tiles in strict column-major
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/1};
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*single_col_chunk=*/1};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"

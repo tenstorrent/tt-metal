@@ -22,11 +22,15 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
-    // Welford must process one column at a time because the SFPU can only maintain
-    // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
-    // per chunk, which would feed the Welford kernel tiles from the wrong columns.
-    constexpr uint32_t row_chunk = use_welford ? 1 : compute_kernel_lib::DEST_AUTO_LIMIT;
+    // single_col_chunk forces row_chunk=1 -- needed by any compute kernel that maintains
+    // per-column accumulator state in DST and therefore cannot tolerate the default
+    // DEST_AUTO_LIMIT chunking that interleaves multiple columns per pass.  Today this
+    // covers two consumers:
+    //   - Welford H-reduce: SFPU keeps a single running mean/M2 state.
+    //   - SFPU INT32 H-reduce (Phase 1 of #43736): folds Ht tiles per column via
+    //     binary_max_int32_tile into a single accumulator DST register.
+    constexpr bool single_col_chunk = get_compile_time_arg_val(4) != 0;
+    constexpr uint32_t row_chunk = single_col_chunk ? 1 : compute_kernel_lib::DEST_AUTO_LIMIT;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 

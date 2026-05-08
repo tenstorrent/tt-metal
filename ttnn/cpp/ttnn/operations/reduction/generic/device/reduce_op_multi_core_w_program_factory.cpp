@@ -141,6 +141,23 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
+    // INT32 inputs go through the SFPU compute kernel because the FPU's GMPOOL primitive
+    // (used by reduce.cpp) silently produces zeros for INT32 -- see issue #26726.
+    // Phase 1 of #43736 ships INT32 + MAX along W only (negate=false); the device-op
+    // validation rejects every other INT32 combination before reaching here.
+    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && !operation_attributes.negate &&
+                                     operation_attributes.math_op == ReduceOpMath::MAX;
+    if (use_sfpu_int32_path) {
+        // The SFPU kernel is parametrised by REDUCE_FORMAT (the input dtype) in addition to
+        // the existing REDUCE_OP / REDUCE_DIM defines, so the same source file scales to the
+        // other dtypes the LLK supports (UInt32, UInt16, Float32, Float16_b) when those phases
+        // are wired in.
+        // Note: `DataFormat` lives at global scope (defined in tensix_types.h, no namespace),
+        // unlike `ckernel::PoolType` and `ckernel::ReduceDim`.  Functions in `namespace ckernel`
+        // and `namespace compute_kernel_lib` find it via standard unqualified lookup.
+        reduce_defines["REDUCE_FORMAT"] = "DataFormat::Int32";
+    }
+
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -167,9 +184,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         post_mul_scaler_bits,       // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
+    // Pick the compute kernel: SFPU sibling for INT32 (Phase 1 of #43736), FPU GMPOOL path
+    // (with optional _w_neg negate-twice variant for signed MIN-as-MAX-of-negated-input)
+    // otherwise.
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
-        (operation_attributes.negate ? "_w_neg" : "") + ".cpp";
+        use_sfpu_int32_path
+            ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_sfpu.cpp")
+            : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+                  (operation_attributes.negate ? "_w_neg" : "") + ".cpp";
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;

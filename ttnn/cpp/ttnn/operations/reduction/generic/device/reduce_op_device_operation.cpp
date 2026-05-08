@@ -36,11 +36,39 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
     TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+    // INT32 is supported via a dedicated SFPU compute kernel (reduce_sfpu.cpp + the
+    // compute_kernel_lib::reduce_sfpu helper) for the combinations enabled in Phase 1 of
+    // issue #43736; everything else for INT32 routes through the FPU GMPOOL path which
+    // only accepts {Float32, BFLOAT16, BFLOAT8_B, UINT32} and would silently produce zeros
+    // for INT32 (issue #26726).
+    //
+    // Phase 1 (SFPU INT32) supports:
+    //   - MAX along H or W (negate=false).  The repro from issue #21071 lives here.
+    //
+    // Out of Phase 1 scope (rejected here so they fail fast with a helpful message rather
+    // than silently going through the GMPOOL zero-producing path):
+    //   - SUM/AVG on INT32 (would need an INT32 binary-add tile in the cross-tile fold).
+    //   - MIN on INT32 along W (sfpu_reduce<MIN, *, REDUCE_ROW> is not in the LLK).
+    //   - MIN on INT32 along H (LLK supports it, but Phase 1 ships MAX only -- the
+    //     existing reduce_min path through the negate trick on top of the FPU MAX kernel
+    //     would still hit GMPOOL with INT32 input, so reject it for now).
+    //   - INT32 + HW reduce (composes from W then H; Phase 1 only ships the per-axis path).
+    const bool is_int32 = tensor_args.dtype() == DataType::INT32;
+    const bool is_int32_max_phase1 = is_int32 && operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX &&
+                                     !operation_attributes.negate &&
+                                     (operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
+                                      operation_attributes.dim == tt::tt_metal::ReduceOpDim::W);
     TT_FATAL(
         tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-            tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
-        "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
-        tensor_args.dtype());
+            tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
+            is_int32_max_phase1,
+        "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
+        "(plus INT32 for MAX along H or W in Phase 1 of issue #43736). Got dtype={}, math_op={}, "
+        "dim={}, negate={}.",
+        tensor_args.dtype(),
+        operation_attributes.math_op,
+        operation_attributes.dim,
+        operation_attributes.negate);
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
     const auto device_grid_size = tensor_args.device()->compute_with_storage_grid_size();
     TT_FATAL(

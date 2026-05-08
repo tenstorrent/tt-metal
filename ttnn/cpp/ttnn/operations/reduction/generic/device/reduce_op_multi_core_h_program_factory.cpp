@@ -260,6 +260,23 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
+    // INT32 inputs go through the SFPU compute kernel because the FPU's GMPOOL primitive
+    // (used by reduce_h_neg.cpp / reduce.cpp) silently produces zeros for INT32 -- see
+    // issue #26726.  Phase 1 of #43736 ships INT32 + MAX along H (negate=false); the
+    // device-op validation rejects every other INT32 combination before reaching here.
+    //
+    // The SFPU H kernel folds Ht tiles per output via binary_max_int32_tile, so it requires
+    // the reader to deliver tiles column-by-column (single_col_chunk).  We share the
+    // welford-style single-column reader path below by setting that compile-time flag.
+    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && !operation_attributes.negate &&
+                                     operation_attributes.math_op == ReduceOpMath::MAX;
+    if (use_sfpu_int32_path) {
+        // Note: `DataFormat` lives at global scope (defined in tensix_types.h, no namespace),
+        // unlike `ckernel::PoolType` and `ckernel::ReduceDim`.  Functions in `namespace ckernel`
+        // and `namespace compute_kernel_lib` find it via standard unqualified lookup.
+        reduce_defines["REDUCE_FORMAT"] = "DataFormat::Int32";
+    }
+
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
@@ -279,7 +296,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reader_desc.compile_time_args = reader_compile_time_args;
         reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/0};
+        // The reader's compile-time arg 4 forces row_chunk=1 (one tile-column at a time);
+        // it was originally added for welford and now also covers the SFPU INT32 H reduce
+        // path which folds Ht tiles per column via binary_max_int32_tile in DST.
+        std::vector<uint32_t> reader_compile_time_args = {
+            Ht, Wt, HtWt, scaler_bits, /*single_col_chunk=*/use_sfpu_int32_path ? 1u : 0u};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         // Pass DEST config so reader can compute DEST_AUTO_LIMIT
@@ -329,9 +350,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
+    // Pick the compute kernel: SFPU sibling for INT32 (Phase 1 of #43736), FPU GMPOOL path
+    // (with optional _h_neg negate-twice variant for signed MIN-as-MAX-of-negated-input)
+    // otherwise.
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
-        (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
+        use_sfpu_int32_path
+            ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_sfpu.cpp")
+            : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+                  (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;
