@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/ring_buffer.h"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
 
@@ -158,6 +159,18 @@ void kernel_main() {
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
+    // Pre-fill watcher ring buffer with 0xffffffff so unwritten slots are distinguishable.
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
+    {
+        auto debug_buf = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
+        for (int i = 0; i < DEBUG_RING_BUFFER_ELEMENTS; ++i) {
+            debug_buf->data[i] = 0xffffffff;
+        }
+        debug_buf->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
+        debug_buf->wrapped = 0;
+    }
+#endif
+
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
@@ -171,7 +184,9 @@ void kernel_main() {
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
+        WATCHER_RING_BUFFER_PUSH(ring_iter);
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        WATCHER_RING_BUFFER_PUSH(ring_id);
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
