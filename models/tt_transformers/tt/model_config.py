@@ -2833,7 +2833,7 @@ class ModelArgs:
             self.hf_config = AutoConfig.from_pretrained(
                 self.CKPT_DIR,
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=False,
+                local_files_only=os.getenv("CI") == "true",
             )
 
         config = self.hf_config.to_dict()
@@ -3026,7 +3026,7 @@ class ModelArgs:
                 self.CKPT_DIR,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=False
+                local_files_only=os.getenv("CI") == "true"
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
@@ -3468,7 +3468,7 @@ class ModelArgs:
             # If there is no Processor, it will return Tokenizer (useful for multimodal models)
             tokenizer = AutoTokenizer.from_pretrained(
                 self.TOKENIZER_PATH,
-                local_files_only=False,
+                local_files_only=os.getenv("CI") == "true",
                 trust_remote_code=self.trust_remote_code_hf,
             )
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
@@ -3517,7 +3517,9 @@ class ModelArgs:
             if fallback_tokenizer_path:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                 try:
-                    tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path, local_files_only=False)
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                    )
                     logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                 except Exception as fallback_e:
                     logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -3539,7 +3541,7 @@ class ModelArgs:
 
         processor = None
         try:
-            processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH, local_files_only=False)
+            processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
             logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
         except Exception as e:
             logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
@@ -3576,7 +3578,7 @@ class ModelArgs:
             config = AutoConfig.from_pretrained(
                 self.LOCAL_HF_PARAMS[self.model_name],
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=False,
+                local_files_only=os.getenv("CI") == "true",
             )
             if hasattr(config, "text_config"):
                 config.text_config.num_layers = self.n_layers
@@ -3608,7 +3610,7 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(
                     self.LOCAL_HF_PARAMS[self.model_name],
                     trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=False,
+                    local_files_only=os.getenv("CI") == "true",
                 )
                 if hasattr(config, "text_config"):
                     config.text_config.num_layers = self.n_layers
@@ -3636,7 +3638,7 @@ class ModelArgs:
                     model = model_cls.from_pretrained(
                         self.CKPT_DIR,
                         torch_dtype="auto",
-                        local_files_only=False,
+                        local_files_only=os.getenv("CI") == "true",
                         trust_remote_code=self.trust_remote_code_hf,
                     )
                     self.cached_hf_model = model
@@ -3648,7 +3650,7 @@ class ModelArgs:
                         self.CKPT_DIR,
                         torch_dtype="auto",
                         trust_remote_code=self.trust_remote_code_hf,
-                        local_files_only=False,
+                        local_files_only=os.getenv("CI") == "true",
                     )
 
         # HACK: Assume that we want the language model layers only
@@ -3719,7 +3721,9 @@ class ModelArgs:
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             if self.cached_hf_model is None:
-                model = model_cls.from_pretrained(self.CKPT_DIR, torch_dtype="auto", local_files_only=False)
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+                )
                 self.cached_hf_model = model
             else:
                 model = self.cached_hf_model
