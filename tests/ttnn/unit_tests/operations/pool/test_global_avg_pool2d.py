@@ -40,6 +40,49 @@ def test_run_average_pool2d(
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+# Regression test for https://github.com/tenstorrent/tt-metal/issues/43843.
+# The reduce-op validation added in PR #43253 rejects the input-derived
+# output_mem_config carried into ttnn::prim::reduce, even though
+# build_reduce_output_tensor_spec overwrites shard_shape[-2] to 1 and rounds
+# up to tile alignment for an H-reduce. This mirrors the failing call at
+# models/experimental/efficientnetb0/tt/efficientnetb0.py:483, where the input
+# is [1, 1, 49, 1280] ROW_MAJOR with an ND shard spec whose shard_shape[-2] = 49
+# (= 7*7, the spatial-flattened H of the EfficientNet-B0 feature map).
+@pytest.mark.parametrize(
+    "h_w, channels, w_split",
+    [
+        (49, 1280, 8),  # EfficientNet-B0 final feature map
+        (25, 320, 4),  # 5x5, also non-tile-aligned
+    ],
+    ids=["efficientnetb0_7x7_1280", "5x5_320"],
+)
+def test_global_avg_pool2d_nd_sharded_row_major_non_tile_aligned_h(device, h_w, channels, w_split):
+    torch.manual_seed(0)
+
+    assert channels % w_split == 0, "channels must split evenly across cores"
+    assert h_w % 32 != 0, "test targets non-tile-aligned H*W"
+
+    torch_input = torch.randn(1, 1, h_w, channels, dtype=torch.bfloat16)
+    torch_output = torch_input.mean(dim=2, keepdim=True)
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(w_split - 1, 0))])
+    shard_shape = ttnn.Shape([1, 1, h_w, channels // w_split])
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(shard_shape, grid))
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+        device=device,
+    )
+
+    output_tensor = ttnn.global_avg_pool2d(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor, 0.99)
+
+
 @pytest.mark.parametrize(
     "input_shape",
     (
