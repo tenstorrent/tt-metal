@@ -97,7 +97,7 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
 
 std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_device(
     tt::umd::Cluster& cluster) {
-    return discover_tunnels_from_mmio_device(*cluster.get_cluster_description());;
+    return discover_tunnels_from_mmio_device(*cluster.get_cluster_description());
 }
 
 }  // namespace tt::llrt
