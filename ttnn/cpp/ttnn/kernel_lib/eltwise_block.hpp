@@ -31,11 +31,38 @@
  *
  * Element kinds:
  *  - `BlockCopyTile<Cb, BlockSize, BaseDst, Policy, Reconfig>` — N CB → DEST loads.
- *  - `BlockBinaryFpu<CbA, CbB, Op, BlockSize, BaseDst, ...>` — N FPU binary ops.
- *  - `BlockPackTile<Cb, BlockSize, BaseDst, Policy, Reconfig>` — N DEST → CB packs.
+ *  - `BlockBinaryFpu<CbA, CbB, Op, BlockSize, ...>` — N FPU binary ops.
+ *  - `BlockPackTile<Cb, BlockSize, BaseDst, Policy, Reconfig, EnableFp32DestAcc>` — N DEST → CB packs.
  *
  * The streaming chain pipeline already supports these — they just present a different
  * `wait_per_tile` / `pop_per_tile` / `exec` shape (waits N, pops N, runs N inner ops).
+ *
+ * @section block_path_fold Compile-time prev-CB / prev-fp32 fold (D7)
+ *
+ * Block elements expose the same `reconfig_srca_cb` / `reconfig_srcb_cb` /
+ * `reconfig_pack_cb` static accessors as streaming elements (post-commit-3). The
+ * chain's `emit_pre_element_transitions<E, I, Es...>()` walks the element pack at
+ * compile time and emits per-element reconfig + fp32 transitions ahead of each
+ * element's `init()`. Reconfig is compile-time-elided when the running prev value
+ * equals the element's required value.
+ *
+ * Block-element `init()` bodies no longer emit reconfig — they program only the
+ * per-op LLK shape (`add_tiles_init`, `init_bcast`, `copy_tile_init`).
+ *
+ * @section block_path_carry_skip CARRY / SKIP element classification (D6)
+ *
+ * | List | Block elements | Carries `EnableFp32DestAcc` template? |
+ * |---|---|---|
+ * | CARRY | `BlockBinaryFpu`, `BlockPackTile` | Yes (default `false`); `static_assert(!EnableFp32DestAcc \|\|
+ * DST_ACCUM_MODE)` enforces FP32_DEST_ACC_EN at compile time. | | SKIP  | `BlockCopyTile` | No template parameter; fold
+ * treats it as transparent (passes prev fp32 through). |
+ *
+ * @section block_caller_init_contract Caller-init contract — reminder
+ *
+ * Block-using kernels follow the same caller-init contract as streaming chains. See
+ * `eltwise_chain.hpp` `@section caller_init_contract` for the table; the only block-
+ * specific note is that `init_bcast<...>(CbA, CbB, ocb)` in `BlockBinaryFpu::init()`
+ * is per-element (chain-owned), not BIG-init.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

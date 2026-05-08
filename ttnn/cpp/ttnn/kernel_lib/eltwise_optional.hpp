@@ -10,9 +10,12 @@
  * Two patterns are supported:
  *
  *  1. **Compile-time conditional** — `OptionalChainElement<bool COND, Inner>`. When
- *     COND is true the inner element runs unchanged; when false every hook is a no-op.
- *     The chain combinator sees the wrapper as the same kind as `Inner` (inherits its
- *     tag) and forwards trait queries (`cb_a_id`, `is_upfront`, etc.) to it.
+ *     COND is true the wrapper inherits Inner's constructors AND its full type / tag,
+ *     so the chain pipeline sees `Inner`. When COND is false the wrapper inherits
+ *     Inner's tag (so chain traits classify it the same way) but every hook is a
+ *     no-op. The wrapper's variadic constructor swallows any args the caller would
+ *     pass to Inner — `OptionalChainElement<COND, FillScalar>{0.5f}` compiles for
+ *     COND in {true, false}.
  *
  *  2. **Runtime conditional** — kernels that need to pick a chain shape based on a
  *     runtime arg use the standard "template the inner function on a `bool`" pattern
@@ -30,6 +33,17 @@
  *             const bool do_mask = get_arg_val<uint32_t>(0) != 0;
  *             if (do_mask) run_op<true>(n); else run_op<false>(n);
  *         }
+ *
+ * @section per_element_fp32_dest_acc_optional Per-element fp32-dest-acc (D6)
+ *
+ * `OptionalChainElement<COND, Inner>` is on the **SKIP list** for D6 — the wrapper
+ * itself does not expose `EnableFp32DestAcc`. When `COND == true` and `Inner` is a
+ * CARRY element, `Inner::EnableFp32DestAcc` participates in the fold via the SFINAE
+ * probe (the wrapper's chosen specialisation IS the `Inner` struct). When
+ * `COND == false`, the no-op specialisation has no `EnableFp32DestAcc` member; the
+ * fold's SFINAE probe returns the running prev — transparent pass-through.
+ *
+ * @section optional_caveats Caveats
  *
  * Mid-loop per-iteration runtime conditions (`if (col_idx == Wt-1) mask_tile(...)`)
  * are NOT supported by these helpers — they require a per-iter runtime branch

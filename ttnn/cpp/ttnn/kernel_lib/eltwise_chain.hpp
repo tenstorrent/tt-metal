@@ -15,32 +15,156 @@
  *   - the modern dst-sync window (`tile_regs_acquire/commit/wait/release`),
  *   - per-chain-element init / exec dispatch,
  *   - CB lifecycle (wait/pop on inputs, reserve/push on outputs) via per-element policy enums,
- *   - input-side and pack-side dtype reconfig via per-element policy enums,
+ *   - input-side and pack-side dtype reconfig via per-element policy enums (compile-time-elided
+ *     via prev-CB / prev-fp32-dest-acc folds — see @ref per_element_fp32_dest_acc),
+ *   - per-element fp32-dest-acc transitions (D6 — see @ref per_element_fp32_dest_acc),
  *   - compile-time invariant checks (illegal lifecycle/index combos, duplicate upfront CBs,
  *     pack collisions, hoist-safety).
  *
  * The chain does NOT emit any deprecated dst-sync (`acquire_dst`/`release_dst`) — modern only.
  *
+ * @section caller_init_contract Caller-init contract (D8)
+ *
+ * The chain helper does **not** wrap any "BIG init". Engine-wide setup is the caller's
+ * responsibility. The chain owns ONLY per-element setup.
+ *
+ * | Init kind | Owner | When to call | Notes |
+ * |---|---|---|---|
+ * | `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` | **caller** | First statement of `MAIN()` (D5). | Engine boot.
+ * MMIO-unsafe mid-kernel. Required for chains that read/write CBs. | | `binary_op_init_common(cb_a, cb_b, cb_out)` |
+ * **caller** (when applicable) | Once per `MAIN()`, before any chain or raw binary call. | Required when the kernel
+ * mixes raw binary primitives with chain calls; not required for chain-only kernels. | | `mm_init(...)` | **caller** |
+ * N/A for eltwise chain (chain is eltwise-only). | If a kernel mixes matmul and chain, kernel author owns `mm_init`
+ * placement. | | `reduce_init<...>(...)` | **caller** | N/A for eltwise chain. | Same as `mm_init`. | |
+ * `add_tiles_init` / `sub_tiles_init` / `mul_tiles_init` / `init_bcast<...>(...)` | **chain** | Per-element, before
+ * each binary element's `exec()`. | Chain owns the per-element programming. Caller does NOT call these. | |
+ * `copy_tile_init(cb)` / `copy_tile_to_dst_init_short(cb)` | **chain** | Per-CopyTile / per-BlockCopyTile, fold-driven
+ * prev-CB. | The fold emits the equivalent `_with_dt` form by combining `reconfig_data_format_srca(curr) +
+ * copy_tile_init(curr)`. | | `reconfig_data_format_srca/srcb(cb)` / `pack_reconfig_data_format(cb)` | **chain** |
+ * Per-element, fold-driven (D2 + D7). | Compile-time-elided when prev_cb == cur_cb. | | `enable_fp32_dest_acc()` /
+ * `disable_fp32_dest_acc()` | **chain** | Per-element fold transition (D6). | Compile-time-elided when prev_fp32 ==
+ * cur_fp32. | | `tile_regs_acquire / commit / wait / release` | **chain** | Per-iteration. | Chain owns the lifecycle.
+ * |
+ *
+ * @section hw_startup_placement compute_kernel_hw_startup placement (D5)
+ *
+ * `compute_kernel_hw_startup` is the first statement of `MAIN()` if the chain shape requires
+ * it (chains with at least one CB-reader and one CB-writer). Multi-stage kernels (different PACK
+ * output CB per stage) emit one boot per stage — stage 1 at top of `MAIN()`, stages 2+
+ * immediately before that stage's chain call. Mid-`MAIN()` placement is undefined per
+ * `compute_kernel_hw_startup.h:26-30` (MMIO writes unsafe to call mid-kernel).
+ *
+ * | Chain shape | Caller pre-chain init | Placement |
+ * |---|---|---|
+ * | Unary `CopyTile<cbA, …>{} … PackTile<cbOut, …>{}` | `compute_kernel_hw_startup(cbA, cbA, cbOut);` | First statement
+ * of `MAIN()`. | | Binary `BinaryFpu<cbA, cbB, …>{} … PackTile<cbOut>{}` | `compute_kernel_hw_startup(cbA, cbB,
+ * cbOut);` | First statement of `MAIN()`. | | `DestReuseBinary<cb, …>{}` only | `compute_kernel_hw_startup(cb, cb,
+ * cbOut);` | First statement of `MAIN()`. | | Multi-stage (e.g. `logit_kernel.cpp`) | One `compute_kernel_hw_startup`
+ * per stage. | Stage 1 at top of `MAIN()`; stages 2+ immediately before that stage's chain call. | | Mid-loop chain
+ * (moreh inner-loop pattern) | Caller's outer `binary_op_init_common(...)` already covers the chain — no extra boot
+ * needed. | Omit; calling `compute_kernel_hw_startup` mid-`MAIN()` here is **undefined per D5**. | | Copy-only chain
+ * whose CB formats already match defaults | Omit. | N/A. |
+ *
+ * @section deduced_wrapper eltwise_chain_with_init — single-stage convenience (U4)
+ *
+ * `eltwise_chain_with_init(num_tiles, elts...)` deduces `(cb_a, cb_b, cb_out)` from the chain
+ * element pack at compile time and emits `compute_kernel_hw_startup` before the chain. **Use only
+ * for single-stage kernels.** Multi-stage (different PACK output CB per stage) MUST keep the
+ * explicit per-stage `compute_kernel_hw_startup` pattern.
+ *
+ * @section per_element_fp32_dest_acc Per-element EnableFp32DestAcc (D6)
+ *
+ * The chain inherits **no** fp32-dest-acc state from the kernel. Each chain element on the **CARRY
+ * list** (DEST-format-sensitive LLK) carries an `EnableFp32DestAcc` template parameter (default
+ * `false`). The chain's compile-time fold walks the element pack and emits
+ * `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` before any element where the running mode
+ * differs from the prior element's mode.
+ *
+ * | List | Elements | EnableFp32DestAcc behavior |
+ * |---|---|---|
+ * | **CARRY** | `BinaryFpu`, `BlockBinaryFpu`, `DestReuseBinary`, `UnaryBcast`, `PackTile`, `PackTileBlock`,
+ * `BlockPackTile` (and the SFPU `BinarySfpu` family — `AddBinary` / `SubBinary` / `MulBinary` / `DivBinary` — once
+ * F-UX-9 lifts the SFPU-family deferral) | Carries `bool EnableFp32DestAcc = false` template parameter.
+ * `static_assert(!EnableFp32DestAcc \|\| DST_ACCUM_MODE)` rejects opt-in on kernels not built with `FP32_DEST_ACC_EN`.
+ * The fold's SFINAE probe reads `E::EnableFp32DestAcc`. | | **SKIP** | `CopyTile`, `BlockCopyTile`, `FillScalar`,
+ * `FillInt`, `FillBitcast`, `RandTile`, `OptionalChainElement<COND, Inner>` | No `EnableFp32DestAcc` template parameter
+ * — dest-mode-irrelevant. The fold's SFINAE probe returns the running prev value (transparent pass-through). |
+ *
+ * Pattern for kernels wanting "global fp32 chain":
+ *
+ * @code
+ *   constexpr bool kFp32 =
+ *   #ifdef FP32_DEST_ACC_EN
+ *       true;
+ *   #else
+ *       false;
+ *   #endif
+ *   // then per CARRY element:
+ *   BinaryFpu<cbA, cbB, cbOut, BinaryFpuOp::Add, BroadcastDim::None,
+ *             BinaryDataFormatReconfig::InputAndOutput,
+ *             CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
+ *             CbIndexMode::FirstTile, Dst::D0, kFp32>{}
+ * @endcode
+ *
+ * @section block_path_fold Block-path fold (D7)
+ *
+ * Block elements (`BlockCopyTile`, `BlockBinaryFpu`, `BlockPackTile`) participate in the same
+ * compile-time prev-CB / prev-fp32 fold as streaming elements via the uniform
+ * `reconfig_srca_cb` / `reconfig_srcb_cb` / `reconfig_pack_cb` static accessors. `init()` bodies
+ * no longer emit reconfig — that's fold-driven. The `_with_dt` two-arg LLK forms (formerly at
+ * `eltwise_block.hpp:72,236`) are now decomposed into the chain's
+ * `reconfig_data_format_srca(curr) + copy_tile_init(curr)` sequence, compile-time-elided when
+ * prev_cb == curr_cb.
+ *
+ * @section caller_init_wrong_way Anti-examples (D8)
+ *
+ * Three failure modes the contract above prevents:
+ * 1. **Mid-`MAIN()` `compute_kernel_hw_startup`** — undefined behaviour per
+ *    `compute_kernel_hw_startup.h:26-30` (MMIO write mid-kernel; race conditions under load).
+ * 2. **Chain-only kernel forgetting `compute_kernel_hw_startup`** — silent miscompile; default-
+ *    format reconfigs may match by accident; first mismatched-dtype kernel produces garbage.
+ * 3. **`EnableFp32DestAcc=true` on a kernel built without `FP32_DEST_ACC_EN`** — compile-time
+ *    `static_assert` per CARRY element fires immediately.
+ *
+ * @section big_init_grep_gate D8 grep gate
+ *
+ * Manual one-liner the reviewer / future contributor runs ad-hoc to verify the chain helper
+ * has no BIG-init call sites:
+ *
+ * @code
+ *   grep -nE 'init_common|compute_kernel_hw_startup|mm_init|reduce_init' \
+ *        ttnn/cpp/ttnn/kernel_lib/eltwise_{chain.hpp,chain.inl,block.hpp}
+ * @endcode
+ *
+ * Expected: only the `#include "compute_kernel_hw_startup.h"` line in this header (and any
+ * doxygen comment matches such as this one). Zero call sites in helper bodies.
+ *
  * Worked examples
  * ---------------
  *
  *   // Streaming unary — Exp(x) → out
- *   eltwise_chain(
+ *   eltwise_chain(num_tiles,
  *       CopyTile<cb_in,  Dst::D0, CopyTilePolicy::WaitAndPop>{},
  *       Exp<>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
  *   );
  *
  *   // Streaming binary — A + B → out
- *   eltwise_chain(
- *       CopyTile<cb_a, Dst::D0, CopyTilePolicy::WaitAndPop>{},
- *       CopyTile<cb_b, Dst::D1, CopyTilePolicy::WaitAndPop>{},
- *       BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add>{},
+ *   //   (3rd template arg is CbOut)
+ *   eltwise_chain(num_tiles,
+ *       BinaryFpu<cb_a, cb_b, cb_out, BinaryFpuOp::Add>{},
+ *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
+ *   );
+ *
+ *   // Single-stage with deduced wrapper — U4
+ *   eltwise_chain_with_init(num_tiles,
+ *       CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+ *       Exp<>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
  *   );
  *
  *   // Fan-out — same input, two outputs
- *   eltwise_chain(
+ *   eltwise_chain(num_tiles,
  *       CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitNoPop>{},
  *       CopyTile<cb_in, Dst::D1, CopyTilePolicy::NoWaitPop>{},
  *       Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
@@ -56,6 +180,21 @@
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::UpfrontReservePushAtEnd, PackTileIndexMode::BlockIter>{}
  *   );
  *
+ *   // Mixed CARRY + SKIP + fp32 transitions (D6)
+ *   //   (BinaryFpu's 11th template arg is EnableFp32DestAcc; passing `true` here)
+ *   eltwise_chain(num_tiles,
+ *       CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},                          // SKIP — transparent
+ *       BinaryFpu<cb_in, cb_b, cb_tmp, BinaryFpuOp::Add, BroadcastDim::None,             // CARRY, fp32=true
+ *                 BinaryDataFormatReconfig::InputAndOutput,
+ *                 CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
+ *                 CbIndexMode::FirstTile, Dst::D0, true>{},
+ *       Exp<>{},                                                                        // SKIP — transparent
+ *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush,                 // CARRY, fp32=false (default)
+ *                PackTileIndexMode::FirstTile, PackTileReconfig::None>{}
+ *   );
+ *   // Fold emits: `enable_fp32_dest_acc()` before BinaryFpu (transition from default false → true)
+ *   //             `disable_fp32_dest_acc()` before PackTile (transition from true → false)
+ *
  * Non-goals
  * ---------
  *  - Cumulative wait policy (`cb_wait_front(base + i)`). Out of scope; raw LLK only.
@@ -65,19 +204,23 @@
  *  - `acquire_dst/release_dst` and `ACQ()/REL()` macros — modern dst-sync only. Kernels migrate
  *    their dst-sync as part of adopting the chain.
  *
- * Reconfig (`with_dt_tree`-style)
- * --------------------------------
- *  - CopyTileReconfig::Input         → reconfig_data_format_srca(old, new) + copy_tile init.
- *  - BinaryDataFormatReconfig::INPUT → reconfig_data_format_srca / _srcb (per side).
- *  - BinaryDataFormatReconfig::OUTPUT → pack_reconfig_data_format(old, new).
- *  - DestReuseReconfig::Input        → srca OR srcb reconfig (per ReuseType).
- *  - PackTileReconfig::Output        → pack_reconfig_data_format(new_cb).
- *  - PackTileReconfig::OutputConditional → pack_reconfig_data_format(old_cb, new_cb).
- *  - UnaryBcastReconfig::Input       → reconfigure_unary_bcast(old, new, old_ocb, new_ocb).
+ * Reconfig (`with_dt_tree`-style) — fold-driven post commits 2-3
+ * ----------------------------------------------------------------
+ *  - CopyTileReconfig::Input         → fold emits `reconfig_data_format_srca(curr)` (compile-time-elided when prev ==
+ * curr).
+ *  - BinaryDataFormatReconfig::Input → fold emits `reconfig_data_format_srca / _srcb` per side (compile-time-elided per
+ * side).
+ *  - BinaryDataFormatReconfig::Output → fold emits `pack_reconfig_data_format(CbOut)` (compile-time-elided when
+ * prev_pack == CbOut).
+ *  - DestReuseReconfig::Input        → fold emits per-side reconfig (srca OR srcb depending on ReuseType).
+ *  - PackTileReconfig::Output        → fold emits `pack_reconfig_data_format(new_cb)`.
+ *  - PackTileReconfig::OutputConditional → currently emits same as ::Output; future extension may
+ *    select two-arg `pack_reconfig_data_format(prev, curr)` form when prev_pack is known (D7 note).
+ *  - UnaryBcastReconfig::Input       → currently bundled into `unary_bcast_init`.
  *
  * The combined `reconfig_data_format(srca, srcb)` overloads expand to the same two MOPs that
- * `reconfig_data_format_srca` + `reconfig_data_format_srcb` issue independently, so the helper
- * picks the per-side variant when only one operand changes dtype.
+ * `reconfig_data_format_srca` + `reconfig_data_format_srcb` issue independently, so the per-side
+ * elision in the fold yields the same MOP count as the combined form when both sides change.
  */
 
 #include <cstdint>
