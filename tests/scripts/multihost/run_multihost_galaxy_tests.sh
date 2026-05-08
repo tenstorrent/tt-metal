@@ -713,8 +713,8 @@ run_all_needed_local_tests() {
     fi
 }
 
-# Run everything
-run_quad_galaxy_tests() {
+# Run everything (unit + dual + quad DeepSeek V3 integration suites)
+run_all_multihost_galaxy_tests() {
     run_quad_galaxy_unit_tests
     run_dual_deepseekv3_unit_tests
     run_quad_deepseekv3_unit_tests
@@ -911,7 +911,7 @@ main() {
             run_all_needed_local_tests
             ;;
         "all")
-            run_quad_galaxy_tests
+            run_all_multihost_galaxy_tests
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
