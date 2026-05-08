@@ -329,28 +329,23 @@ void get_optimal_dram_bank_to_reader_assignment(
 
 // On Blackhole, NoC0 routes packets right-then-down (per
 // tt-isa-documentation/BlackholeA0/NoC/RoutingPaths.md). DRAM endpoints sit on fixed columns, so a
-// duplicate reader is moved strictly to the right on the same logical row: this keeps the request on
-// the same horizontal corridor while ensuring its vertical down-leg into the DRAM column stays distinct
-// from the original reader's, minimising NoC contention.
+// duplicate reader prefers moving right on the same logical row before falling back left: this keeps
+// the request on the same horizontal corridor while ensuring its vertical down-leg into the DRAM
+// column stays distinct from the original reader's, minimising NoC contention.
 std::optional<CoreCoord> find_next_unused_worker_core_on_same_row(
     tt_metal::distributed::MeshDevice* device, const CoreCoord& preferred_core, const std::set<CoreCoord>& used_cores) {
-    const auto grid_size = device->compute_with_storage_grid_size();
-    const auto& storage_only_cores = device->storage_only_cores();
+    const auto grid_size = device->logical_grid_size();
     const uint32_t y = preferred_core.y;
-
-    auto is_available = [&](const CoreCoord& candidate) {
-        return !used_cores.contains(candidate) && !storage_only_cores.contains(candidate);
-    };
 
     for (uint32_t x = preferred_core.x + 1; x < grid_size.x; ++x) {
         CoreCoord candidate{x, y};
-        if (is_available(candidate)) {
+        if (!used_cores.contains(candidate)) {
             return candidate;
         }
     }
     for (int32_t x = static_cast<int32_t>(preferred_core.x) - 1; x >= 0; --x) {
         CoreCoord candidate{static_cast<uint32_t>(x), y};
-        if (is_available(candidate)) {
+        if (!used_cores.contains(candidate)) {
             return candidate;
         }
     }
