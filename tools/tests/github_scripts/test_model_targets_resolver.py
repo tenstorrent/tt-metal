@@ -150,7 +150,13 @@ def test_model_targets_resolver_distinguishes_batch_perf_vs_accuracy_entries(
                 "skus": {
                     "wh_n150": {
                         "entries": [
-                            {"batch_size": 1, "seq_len": 1024, "status": "active", "perf": {}, "accuracy": {"top1": 91.0}},
+                            {
+                                "batch_size": 1,
+                                "seq_len": 1024,
+                                "status": "active",
+                                "perf": {},
+                                "accuracy": {"top1": 91.0},
+                            },
                             {
                                 "batch_size": 32,
                                 "seq_len": 1024,
