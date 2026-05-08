@@ -89,6 +89,27 @@ class PI0ModelTTNN:
 
         # Initialize components
         self._init_components()
+        self._precompute_bs1_timestep_tensors()
+
+    def _precompute_bs1_timestep_tensors(self) -> None:
+        """
+        One-time device tensors for timestep (batch=1): avoids slice+reshape inside
+        the denoise loop when batch_size matches.
+        """
+        num_steps = self.denoise_config.num_steps
+        pad_steps = ((num_steps + 31) // 32) * 32
+
+        timestep_indices = ttnn.to_layout(self.timestep_indices, ttnn.TILE_LAYOUT)
+        timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
+        ttnn.deallocate(timestep_indices)
+        row = ttnn.add(timestep_values, 1.0)
+        ttnn.deallocate(timestep_values)
+        self._timesteps_row_ttnn = ttnn.reshape(row, (1, pad_steps))
+
+        self._timestep_per_step_bs1: List[ttnn.Tensor] = []
+        for i in range(num_steps):
+            t_i = ttnn.slice(self._timesteps_row_ttnn, [0, i], [1, i + 1])
+            self._timestep_per_step_bs1.append(ttnn.reshape(t_i, (1,)))
 
     def _init_components(self):
         """Initialize all model components."""
@@ -206,19 +227,18 @@ class PI0ModelTTNN:
         # Step 2: Forward prefix through VLM and cache KV
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
-        # Get timesteps
         num_steps = self.denoise_config.num_steps
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
-        # Compute timestep tensor on device
-        pad_steps = ((num_steps + 31) // 32) * 32
-        timestep_indices = self.timestep_indices
-        timestep_indices = ttnn.to_layout(timestep_indices, ttnn.TILE_LAYOUT)
-        timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
-        timesteps_ttnn = ttnn.add(timestep_values, 1.0)
-        timesteps_ttnn = ttnn.reshape(timesteps_ttnn, (1, pad_steps))
-        ttnn.deallocate(timestep_indices)
-        ttnn.deallocate(timestep_values)
+        timesteps_ttnn = None
+        if batch_size != 1:
+            pad_steps = ((num_steps + 31) // 32) * 32
+            timestep_indices = ttnn.to_layout(self.timestep_indices, ttnn.TILE_LAYOUT)
+            timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
+            timesteps_ttnn = ttnn.add(timestep_values, 1.0)
+            timesteps_ttnn = ttnn.reshape(timesteps_ttnn, (1, pad_steps))
+            ttnn.deallocate(timestep_indices)
+            ttnn.deallocate(timestep_values)
 
         # Step 3: Sample initial noise
         x_t_ttnn = self.x_t_ttnn
@@ -229,8 +249,12 @@ class PI0ModelTTNN:
             t_next = timesteps[i + 1]
             dt = t_next - t
 
-            t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
-            t_tensor = ttnn.reshape(t_tensor, (batch_size,))
+            if batch_size == 1:
+                t_tensor = self._timestep_per_step_bs1[i]
+            else:
+                assert timesteps_ttnn is not None
+                t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
+                t_tensor = ttnn.reshape(t_tensor, (batch_size,))
 
             suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
 
