@@ -114,7 +114,8 @@ struct ReduceToAllB1 {
         uint32_t outputCoreNocX = 0,
         uint32_t outputCoreNocY = 0,
         uint32_t meshRows = 0,
-        uint32_t myRow = 0>
+        uint32_t myRow = 0,
+        uint32_t forwardMetadataSizeBytes = 0>
     struct WriterCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t payload_size_bytes = payloadSizeBytes;
@@ -146,6 +147,7 @@ struct ReduceToAllB1 {
         static constexpr uint32_t output_core_noc_y = outputCoreNocY;
         static constexpr uint32_t mesh_rows = meshRows;
         static constexpr uint32_t my_row = myRow;
+        static constexpr uint32_t forward_metadata_size_bytes = forwardMetadataSizeBytes;
         static constexpr bool ring_barrier_enable = meshRows > 1;
 
         static constexpr uint32_t all_sent_mask =
@@ -209,6 +211,7 @@ struct ReduceToAllB1 {
         uint32_t r3_slot_bit;
         uint32_t r3_sem_addr;
         uint32_t socket_config_addr;
+        uint32_t metadata_addr;
         uint32_t agg_sem_l1_addr;
         uint32_t agg_core_noc_x;
         uint32_t agg_core_noc_y;
@@ -647,11 +650,17 @@ struct ReduceToAllB1 {
                     noc_async_write_barrier();
 
                     if constexpr (CTArgs::enable_downstream_socket) {
+                        constexpr bool is_last_worker_metadata_forwarder = CTArgs::forward_metadata_size_bytes > 0;
                         if (args.socket_config_addr != 0) {
+                            const bool is_last_worker = args.shard_idx == CTArgs::total_num_workers - 1;
+                            const uint32_t actual_socket_page_size =
+                                (is_last_worker_metadata_forwarder && is_last_worker)
+                                    ? CTArgs::socket_page_size + CTArgs::forward_metadata_size_bytes
+                                    : CTArgs::socket_page_size;
                             SocketSenderInterface sender_socket =
                                 create_sender_socket_interface(args.socket_config_addr);
-                            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size);
-                            DPRINT << "WSR sp=" << (uint32_t)CTArgs::socket_page_size
+                            set_sender_socket_page_size(sender_socket, actual_socket_page_size);
+                            DPRINT << "WSR sp=" << (uint32_t)actual_socket_page_size
                                    << " pl=" << (uint32_t)CTArgs::payload_size_bytes << "\n";
                             socket_reserve_pages(sender_socket, 1);
                             DPRINT << "WSRd\n";
@@ -661,8 +670,18 @@ struct ReduceToAllB1 {
                                 downstream_enc.d2d.downstream_noc_x,
                                 downstream_enc.d2d.downstream_noc_y,
                                 sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
-                            noc_async_write(src_addr, fifo_dst, CTArgs::socket_page_size);
-                            noc_async_writes_flushed();
+                            noc_async_write<CTArgs::socket_page_size, true, /*posted=*/true>(
+                                src_addr, fifo_dst, CTArgs::socket_page_size);
+
+                            if constexpr (is_last_worker_metadata_forwarder) {
+                                if (is_last_worker) {
+                                    noc_async_write<CTArgs::forward_metadata_size_bytes, true, /*posted=*/true>(
+                                        args.metadata_addr,
+                                        fifo_dst + CTArgs::socket_page_size,
+                                        CTArgs::forward_metadata_size_bytes);
+                                }
+                            }
+                            noc_async_posted_writes_flushed();
                             DPRINT << "WSW\n";
                             socket_push_pages(sender_socket, 1);
                             socket_notify_receiver(sender_socket);

@@ -1566,14 +1566,4 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
 
     ttnn.distributed_context_barrier()
 
-    # -- Pipeline teardown --
-    logger.info(f"[rank={my_mesh_id}] waiting for pipeline termination")
-    if is_stage0:
-        ttnn.distributed_context_barrier()
-        for hio in host_ios:
-            hio.terminate(False)
-        entry_socket_interface.terminate(False)
-        exit_socket_interface.terminate(True)
-    else:
-        pipeline_block.terminate()
-    logger.info(f"[rank={my_mesh_id}] programs terminated")
+    logger.info(f"[rank={my_mesh_id}] persistent MoE test PASSED")

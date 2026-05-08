@@ -281,6 +281,7 @@ class _MoeRoutedExpertContext:
     enable_forward: bool = False
     forward_params: dict = None
     forward_staging_tensor: Any = None
+    forward_metadata_size_bytes: int = 0
 
 
 @dataclass
@@ -1810,6 +1811,7 @@ class MoeRoutedExpertOp:
             ("reduce_output_core_noc_y", 0),
             ("reduce_mesh_rows", 0),
             ("reduce_my_row", 0),
+            ("reduce_forward_metadata_size_bytes", ctx.forward_metadata_size_bytes),
             # Broadcast / Forward (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
             # Forward BRISC CT args
@@ -3402,7 +3404,11 @@ class MoeOp:
 
     @staticmethod
     def _overlap_cbs_with_sdpa_buffer(
-        routed_ctx, shared_ctx, sdpa_kv_cache_buffer, sdpa_out_interm_buffer, reduce_all_cores_set=None
+        routed_ctx,
+        shared_ctx,
+        sdpa_kv_cache_buffer,
+        sdpa_out_interm_buffer,
+        reduce_all_cores_set=None,
     ):
         """
         Override working-buffer CB descriptors to overlap with SDPA buffers.
@@ -3995,7 +4001,7 @@ class MoeOp:
 
         if routed_ctx.enable_forward and routed_ctx.bcast_pkt_cb is not None:
             cb46_cb_id = routed_ctx.bcast_pkt_cb
-            cb46_total_size = routed_ctx.forward_params["payload_size_bytes"]
+            cb46_total_size = routed_ctx.forward_params["payload_size_bytes"] + routed_ctx.forward_metadata_size_bytes
             rmsnorm_fmt = routed_ctx.rmsnorm_output_cb_descriptor.format_descriptors[0]
             cb46_page_size = rmsnorm_fmt.page_size
             cb46_tile = rmsnorm_fmt.tile
@@ -4467,6 +4473,7 @@ class MoeOp:
                             f"socket_config_addr=0x{socket_config_addr:x} (single socket)",
                             flush=True,
                         )
+                worker_metadata_addr = self._metadata_l1_addr if (is_exit_col and self._metadata_l1_addr != 0) else 0
                 worker_args = [
                     fc_phys.x,  # 0
                     fc_phys.y,  # 1
@@ -4488,16 +4495,17 @@ class MoeOp:
                     r3_slot_b,  # 17
                     r3_fwd_sem_addr,  # 18 (L1 addr)
                     socket_config_addr,  # 19
-                    0,  # 20 agg_sem_l1_addr (unused, workers bump FC directly)
-                    0,  # 21 agg_core_noc_x (unused)
-                    0,  # 22 agg_core_noc_y (unused)
-                    int(is_persistent_device),  # 23 persistent_enable: all workers on exit device
-                    persistent_fc_wait_sem_noc_x if is_persistent_device else 0,  # 24
-                    persistent_fc_wait_sem_noc_y if is_persistent_device else 0,  # 25
-                    0,  # 26 persistent_dst_mesh_id (unused by workers)
-                    0,  # 27 persistent_dst_chip_id (unused by workers)
-                    persistent_fc_wait_sem_addr if is_persistent_device else 0,  # 28
-                    shard_idx,  # 29
+                    worker_metadata_addr,  # 20 metadata_addr
+                    0,  # 21 agg_sem_l1_addr (unused, workers bump FC directly)
+                    0,  # 22 agg_core_noc_x (unused)
+                    0,  # 23 agg_core_noc_y (unused)
+                    int(is_persistent_device),  # 24 persistent_enable: all workers on exit device
+                    persistent_fc_wait_sem_noc_x if is_persistent_device else 0,  # 25
+                    persistent_fc_wait_sem_noc_y if is_persistent_device else 0,  # 26
+                    0,  # 27 persistent_dst_mesh_id (unused by workers)
+                    0,  # 28 persistent_dst_chip_id (unused by workers)
+                    persistent_fc_wait_sem_addr if is_persistent_device else 0,  # 29
+                    shard_idx,  # 30
                 ]
                 reduce_brisc_per_core_args.append((core, worker_args))
 
@@ -4676,7 +4684,7 @@ class MoeOp:
         tensor_address = int(residual_device.buffer_address())
 
         cross_col_sem_addr = self.sem_addrs[MoeSem.FORWARD_CROSS_COL_SYNC]
-        socket_page_size = fp["payload_size_bytes"]
+        socket_page_size = fp["payload_size_bytes"] + self._forward_metadata_size_bytes
 
         def _update_ncrisc_ct(name, value):
             for i, (n, _v) in enumerate(self.ncrisc_args):
@@ -5082,6 +5090,8 @@ class MoeOp:
                     f"shape={forward_staging_tensor.shape}",
                     flush=True,
                 )
+
+            routed_ctx.forward_metadata_size_bytes = self._forward_metadata_size_bytes
 
             reduce_all_cores_set = None
             if routed_ctx.enable_reduce_to_all and routed_ctx.reduce_params:
