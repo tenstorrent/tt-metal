@@ -18,6 +18,7 @@
 #include <nanobind/operators.h>
 #include <nanobind/make_iterator.h>
 #include <nanobind/stl/bind_vector.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
