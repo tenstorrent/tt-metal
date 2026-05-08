@@ -53,9 +53,6 @@ public:
     // Returns the local shape of the system mesh; this is the local mesh shape in distributed context
     const MeshShape& local_shape() const;
 
-    // Returns the local offset within the global mesh; identifies where this host's local slice sits.
-    const MeshCoordinate& local_offset() const;
-
     // Wrapper structure with device IDs, fabric node IDs, and mesh shape ordered in row-major order according to the
     // requested `shape`.
     struct MappedDevices {

@@ -703,7 +703,7 @@ void Data::rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& re
         local_shape_builder.set(i, local_shape[i]);
     }
 
-    const auto& local_offset = system_mesh.local_offset();
+    const auto local_offset = MetalContext::instance().get_control_plane().get_local_mesh_offset();
     auto local_offset_builder = system_mesh_builder.initLocalOffset(local_offset.dims());
     for (size_t i = 0; i < local_offset.dims(); ++i) {
         local_offset_builder.set(i, local_offset[i]);
