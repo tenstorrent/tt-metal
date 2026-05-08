@@ -32,6 +32,9 @@ struct Case {
     uint32_t H;                    // hidden_dim
     uint32_t I;                    // intermediate_dim
     std::vector<uint32_t> counts;  // active rows per expert (must be tile-aligned multiples of 32)
+    // Extra tile-rows of trailing slack between offsets[-1] and T_cap, mirroring
+    // moe_group's worst-case allocation slack. 0 = no trailing pad path triggered.
+    uint32_t slack_tiles = 0U;
 };
 
 struct Stats {
@@ -117,13 +120,13 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     std::mt19937 rng(rng_global());
 
     const auto offsets_host = compute_offsets(c.counts);
-    const uint32_t T_cap = offsets_host.back();
+    constexpr uint32_t kTile = 32U;
+    const uint32_t T_cap = offsets_host.back() + c.slack_tiles * kTile;
 
     const auto offsets_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
 
     // Build weights once and reuse across iterations.
-    // [out, in] layout (LinearLayer convention).
     const auto w_gate = build_expert_weight_list(c.E, c.I, c.H, device, rng);
     const auto w_up = build_expert_weight_list(c.E, c.I, c.H, device, rng);
     const auto w_down = build_expert_weight_list(c.E, c.H, c.I, device, rng);
@@ -261,6 +264,19 @@ int main() {
 
             // Smaller debug shape that fits comfortably and runs fast.
             {"debug_h512_i1024_e4_uniform_512tok", 4, 512, 1024, uniform_counts(4, /*tokens=*/512, /*K=*/2)},
+
+            // Trailing-pad path comparison: same shape, with vs without slack.
+            // Slack mirrors moe_group's worst-case formula: per-expert (32 + 7·N) rows
+            // for WH N=72 → ~17 tile-rows per expert. E=12 → 12·17 ≈ 204 tile-rows.
+            {"h4k_i512_e12_uniform_4ktok_pad0", 12, 4096, 512, uniform_counts(12, 4096, 8), /*slack_tiles=*/0U},
+            {"h4k_i512_e12_uniform_4ktok_pad204", 12, 4096, 512, uniform_counts(12, 4096, 8), /*slack_tiles=*/204U},
+            {"mixtral_h4k_i14k_e8_uniform_4ktok_pad0", 8, 4096, 14336, uniform_counts(8, 4096, 2), /*slack_tiles=*/0U},
+            {"mixtral_h4k_i14k_e8_uniform_4ktok_pad136",
+             8,
+             4096,
+             14336,
+             uniform_counts(8, 4096, 2),
+             /*slack_tiles=*/136U},
         };
 
         print_header();

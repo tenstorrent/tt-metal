@@ -11,11 +11,13 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/full/full.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
@@ -40,6 +42,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     const std::vector<autograd::TensorPtr>& w_down) {
     const auto& grouped_value = grouped->get_value();
     const auto grouped_shape = grouped_value.logical_shape();
+    const uint32_t token_capacity = grouped_shape[-2];
     const uint32_t hidden_dim = grouped_shape[-1];
     const uint32_t num_experts = static_cast<uint32_t>(w_gate.size());
 
@@ -115,6 +118,21 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         down_proj_parts.push_back(std::move(down_proj_e));
     }
 
+    // moe_group allocates `grouped` for a worst-case T_cap; the actual used range
+    // is [0, offsets[-1]). Append a zero tensor for the trailing slack so the
+    // output shape matches what moe_ungroup expects ([1,1,T_cap,H]).
+    const uint32_t produced_rows = offsets_host.back();
+    if (token_capacity > produced_rows) {
+        const uint32_t pad_rows = token_capacity - produced_rows;
+        down_proj_parts.push_back(ttnn::moreh_full(
+            ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
+            0.0F,
+            &autograd::ctx().get_device(),
+            grouped_value.dtype(),
+            grouped_value.layout(),
+            grouped_value.memory_config()));
+    }
+
     const auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
     down_proj_parts.clear();
 
@@ -129,7 +147,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    gate_proj_parts = std::move(gate_proj_parts),
                                    up_proj_parts = std::move(up_proj_parts),
                                    num_experts,
-                                   hidden_dim]() mutable {
+                                   hidden_dim,
+                                   token_capacity]() mutable {
         const auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
 
@@ -207,6 +226,20 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
         gate_proj_parts.clear();
         up_proj_parts.clear();
+
+        // Pad the trailing slack (rows the op never read) with zeros so dX
+        // matches grouped's shape [1, 1, T_cap, H] for add_grad.
+        const uint32_t produced_rows = offsets_host.back();
+        if (token_capacity > produced_rows) {
+            const uint32_t pad_rows = token_capacity - produced_rows;
+            dX_parts.push_back(ttnn::moreh_full(
+                ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
+                0.0F,
+                &autograd::ctx().get_device(),
+                grouped_value.dtype(),
+                grouped_value.layout(),
+                grouped_value.memory_config()));
+        }
 
         const auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
         grouped->add_grad(dX);

@@ -73,6 +73,10 @@ struct FfnCase {
     uint32_t H;
     uint32_t I;
     std::vector<uint32_t> counts;
+    // Extra tile-rows of trailing slack between offsets[-1] and T_cap,
+    // mirroring moe_group's worst-case T_cap upper-bound. The op pads this
+    // region with zeros to produce an output of shape [1,1,T_cap,H].
+    uint32_t tail_pad_tiles = 0U;
 };
 
 // Build a list of per-expert rank-4 TensorPtrs from a stacked rank-3 xtensor
@@ -98,13 +102,13 @@ std::vector<ttml::autograd::TensorPtr> make_expert_weight_list(
 void RunCase(const FfnCase& c) {
     using namespace ttml;
 
-    // offsets[e+1] = offsets[e] + round_up(counts[e], TILE); last is T_cap.
     std::vector<uint32_t> offsets(c.E + 1, 0U);
     for (uint32_t e = 0; e < c.E; ++e) {
         const uint32_t padded = ((c.counts[e] + kTile - 1U) / kTile) * kTile;
         offsets[e + 1U] = offsets[e] + padded;
     }
-    const uint32_t T_cap = offsets.back();
+    const uint32_t used_rows = offsets.back();
+    const uint32_t T_cap = used_rows + c.tail_pad_tiles * kTile;
     ASSERT_GT(T_cap, 0U);
 
     auto& rng = autograd::ctx().get_generator();
@@ -176,6 +180,12 @@ void RunCase(const FfnCase& c) {
         const float max_abs = xt::amax(xt::abs(pad_slice))();
         EXPECT_NEAR(max_abs, 0.0f, 1e-4f) << "pad rows for expert " << e << " not zero";
     }
+
+    // Trailing slack [used_rows, T_cap) must be exactly zero
+    if (T_cap > used_rows) {
+        const xt::xarray<float> tail = xt::view(out_2d, xt::range(used_rows, T_cap), xt::all());
+        EXPECT_EQ(xt::amax(xt::abs(tail))(), 0.0f) << "trailing slack rows not zero";
+    }
 }
 
 }  // namespace
@@ -198,6 +208,10 @@ TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H512_I1024) {
 
 TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H4096_I512) {
     RunCase({/*E*/ 4U, /*H*/ 4096U, /*I*/ 512U, /*counts*/ {64U, 32U, 96U, 64U}});
+}
+
+TEST_F(MoeFfnSwigluForwardTest, TrailingPad_E3_H64_I128) {
+    RunCase({/*E*/ 3U, /*H*/ 64U, /*I*/ 128U, /*counts*/ {32U, 16U, 48U}, /*tail_pad_tiles*/ 5U});
 }
 
 // Backward sanity: gradients populate, are finite, have the right shapes,
