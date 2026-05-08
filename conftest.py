@@ -3,28 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import pytest
-import torch
-import random
+import hashlib
+import json
 import os
-import numpy as np
+import random
+import subprocess
+from datetime import datetime
 from functools import partial
 from operator import contains, eq, getitem
 from pathlib import Path
-import json
-import multiprocess
-from queue import Empty
-import signal
-import time
-import psutil
-import subprocess
-from datetime import datetime
 
+import numpy as np
+import pytest
+import torch
 from loguru import logger
 
 from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
-from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
@@ -927,6 +922,59 @@ def pytest_configure(config):
         import ttnn.operation_tracer
 
         ttnn.operation_tracer._ENABLE_TRACE = True
+
+
+@pytest.fixture(scope="function", autouse=True)
+def _per_test_trace_dir(request):
+    """Create a per-test subdirectory for operation tracing when --trace-params is active.
+
+    Reads TTNN_OPERATION_TRACE_DIR as the parent directory and sets it to a
+    per-test subdirectory before the test runs.  After the test finishes, a
+    ``_status.json`` sidecar is written so the generic_ops_tracer can decide
+    whether to include or skip traces from this invocation.
+    """
+    if not request.config.getoption("--trace-params", default=False):
+        yield
+        return
+
+    base_trace_dir = os.environ.get("TTNN_OPERATION_TRACE_DIR")
+    if not base_trace_dir:
+        yield
+        return
+
+    node_id = request.node.nodeid
+    dir_name = hashlib.sha256(node_id.encode()).hexdigest()[:16]
+    per_test_dir = os.path.join(os.path.realpath(base_trace_dir), dir_name)
+    os.makedirs(per_test_dir, exist_ok=True)
+
+    os.environ["TTNN_OPERATION_TRACE_DIR"] = per_test_dir
+
+    yield
+
+    # Restore the parent directory for the next test
+    os.environ["TTNN_OPERATION_TRACE_DIR"] = base_trace_dir
+
+    # Determine test outcome from the phase report stash
+    report = request.node.stash.get(phase_report_key, {})
+    call_report = report.get("call")
+    setup_report = report.get("setup")
+
+    if setup_report and setup_report.failed:
+        status = "failed"
+    elif setup_report and setup_report.skipped:
+        status = "skipped"
+    elif call_report is None:
+        status = "skipped"
+    elif call_report.passed:
+        status = "passed"
+    else:
+        status = "failed"
+
+    try:
+        status_path = Path(per_test_dir) / "_status.json"
+        status_path.write_text(json.dumps({"test_nodeid": node_id, "status": status}, indent=2))
+    except OSError as exc:
+        logger.debug("Could not write trace status for {}: {}", node_id, exc)
 
 
 @pytest.fixture
