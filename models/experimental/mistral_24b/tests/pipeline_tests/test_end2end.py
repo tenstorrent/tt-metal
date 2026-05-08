@@ -3,6 +3,8 @@
 
 """Test for Mistral-24B End-to-End Vision-Text Pipeline"""
 
+import time
+
 import torch
 import pytest
 from loguru import logger
@@ -27,6 +29,13 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
 import re
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
 
 
 def run_reference_demo_pipeline(messages, model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503"):
@@ -99,6 +108,86 @@ def display_chat(logger, conversation):
             logger.info(f"🤖 Assistant: {message}")
 
 
+def log_e2e_performance_measurements(
+    *,
+    batch_size,
+    num_prefill_tokens,
+    inference_prefill_time,
+    inference_decode_time,
+    decode_step_times,
+    compile_prefill_time=None,
+    compile_decode_time=None,
+    vision_model_prefill_time=None,
+    full_run_time=None,
+):
+    """
+    Log throughput and latency metrics in the same shape as Qwen VL demos
+    (see models/demos/qwen3_vl/demo/demo.py measurements + Performance metrics block).
+    Vision/text prefill are not split here without a profiler; vision timing is optional.
+    """
+    avg_time_to_first_token = inference_prefill_time / batch_size if batch_size else inference_prefill_time
+    prefill_tok_s = (num_prefill_tokens / inference_prefill_time * batch_size) if inference_prefill_time > 0 else 0.0
+    num_decode_tokens = len(decode_step_times)
+    decode_tok_s_user = (num_decode_tokens / inference_decode_time) if inference_decode_time > 0 else 0.0
+    decode_tok_s = decode_tok_s_user * batch_size
+
+    measurements = {
+        "prefill_tokens": num_prefill_tokens,
+        "compile_prefill": compile_prefill_time,
+        "compile_decode": compile_decode_time,
+        "vision_model_prefill": vision_model_prefill_time,
+        "inference_prefill": inference_prefill_time,
+        "inference_decode": inference_decode_time,
+        "prefill_time_to_token": avg_time_to_first_token,
+        "prefill_t/s": prefill_tok_s,
+        "decode_t/s/u": decode_tok_s_user,
+        "decode_t/s": decode_tok_s,
+        "num_decode_tokens": num_decode_tokens,
+        "Total compile time": (
+            (compile_prefill_time + compile_decode_time)
+            if compile_prefill_time is not None and compile_decode_time is not None
+            else None
+        ),
+        "Full demo runtime": full_run_time,
+    }
+
+    logger.info("")
+    logger.info("=== Performance measurements (E2E test) ===")
+    for key, value in measurements.items():
+        if value is None:
+            continue
+        if isinstance(value, float):
+            logger.info(f"  {key}: {value:.6g}")
+        else:
+            logger.info(f"  {key}: {value}")
+
+    logger.info("")
+    logger.info("=== Performance metrics ===")
+    logger.info(
+        f"Prefill tokens: {num_prefill_tokens} | TTFT (prefill to first token): "
+        f"{avg_time_to_first_token * 1000:.2f}ms"
+    )
+    logger.info(
+        f"Prefill throughput: {prefill_tok_s:.2f} tokens/s " f"(inference_prefill={inference_prefill_time:.4f}s)"
+    )
+    if decode_step_times:
+        first_decode_s = decode_step_times[0]
+        if first_decode_s > 0:
+            logger.info(
+                f"1st decode step: {first_decode_s * 1000:.2f}ms "
+                f"[{1.0 / first_decode_s:.2f} t/s/u, {(1.0 / first_decode_s) * batch_size:.2f} t/s]"
+            )
+        else:
+            logger.info(f"1st decode step: {first_decode_s * 1000:.2f}ms")
+    logger.info(
+        f"Decode: {num_decode_tokens} tokens in {inference_decode_time:.4f}s → "
+        f"{decode_tok_s_user:.2f} tok/s/user, {decode_tok_s:.2f} tok/s aggregate"
+    )
+    if full_run_time is not None:
+        logger.info(f"Full run (prefill + decode wall time): {full_run_time:.4f}s")
+    logger.info("===")
+
+
 def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optimizations):
     """Setup model arguments for vision-enabled model (Single Responsibility)."""
     instruct = True if weights == "instruct" else False
@@ -114,55 +203,103 @@ def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optim
     return model_args, instruct
 
 
+SYSTEM_PROMPT = """You are mistralai/Mistral-Small-3.1-24B-Instruct-2503, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.
+You power an AI assistant called Le Chat.
+Your knowledge base was last updated on 2023-10-01.
+The current date is 2026-05-07.
+
+When you're not sure about some information, you say that you don't have the information and don't make up anything.
+If the user's question is not clear, ambiguous, or does not provide enough context for you to accurately answer the question, you do not try to answer it right away and you rather ask the user to clarify their request (e.g. "What are some good restaurants around me?" => "Where are you?" or "When is the next flight to Tokyo" => "Where do you travel from?").
+You are always very attentive to dates, in particular you try to resolve dates (e.g. "yesterday" is {yesterday}) and when asked about information at specific dates, you discard information that is at another date.
+You follow these instructions in all languages, and always respond to the user in the language they use or request.
+Next sections describe the capabilities that you have.
+
+# WEB BROWSING INSTRUCTIONS
+
+You cannot perform any web search or access internet to open URLs, links etc. If it seems like the user is expecting you to do so, you clarify the situation and ask the user to copy paste the text directly in the chat.
+
+# MULTI-MODAL INSTRUCTIONS
+
+You have the ability to read images, but you cannot generate images. You cannot read nor transcribe audio files or videos."""
+
+
 def setup_vision_prompts_and_tokenizer(model_args, instruct):
     """Setup multimodal prompts and tokenizer for vision-enabled model."""
+    signpost("Mistral24B::TokenizerPreprocessing::PromptSetup::Start")
+    image_url = "https://huggingface.co/datasets/patrickvonplaten/random_img/resolve/main/europe.png"
+
     messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
             "content": [
                 {
-                    "type": "image",
-                    "image": "https://img.freepik.com/premium-photo/girl-hugging-dog-with-girl-hugging-her_737761-2565.jpg",
-                },
-                {
                     "type": "text",
-                    "text": "Is there a cat in this image? If not, what animal do you see in the image? Describe the image in detail in 600 words.",
+                    "text": (
+                        "Which of the depicted countries has the best food? Which the second and third and fourth? "
+                        "Name the country, its color on the map and one its city that is visible on the map, but is "
+                        "not the capital. Make absolutely sure to only name a city that can be seen on the map."
+                    ),
                 },
+                {"type": "image", "image": image_url},
             ],
-        }
+        },
     ]
 
     tokenizer = model_args.tokenizer
+    signpost("Mistral24B::TokenizerPreprocessing::PromptSetup::End")
     return messages, tokenizer
 
 
 def process_vision_info(messages):
-    """Extract images (already opened) from messages."""
+    """Extract images from messages.
+
+    Supports content as a plain string (e.g. system message) or as a list of dicts
+    where each item has a `type` field of "image" (with `image`) or "image_url"
+    (with `image_url.url`).
+    """
+    signpost("Mistral24B::TokenizerPreprocessing::VisionInfo::Start")
     image_inputs = []
     video_inputs = None  # Not used
 
     for msg in messages:
         content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
         for item in content:
-            if item.get("type") == "image":
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "image" and "image" in item:
                 image_inputs.append(item["image"])
+            elif item_type == "image_url":
+                url = item.get("image_url", {})
+                if isinstance(url, dict) and "url" in url:
+                    image_inputs.append(url["url"])
 
+    signpost("Mistral24B::TokenizerPreprocessing::VisionInfo::End", f"num_images={len(image_inputs)}")
     return image_inputs, video_inputs
 
 
 def process_real_vision_inputs(messages, model_args):
     """Process real image inputs using AutoProcessor (Interface Segregation)."""
+    signpost("Mistral24B::TokenizerPreprocessing::AutoProcessorLoad::Start")
     processor = AutoProcessor.from_pretrained(os.getenv("HF_MODEL"))
+    signpost("Mistral24B::TokenizerPreprocessing::AutoProcessorLoad::End")
 
+    signpost("Mistral24B::TokenizerPreprocessing::ChatTemplate::Start")
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True, padding=True, padding_side="left"
     )
+    signpost("Mistral24B::TokenizerPreprocessing::ChatTemplate::End")
 
     image_inputs, video_inputs = process_vision_info(messages)
 
+    signpost("Mistral24B::TokenizerPreprocessing::ProcessorEncode::Start")
     encoded = processor(
         text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt", return_dict=True
     ).to("cpu", dtype=torch.bfloat16)
+    signpost("Mistral24B::TokenizerPreprocessing::ProcessorEncode::End")
     input_ids = encoded["input_ids"]
     pixel_values = encoded["pixel_values"] if "pixel_values" in encoded else None
     attention_mask = encoded["attention_mask"] if "attention_mask" in encoded else None
@@ -179,6 +316,7 @@ def process_real_vision_inputs(messages, model_args):
 
 def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged_attention, page_params):
     """Load separate vision and text models following test_end2end.py pattern."""
+    signpost("Mistral24B::ModelLoad::Start")
     state_dict = model_args.load_state_dict()
 
     vision_prefix = "vision_tower."
@@ -211,6 +349,7 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         paged_attention_config=paged_attention_config,
     )
     logger.info("Separate vision and text models loaded like test_end2end.py")
+    signpost("Mistral24B::ModelLoad::End")
     return vision_model, text_model
 
 
@@ -230,6 +369,7 @@ def run_generation_exactly_like_test_end2end(
     logger.info("Running generation exactly like test_end2end.py...")
 
     logger.info("Running Vision Model...")
+    signpost("Mistral24B::Generation::Setup::Start")
     generator = MistralGenerator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
     tt_kv_cache = [[l.attention.layer_past for l in text_model.layers]] if paged_attention_config else None
 
@@ -242,8 +382,12 @@ def run_generation_exactly_like_test_end2end(
         decoding_pos = [input_tokens_prefill_pt.shape[1]] * batch_size
     prefill_lens = decoding_pos
     encoded_prompts = [input_ids[0].tolist()]
+    signpost("Mistral24B::Generation::Setup::End")
 
     logger.info("Running prefill...")
+    run_t0 = time.perf_counter()
+    prefill_t0 = time.perf_counter()
+    signpost("Mistral24B::Prefill::HarnessCall::Start")
     logits = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
@@ -252,6 +396,10 @@ def run_generation_exactly_like_test_end2end(
         vision_model=vision_model,
         processed_inputs=processed_inputs,
     )
+    signpost("Mistral24B::Prefill::HarnessCall::End")
+    prefill_t1 = time.perf_counter()
+    inference_prefill_time = prefill_t1 - prefill_t0
+    num_prefill_tokens = int(prefill_lens[0])
 
     prefilled_token = torch.argmax(logits, dim=-1)
     prefilled_token_decoded_res = model_args.tokenizer.decode(prefilled_token[0].item())
@@ -285,11 +433,16 @@ def run_generation_exactly_like_test_end2end(
     generation_length = max_gen_len
 
     results = []
+    decode_step_times = []
 
     logger.info("Starting decode loop...")
+    signpost("Mistral24B::DecodeLoop::Start", f"max_gen_len={generation_length}")
     for iteration in range(generation_length):
         logger.info(f"[Text] Decoding token {iteration}, current_pos: {current_pos.item()}")
 
+        decode_t0 = time.perf_counter()
+        if iteration < 4 or iteration % 128 == 0:
+            signpost("Mistral24B::DecodeStepHarness::Start", f"iteration={iteration}")
         decode_output = generator.decode_forward(
             out_tok,
             current_pos,
@@ -297,6 +450,10 @@ def run_generation_exactly_like_test_end2end(
             page_table=page_table,
             kv_cache=tt_kv_cache,
         )
+        if iteration < 4 or iteration % 128 == 0:
+            signpost("Mistral24B::DecodeStepHarness::End", f"iteration={iteration}")
+        decode_t1 = time.perf_counter()
+        decode_step_times.append(decode_t1 - decode_t0)
 
         # decode_forward returns (logits, log_probs) tuple when read_from_device=True
         if isinstance(decode_output, tuple):
@@ -350,6 +507,7 @@ def run_generation_exactly_like_test_end2end(
         logger.info(f" Each iteration Generated {len(results)} tokens successfully")
 
     # Final response (exactly like test_end2end.py)
+    signpost("Mistral24B::DecodeLoop::End", f"generated={len(results)}")
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
     logger.info(f"Final Generated Response:\n{response}")
     logger.info(f"Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
@@ -357,26 +515,45 @@ def run_generation_exactly_like_test_end2end(
     display_chat(logger, chat)
 
     logger.info(f"Generated {len(results)} tokens successfully")
+
+    run_t1 = time.perf_counter()
+    full_run_time = run_t1 - run_t0
+    inference_decode_time = sum(decode_step_times)
+
+    log_e2e_performance_measurements(
+        batch_size=batch_size,
+        num_prefill_tokens=num_prefill_tokens,
+        inference_prefill_time=inference_prefill_time,
+        inference_decode_time=inference_decode_time,
+        decode_step_times=decode_step_times,
+        full_run_time=full_run_time,
+    )
+
     return results
 
 
 def validate_e2e_outputs(results, expected_min_tokens=1):
     """Validate end-to-end pipeline outputs."""
+    signpost("Mistral24B::OutputValidation::Start", "e2e")
     if not results:
         logger.error("No results generated from E2E pipeline")
+        signpost("Mistral24B::OutputValidation::End", "e2e failed: no results")
         return False
 
     if len(results) < expected_min_tokens:
         logger.warning(f"Generated only {len(results)} tokens, expected at least {expected_min_tokens}")
+        signpost("Mistral24B::OutputValidation::End", "e2e failed: too few tokens")
         return False
 
     # Check if tokens are valid
     for result in results:
         if not hasattr(result, "token") or not hasattr(result, "text"):
             logger.error("Invalid result format")
+            signpost("Mistral24B::OutputValidation::End", "e2e failed: invalid result")
             return False
 
     logger.info("E2E pipeline validation passed")
+    signpost("Mistral24B::OutputValidation::End", "e2e passed")
     return True
 
 
@@ -451,6 +628,7 @@ def test_e2e_vision_text_pipeline(
     device_params,
 ):
     """Test end-to-end vision-text pipeline using proper Generator methods."""
+    signpost("Mistral24B::E2ETest::Start")
     logger.info("Starting E2E vision-text pipeline test")
 
     # Use bfloat8_b like test_end2end.py for better memory efficiency
@@ -523,6 +701,8 @@ def test_e2e_vision_text_pipeline(
         # Log generated tokens for debugging
         for i, result in enumerate(results[:5]):
             logger.info(f"Token {i}: {result.token} -> '{result.text}'")
+        signpost("Mistral24B::E2ETest::End", "passed")
     else:
         logger.error("E2E pipeline test failed")
+        signpost("Mistral24B::E2ETest::End", "failed")
         assert False, f"E2E pipeline failed - generated {len(results)} tokens, validation: {validation_passed}"

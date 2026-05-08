@@ -16,6 +16,13 @@ from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAt
 
 from ttnn import ConcatMeshToTensor
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 @torch.no_grad()
 @run_for_wormhole_b0_or_blackhole()
@@ -42,6 +49,7 @@ from ttnn import ConcatMeshToTensor
     indirect=True,
 )
 def test_vision_attention(mesh_device, seq_len, batch_size):
+    signpost("Mistral24B::UnitTest::VisionAttention::Start", f"seq_len={seq_len}")
     logger.info(f"seq_len: {seq_len}, batch_size: {batch_size}")
     dtype = ttnn.bfloat16
 
@@ -107,10 +115,14 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
+    signpost("Mistral24B::Attention::HarnessCall::Start")
     tt_out = tt_model(attention_input, position_embeddings=(cos_t, sin_t))
+    signpost("Mistral24B::Attention::HarnessCall::End")
+    signpost("Mistral24B::DeviceTransfer::AttentionOutputToHost::Start")
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))[
         :, :, :, : tt_out.shape[-1]
     ]
+    signpost("Mistral24B::DeviceTransfer::AttentionOutputToHost::End")
     tt_output_torch = tt_output_torch.squeeze(0)
     reference_output = reference_model(
         pt_attention_input,
@@ -119,9 +131,11 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     )[0]
     pcc_required = 0.99
 
+    signpost("Mistral24B::OutputValidation::Start", "vision_attention")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
 
+    signpost("Mistral24B::OutputValidation::End", f"vision_attention passing={passing}")
     assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

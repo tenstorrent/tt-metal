@@ -14,6 +14,13 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
@@ -35,6 +42,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
+    signpost("Mistral24B::UnitTest::VisionTransformer::Start")
     pcc_required = 0.99
 
     model_args = ModelArgs(mesh_device)
@@ -102,16 +110,21 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     )
 
     with torch.no_grad():
+        signpost("Mistral24B::VisionTransformer::HarnessCall::Start")
         tt_out = tt_model(attention_input, position_embeddings=(cos_t, sin_t))
+        signpost("Mistral24B::VisionTransformer::HarnessCall::End")
         reference_output = reference_model(
             pt_attention_input,
             attention_mask=attention_mask,
             position_embeddings=(cos, sin),
         )[0]
+        signpost("Mistral24B::DeviceTransfer::VisionTransformerOutputToHost::Start")
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             : tt_out.shape[0]
         ]
+        signpost("Mistral24B::DeviceTransfer::VisionTransformerOutputToHost::End")
         tt_output_torch = tt_output_torch.squeeze(0)
+        signpost("Mistral24B::OutputValidation::Start", "vision_transformer")
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
         if not passing:
             logger.warning(f"PCC value -- {pcc_message} -- is lower than {pcc_required} for the output.")
@@ -120,4 +133,5 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
         logger.info(comp_allclose(reference_output, tt_output_torch))
         all_tests_pass = all_tests_pass and passing
 
+        signpost("Mistral24B::OutputValidation::End", f"vision_transformer passing={passing}")
         assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

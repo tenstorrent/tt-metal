@@ -11,6 +11,13 @@ from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 import ttnn
 from ttnn import ConcatMeshToTensor
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 class TTMistral3PatchMerger(LightweightModule):
     def __init__(
@@ -49,6 +56,7 @@ class TTMistral3PatchMerger(LightweightModule):
         self.merging_bias = as_tensor("merging_layer", ttnn.bfloat16, is_bias=False)
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
+        signpost("Mistral24B::PatchMerger::Start", f"image_sizes={image_sizes}")
         image_sizes = [
             (image_size[0] // self.patch_size, image_size[1] // self.patch_size) for image_size in image_sizes
         ]
@@ -57,6 +65,7 @@ class TTMistral3PatchMerger(LightweightModule):
         d = image_features.shape[-1]
 
         permuted_tensor = []
+        signpost("Mistral24B::PatchMerger::ImageLoop::Start", f"num_images={len(tokens_per_image)}")
         for image_index, image_tokens in enumerate(ttnn.split(image_features, tokens_per_image, dim=0)):
             # Reshape image_tokens into a 2D grid
             h, w = image_sizes[image_index]
@@ -69,29 +78,43 @@ class TTMistral3PatchMerger(LightweightModule):
             image_grid = ttnn.unsqueeze(image_grid, dim=0)  # Add batch dimension
             # Reshape the grid to merge patches
             if self.args.num_devices > 1:
+                signpost("Mistral24B::DeviceTransfer::PatchMergerToHost::Start", f"image={image_index}")
                 image_grid_torch = ttnn.to_torch(image_grid, mesh_composer=ConcatMeshToTensor(self.device, dim=0))
                 image_grid_torch = image_grid_torch[0].unsqueeze(0)  # shape: [1, 1024, 30, 44]
                 image_grid_torch = image_grid_torch.to(dtype=torch.bfloat16)
+                signpost("Mistral24B::DeviceTransfer::PatchMergerToHost::End", f"image={image_index}")
             else:
+                signpost("Mistral24B::DeviceTransfer::PatchMergerToHost::Start", f"image={image_index}")
                 image_grid_torch = ttnn.to_torch(image_grid).to(dtype=torch.bfloat16)
+                signpost("Mistral24B::DeviceTransfer::PatchMergerToHost::End", f"image={image_index}")
 
+            signpost("Mistral24B::PatchMerger::TorchUnfold::Start", f"image={image_index}")
             grid = torch.nn.functional.unfold(
                 image_grid_torch, kernel_size=self.spatial_merge_size, stride=self.spatial_merge_size
             )
+            signpost("Mistral24B::PatchMerger::TorchUnfold::End", f"image={image_index}")
 
+            signpost("Mistral24B::DeviceTransfer::PatchMergerFromHost::Start", f"image={image_index}")
             grid = ttnn.from_torch(grid, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            signpost("Mistral24B::DeviceTransfer::PatchMergerFromHost::End", f"image={image_index}")
 
             grid = ttnn.view(grid, (d * self.spatial_merge_size**2, -1))
             grid = ttnn.transpose(grid, 0, 1)  # Transpose to have features first
 
             permuted_tensor.append(grid)
+        signpost("Mistral24B::PatchMerger::ImageLoop::End")
 
+        signpost("Mistral24B::PatchMerger::Concat::Start")
         image_features = ttnn.concat(permuted_tensor, dim=0)
+        signpost("Mistral24B::PatchMerger::Concat::End")
         # Apply merging layer
+        signpost("Mistral24B::PatchMerger::Linear::Start")
         image_features = ttnn.linear(
             image_features, self.merging_weights, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        signpost("Mistral24B::PatchMerger::Linear::End")
 
+        signpost("Mistral24B::PatchMerger::End")
         return image_features
 
 
@@ -152,9 +175,15 @@ class TTMistral3MultiModalProjector(LightweightModule):
             self.linear_2_bias = None
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
+        signpost("Mistral24B::MultimodalProjector::Forward::Start", f"image_sizes={image_sizes}")
+        signpost("Mistral24B::MultimodalProjector::Norm::Start")
         image_features = self.norm(image_features, mode="decode")
+        signpost("Mistral24B::MultimodalProjector::Norm::End")
+        signpost("Mistral24B::MultimodalProjector::PatchMerger::Start")
         image_features = self.patch_merger(image_features, image_sizes)
+        signpost("Mistral24B::MultimodalProjector::PatchMerger::End")
 
+        signpost("Mistral24B::MultimodalProjector::Linear1::Start")
         hidden_states = ttnn.linear(
             image_features,
             self.linear_1_weight,
@@ -163,7 +192,9 @@ class TTMistral3MultiModalProjector(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             activation="gelu",  # Using GELU activation as per Mistral 3 model
         )
+        signpost("Mistral24B::MultimodalProjector::Linear1::End")
 
+        signpost("Mistral24B::MultimodalProjector::Linear2::Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.linear_2_weight,
@@ -171,5 +202,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        signpost("Mistral24B::MultimodalProjector::Linear2::End")
 
+        signpost("Mistral24B::MultimodalProjector::Forward::End")
         return hidden_states

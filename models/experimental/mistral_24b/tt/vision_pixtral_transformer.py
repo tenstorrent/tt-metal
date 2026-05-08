@@ -12,6 +12,13 @@ from tqdm import tqdm
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.vision_pixtral_image_block import TtPixtralImageTransformerBlock
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 class TtPixtralTransformer(LightweightModule):
     def __init__(
@@ -52,10 +59,15 @@ class TtPixtralTransformer(LightweightModule):
         Outer code will have to be aware and handle this correctly.
         """
         out = []
+        signpost("Mistral24B::VisionTransformer::Start", f"layers={len(self.resblocks)}")
         for idx, r in enumerate(self.resblocks):
             if return_intermediate is not None and idx in return_intermediate:
                 out.append(x)
+            signpost("Mistral24B::VisionTransformerBlock::Start", f"layer={idx}")
             x = r(x, position_embeddings=position_embeddings)
+            signpost("Mistral24B::VisionTransformerBlock::End", f"layer={idx}")
         if return_intermediate is not None:
+            signpost("Mistral24B::VisionTransformer::End", "return_intermediate=True")
             return x, out
+        signpost("Mistral24B::VisionTransformer::End")
         return x

@@ -17,6 +17,13 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from ttnn import ConcatMeshToTensor
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 def reference_conv2d_patch(model_args):
     """Mistral-specific reference method for conv2d patch."""
@@ -41,6 +48,7 @@ def test_conv2d_inference(
     mesh_device,
     reset_seeds,
 ):
+    signpost("Mistral24B::UnitTest::PatchEmbedding::Start")
     pcc_required = 0.9999
     dtype = ttnn.bfloat16
 
@@ -91,11 +99,15 @@ def test_conv2d_inference(
         stride,
         bias,
     )
+    signpost("Mistral24B::PatchEmbedding::HarnessCall::Start")
     tt_output = tt_model(input_tensor)
+    signpost("Mistral24B::PatchEmbedding::HarnessCall::End")
 
     ##### Check the outputs #####
+    signpost("Mistral24B::DeviceTransfer::PatchEmbeddingOutputToHost::Start")
     out = ttnn.from_device(tt_output)
     tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=2))
+    signpost("Mistral24B::DeviceTransfer::PatchEmbeddingOutputToHost::End")
 
     # Only select output from one device
     tt_output_torch = tt_output_torch[0, ..., :out_channels]
@@ -107,8 +119,10 @@ def test_conv2d_inference(
     W_out = W // kernel_size
     tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, out_channels, H_out, W_out)
 
+    signpost("Mistral24B::OutputValidation::Start", "patch_embedding")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
+    signpost("Mistral24B::OutputValidation::End", f"patch_embedding passing={passing}")
     assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

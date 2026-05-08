@@ -18,6 +18,13 @@ from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as 
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
 from ttnn import ConcatMeshToTensor
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 class MistralVisionTower(LightweightModule):
     def __init__(
@@ -121,7 +128,11 @@ class MistralVisionTower(LightweightModule):
         """
         if image_sizes is None or len(image_sizes) == 0:
             raise ValueError("image_sizes must be provided and non-empty")
+        signpost("Mistral24B::VisionTower::Forward::Start", f"image_sizes={image_sizes}")
+        signpost("Mistral24B::PatchEmbedding::Call::Start")
         patch_embeds = self.patch_conv(input_tensor)
+        signpost("Mistral24B::PatchEmbedding::Call::End")
+        signpost("Mistral24B::VisionTower::PatchLayout::Start")
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
         height, width = image_sizes[0]
         patch_embeds = ttnn.reshape(
@@ -145,28 +156,40 @@ class MistralVisionTower(LightweightModule):
             reshaped_patches.append(p)
 
         patch_embeds = ttnn.concat(reshaped_patches, dim=0)
+        signpost("Mistral24B::VisionTower::PatchLayout::End")
 
         # ln_pre RMS Norm
         mode = "prefill"
+        signpost("Mistral24B::VisionTower::LnPre::Start")
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
+        signpost("Mistral24B::VisionTower::LnPre::End")
 
         # # positional embeddings
+        signpost("Mistral24B::VisionTower::PositionIds::Start")
         position_ids = position_ids_in_meshgrid_tt(
             patch_embeds_list,
             max_width=self.config.vision_image_size // self.config.vision_patch_size,
             device=self.mesh_device,
         )
 
+        signpost("Mistral24B::DeviceTransfer::PositionIdsToHost::Start")
         torch_position_ids = ttnn.to_torch(position_ids, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[
             : position_ids.shape[-1]
         ]
+        signpost("Mistral24B::DeviceTransfer::PositionIdsToHost::End")
 
+        signpost("Mistral24B::VisionTower::RopeMats::Start")
         position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
+        signpost("Mistral24B::VisionTower::RopeMats::End")
+        signpost("Mistral24B::VisionTower::PositionIds::End")
 
         patch_embeds = ttnn.unsqueeze(patch_embeds, 0)
+        signpost("Mistral24B::VisionEncoder::Transformer::Start")
         out = self.transformer(patch_embeds, position_embeddings=position_embeddings)
+        signpost("Mistral24B::VisionEncoder::Transformer::End")
         # deallocate position_embeddings
         ttnn.deallocate(position_embeddings[0])
         ttnn.deallocate(position_embeddings[1])
 
+        signpost("Mistral24B::VisionTower::Forward::End")
         return out

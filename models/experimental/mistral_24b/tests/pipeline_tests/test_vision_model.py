@@ -16,6 +16,13 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     """
@@ -43,6 +50,7 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     indirect=True,
 )
 def test_mistral_vision_model(mesh_device, reset_seeds):
+    signpost("Mistral24B::UnitTest::VisionModel::Start")
     pcc_required = 0.97
     dtype = ttnn.bfloat8_b
 
@@ -83,17 +91,23 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         model_args=model_args,
     )
 
+    signpost("Mistral24B::VisionModel::HarnessCall::Start")
     tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
+    signpost("Mistral24B::VisionModel::HarnessCall::End")
+    signpost("Mistral24B::DeviceTransfer::VisionModelOutputToHost::Start")
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
     ]
+    signpost("Mistral24B::DeviceTransfer::VisionModelOutputToHost::End")
 
     non_zero_indices = tt_output.ne(0).nonzero(as_tuple=True)
     tt_output = tt_output[non_zero_indices]
     reference_output = reference_output[non_zero_indices]
 
+    signpost("Mistral24B::OutputValidation::Start", "vision_model")
     passing, pcc_message = comp_pcc(reference_output, tt_output, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output))
     logger.info(f"PCC: {pcc_message}")
+    signpost("Mistral24B::OutputValidation::End", f"vision_model passing={passing}")
     assert passing, f"PCC below {pcc_required}. {pcc_message}"
