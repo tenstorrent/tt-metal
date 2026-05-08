@@ -1210,7 +1210,10 @@ class Generator(WarmupForwardMixin):
             if sampling_module is not None and getattr(sampling_module, "enable_internal_trace", False):
                 # Pre-capture the split sampling trace so the first live decode
                 # step does not lazily enter sampling trace capture.
-                sampling_module.capture_trace(logits=tt_out_tok[0], tt_out_tok=tokens_tt)
+                sampling_module.capture_trace(
+                    logits=tt_out_tok[0],
+                    tt_out_tok=tokens_tt if sampling_module.tt_sampling.force_argmax_sampling else None,
+                )
         logger.info("Done Capturing Decode Trace")
 
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
@@ -1282,10 +1285,18 @@ class Generator(WarmupForwardMixin):
         )
 
         if not return_logits:
-            return self.model.sampling.sample(
-                logits=trace_tok_rm[0],
-                tt_out_tok=self.trace_inputs_decode[return_logits][0],
-            )
+            sampling_module = self.model.sampling
+            if sampling_module.tt_sampling.force_argmax_sampling:
+                return sampling_module.sample(
+                    logits=trace_tok_rm[0],
+                    tt_out_tok=self.trace_inputs_decode[return_logits][0],
+                )
+
+            sampled = sampling_module.sample(logits=trace_tok_rm[0])
+            sampled_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
+            # Keep readback output separate from the next-step trace input buffer.
+            ttnn.copy(input_a=sampled_tokens, input_b=self.trace_inputs_decode[return_logits][0])
+            return sampled
 
         return trace_tok_rm
 

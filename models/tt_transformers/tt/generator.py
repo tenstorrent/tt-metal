@@ -1269,7 +1269,10 @@ class Generator(WarmupForwardMixin):
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
 
             if split_enabled:
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
+                sampling_module.capture_trace(
+                    logits=tt_out_trace[i],
+                    tt_out_tok=device_inputs[i][0] if sampling_module.tt_sampling.force_argmax_sampling else None,
+                )
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
@@ -1323,12 +1326,20 @@ class Generator(WarmupForwardMixin):
                     new_outputs.append(outputs[i])
                     continue
 
-                new_outputs.append(
-                    sampling_module.sample(
-                        logits=outputs[i],
-                        tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
+                if sampling_module.tt_sampling.force_argmax_sampling:
+                    new_outputs.append(
+                        sampling_module.sample(
+                            logits=outputs[i],
+                            tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
+                        )
                     )
-                )
+                    continue
+
+                sampled = sampling_module.sample(logits=outputs[i])
+                sampled_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
+                # Keep readback output separate from the next-step trace input buffer.
+                ttnn.copy(input_a=sampled_tokens, input_b=self.trace_inputs_decode[sampling_on_device][i][0])
+                new_outputs.append(sampled)
             return new_outputs
         return outputs
 
