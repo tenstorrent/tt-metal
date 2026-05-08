@@ -43,6 +43,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
+        shard_spec_validation.cpp
         batch_norm/batch_norm.cpp
         batch_norm/device/batch_norm_device_operation.cpp
         batch_norm/device/batch_norm_program_factory.cpp

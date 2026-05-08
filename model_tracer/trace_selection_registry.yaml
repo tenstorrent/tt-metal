@@ -44,7 +44,8 @@ targets:
     - model:
         - gpt_oss
         - tt_dit
-      trace: [9,15]
+        - deepseek_v3
+      trace: [9, 15, 13]
 
   model_traced:
     - model:
@@ -165,7 +166,7 @@ registry:
     notes: 'contains configs that fail when sweep is run; superseded by trace 15'
 
   - trace_id: 13
-    status: draft
+    status: active
     models: [deepseek_v3]
     hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
     trace_uid: 8b53d615-a39d-4b02-bca1-7006e3ee0ef1
