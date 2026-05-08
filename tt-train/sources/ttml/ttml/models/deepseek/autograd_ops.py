@@ -105,7 +105,7 @@ class Softmax(ttml.autograd.Function):
         return grad_input
 
 
-class RoPEPartial(ttml.autograd.Function):
+class RoPETrailing(ttml.autograd.Function):
     """RoPE the last ``rope_dim`` columns of a 4-D tensor; pass the prefix through.
 
     Replaces the slice -> rope -> concat pattern (used in MLA's Q path) with a
@@ -252,12 +252,12 @@ def autograd_softmax(tensor):
     return Softmax.apply(tensor)
 
 
-def rope_partial(tensor, rope_params):
+def rope_trailing(tensor, rope_params):
     """RoPE the last ``rope_params.head_dim`` columns; prefix is identity.
 
     Replaces the slice -> rope -> concat pattern with a single autograd node.
     """
-    return RoPEPartial.apply(tensor, rope_params)
+    return RoPETrailing.apply(tensor, rope_params)
 
 
 def moe_routing_normalize(scores, mask, route_scale, eps=1e-20):

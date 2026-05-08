@@ -70,8 +70,9 @@ void kernel_main() {
         // dk_pe[block_base + 0..Tr) ← Tr tiles produced by compute (head-axis sum).
         cb_wait_front(cb_dkpe_out, Tr);
         const uint32_t l1_kpe = get_read_ptr(cb_dkpe_out);
+        const uint32_t dkpe_tile_bytes = get_tile_size(cb_dkpe_out);
         for (uint32_t w = 0U; w < Tr; ++w) {
-            noc_async_write_page(dk_pe_block_base + w, dk_pe_addr_gen, l1_kpe + w * get_tile_size(cb_dkpe_out));
+            noc_async_write_page(dk_pe_block_base + w, dk_pe_addr_gen, l1_kpe + w * dkpe_tile_bytes);
         }
         noc_async_write_barrier();
         cb_pop_front(cb_dkpe_out, Tr);

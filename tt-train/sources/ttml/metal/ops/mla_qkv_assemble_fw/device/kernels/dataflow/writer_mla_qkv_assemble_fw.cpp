@@ -10,12 +10,12 @@
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t q_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t k_full_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t k_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t v_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_blocks = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t sb = get_arg_val<uint32_t>(runtime_args_counter++);         // s-tile-row index within current batch
     uint32_t q_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);  // q[b, 0, sb, 0]
-    uint32_t k_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);  // k_full[b, 0, sb, 0]
+    uint32_t k_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);  // k[b, 0, sb, 0]
     uint32_t v_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);  // v[b, 0, sb, 0]
 
     constexpr uint32_t cb_q = tt::CBIndex::c_0;
@@ -35,10 +35,10 @@ void kernel_main() {
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     const auto q_addr_gen = TensorAccessor(q_args, q_addr);
-    const auto k_addr_gen = TensorAccessor(k_args, k_full_addr);
+    const auto k_addr_gen = TensorAccessor(k_args, k_addr);
     const auto v_addr_gen = TensorAccessor(v_args, v_addr);
 
-    const uint32_t tile_bytes = get_tile_size(cb_q);
+    const uint32_t tile_bytes = get_tile_size(cb_kpe);
     constexpr uint32_t Th = Tn + Tr;
 
     // End-of-batch jump for head-major outputs:

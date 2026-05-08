@@ -30,7 +30,7 @@ constexpr uint32_t kReaderArgKpeAddr = 2;
 
 // writer runtime arg indices
 constexpr uint32_t kWriterArgQAddr = 0;
-constexpr uint32_t kWriterArgKFullAddr = 1;
+constexpr uint32_t kWriterArgKAddr = 1;
 constexpr uint32_t kWriterArgVAddr = 2;
 
 // CB indices
@@ -60,7 +60,7 @@ static void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* kv_up_buffer,
     const tt::tt_metal::Buffer* k_pe_buffer,
     const tt::tt_metal::Buffer* q_buffer,
-    const tt::tt_metal::Buffer* k_full_buffer,
+    const tt::tt_metal::Buffer* k_buffer,
     const tt::tt_metal::Buffer* v_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -118,7 +118,7 @@ static void assign_per_core_runtime_args(
             kernels.writer,
             core,
             {q_buffer->address(),
-             k_full_buffer->address(),
+             k_buffer->address(),
              v_buffer->address(),
              num_blocks_per_core,
              sb_start,
@@ -136,7 +136,7 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     const auto& kv_up = tensor_args.kv_up;
     const auto& k_pe = tensor_args.k_pe;
     auto& q_out = output[0];
-    auto& k_full = output[1];
+    auto& k = output[1];
     auto& v = output[2];
 
     auto* device = kv_up.device();
@@ -154,7 +154,7 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     const uint32_t Th = Tn + Tr;
     const uint32_t S_t = S / TILE_HEIGHT;
 
-    // q and k_full share per-head width (qk_head). v has its own width.
+    // q and k share per-head width (qk_head). v has its own width.
     const uint32_t kq_HtWt = S_t * Th;
     const uint32_t v_HtWt = S_t * Tv;
 
@@ -172,6 +172,8 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
     // ── CBs ──
+    // Validation guarantees q_pre / kv_up / k_pe share dtype, so any of them yields the same
+    // data_format. kv_up is picked because it's also the source-of-truth for B and S above.
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(kv_up.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
@@ -190,7 +192,7 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     auto* kv_up_buffer = kv_up.buffer();
     auto* k_pe_buffer = k_pe.buffer();
     auto* q_buffer = q_out.buffer();
-    auto* k_full_buffer = k_full.buffer();
+    auto* k_buffer = k.buffer();
     auto* v_buffer = v.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {Th, Tn + Tv, Tr, H};
@@ -200,7 +202,7 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
 
     std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, kq_HtWt, v_HtWt, S_t};
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(k_full_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> defines;
@@ -217,7 +219,7 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
         kv_up_buffer,
         k_pe_buffer,
         q_buffer,
-        k_full_buffer,
+        k_buffer,
         v_buffer,
         num_cores,
         num_cores_y,
@@ -255,7 +257,7 @@ void MLAQKVAssembleFwProgramFactory::override_runtime_arguments(
     auto* kv_up_buffer = tensor_args.kv_up.buffer();
     auto* k_pe_buffer = tensor_args.k_pe.buffer();
     auto* q_buffer = output[0].buffer();
-    auto* k_full_buffer = output[1].buffer();
+    auto* k_buffer = output[1].buffer();
     auto* v_buffer = output[2].buffer();
 
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
@@ -272,7 +274,7 @@ void MLAQKVAssembleFwProgramFactory::override_runtime_arguments(
         {
             auto& ra = writer_runtime_args[core.x][core.y];
             ra[kWriterArgQAddr] = q_buffer->address();
-            ra[kWriterArgKFullAddr] = k_full_buffer->address();
+            ra[kWriterArgKAddr] = k_buffer->address();
             ra[kWriterArgVAddr] = v_buffer->address();
         }
     }
