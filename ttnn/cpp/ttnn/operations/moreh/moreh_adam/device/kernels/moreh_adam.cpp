@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Power
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 #ifdef FP32_DEST_ACC_EN
@@ -266,19 +267,16 @@ void kernel_main() {
         // denom = sqrt(max_exp_avg_sq) / sqrt(bias_correction2) + eps;
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
-        // cb_tmp1 = pow(beta2, step);
-        tile_regs_acquire();
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta2_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        cb_reserve_back(cb_tmp1, onetile);
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_push_back(cb_tmp1, onetile);
-        tile_regs_release();
+        // cb_tmp1 = pow(beta2, step);  (T1.32)
+        {
+            using namespace compute_kernel_lib;
+            auto copy_elt = CopyTile<cb_scalar_args, Dst::D0, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{};
+            copy_elt.cb_tile_idx = beta2_tile;
+            auto power_elt = Power<Dst::D0>{};
+            power_elt.exponent = step;
+            eltwise_chain(
+                onetile, copy_elt, power_elt, PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        }
 
         // cb_tmp1 = 1 / (1 - cb_tmp1);
         tile_regs_acquire();
@@ -314,18 +312,8 @@ void kernel_main() {
         cb_push_back(tmp_cb_max_exp_avg_sq, onetile);
         tile_regs_release();
 
-        // cb_max_exp_avg_sq_out
-        tile_regs_acquire();
-        cb_wait_front(tmp_cb_max_exp_avg_sq, onetile);
-        cb_reserve_back(cb_max_exp_avg_sq_out, onetile);
-        copy_tile_init_with_dt(tmp_cb_max_exp_avg_sq);
-        copy_tile(tmp_cb_max_exp_avg_sq, first_tile, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_max_exp_avg_sq_out);
-        cb_push_back(cb_max_exp_avg_sq_out, onetile);
-        tile_regs_release();
+        // cb_max_exp_avg_sq_out  (T1.34)
+        moreh_copy_chain<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/false>();
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
@@ -374,19 +362,16 @@ void kernel_main() {
         tile_regs_release();
 
         // bias_correction1 = 1 - pow(beta1, step);
-        // cb_tmp2 = pow(beta1, step);
-        tile_regs_acquire();
-        cb_reserve_back(cb_tmp2, onetile);
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta1_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        cb_push_back(cb_tmp2, onetile);
-        tile_regs_release();
+        // cb_tmp2 = pow(beta1, step);  (T1.33)
+        {
+            using namespace compute_kernel_lib;
+            auto copy_elt = CopyTile<cb_scalar_args, Dst::D0, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{};
+            copy_elt.cb_tile_idx = beta1_tile;
+            auto power_elt = Power<Dst::D0>{};
+            power_elt.exponent = step;
+            eltwise_chain(
+                onetile, copy_elt, power_elt, PackTile<cb_tmp2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        }
 
         // cb_tmp2 = 1 / (1 - cb_tmp2);
         tile_regs_acquire();

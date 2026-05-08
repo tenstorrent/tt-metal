@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 namespace {
@@ -277,19 +278,25 @@ void kernel_main() {
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_beta2_exponent = pow(beta2, step); Calculated from host
 
-        // cb_tmp1 = 1 / (1 - cb_beta2_exponent);
-        tile_regs_acquire();
-        cb_reserve_back(cb_tmp1, onetile);
-        sub_tiles_init_with_dt(cb_one, cb_beta2_exponent);
-        sub_tiles(cb_one, cb_beta2_exponent, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_push_back(cb_tmp1, onetile);
-        tile_regs_release();
+        // cb_tmp1 = 1 / (1 - cb_beta2_exponent);  (T1.35)
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    cb_one,
+                    cb_beta2_exponent,
+                    cb_tmp1,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::InputAndOutput,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Recip<Dst::D0>{},
+                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        }
 
 #ifdef AMSGRAD
         // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq);
@@ -356,19 +363,25 @@ void kernel_main() {
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_beta1_exponent = pow(beta1, step); Calculated from host
 
-        // cb_tmp2 = 1 / (1 - cb_beta1_exponent);
-        tile_regs_acquire();
-        cb_reserve_back(cb_tmp2, onetile);
-        sub_tiles_init_with_dt(cb_one, cb_beta1_exponent);
-        sub_tiles(cb_one, cb_beta1_exponent, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        cb_push_back(cb_tmp2, onetile);
-        tile_regs_release();
+        // cb_tmp2 = 1 / (1 - cb_beta1_exponent);  (T1.36)
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    cb_one,
+                    cb_beta1_exponent,
+                    cb_tmp2,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::InputAndOutput,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Recip<Dst::D0>{},
+                PackTile<cb_tmp2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        }
 
         // cb_tmp2 = lr * cb_tmp2;
         moreh_bin_chain<
