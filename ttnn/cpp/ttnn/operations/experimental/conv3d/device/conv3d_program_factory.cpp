@@ -725,7 +725,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t weight_addr = weight_tensor.buffer()->address();
     uint32_t bias_addr = bias_tensor.has_value() ? bias_tensor.value().buffer()->address() : 0;
 
-    // Per-core work assignment via the original core_id row-major mapping. See WeightMcastRole
+    // Per-core work assignment via the original core_id row-major mapping. See WeightShareRole
     // in conv3d_weight_share.hpp for the role values.
     struct CoreWork {
         bool has_work = false;
@@ -742,11 +742,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         uint32_t t_out_start = 0, t_out_end = 0;
         uint32_t h_out_start = 0, h_out_end = 0;
         uint32_t w_out_start = 0, w_out_end = 0;
-        WeightMcastRole weight_mcast_role = WeightMcastRole::Local;
-        // Chain pred/succ (chain roles) or mcast sender NoC (mcast receiver/passive use pred fields).
-        // McastSender also carries the sender coordinate here for uniform runtime args; writer ignores it.
-        uint32_t pred_noc_x = 0, pred_noc_y = 0;
-        uint32_t succ_noc_x = 0, succ_noc_y = 0;
+        WeightShareRole weight_share_role = WeightShareRole::Local;
+        // Where this core receives weights from: chain predecessor (chain roles) or mcast sender
+        // (mcast receiver/passive). McastSender carries its own coord for uniform runtime args.
+        uint32_t weight_src_noc_x = 0, weight_src_noc_y = 0;
+        // Chain forwarding target (chain injector/middle). Unused for other roles.
+        uint32_t chain_succ_noc_x = 0, chain_succ_noc_y = 0;
         // Mcast bbox in physical NoC coords (already swapped for NOC_1). Sender role only.
         uint32_t mcast_bbox_start_x = 0, mcast_bbox_start_y = 0;
         uint32_t mcast_bbox_end_x = 0, mcast_bbox_end_y = 0;
@@ -825,18 +826,18 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                 CoreWork& cw = core_work[cid];
                 const bool is_injector = (i == 0);
                 const bool is_tail = (i + 1 == members.size());
-                cw.weight_mcast_role = is_injector
-                                           ? WeightMcastRole::ChainInjector
-                                           : (is_tail ? WeightMcastRole::ChainTail : WeightMcastRole::ChainMiddle);
+                cw.weight_share_role = is_injector
+                                           ? WeightShareRole::ChainInjector
+                                           : (is_tail ? WeightShareRole::ChainTail : WeightShareRole::ChainMiddle);
                 if (!is_injector) {
                     const auto pred_phys = device->worker_core_from_logical_core(cores.at(members[i - 1]));
-                    cw.pred_noc_x = (uint32_t)pred_phys.x;
-                    cw.pred_noc_y = (uint32_t)pred_phys.y;
+                    cw.weight_src_noc_x = (uint32_t)pred_phys.x;
+                    cw.weight_src_noc_y = (uint32_t)pred_phys.y;
                 }
                 if (!is_tail) {
                     const auto succ_phys = device->worker_core_from_logical_core(cores.at(members[i + 1]));
-                    cw.succ_noc_x = (uint32_t)succ_phys.x;
-                    cw.succ_noc_y = (uint32_t)succ_phys.y;
+                    cw.chain_succ_noc_x = (uint32_t)succ_phys.x;
+                    cw.chain_succ_noc_y = (uint32_t)succ_phys.y;
                 }
             }
         }
@@ -943,16 +944,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                         cw.h_out_idx = rem / w_out_parallel_factor;
                         cw.w_out_idx = rem % w_out_parallel_factor;
                         compute_block_ranges(cw);
-                        cw.weight_mcast_role =
-                            is_sender_slot ? WeightMcastRole::McastSender : WeightMcastRole::McastReceiver;
+                        cw.weight_share_role =
+                            is_sender_slot ? WeightShareRole::McastSender : WeightShareRole::McastReceiver;
                     } else {
-                        cw.weight_mcast_role = WeightMcastRole::McastPassive;
+                        cw.weight_share_role = WeightShareRole::McastPassive;
                     }
-                    // Receivers/passives use pred_noc_* as the sender NoC coordinate.  The
-                    // sender slot also gets its own coordinate to keep runtime args uniform;
-                    // writer.cpp does not read pred_noc_* for McastSender.
-                    cw.pred_noc_x = (uint32_t)sender_phys.x;
-                    cw.pred_noc_y = (uint32_t)sender_phys.y;
+                    // Receivers/passives source weights from the sender. Sender carries its own
+                    // coord for uniform runtime args; writer.cpp ignores it for McastSender.
+                    cw.weight_src_noc_x = (uint32_t)sender_phys.x;
+                    cw.weight_src_noc_y = (uint32_t)sender_phys.y;
                     cw.mcast_bbox_start_x = (uint32_t)bbox_start_phys.x;
                     cw.mcast_bbox_start_y = (uint32_t)bbox_start_phys.y;
                     cw.mcast_bbox_end_x = (uint32_t)bbox_end_phys.x;
@@ -1090,11 +1090,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             cw.w_out_start,
             cw.w_out_end,
             (uint32_t)cw.is_reducer,
-            static_cast<uint32_t>(cw.weight_mcast_role),
-            cw.pred_noc_x,
-            cw.pred_noc_y,
-            cw.succ_noc_x,
-            cw.succ_noc_y,
+            static_cast<uint32_t>(cw.weight_share_role),
+            cw.weight_src_noc_x,
+            cw.weight_src_noc_y,
+            cw.chain_succ_noc_x,
+            cw.chain_succ_noc_y,
             cw.mcast_bbox_start_x,
             cw.mcast_bbox_start_y,
             cw.mcast_bbox_end_x,
@@ -1120,7 +1120,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             core.y,
             cw.has_work,
             cw.is_reducer,
-            static_cast<uint32_t>(cw.weight_mcast_role),
+            static_cast<uint32_t>(cw.weight_share_role),
             group_id,
             cw.c_in_idx,
             cw.c_out_idx,

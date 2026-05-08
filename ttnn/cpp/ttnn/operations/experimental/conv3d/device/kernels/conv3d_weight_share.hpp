@@ -21,7 +21,7 @@ enum class WeightShareMode : uint32_t {
 // Per-core role within the weight-share machinery. `Local` is also used for cores that have
 // no work or whose group is single-core; the kernel's outer (c_in, c_out) loop simply does
 // not execute for those.
-enum class WeightMcastRole : uint32_t {
+enum class WeightShareRole : uint32_t {
     Local = 0,          // no participation: read DRAM directly (or empty work — kernel exits)
     ChainInjector = 1,  // chain head: read DRAM, forward to successor
     ChainMiddle = 2,    // chain middle: receive from pred, forward to succ

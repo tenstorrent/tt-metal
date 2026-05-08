@@ -80,14 +80,12 @@ void kernel_main() {
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_reducer = get_arg_val<uint32_t>(argidx++);
-    // weight_mcast_role: see WeightMcastRole in conv3d_weight_share.hpp.
-    const WeightMcastRole weight_mcast_role = static_cast<WeightMcastRole>(get_arg_val<uint32_t>(argidx++));
-    // Chain pred (roles 2,3) doubles as mcast sender NoC coord (roles 5,6).
-    const uint32_t pred_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t pred_noc_y = get_arg_val<uint32_t>(argidx++);
-    // Chain succ (roles 1,2). Unused otherwise.
-    const uint32_t succ_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t succ_noc_y = get_arg_val<uint32_t>(argidx++);
+    // weight_share_role: see WeightShareRole in conv3d_weight_share.hpp.
+    const WeightShareRole weight_share_role = static_cast<WeightShareRole>(get_arg_val<uint32_t>(argidx++));
+    const uint32_t weight_src_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t weight_src_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chain_succ_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chain_succ_noc_y = get_arg_val<uint32_t>(argidx++);
     // Mcast bbox + counts. Only mcast sender (role 4) needs the bbox; passive (role 6) needs iters.
     const uint32_t mcast_bbox_start_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_bbox_start_y = get_arg_val<uint32_t>(argidx++);
@@ -140,9 +138,9 @@ void kernel_main() {
     // ack'ing). Run mcast_num_iters handshakes (matching active receivers' iteration count) and
     // exit before any work-dependent code below.
     if constexpr (enable_weight_mcast) {
-        if (weight_mcast_role == WeightMcastRole::McastPassive) {
+        if (weight_share_role == WeightShareRole::McastPassive) {
             for (uint32_t i = 0; i < mcast_num_iters; i++) {
-                weights_mcast_sender_sem.up(noc, pred_noc_x, pred_noc_y, 1);
+                weights_mcast_sender_sem.up(noc, weight_src_noc_x, weight_src_noc_y, 1);
                 weights_mcast_receiver_sem.wait(1);
                 weights_mcast_receiver_sem.set(0);
             }
@@ -165,20 +163,20 @@ void kernel_main() {
                 //   - off (0): every core reads from DRAM independently
                 if constexpr (enable_weight_chain) {
                     cb_weight.reserve_back(weight_tiles);
-                    if (weight_mcast_role == WeightMcastRole::Local) {
+                    if (weight_share_role == WeightShareRole::Local) {
                         // Local DRAM read (single-core group inside a chain-mode program).
                         read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
                             noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
                     } else {
-                        if (weight_mcast_role == WeightMcastRole::ChainInjector) {
+                        if (weight_share_role == WeightShareRole::ChainInjector) {
                             read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
                                 noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
                         } else {
-                            weights_mcast_sender_sem.up(noc, pred_noc_x, pred_noc_y, 1);
+                            weights_mcast_sender_sem.up(noc, weight_src_noc_x, weight_src_noc_y, 1);
                             weights_mcast_receiver_sem.wait(1);
                             weights_mcast_receiver_sem.set(0);
                         }
-                        if (weight_mcast_role != WeightMcastRole::ChainTail) {
+                        if (weight_share_role != WeightShareRole::ChainTail) {
                             weights_mcast_sender_sem.wait(1);
                             weights_mcast_sender_sem.set(0);
 
@@ -190,17 +188,17 @@ void kernel_main() {
                                 ep,
                                 weight_block_bytes,
                                 {.offset_bytes = 0},
-                                {.noc_x = succ_noc_x, .noc_y = succ_noc_y, .addr = local_addr});
+                                {.noc_x = chain_succ_noc_x, .noc_y = chain_succ_noc_y, .addr = local_addr});
                             noc.async_write_barrier();
 
-                            weights_mcast_receiver_sem.up(noc, succ_noc_x, succ_noc_y, 1);
+                            weights_mcast_receiver_sem.up(noc, chain_succ_noc_x, chain_succ_noc_y, 1);
                             noc.async_atomic_barrier();
                         }
                     }
                     cb_weight.push_back(weight_tiles);
                 } else if constexpr (enable_weight_mcast) {
                     cb_weight.reserve_back(weight_tiles);
-                    if (weight_mcast_role == WeightMcastRole::McastSender) {
+                    if (weight_share_role == WeightShareRole::McastSender) {
                         // Sender: DRAM read into local L1, then hardware multicast over the
                         // bbox. The mcast call below uses EXCLUDE_SRC; sender keeps the
                         // DRAM-read copy in cb_weight so it doesn't need to receive its own
@@ -248,9 +246,9 @@ void kernel_main() {
                             mcast_bbox_end_y,
                             mcast_num_dests,
                             false);
-                    } else if (weight_mcast_role == WeightMcastRole::McastReceiver) {
+                    } else if (weight_share_role == WeightShareRole::McastReceiver) {
                         // Active receiver: ack sender, wait for VALID, reset for next iteration.
-                        weights_mcast_sender_sem.up(noc, pred_noc_x, pred_noc_y, 1);
+                        weights_mcast_sender_sem.up(noc, weight_src_noc_x, weight_src_noc_y, 1);
                         weights_mcast_receiver_sem.wait(1);
                         weights_mcast_receiver_sem.set(0);
                     }

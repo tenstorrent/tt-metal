@@ -75,8 +75,9 @@ void matmul_blocks(
 
 template <uint32_t rows, uint32_t cols>
 void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
-    // Math add path used when inout_cb is not physically full, so L1 pack
-    // accumulation cannot safely target the old tile slots.
+    // Math-side broadcast add (`add_tiles_bcast_rows`): used when inout_cb is not
+    // physically full, so we cannot rely on pop+reserve returning the same L1 slots
+    // and the pack-side L1-acc path in `add_inplace_l1_acc` is unsafe.
 
     constexpr uint32_t num_tiles = rows * cols;
     constexpr uint32_t max_dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -96,9 +97,7 @@ void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
             cb_pop_front(inout_cb, cols_cur);
             cb_reserve_back(inout_cb, cols_cur);
             tile_regs_wait();
-            for (uint32_t j = 0; j < cols_cur; ++j) {
-                pack_tile(j, inout_cb);
-            }
+            pack_tile_block(0, inout_cb, cols_cur);
             cb_push_back(inout_cb, cols_cur);
             tile_regs_release();
         }
@@ -107,15 +106,16 @@ void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
 
 template <uint32_t rows, uint32_t cols, bool consume_add_cb>
 void add_inplace_l1_acc(uint32_t inout_cb, uint32_t add_cb) {
-    // Requires inout_cb to be physically full: pop+reserve must return the
-    // same L1 slots so pack L1 accumulation targets the existing tiles.
-    // consume_add_cb=false means add_cb is a single bias row reused for every
-    // output row; consume_add_cb=true means add_cb is a full block consumed tile-for-tile.
+    // Pack-side L1 accumulation (`pack_reconfig_l1_acc(1)` + indexed pack): cheaper
+    // than the math add in `add_bias_inplace` because the add fuses into the pack,
+    // but requires inout_cb to be physically full — pop+reserve must return the
+    // same L1 slots so the indexed pack lands on top of the existing tiles.
+    // consume_add_cb=false: add_cb is a single bias row reused for every output row.
+    // consume_add_cb=true:  add_cb is a full block consumed tile-for-tile (reduction).
     constexpr uint32_t num_tiles = rows * cols;
     constexpr uint32_t add_tiles = consume_add_cb ? num_tiles : cols;
     constexpr uint32_t max_dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
     static_assert(rows > 0 && cols > 0);
-    static_assert((consume_add_cb && add_tiles == num_tiles) || (!consume_add_cb && add_tiles == cols));
 
     cb_wait_front(inout_cb, num_tiles);
     cb_wait_front(add_cb, add_tiles);
