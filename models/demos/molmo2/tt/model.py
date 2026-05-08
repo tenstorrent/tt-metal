@@ -182,9 +182,11 @@ class TtMolmo2DecoderBlock(LightweightModule):
         ttnn.deallocate(x)
 
         # MLP with dedicated L1 decode path
+        # Output stays in L1 so next layer reads directly from L1 (no DRAM round-trip).
+        # Matches ign/Molmo2_8B_new: layer output is L1_WIDTH_SHARDED throughout the loop.
         ff_in = self.ff_norm(h, mode=Mode.DECODE)
         ff_out = self.feed_forward.forward_decode(ff_in)
-        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        out = ttnn.add(h, ff_out, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_out)
         return out

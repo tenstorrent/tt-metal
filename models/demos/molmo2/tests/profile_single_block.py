@@ -32,6 +32,9 @@ BLOCKS = [
     "text_attention",
     "text_mlp",
     "decoder_block",
+    "decode_attention",
+    "decode_mlp",
+    "decode_block",
     "vit_encoder",
     "vit_encoder_dp",
     "image_pooling",
@@ -150,6 +153,96 @@ elif args.block == "decoder_block":
         out = blk.forward(x, rot_mats=rot_mats, user_id=0, mode="prefill", attn_mask=None)
         ttnn.deallocate(x)
         return out
+
+elif args.block in ("decode_attention", "decode_mlp", "decode_block"):
+    from models.demos.molmo2.tt.attention import TtMolmo2TextAttention
+    from models.demos.molmo2.tt.mlp import TtMolmo2TextMLP
+    from models.demos.molmo2.tt.model import TtMolmo2DecoderBlock
+
+    attn_blk = TtMolmo2TextAttention(
+        mesh_device=mesh,
+        tt_ccl=ccl,
+        state_dict=sd,
+        weight_cache_path=WEIGHT_CACHE,
+        layer_num=0,
+        dtype=ttnn.bfloat16,
+        configuration=cfg,
+        transformation_mats=transformation_mats,
+    )
+    mlp_blk = TtMolmo2TextMLP(
+        mesh_device=mesh,
+        tt_ccl=ccl,
+        state_dict=sd,
+        weight_cache_path=WEIGHT_CACHE,
+        layer_num=0,
+        dtype=ttnn.bfloat16,
+        configuration=cfg,
+    )
+    dec_blk = TtMolmo2DecoderBlock(
+        mesh_device=mesh,
+        tt_ccl=ccl,
+        state_dict=sd,
+        weight_cache_path=WEIGHT_CACHE,
+        layer_num=0,
+        dtype=ttnn.bfloat16,
+        configuration=cfg,
+        transformation_mats=transformation_mats,
+    )
+
+    # Decode: single token [1, 1, 1, dim], position tensor
+    decode_pos = 128
+    cur_pos_tt = ttnn.from_torch(
+        torch.tensor([decode_pos], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    cos_1 = (
+        torch.cat(
+            [
+                transformation_mats["prefill"][decode_pos : decode_pos + 1],
+                transformation_mats["prefill"][decode_pos : decode_pos + 1],
+            ],
+            dim=-1,
+        )
+        if False
+        else None
+    )
+    # Use _get_rot_mats_decode-style: slice head_dim/2 cos/sin and cat
+    from models.tt_transformers.tt.common import precompute_freqs
+
+    cos_r, sin_r = precompute_freqs(cfg.head_dim, cfg.max_seq_len * 2, cfg.rope_theta, None, None)
+    cos_hf = torch.cat([cos_r[: cfg.max_seq_len], cos_r[: cfg.max_seq_len]], dim=-1)
+    sin_hf = torch.cat([sin_r[: cfg.max_seq_len], sin_r[: cfg.max_seq_len]], dim=-1)
+    cos_1 = cos_hf[decode_pos : decode_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+    sin_1 = sin_hf[decode_pos : decode_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+    rot_decode = [_tt(cos_1), _tt(sin_1)]
+
+    if args.block == "decode_attention":
+
+        def fwd():
+            x = _tt(torch.randn(1, 1, 1, cfg.dim).bfloat16())
+            out = attn_blk.forward_decode(x, current_pos=cur_pos_tt, rot_mats=rot_decode)
+            ttnn.deallocate(x)
+            return out
+
+    elif args.block == "decode_mlp":
+
+        def fwd():
+            x = _tt(torch.randn(1, 1, 1, cfg.dim).bfloat16())
+            out = mlp_blk.forward(x, mode=Mode.DECODE)
+            ttnn.deallocate(x)
+            return out
+
+    else:  # decode_block
+
+        def fwd():
+            x = _tt(torch.randn(1, 1, 1, cfg.dim).bfloat16())
+            out = dec_blk.forward_decode(x, current_pos=cur_pos_tt, rot_mats=rot_decode)
+            ttnn.deallocate(x)
+            return out
 
 elif args.block == "vit_encoder":
     from models.demos.molmo2.tt.vision_encoder import TtMolmo2ViTEncoder
