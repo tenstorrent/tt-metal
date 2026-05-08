@@ -30,7 +30,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearIReplicatedWColSharded,
 )
 from models.experimental.tt_symbiote.modules.rope import (
-    TTNNRotaryPositionEmbedding,
+    TTNNQwenOmniRotaryPositionEmbedding,
 )
 
 
@@ -302,10 +302,18 @@ class TTNNQwen3FullAttention(TTNNModule):
         new_attn.v_proj = LinearClsIn.from_torch(torch_attn.v_proj)
         new_attn.o_proj = LinearClsOut.from_torch(torch_attn.o_proj)
 
-        # RoPE for position embeddings
-        # Qwen3.5 uses partial rotary (rotary_dim=64, head_dim=256, factor=0.25),
-        # so we always use non-distributed RoPE which handles partial rotary correctly
-        new_attn.rope = TTNNRotaryPositionEmbedding()
+        # RoPE for position embeddings.
+        # Qwen3.5 / 3.6 use partial rotary (rotary_dim=64, head_dim=256, factor=0.25).
+        # We use the Qwen-Omni flavor (subclass of TTNNRotaryPositionEmbedding) which
+        # adds two defenses on top of the base implementation:
+        #   1. Slices cos/sin back to head_dim if `_maybe_all_gather` (called below
+        #      on every distributed forward) inflated their last dim from
+        #      rotary_dim to rotary_dim*num_devices when they were already
+        #      replicated across the mesh.
+        #   2. Pads q/k as well as cos/sin in the full-rotary branch when the
+        #      rotary dim isn't tile-aligned, so the rotary kernel sees matching
+        #      last dims.
+        new_attn.rope = TTNNQwenOmniRotaryPositionEmbedding()
 
         # SDPA for attention computation
         new_attn.sdpa = TTNNSDPAAttention()

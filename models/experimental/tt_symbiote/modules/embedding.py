@@ -4,6 +4,7 @@
 
 """Embedding layer implementations for TTNN."""
 
+import torch
 from torch import nn
 
 import ttnn
@@ -17,11 +18,22 @@ from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of
 
 @trace_enabled
 class TTNNEmbedding(TTNNModule):
-    """TTNN-accelerated embedding lookup for Ling/Bailing models.
+    """TTNN-accelerated embedding lookup for Ling/Bailing/Qwen models.
 
     Replaces nn.Embedding (word_embeddings). Weight is replicated across all
     devices on a mesh — no CCL needed since downstream column-parallel linears
     expect replicated input.
+
+    Index dtype handling: ``ttnn.embedding`` requires ``UINT32`` or
+    ``BFLOAT16`` indices. Most callers (Bailing / Gemma4 / etc.) pre-convert
+    via ``ttnn.from_torch(..., dtype=ttnn.uint32)`` before calling this op,
+    but when the wrapper is registered directly via
+    ``register_module_replacement_dict`` (as for Qwen3.6) the HF text model
+    hands us raw ``input_ids`` whose default TTNN dtype is ``INT32`` -- which
+    the kernel rejects. ``forward`` handles that case with a cached
+    pad-typecast-slice (``ttnn.typecast`` requires ``padded_shape[-1] % 32 ==
+    0``); the path is a no-op when the input is already ``UINT32`` /
+    ``BFLOAT16``, so existing callers are unaffected.
     """
 
     @classmethod
@@ -29,6 +41,12 @@ class TTNNEmbedding(TTNNModule):
         new_layer = cls()
         new_layer._fallback_torch_layer = embedding
         new_layer._scale_factor = scale_factor
+        # Cache: (leading-dim shape, pad_amount) -> pre-allocated zero buffer
+        # used to pad the index tensor to a multiple of 32 for `ttnn.typecast`.
+        # Populated lazily on the first non-UINT32 forward (warm-up runs
+        # outside trace capture, so the allocation is safe; subsequent capture
+        # / replay re-uses the cached buffer with no allocation).
+        new_layer._typecast_pad_buffers = {}
         return new_layer
 
     def preprocess_weights_impl(self):
@@ -54,7 +72,65 @@ class TTNNEmbedding(TTNNModule):
         ttnn.deallocate(self.tt_weight)
         super().deallocate_weights_impl()
 
+    def _ensure_uint32(self, tt_indices):
+        """Convert ``tt_indices`` to UINT32 if it isn't already a kernel-compatible dtype.
+
+        ``ttnn.embedding`` only accepts ``UINT32`` or ``BFLOAT16``. ``ttnn.typecast``
+        requires the last dim padded to a multiple of 32, so we pad with a cached
+        zero buffer, typecast on device, then slice back to the original length.
+        Returns ``tt_indices`` unchanged when it's already a compatible dtype or
+        not even a ``ttnn.Tensor`` (the kernel will then surface its own error).
+        """
+        if not isinstance(tt_indices, ttnn.Tensor):
+            return tt_indices
+        if tt_indices.dtype in (ttnn.uint32, ttnn.bfloat16):
+            return tt_indices
+
+        # ``ttnn._ttnn.types.Shape`` only supports integer indexing (no slicing
+        # and no ``list(...)``), so materialize the dims as a Python tuple up
+        # front and operate on that.
+        rank = len(tt_indices.shape)
+        shape_dims = tuple(int(tt_indices.shape[i]) for i in range(rank))
+        orig_size = shape_dims[-1] if rank > 0 else 1
+        pad_amount = (32 - orig_size % 32) % 32
+
+        if pad_amount > 0:
+            # Cache pad buffers keyed on (leading-dims, pad_amount) so trace
+            # capture / replay never re-allocates -- prefill (variable seq_len)
+            # gets one buffer per length and decode (seq_len=1) shares one.
+            leading_dims = shape_dims[:-1] if rank > 1 else (1,)
+            cache_key = leading_dims + (pad_amount,)
+            if cache_key not in self._typecast_pad_buffers:
+                pad_torch = torch.zeros(*cache_key, dtype=torch.int32)
+                mesh_mapper = (
+                    ttnn.ReplicateTensorToMesh(self.device)
+                    if self.device is not None and self.device.get_num_devices() > 1
+                    else None
+                )
+                self._typecast_pad_buffers[cache_key] = ttnn.from_torch(
+                    pad_torch,
+                    device=self.device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mesh_mapper,
+                )
+            tt_indices = ttnn.concat([tt_indices, self._typecast_pad_buffers[cache_key]], dim=-1)
+
+        tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
+
+        if pad_amount > 0:
+            # Re-materialize the post-typecast shape as a Python list for
+            # ``ttnn.slice`` (which expects plain ints, not a Shape object).
+            post_rank = len(tt_indices.shape)
+            ends = [int(tt_indices.shape[i]) for i in range(post_rank)]
+            starts = [0] * post_rank
+            ends[-1] = orig_size
+            tt_indices = ttnn.slice(tt_indices, starts, ends)
+        return tt_indices
+
     def forward(self, tt_indices):
+        tt_indices = self._ensure_uint32(tt_indices)
         out = ttnn.embedding(
             tt_indices,
             self.tt_weight,

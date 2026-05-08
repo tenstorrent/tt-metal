@@ -27,6 +27,8 @@ from models.experimental.tt_symbiote.core.run_config import TracedRun
 # FIXED IMPORTS: Use Qwen-specific modules from their dedicated files
 from models.experimental.tt_symbiote.modules.qwen_moe import TTNNQwen3MoE
 from models.experimental.tt_symbiote.modules.qwen_norm import TTNNQwen3MoeRMSNorm
+from models.experimental.tt_symbiote.modules.qwen_decoder import TTNNQwen3MoeDecoderLayer
+from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.attention import PagedAttentionConfig
 from models.experimental.tt_symbiote.modules.qwen_attention import (
     TTNNQwen3LinearAttention,
@@ -140,9 +142,25 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     full_attn_class = None
     moe_class = None
     rms_norm_class = None
+    decoder_layer_class = None
+    # The text-embedding lookup -- Qwen3_5MoeTextModel wires it as
+    # `self.embed_tokens = nn.Embedding(...)`. Detecting the class dynamically
+    # (instead of hard-coding `nn.Embedding`) keeps the swap targeted to the
+    # token embedding without accidentally catching unrelated `nn.Embedding`
+    # instances if a future model variant exposes any.
+    embedding_class = None
+    if hasattr(model, "model") and hasattr(model.model, "embed_tokens"):
+        embedding_class = model.model.embed_tokens.__class__
+        print(f"Found embedding class: {embedding_class.__name__}")
 
     for layer in model.model.layers:
         layer_type = getattr(layer, "layer_type", None)
+
+        # The decoder-layer class is shared across the stack
+        # (`Qwen3_5MoeDecoderLayer`); grab it once for the second-pass swap.
+        if decoder_layer_class is None:
+            decoder_layer_class = layer.__class__
+            print(f"Found decoder layer class: {decoder_layer_class.__name__}")
 
         # Try to identify attention class from layer_type attribute
         # Note: linear attention layers use 'linear_attn', full attention uses 'self_attn'
@@ -165,7 +183,7 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
             print(f"Found RMSNorm class: {rms_norm_class.__name__}")
 
         # Stop once we've found all classes
-        if linear_attn_class and full_attn_class and moe_class and rms_norm_class:
+        if linear_attn_class and full_attn_class and moe_class and rms_norm_class and decoder_layer_class:
             break
 
     # Fallback: if layer_type attribute doesn't exist, inspect class names
@@ -196,6 +214,8 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     use_cpu_linear_attn = os.environ.get("TT_QWEN_CPU_LINEAR_ATTN", "0").lower() in ("1", "true", "yes")
     # Allow disabling the RMSNorm port for A/B comparison.
     use_cpu_rms_norm = os.environ.get("TT_QWEN_CPU_RMS_NORM", "0").lower() in ("1", "true", "yes")
+    # Allow disabling the embedding port for A/B comparison.
+    use_cpu_embedding = os.environ.get("TT_QWEN_CPU_EMBEDDING", "0").lower() in ("1", "true", "yes")
 
     nn_to_ttnn = {}
     if linear_attn_class:
@@ -216,8 +236,38 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
         nn_to_ttnn[rms_norm_class] = TTNNQwen3MoeRMSNorm
     elif use_cpu_rms_norm:
         print("[DEBUG] TT_QWEN_CPU_RMS_NORM=1: Using PyTorch for Qwen3_5MoeRMSNorm")
+    # Replace `model.embed_tokens` (`nn.Embedding`) with TTNNEmbedding so the
+    # token lookup runs on device and emits a TTNN-backed tensor directly.
+    # Without this, every step re-runs the embedding on CPU and pays a
+    # host->device transfer of a `[B, S, hidden_size]` tensor before the first
+    # decoder layer can touch it.
+    if embedding_class and not use_cpu_embedding:
+        nn_to_ttnn[embedding_class] = TTNNEmbedding
+    elif use_cpu_embedding:
+        print("[DEBUG] TT_QWEN_CPU_EMBEDDING=1: Using PyTorch for nn.Embedding")
 
     print(f"Module mappings: {nn_to_ttnn}")
+
+    # Second-pass dict: this MUST be a separate `register_module_replacement_dict`
+    # call because the recursion in `register_module_replacement_dict` does NOT
+    # descend into a subtree once it matches a class. If we put
+    # `Qwen3_5MoeDecoderLayer` in the first pass the inner RMSNorm / attention
+    # / MoE replacements would never happen, since the decoder layer would be
+    # swapped before its children were visited.
+    use_cpu_decoder_residual_add = os.environ.get("TT_QWEN_CPU_DECODER_RESIDUAL_ADD", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    nn_to_ttnn_second_pass = {}
+    if decoder_layer_class and not use_cpu_decoder_residual_add:
+        # Replacing the decoder layer routes the two `residual + hidden_states`
+        # ops through `ttnn.add` instead of the torch dispatcher, eliminating
+        # ~10,240 `aten::add.Tensor` calls / 128 generated tokens in the
+        # captured pivot CSV (and the matching `_unwrap_to_torch` overhead).
+        nn_to_ttnn_second_pass[decoder_layer_class] = TTNNQwen3MoeDecoderLayer
+    elif use_cpu_decoder_residual_add:
+        print("[DEBUG] TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1: leaving residual adds on torch")
 
     # TODO: Selective linear replacement - don't replace small gating layers
     # The generic nn.Linear replacement breaks small linear layers like shared_expert_gate
@@ -242,9 +292,17 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     ).to(model.device)
 
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    # modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
+    # Second pass swaps Qwen3_5MoeDecoderLayer -> TTNNQwen3MoeDecoderLayer once
+    # the inner sub-modules (above) are already TTNN-backed. Skipped when the
+    # dict is empty (TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1).
+    modules2 = (
+        register_module_replacement_dict(model, nn_to_ttnn_second_pass, model_config=None)
+        if nn_to_ttnn_second_pass
+        else {}
+    )
+    # modules3 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
     set_device(model, mesh_device)
-    all_modules = {**modules1}
+    all_modules = {**modules1, **modules2}
 
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):

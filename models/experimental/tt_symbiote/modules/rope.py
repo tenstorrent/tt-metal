@@ -168,6 +168,130 @@ class TTNNRotaryPositionEmbedding(TTNNModule):
         return q_rotated, k_rotated
 
 
+@trace_enabled
+class TTNNQwenOmniRotaryPositionEmbedding(TTNNRotaryPositionEmbedding):
+    """Qwen-Omni / Qwen3.x flavor of TTNN RoPE.
+
+    Same op recipe as :class:`TTNNRotaryPositionEmbedding` (partial-rotary
+    split, ``ttnn.experimental.rotary_embedding`` for each half, concat the
+    pass-through), with two extra defenses that the base class lacks:
+
+    1. **``rotary_dim > head_dim`` slice.** ``TTNNQwen3FullAttention.forward``
+       calls ``_maybe_all_gather(cos)`` / ``_maybe_all_gather(sin)``
+       unconditionally on a multi-device mesh (qwen_attention.py:637-639).
+       When cos/sin are already replicated (the typical case for the HF
+       ``Qwen3_5MoeTextRotaryEmbedding`` output staged via
+       ``ReplicateTensorToMesh``), that all-gather inflates the trailing
+       rotary dim from ``rotary_dim`` to ``rotary_dim * num_devices`` -- e.g.
+       ``64 -> 64 * 8 = 512`` on T3K, which is larger than ``head_dim=256``.
+       The base class then mis-splits q/k. We just slice cos/sin back to
+       ``head_dim`` before continuing.
+
+    2. **Full-rotary padding pads q/k too** (not only cos/sin) and computes
+       ``pad_shape`` dynamically from ``cos.shape[:-1]`` instead of hard-coded
+       ``[1, 1, ...]``. This makes the full-rotary branch correct for
+       arbitrary leading dims and avoids ``ttnn.experimental.rotary_embedding``
+       seeing q/k/cos/sin with mismatched last dims after padding.
+
+    Drop-in replacement: same forward signature
+    ``(q, k, cos, sin) -> (q_rotated, k_rotated)`` and same ``from_torch``
+    contract as the base class. Used today for Qwen3.6-35B-A3B inside
+    ``TTNNQwen3FullAttention``.
+    """
+
+    def forward(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        if q.layout != ttnn.TILE_LAYOUT:
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if k.layout != ttnn.TILE_LAYOUT:
+            k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if cos.layout != ttnn.TILE_LAYOUT:
+            cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if sin.layout != ttnn.TILE_LAYOUT:
+            sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if len(sin.shape) == 3:
+            sin = ttnn.unsqueeze(sin, dim=0)
+        if len(cos.shape) == 3:
+            cos = ttnn.unsqueeze(cos, dim=0)
+
+        batch_size, n_q_heads, seq_len, head_dim = q.shape
+        batch_size2, n_k_heads, seq_len2, head_dim2 = k.shape
+        assert seq_len == seq_len2, "Query and Key sequence lengths must match."
+        assert batch_size == batch_size2, "Query and Key batch sizes must match."
+        assert head_dim == head_dim2, "Query and Key head dimensions must match."
+
+        original_head_dim = head_dim
+        original_seq_len = seq_len
+        rotary_dim = cos.shape[-1]
+
+        # Defense (1): replicated cos/sin can be errantly all-gathered to
+        # head_dim x num_devices; slice back to match Q/K.
+        if rotary_dim > head_dim:
+            cos = cos[:, :, :, :head_dim]
+            sin = sin[:, :, :, :head_dim]
+            rotary_dim = head_dim
+
+        if rotary_dim < head_dim:
+            # Partial rotary: split, rotate first `rotary_dim` chunk, concat pass-through.
+            q_rot = q[:, :, :, :rotary_dim]
+            q_pass = q[:, :, :, rotary_dim:]
+            k_rot = k[:, :, :, :rotary_dim]
+            k_pass = k[:, :, :, rotary_dim:]
+
+            padded_rotary_dim = rotary_dim
+            if rotary_dim % 32 != 0:
+                padded_rotary_dim = ((rotary_dim + 31) // 32) * 32
+                cos = ttnn.pad(cos, [1, 1, cos.shape[-2], padded_rotary_dim], [0, 0, 0, 0], 0.0)
+                sin = ttnn.pad(sin, [1, 1, sin.shape[-2], padded_rotary_dim], [0, 0, 0, 0], 0.0)
+                q_rot = ttnn.pad(q_rot, [batch_size, n_q_heads, seq_len, padded_rotary_dim], [0, 0, 0, 0], 0.0)
+                k_rot = ttnn.pad(k_rot, [batch_size2, n_k_heads, seq_len2, padded_rotary_dim], [0, 0, 0, 0], 0.0)
+
+            q_rot_embedded = ttnn.experimental.rotary_embedding(q_rot, cos, sin)
+            k_rot_embedded = ttnn.experimental.rotary_embedding(k_rot, cos, sin)
+
+            if q_rot_embedded.shape[-2] != seq_len:
+                q_rot_embedded = q_rot_embedded[:, :, :seq_len, :]
+            if k_rot_embedded.shape[-2] != seq_len:
+                k_rot_embedded = k_rot_embedded[:, :, :seq_len, :]
+            if padded_rotary_dim != rotary_dim:
+                q_rot_embedded = q_rot_embedded[:, :, :, :rotary_dim]
+                k_rot_embedded = k_rot_embedded[:, :, :, :rotary_dim]
+
+            q_rotated = ttnn.concat([q_rot_embedded, q_pass], dim=-1)
+            k_rotated = ttnn.concat([k_rot_embedded, k_pass], dim=-1)
+        else:
+            # Full rotary: pad q/k to match cos/sin if either isn't tile-aligned.
+            # Defense (2): build `pad_shape` from cos.shape (not hard-coded `[1, 1, ...]`)
+            # and pad q/k too so the rotary kernel sees matching last dims.
+            padded_dim = rotary_dim
+            if rotary_dim % 32 != 0:
+                padded_dim = ((rotary_dim + 31) // 32) * 32
+                pad_shape = [int(cos.shape[i]) for i in range(len(cos.shape) - 1)] + [padded_dim]
+                cos = ttnn.pad(cos, pad_shape, [0, 0, 0, 0], 0.0)
+                sin = ttnn.pad(sin, pad_shape, [0, 0, 0, 0], 0.0)
+                q = ttnn.pad(q, [batch_size, n_q_heads, seq_len, padded_dim], [0, 0, 0, 0], 0.0)
+                k = ttnn.pad(k, [batch_size2, n_k_heads, seq_len2, padded_dim], [0, 0, 0, 0], 0.0)
+
+            q_rotated = ttnn.experimental.rotary_embedding(q, cos, sin)
+            k_rotated = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+        if q_rotated.shape[-1] != original_head_dim:
+            q_rotated = q_rotated[:, :, :, :original_head_dim]
+        if k_rotated.shape[-1] != original_head_dim:
+            k_rotated = k_rotated[:, :, :, :original_head_dim]
+        if q_rotated.shape[-2] != original_seq_len:
+            q_rotated = q_rotated[:, :, :original_seq_len, :]
+        if k_rotated.shape[-2] != original_seq_len:
+            k_rotated = k_rotated[:, :, :original_seq_len, :]
+
+        return q_rotated, k_rotated
+
+
 class TTNNDistributedRotaryPositionEmbedding(TTNNModule):
     """TTNN-accelerated Rotary Position Embedding for distributed/mesh devices.
 

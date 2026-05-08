@@ -70,6 +70,29 @@ class TTNNModule:
         self._device_state: Optional[DistributedConfig] = None
         self._model_config = {}
         self._bypass_tensor_wrapping = False
+        # Empty stand-ins for the torch.nn.Module attributes that
+        # ``torch.nn.Module._named_members`` reaches into when an enclosing
+        # ``nn.Module`` walks ``model.parameters()`` / ``model.buffers()``.
+        # Without these, iterating from a torch root that has any TTNN-replaced
+        # child (e.g. ``model.model.embed_tokens`` after ``register_module_replacement_dict``)
+        # raises ``AttributeError`` on ``module._parameters.items()`` -- which
+        # in turn breaks the HF ``PreTrainedModel.device`` property that
+        # ``transformers.generate`` consults at startup. Keeping these as
+        # empty dicts makes TTNN modules iterate as parameter-free nodes (their
+        # weights live on device under different attribute names) while still
+        # letting ``TTNNModule.named_modules`` recurse into ``_fallback_torch_layer``
+        # so the HF iteration can still discover the underlying torch parameters
+        # if a caller actually wants them.
+        #
+        # We assign defensively because some subclasses (e.g. ``TTNNLinear``)
+        # define ``_parameters`` as a read-only ``@property`` that forwards to
+        # ``self.torch_layer._parameters`` -- a more useful pass-through than
+        # the empty dict, so we leave that wiring untouched on those classes.
+        for attr in ("_parameters", "_buffers"):
+            try:
+                setattr(self, attr, {})
+            except AttributeError:
+                pass
 
     def set_model_config(self, model_config):
         """Set model configuration dictionary."""
