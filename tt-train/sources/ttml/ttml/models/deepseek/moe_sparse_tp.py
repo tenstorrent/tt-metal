@@ -23,8 +23,6 @@ for the AI/ridge analysis vs the EP path.
 
 from __future__ import annotations
 
-import math
-
 import torch
 
 import ttnn
@@ -38,16 +36,29 @@ from .autograd_ops import (
 )
 
 
-def _build_sharded_param(shape, *, axis_name: str, tdim: int):
-    """Allocate a TP-sharded Parameter on the mesh.
+def _first_replica_numpy(tensor: ttml.autograd.Tensor):
+    """Return the first mesh replica as a host float32 array."""
+    mesh = ttml.maybe_mesh()
+    if mesh is None or mesh.num_devices() == 1:
+        return tensor.to_numpy(ttnn.DataType.FLOAT32)
 
-    `tdim` is the dim of `shape` to shard across the cluster axis.
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(
+        ttml.autograd.AutoContext.get_instance().get_device(), 0
+    )
+    arr = tensor.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+    shape = tuple(tensor.get_value().shape)
+    return arr.reshape((mesh.num_devices(),) + shape)[0]
+
+
+def _make_sharded_param_from_dense_weight(dense_weight: ttml.autograd.Tensor, *, axis_name: str, tdim: int):
+    """Create a leaf sharded parameter from a LinearLayer weight.
+
+    LinearLayer stores [1, 1, out, in]. moe_ffn_swiglu_fw consumes
+    [1, 1, in, out], so transpose on host once, then shard with the mapper.
     """
-    fan_in = shape[-1]
-    k = math.sqrt(1.0 / fan_in)
-    init_fn = ttml.init.uniform(-k, k)
+    weight_np = _first_replica_numpy(dense_weight).transpose(0, 1, 3, 2)
     mapper = ttml.mesh().axis_mapper(axis_name, tdim=tdim)
-    return Parameter(init_fn(shape, mapper=mapper))
+    return Parameter(ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper))
 
 
 class SparseMoETP(MoE):
@@ -61,10 +72,8 @@ class SparseMoETP(MoE):
 
     def __init__(self, config) -> None:
         # Build the dense MoE (gate, dense Experts, shared experts, buffers).
-        # We re-create the per-expert FFN weights below as TP-sharded
-        # parameters so that LinearLayer-based `self.experts` are unused
-        # in `forward`. Keeping them around avoids re-implementing the
-        # routing-related plumbing the base class sets up.
+        # We immediately copy the dense expert weights into persistent sharded
+        # parameters so forward does not scatter weights every step.
         super().__init__(config)
 
         # Mesh axis to shard experts on. Falls back to "tp" so the class
@@ -74,9 +83,7 @@ class SparseMoETP(MoE):
         self.cluster_axis = ttml.mesh().axis_index(self.axis_name)
         D = ttml.mesh().axis_size(self.axis_name)
 
-        H = config.dim
         I = config.moe_inter_dim
-        E = config.n_routed_experts
 
         # Each expert's intermediate dim (I) is sharded I → I/D across the
         # TP axis. Divisibility is required (otherwise the shard is
@@ -87,16 +94,30 @@ class SparseMoETP(MoE):
                 f"SparseMoETP: moe_inter_dim={I} must be divisible by " f"the '{self.axis_name}' axis size ({D})"
             )
 
-        # moe_ffn_swiglu_fw expects weight shape [1, 1, in, out] (matmul
-        # does x @ W with no transpose).
-        # Column-parallel (w_gate, w_up): shard the OUT dim (last) across
-        # the TP axis → each chip has [H, I/D] of the full [H, I].
-        # Row-parallel (w_down): shard the IN dim (second-to-last) → each
-        # chip has [I/D, H] of the full [I, H]. all_reduce in `forward`
-        # sums the per-chip partials.
-        self.w_gate = [_build_sharded_param([1, 1, H, I], axis_name=self.axis_name, tdim=3) for _ in range(E)]
-        self.w_up = [_build_sharded_param([1, 1, H, I], axis_name=self.axis_name, tdim=3) for _ in range(E)]
-        self.w_down = [_build_sharded_param([1, 1, I, H], axis_name=self.axis_name, tdim=2) for _ in range(E)]
+        self.w_gate = []
+        self.w_up = []
+        self.w_down = []
+        for e in range(config.n_routed_experts):
+            # w1/w3 become [H, I] and shard intermediate/output dim I.
+            gate = _make_sharded_param_from_dense_weight(
+                self.experts[e].w1.weight.tensor, axis_name=self.axis_name, tdim=3
+            )
+            up = _make_sharded_param_from_dense_weight(
+                self.experts[e].w3.weight.tensor, axis_name=self.axis_name, tdim=3
+            )
+            # w2 becomes [I, H] and shards intermediate/input dim I.
+            down = _make_sharded_param_from_dense_weight(
+                self.experts[e].w2.weight.tensor, axis_name=self.axis_name, tdim=2
+            )
+
+            # Register each Parameter by name; storing only in a Python list
+            # would not be picked up by AbstractModuleBase.__setattr__.
+            setattr(self, f"w_gate_{e}", gate)
+            setattr(self, f"w_up_{e}", up)
+            setattr(self, f"w_down_{e}", down)
+            self.w_gate.append(gate)
+            self.w_up.append(up)
+            self.w_down.append(down)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         device = ttml.autograd.AutoContext.get_instance().get_device()

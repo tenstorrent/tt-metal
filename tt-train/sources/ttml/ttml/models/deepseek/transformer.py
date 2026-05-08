@@ -45,6 +45,7 @@ class DeepSeekBlock(AbstractModuleBase):
         # Lazy imports to avoid circular dependency (mla/moe import RMSNormLayer from here)
         import ttml as _ttml
         from .mla import MultiHeadLatentAttention
+        from .moe import MoE
         from .moe_sparse import SparseMoE
         from .moe_sparse_tp import SparseMoETP
 
@@ -53,12 +54,22 @@ class DeepSeekBlock(AbstractModuleBase):
         if layer_id < config.n_dense_layers:
             self.ffn = DeepSeekMLP(config.dim, config.inter_dim)
         else:
-            tp_name = getattr(config, "moe_tp_axis_name", None)
-            mesh = _ttml.maybe_mesh()
-            use_moe_tp = (
-                tp_name is not None and mesh is not None and mesh.has_axis(tp_name) and mesh.axis_size(tp_name) > 1
-            )
-            self.ffn = SparseMoETP(config) if use_moe_tp else SparseMoE(config)
+            moe_type = str(getattr(config, "moe_type", "sparse")).lower()
+            if moe_type == "dense":
+                self.ffn = MoE(config)
+            elif moe_type == "sparse":
+                tp_name = getattr(config, "moe_tp_axis_name", None)
+                mesh = _ttml.maybe_mesh()
+                use_moe_tp = (
+                    tp_name is not None and mesh is not None and mesh.has_axis(tp_name) and mesh.axis_size(tp_name) > 1
+                )
+                self.ffn = SparseMoETP(config) if use_moe_tp else SparseMoE(config)
+            else:
+                raise ValueError(
+                    f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected 'sparse' or 'dense' "
+                    f"(from DeepSeekConfig.moe_type)"
+                )
+            self.ffn._debug_layer_id = layer_id
         self.attn_norm = RMSNormLayer(config.dim)
         self.ffn_norm = RMSNormLayer(config.dim)
 
