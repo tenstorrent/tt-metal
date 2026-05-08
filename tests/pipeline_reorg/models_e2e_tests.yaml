@@ -101,7 +101,7 @@
   model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 25
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -210,7 +210,7 @@
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
