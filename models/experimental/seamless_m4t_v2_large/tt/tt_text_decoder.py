@@ -213,11 +213,13 @@ class TTSeamlessM4Tv2Decoder:
             input_ids,
             weight=parameters.embed_tokens.weight,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         pos = ttnn.embedding(
             position_ids,
             weight=parameters.embed_positions.weight,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         hidden = ttnn.add(tok, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -249,7 +251,9 @@ class TTSeamlessM4Tv2Decoder:
                 sdpa_cfg=sdpa_self,
             )
             ttnn.deallocate(normed)
-            hidden = ttnn.add(hidden, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            residual = hidden
+            hidden = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(residual)
             ttnn.deallocate(attn_out)
 
             normed = self._layer_norm(
@@ -271,7 +275,9 @@ class TTSeamlessM4Tv2Decoder:
                 sdpa_cfg=sdpa_cross,
             )
             ttnn.deallocate(normed)
-            hidden = ttnn.add(hidden, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            residual = hidden
+            hidden = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(residual)
             ttnn.deallocate(attn_out)
 
             normed = self._layer_norm(
@@ -281,14 +287,21 @@ class TTSeamlessM4Tv2Decoder:
             )
             ff = self._linear(normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias)
             ttnn.deallocate(normed)
-            ff = ttnn.relu(ff)
-            ff = self._linear(ff, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
-            hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ff_in = ff
+            ff = ttnn.relu(ff_in, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(ff_in)
+            ff_in = ff
+            ff = self._linear(ff_in, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
+            ttnn.deallocate(ff_in)
+            residual = hidden
+            hidden = ttnn.add(residual, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(residual)
             ttnn.deallocate(ff)
 
-        hidden = self._layer_norm(
+        out = self._layer_norm(
             hidden,
             weight=parameters.layer_norm.weight,
             bias=parameters.layer_norm.bias,
         )
-        return hidden
+        ttnn.deallocate(hidden)
+        return out
