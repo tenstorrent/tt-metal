@@ -19,6 +19,7 @@ import os
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 from transformers import GPT2Tokenizer
 
@@ -584,14 +585,36 @@ class TestOlmoE2EPCC:
         self._run_decode_pcc(mesh_device, n_layers=1)
 
     @torch.no_grad()
+    def test_decode_pcc_1layer_bf16weights(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC, 1 layer, bf16 weights. Used to upper-bound achievable PCC vs default bf8."""
+        self._run_decode_pcc(mesh_device, n_layers=1, dtype=ttnn.bfloat16)
+
+    @torch.no_grad()
+    def test_decode_pcc_1layer_1k(self, mesh_device, reset_seeds, ensure_gc):
+        self._run_decode_pcc(mesh_device, n_layers=1, start_pos=1023, max_seq_len=2048)
+
+    @torch.no_grad()
+    def test_decode_pcc_1layer_4k(self, mesh_device, reset_seeds, ensure_gc):
+        self._run_decode_pcc(mesh_device, n_layers=1, start_pos=4095, max_seq_len=8192)
+
+    @torch.no_grad()
+    def test_decode_pcc_1layer_16k(self, mesh_device, reset_seeds, ensure_gc):
+        self._run_decode_pcc(mesh_device, n_layers=1, start_pos=16383, max_seq_len=16384)
+
+    @torch.no_grad()
+    def test_decode_pcc_1layer_32k(self, mesh_device, reset_seeds, ensure_gc):
+        self._run_decode_pcc(mesh_device, n_layers=1, start_pos=32767, max_seq_len=32768)
+
+    @torch.no_grad()
     def test_decode_per_op_pcc_4layers(self, mesh_device, reset_seeds, ensure_gc):
         """Per-op PCC: capture SDPA, attn_out, h_attn, ff_out, layer_out for each layer."""
         hf_model_path = os.environ.get("HF_MODEL")
         if not hf_model_path:
             pytest.skip("HF_MODEL not set")
 
-        # Use 1 layer for faster head-mapping debug; change to 4 for full test
-        n_layers = 1
+        # Use 1 layer for faster head-mapping debug; change to 4 for full test.
+        # Override via N_LAYERS_PER_OP env var to run at full 64-layer depth.
+        n_layers = int(os.environ.get("N_LAYERS_PER_OP", "1"))
         max_seq_len = 256
         batch_size = 32
         start_pos = 127
@@ -699,7 +722,16 @@ class TestOlmoE2EPCC:
             ref_captures[li]["attn_normed"] = attn_normed.detach().clone()
             h = x + attn_normed
             ref_captures[li]["h_attn"] = h.detach().clone()
-            ff_raw = self_block.feed_forward(h)
+            # Inline the FFN so we can capture w1/w3/ff1ff3/w2 separately.
+            ff = self_block.feed_forward
+            w1_out = ff.w1(h)
+            w3_out = ff.w3(h)
+            ref_captures[li]["w1_out"] = w1_out.detach().clone()
+            ref_captures[li]["w3_out"] = w3_out.detach().clone()
+            ff1ff3 = F.silu(w1_out) * w3_out
+            ref_captures[li]["ff1ff3"] = ff1ff3.detach().clone()
+            ff_raw = ff.w2(ff1ff3)
+            ref_captures[li]["w2_out_pre_ar"] = ff_raw.detach().clone()
             ref_captures[li]["ff_out"] = ff_raw.detach().clone()
             ff_normed = self_block.ffn_norm(ff_raw)
             ref_captures[li]["ff_normed"] = ff_normed.detach().clone()
@@ -717,7 +749,9 @@ class TestOlmoE2EPCC:
         model_args.n_layers = n_layers
         state_dict = model_args.load_state_dict()
 
-        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=4096)
+        # 64L overflows DRAM at max_num_blocks=4096; shrink when running deep stacks.
+        per_op_blocks = 128 if n_layers >= 32 else 4096
+        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=per_op_blocks)
         tt_model = TtTransformer(
             args=model_args,
             mesh_device=mesh_device,
@@ -732,6 +766,7 @@ class TestOlmoE2EPCC:
         for layer in tt_model.layers:
             layer.capture_intermediates = True
             layer.attention.capture_intermediates = True
+            layer.feed_forward.capture_intermediates = True
 
         page_table = torch.argsort(torch.randperm(paged_attention_config.max_num_blocks)).reshape(
             model_args.batch_size_per_device_group,
@@ -1234,6 +1269,43 @@ class TestOlmoE2EPCC:
                 f"    REF STATS: xq_norm_std={ref_xq_std:.4f}  xk_norm_std={ref_xk_std:.4f}  "
                 f"xv_std={ref_xv_std:.4f}  sdpa_out_std={ref_sdpa_std:.4f}  attn_weight_max={ref_attn_max:.4f}"
             )
+
+            # ── MLP-internal element-wise comparison: TT vs ref ──
+            mlp_caps = getattr(tt_layer.feed_forward, "captured", {}) or {}
+            for mlp_name in ("w1_out_reduced", "w3_out_reduced", "ff1ff3", "w2_out_pre_ar"):
+                tt_t = mlp_caps.get(mlp_name)
+                ref_name = {
+                    "w1_out_reduced": "w1_out",
+                    "w3_out_reduced": "w3_out",
+                    "ff1ff3": "ff1ff3",
+                    "w2_out_pre_ar": "w2_out_pre_ar",
+                }[mlp_name]
+                ref_t = ref_li.get(ref_name)
+                if tt_t is None or ref_t is None:
+                    continue
+                # TT shape: [rows, 1, batch, dim3_total] (rows replicated post-RS).
+                # Flatten the row-0 slice user-0 batch entry to a 1-D vector of model values.
+                tt_flat = tt_t[0, 0, 0, :].float().flatten() if tt_t.dim() == 4 else tt_t.float().flatten()
+                # Ref shape: [batch=32, seq=1, intermediate]. User-0 → flatten.
+                ref_flat = ref_t[0, 0, :].float().flatten() if ref_t.dim() == 3 else ref_t.float().flatten()
+                n = min(ref_flat.numel(), tt_flat.numel())
+                ref_n = ref_flat[:n]
+                tt_n = tt_flat[:n]
+                diff = (tt_n - ref_n).abs()
+                # Relative ratio — only at positions where ref is not tiny (avoid division noise)
+                mask = ref_n.abs() > 1e-3
+                if mask.any():
+                    ratio = tt_n[mask].abs() / ref_n[mask].abs()
+                    r_med = ratio.median().item()
+                    r_mean = ratio.mean().item()
+                else:
+                    r_med = r_mean = float("nan")
+                logger.info(
+                    f"    MLP {mlp_name:18s}: n={n}  abs_diff max={diff.max():.4e} "
+                    f"mean={diff.mean():.4e}  |TT/ref| mean={r_mean:.4f} med={r_med:.4f}  "
+                    f"ref_std={ref_n.std():.4f} tt_std={tt_n.std():.4f}  "
+                    f"ref_shape={list(ref_t.shape)} tt_shape={list(tt_t.shape)}"
+                )
         logger.info("=" * 70)
 
     @torch.no_grad()
@@ -1692,12 +1764,13 @@ class TestOlmoE2EPCC:
         logger.info("\n2-STEP DECODE ELEMENTWISE COMPLETE")
 
     @torch.no_grad()
-    def _run_decode_pcc(self, mesh_device, n_layers, start_pos=127, max_seq_len=256, batch_size=32):
+    def _run_decode_pcc(self, mesh_device, n_layers, start_pos=127, max_seq_len=256, batch_size=32, dtype=None):
         """Shared implementation for decode PCC tests."""
         hf_model_path = os.environ.get("HF_MODEL")
         if not hf_model_path:
             pytest.skip("HF_MODEL not set")
-        dtype = ttnn.bfloat8_b
+        if dtype is None:
+            dtype = ttnn.bfloat8_b
 
         logger.info("Loading HF state dict...")
         hf_sd = load_hf_raw_state_dict(hf_model_path)
@@ -2059,6 +2132,209 @@ class TestOlmoE2EPCC:
 
         assert matches >= total * 0.5, f"Token match rate too low: {matches}/{total}"
         logger.info("E2E PCC TEST: PASSED")
+
+    @torch.no_grad()
+    def test_e2e_pcc_64layer_drift(self, mesh_device, reset_seeds, ensure_gc):
+        """
+        Cumulative-drift PCC: full 64L prefill + N decode tokens, FREE-RUN both sides.
+        Each side picks its own argmax token; we still compute logit PCC at each step.
+        Free-run captures the self-amplifying error path (slightly-wrong TT token enters
+        TT KV cache and skews downstream attention), which teacher forcing would mask.
+        """
+        hf_model_path = os.environ.get("HF_MODEL")
+        if not hf_model_path:
+            pytest.skip("HF_MODEL not set")
+
+        n_layers = 64
+        max_seq_len = 256
+        n_decode_tokens = int(os.environ.get("N_DECODE_TOKENS", "32"))
+        dtype = ttnn.bfloat8_b
+
+        logger.info("Loading HF state dict...")
+        hf_sd = load_hf_raw_state_dict(hf_model_path)
+
+        logger.info(f"Building CPU reference ({n_layers} layers)...")
+        ref_model = build_ref_model(hf_sd, n_layers=n_layers, max_seq_len=max_seq_len)
+
+        model_args = TtOlmoModelArgs(mesh_device, max_batch_size=32, max_seq_len=max_seq_len)
+        model_args.n_layers = n_layers
+        tokenizer = model_args.tokenizer
+        if tokenizer is None:
+            tokenizer = GPT2Tokenizer.from_pretrained(model_args.TOKENIZER_PATH)
+
+        prompt = "The capital of France is"
+        input_ids = tokenizer.encode(prompt, add_special_tokens=True)
+        seq_len = len(input_ids)
+        padded_len = 128
+        input_ids_padded = input_ids + [tokenizer.eos_token_id or 50256] * (padded_len - seq_len)
+        tokens_pt = torch.tensor(input_ids_padded, dtype=torch.long).unsqueeze(0)
+
+        # ===== CPU prefill + decode (capture logits per step) =====
+        logger.info(f"CPU prefill (seq_len={seq_len})...")
+        embeddings_ref = ref_model.tok_embeddings(tokens_pt[:, :padded_len]).float()
+        ref_prefill_out = ref_model.forward(embeddings_ref, start_pos=0, mode="decode")
+        ref_prefill_logits = ref_prefill_out[:, seq_len - 1, :].squeeze(0)  # [vocab]
+        ref_first_token = ref_prefill_logits.argmax(dim=-1).item()
+        logger.info(f"CPU prefill token: {ref_first_token} ({tokenizer.decode([ref_first_token])})")
+
+        ref_tokens = [ref_first_token]
+        ref_logits_per_step = [ref_prefill_logits.clone()]
+        for step in range(n_decode_tokens):
+            pos = seq_len + step
+            tok_emb = ref_model.tok_embeddings(torch.tensor([[ref_tokens[-1]]])).float()
+            ref_decode_out = ref_model.forward(tok_emb, start_pos=pos, mode="decode")
+            step_logits = ref_decode_out[:, -1, :].squeeze(0)
+            ref_tokens.append(step_logits.argmax(dim=-1).item())
+            ref_logits_per_step.append(step_logits.clone())
+            logger.info(f"CPU decode step {step}: tok={ref_tokens[-1]}")
+
+        # ===== TTNN prefill + teacher-forced decode =====
+        logger.info(f"Building TTNN model ({n_layers} layers)...")
+        state_dict = model_args.load_state_dict()
+        # Small KV cache: only need padded_len + n_decode_tokens positions; 64 layers × 4096 blocks
+        # would OOM. block_size=64, 128 blocks → 8192-token KV → ~2 MB/shard × 64 layers × 2 = 256 MB/dev.
+        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=128)
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+        )
+        tt_model = TtTransformer(
+            args=model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            decode_mode_only=False,
+        )
+        kv_cache = [layer.attention.layer_past for layer in tt_model.layers]
+
+        ttnn_cos, ttnn_sin, _ = precompute_freqs_yarn(
+            dim=model_args.head_dim,
+            end=model_args.max_seq_len * 2,
+            theta=model_args.rope_theta,
+            scaling_factor=model_args.rope_scaling_factor,
+            original_max_position_embeddings=model_args.original_max_position_embeddings,
+            beta_fast=model_args.yarn_beta_fast,
+            beta_slow=model_args.yarn_beta_slow,
+            attention_factor=model_args.yarn_attention_factor,
+        )
+        position_ids = torch.arange(padded_len)
+        cos_gathered, sin_gathered = gather_cos_sin(position_ids, ttnn_cos, ttnn_sin)
+        rot_mats_prefill = [
+            ttnn.from_torch(
+                cos_gathered,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+            ttnn.from_torch(
+                sin_gathered,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+        ]
+        tt_model.tt_rot_mats_prefill = rot_mats_prefill
+
+        block_size = paged_attention_config.block_size
+        num_prefill_blocks = math.ceil(padded_len / block_size)
+        prefill_page_table = torch.ones(32, num_prefill_blocks, dtype=torch.int32) * -1
+        prefill_page_table[0, :] = page_table[0, :num_prefill_blocks]
+
+        host_inputs = tt_model.prepare_prefill_inputs_host(tokens_pt, user_id=0, page_table=prefill_page_table)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+        transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs)
+        tt_out_prefill = tt_model.ttnn_prefill_forward(*transformed_inputs, kv_cache=kv_cache, batch_size=1)
+        tt_first_tok_result = tt_model.process_output_prefill(tt_out_prefill, last_token_idx=seq_len - 1)
+        ttnn.synchronize_device(mesh_device)
+        tt_first_token = int(tt_first_tok_result[0])
+        logger.info(f"TTNN prefill token: {tt_first_token} ({tokenizer.decode([tt_first_token])})")
+
+        decode_page_table_pt = page_table.clone()
+        decode_page_table_tt = ttnn.from_torch(
+            decode_page_table_pt,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        tt_model.switch_mode("decode")
+        vocab_size = model_args.vocab_size
+        tt_out_logits_saved = torch.zeros(vocab_size)
+
+        # Free-run decode: TT consumes its own previous argmax (matches real generation).
+        tt_logits_per_step = []
+        tt_tokens = [tt_first_token]
+        current_pos_val = seq_len
+        for step in range(n_decode_tokens):
+            tok_input = tt_tokens[-1]  # free-run
+            tok_tensor = torch.full((1, 1, 1, 32), 0, dtype=torch.long)
+            tok_tensor[0, 0, 0, 0] = tok_input
+            tt_tok_device = ttnn.from_torch(
+                tok_tensor,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            current_pos = torch.full((32,), current_pos_val, dtype=torch.long)
+            current_pos_tt = ttnn.from_torch(
+                current_pos,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=model_args.cluster_shape),
+            )
+            rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+            tt_model.ttnn_decode_forward(
+                tt_tok_device,
+                current_pos_tt,
+                rot_mat_idxs,
+                page_table=decode_page_table_tt,
+                kv_cache=kv_cache,
+                tt_out_logits_saved=tt_out_logits_saved,
+            )
+            ttnn.synchronize_device(mesh_device)
+            tt_logits_per_step.append(tt_out_logits_saved.clone())
+            tt_tokens.append(int(tt_out_logits_saved.argmax().item()))
+            current_pos_val += 1
+
+        # ===== Per-step PCC =====
+        logger.info("=" * 60)
+        logger.info(f"CUMULATIVE DRIFT (64L, teacher-forced, n_decode={n_decode_tokens})")
+        logger.info("=" * 60)
+        logger.info(
+            f"Prefill token: CPU={ref_first_token}, TTNN={tt_first_token}, "
+            f"match={ref_first_token == tt_first_token}"
+        )
+
+        # ref_logits_per_step has prefill_logits at [0], step-0 at [1], ...
+        # tt_logits_per_step has step-0 at [0], step-1 at [1], ...
+        # For step k (0..n_decode_tokens-1), compare ref_logits_per_step[k+1] vs tt_logits_per_step[k]
+        argmax_matches = 0
+        for k in range(n_decode_tokens):
+            ref_l = ref_logits_per_step[k + 1].float()
+            tt_l = tt_logits_per_step[k].float()
+            ref_top = ref_l.argmax().item()
+            tt_top = tt_l.argmax().item()
+            _, pcc = comp_pcc(ref_l, tt_l, pcc=0.0)
+            argmax_matches += int(ref_top == tt_top)
+            ref_str = tokenizer.decode([ref_top])
+            tt_str = tokenizer.decode([tt_top])
+            logger.info(
+                f"  step {k:3d}: PCC={pcc:.6f}  ref={ref_top}({ref_str!r})  "
+                f"tt={tt_top}({tt_str!r})  {'✓' if ref_top == tt_top else '✗'}"
+            )
+        logger.info(
+            f"Argmax match: {argmax_matches}/{n_decode_tokens} " f"({100.0 * argmax_matches / n_decode_tokens:.1f}%)"
+        )
+        logger.info("E2E DRIFT TEST: COMPLETE")
 
     @torch.no_grad()
     def test_prefill_per_op_pcc_1layer(self, mesh_device, reset_seeds, ensure_gc):

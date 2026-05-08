@@ -228,11 +228,13 @@ def run_olmo_demo(
         top_k = sampling_params.get("top_k", 1)
         top_p = sampling_params["top_p"]
         seed = sampling_params.get("seed", 42)
+        repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
         device_sampling_params = SamplingParams(
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
             seed=seed,
+            repetition_penalty=repetition_penalty,
         )
 
         # ── KV cache reset for repeat batches ────────────────────────────
@@ -246,7 +248,6 @@ def run_olmo_demo(
         # Check if ISL fits within traced seqlens
         max_trace_seqlen = max(model.tt_ccl.support_seqlens)
         use_prefill_trace = prefill_enable_trace and max_encoded_prompt_len <= max_trace_seqlen
-
 
         # ── Prefill warmup (first batch only) ────────────────────────────
         # For traced ISLs we do a compile prefill here to pre-populate the specific
@@ -631,6 +632,20 @@ def run_olmo_demo(
             64,
             False,
         ),
+        (  # long-128-b1-32k-gen: 128 context, 1 user, 32K decode tokens (perf benchmark)
+            "models/demos/olmo_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            32768,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 1.0, "top_p": 1.0},
+            False,
+            64,
+            False,
+        ),
         (  # aime-b1: AIME 2024 problem, batch=1, HF-recommended sampling (temp=0.6, top_p=0.95, no top_k), 32K decode budget
             "models/demos/olmo_galaxy/demo/sample_prompts/input_data_aime_test.json",
             True,
@@ -642,6 +657,64 @@ def run_olmo_demo(
             {"page_block_size": 64, "page_max_num_blocks": 2048},
             {"temperature": 0.6, "top_p": 0.95, "seed": 42},
             True,  # stop_at_eos: stop when model finishes thinking
+            64,
+            False,
+        ),
+        (  # aime24-p2: AIME 2024 problem 2 (target=113). Failed in r1_aime24 5-problem run.
+            # Match eval gen_kwargs: temperature=0.6, top_p=0.95, top_k=40 (HF-recommended).
+            # Default top_k=1 triggered force-argmax which ignored seed and produced loops.
+            "models/demos/olmo_galaxy/demo/sample_prompts/input_data_aime24_p2.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            32768,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0.6, "top_p": 0.95, "top_k": 40, "seed": 42},
+            True,  # stop_at_eos
+            64,
+            False,
+        ),
+        (  # aime24-p2-seed0: variance check — same prompt, different seed.
+            "models/demos/olmo_galaxy/demo/sample_prompts/input_data_aime24_p2.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            32768,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0.6, "top_p": 0.95, "top_k": 40, "seed": 1},
+            True,
+            64,
+            False,
+        ),
+        (  # aime24-p2-10k: AIME problem 2 with 10K-token decode budget (faster repro of degeneration).
+            "models/demos/olmo_galaxy/demo/sample_prompts/input_data_aime24_p2.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            10000,  # 10K tokens — degeneration kicks in around 1200, this captures it cleanly
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0.6, "top_p": 0.95, "top_k": 40, "seed": 42},
+            True,
+            64,
+            False,
+        ),
+        (  # aime24-p2-reppen: same prompt with repetition_penalty=1.05 to break math-loop degeneration.
+            "models/demos/olmo_galaxy/demo/sample_prompts/input_data_aime24_p2.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            32768,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0.6, "top_p": 0.95, "top_k": 40, "seed": 42, "repetition_penalty": 1.5},
+            True,
             64,
             False,
         ),
@@ -673,7 +746,12 @@ def run_olmo_demo(
         "long-32k-b1",
         "long-64k-b1",
         "long-64k-b1-32k-gen",
+        "long-128-b1-32k-gen",
         "aime-b1",
+        "aime24-p2",
+        "aime24-p2-seed0",
+        "aime24-p2-10k",
+        "aime24-p2-reppen",
         "stress-test",
     ],
 )
@@ -703,6 +781,7 @@ def run_olmo_demo(
     ],
     indirect=True,
 )
+@pytest.mark.timeout(1800)
 def test_olmo_text_demo(
     input_prompts,
     instruct,

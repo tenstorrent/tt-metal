@@ -1204,11 +1204,14 @@ class TtOlmoModelArgs(TtModelArgs):
             k_chunk_size=256,
         )
 
-        # SDPA compute kernel config
+        # SDPA compute kernel config.
+        # OLMo3-32B: HiFi4 + fp32 dest accumulation to reduce logit drift on long-decode runs.
+        # Bf8 weights + bf8 KV cache + lossy compute caused thinking-loops / symbol garble
+        # after ~600-1000 tokens. Higher-precision compute slows the drift.
         self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
 
