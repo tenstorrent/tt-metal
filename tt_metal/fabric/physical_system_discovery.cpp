@@ -76,7 +76,6 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     bool using_mock_cluster_desc,
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray,
     std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
-    
     if (cluster_desc.get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc.get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
