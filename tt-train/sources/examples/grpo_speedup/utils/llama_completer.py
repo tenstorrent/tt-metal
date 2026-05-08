@@ -13,7 +13,6 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig
-from transformers import AutoTokenizer
 
 
 class LlamaGRPOCompleter:
@@ -82,7 +81,6 @@ class LlamaGRPOCompleter:
 
         self._mesh_device: Any = self.setup_device(device_config)
         self._model_source: str = model_source
-        self._tokenizer: Any = AutoTokenizer.from_pretrained(model_source)
 
         # ``ModelArgs`` reads the model id from the env var.
         os.environ["HF_MODEL"] = model_source
@@ -98,6 +96,9 @@ class LlamaGRPOCompleter:
             max_seq_len=max_seq_len,
             cache_hf=True,
         )
+        # Reuse the tokenizer created by ModelArgs so stop tokens and
+        # fallbacks match simple_text_demo / tt-transformers behavior.
+        self._tokenizer: Any = self._model_args.tokenizer
 
         # Paged attention KV cache: kept simple (single contiguous identity
         # mapping). The page_table is a host torch tensor — that's what the
@@ -125,6 +126,7 @@ class LlamaGRPOCompleter:
             block_size=block_size,
             max_num_blocks=max_num_blocks,
         )
+        self._paged_cache_max_seq_len = block_size * blocks_per_user
         self._page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, blocks_per_user)
 
         self._model: Any = None
@@ -265,6 +267,60 @@ class LlamaGRPOCompleter:
                 ids.add(int(tid))
         return ids
 
+    def _prepare_prompt_batch(
+        self, prompts: List[List[int]], max_new_tokens: int
+    ) -> tuple[List[List[int]], List[int], int]:
+        """Normalize/clip prompts and pad to ``max_batch_size`` for decode.
+
+        ``Transformer.prepare_decode_inputs_host`` requires decode batch size
+        to exactly match ``ModelArgs.max_batch_size``. We therefore pad with
+        inert one-token prompts when ``len(prompts) < max_batch_size`` and
+        ignore those padded slots in the returned completions.
+        """
+        assert max_new_tokens >= 0, "max_new_tokens must be non-negative"
+
+        active_batch_size = len(prompts)
+        assert 0 < active_batch_size <= self._max_batch_size, (
+            f"generate() got {active_batch_size} prompts but completer was built with "
+            f"max_batch_size={self._max_batch_size}"
+        )
+
+        normalized_prompts = [[int(tok) for tok in prompt] for prompt in prompts]
+        prompt_lens = [len(p) for p in normalized_prompts]
+        assert min(prompt_lens) > 0, "empty prompts are not supported"
+
+        max_prefill_len = self._model_args.max_seq_len - max_new_tokens
+        assert (
+            max_prefill_len > 0
+        ), f"max_new_tokens ({max_new_tokens}) must be smaller than max_seq_len ({self._model_args.max_seq_len})"
+
+        if max(prompt_lens) > max_prefill_len:
+            normalized_prompts = [p[-max_prefill_len:] for p in normalized_prompts]
+            prompt_lens = [len(p) for p in normalized_prompts]
+
+        max_prompt_len = max(prompt_lens)
+        assert max_prompt_len + max_new_tokens <= self._model_args.max_seq_len, (
+            f"prompt prefill tokens ({max_prompt_len}) + decode tokens ({max_new_tokens}) "
+            f"must be <= max_seq_len ({self._model_args.max_seq_len})"
+        )
+        assert max_prompt_len + max_new_tokens <= self._paged_cache_max_seq_len, (
+            f"prompt prefill tokens ({max_prompt_len}) + decode tokens ({max_new_tokens}) "
+            f"must be <= paged-cache capacity ({self._paged_cache_max_seq_len})"
+        )
+
+        if active_batch_size < self._max_batch_size:
+            filler_token = self._tokenizer.pad_token_id
+            if filler_token is None:
+                filler_token = self._tokenizer.eos_token_id
+            if filler_token is None or filler_token < 0:
+                filler_token = 0
+            filler_prompt = [int(filler_token)]
+            pad_slots = self._max_batch_size - active_batch_size
+            normalized_prompts.extend([filler_prompt] * pad_slots)
+            prompt_lens.extend([1] * pad_slots)
+
+        return normalized_prompts, prompt_lens, active_batch_size
+
     def generate(
         self,
         prompts: List[List[int]],
@@ -318,23 +374,18 @@ class LlamaGRPOCompleter:
 
         from models.tt_transformers.tt.common import sample_host
 
-        B = len(prompts)
-        assert 0 < B <= self._max_batch_size, (
-            f"generate() got {B} prompts but completer was built with " f"max_batch_size={self._max_batch_size}"
-        )
+        if max_new_tokens == 0:
+            return [[] for _ in prompts]
 
-        prompt_lens = [len(p) for p in prompts]
-        assert min(prompt_lens) > 0, "empty prompts are not supported"
+        prompts, prompt_lens, active_batch_size = self._prepare_prompt_batch(prompts, max_new_tokens)
+        batch_size = len(prompts)
         max_prompt_len = max(prompt_lens)
-        assert max_prompt_len <= self._model_args.max_seq_len, (
-            f"prompt length {max_prompt_len} exceeds max_seq_len " f"{self._model_args.max_seq_len}"
-        )
 
         # Pad prompts to a common length. Padding token is irrelevant for
         # attention because ``prompt_lens`` tells the model exactly how many
         # real tokens each user has.
         pad_id = int(self._tokenizer.pad_token_id) if self._tokenizer.pad_token_id is not None else 0
-        input_tokens_prefill_pt = torch.full((B, max_prompt_len), pad_id, dtype=torch.int32)
+        input_tokens_prefill_pt = torch.full((batch_size, max_prompt_len), pad_id, dtype=torch.int32)
         for i, p in enumerate(prompts):
             input_tokens_prefill_pt[i, : len(p)] = torch.tensor(p, dtype=torch.int32)
 
@@ -372,11 +423,15 @@ class LlamaGRPOCompleter:
         # which is bit-exact deterministic across runs.
         _, prefilled_token = sample_host(prefill_logits, temperature=temperature, top_p=top_p, on_host=True)
 
-        completions: List[List[int]] = [[] for _ in range(B)]
-        user_done = [False] * B
+        completions: List[List[int]] = [[] for _ in range(batch_size)]
+        user_done = [False] * batch_size
+        for u in range(active_batch_size, batch_size):
+            user_done[u] = True
         stop_ids = self._stop_token_ids() if stop_at_eos else set()
 
-        for u in range(B):
+        for u in range(batch_size):
+            if user_done[u]:
+                continue
             tok = int(prefilled_token[u].item())
             if stop_at_eos and tok in stop_ids:
                 user_done[u] = True
@@ -384,7 +439,7 @@ class LlamaGRPOCompleter:
                 completions[u].append(tok)
 
         if all(user_done) or max_new_tokens <= 1:
-            return completions
+            return completions[:active_batch_size]
 
         current_pos = torch.tensor(prompt_lens, dtype=torch.int32)
         out_tok = prefilled_token  # shape [B, 1]
@@ -409,7 +464,7 @@ class LlamaGRPOCompleter:
             out_tok = sampled  # already shape [B, 1]
             current_pos = current_pos + 1
 
-            for u in range(B):
+            for u in range(batch_size):
                 if user_done[u]:
                     continue
                 tok = int(out_tok[u].item())
@@ -421,4 +476,4 @@ class LlamaGRPOCompleter:
             if stop_at_eos and all(user_done):
                 break
 
-        return completions
+        return completions[:active_batch_size]
