@@ -230,7 +230,7 @@ def run(
     from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
     if isinstance(memory_config, dict):
-        memory_config = parse_dict_value("memory_config", memory_config)
+        memory_config = dict_to_memory_config(memory_config) or parse_dict_value("memory_config", memory_config)
     if isinstance(core_grid, dict):
         core_grid = parse_dict_value("core_grid", core_grid)
     if isinstance(compute_kernel_config, dict):
