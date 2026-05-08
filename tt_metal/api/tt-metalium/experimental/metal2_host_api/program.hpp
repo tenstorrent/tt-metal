@@ -45,7 +45,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params);
 // TensorParameter's declared spec.
 //
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunParams variation
-// is in the tensors args (i.e. which specific MeshTensorsare operated on by the Program).
+// is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
 void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args);
 
 // Power-user API for updating the mutable parameters of a Program in-place.

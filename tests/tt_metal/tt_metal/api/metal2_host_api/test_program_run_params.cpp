@@ -40,6 +40,8 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
 
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include "test_helpers.hpp"
 
 namespace tt::tt_metal::experimental::metal2_host_api {

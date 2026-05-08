@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <span>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
