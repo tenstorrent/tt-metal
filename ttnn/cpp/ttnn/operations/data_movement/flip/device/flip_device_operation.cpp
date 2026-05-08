@@ -13,7 +13,10 @@
 namespace ttnn::operations::data_movement {
 
 FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_tensor.layout() == Layout::TILE) {
+        return MultiCoreTiled{};
+    }
     return MultiCoreRowMajor{};
 }
 

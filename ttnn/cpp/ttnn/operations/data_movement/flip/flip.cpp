@@ -26,34 +26,6 @@ bool is_flip_nop(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint3
     return true;
 }
 
-ttnn::Tensor flip_tiled(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims, const MemoryConfig& mem_conf) {
-    TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "flip_tiled: expected TILE_LAYOUT input");
-
-    const auto& logical_shape = input_tensor.logical_shape();
-    const auto& padded_shape = input_tensor.padded_shape();
-
-    // TILE to RM layout
-    auto rm_padded = ttnn::untilize(input_tensor, mem_conf);
-
-    // Slice off padding if logical != padded
-    ttnn::Tensor rm_unpadded = rm_padded;
-    if (logical_shape != padded_shape) {
-        SmallVector<uint32_t> begins(logical_shape.rank(), 0);
-        SmallVector<uint32_t> ends(logical_shape.rank());
-        SmallVector<uint32_t> steps(logical_shape.rank(), 1);
-        for (uint32_t i = 0; i < logical_shape.rank(); i++) {
-            ends[i] = logical_shape[i];
-        }
-        rm_unpadded = ttnn::slice(rm_padded, begins, ends, steps, mem_conf);
-    }
-
-    auto flipped_rm = ttnn::prim::flip(rm_unpadded, dims, mem_conf, std::nullopt);
-
-    // RM -> TILE, pad back to original padded shape
-    return ttnn::tilize_with_val_padding(flipped_rm, padded_shape, 0.0f, mem_conf);
-}
-
 }  // namespace ttnn::operations::data_movement::detail
 
 namespace ttnn {
@@ -82,12 +54,6 @@ ttnn::Tensor flip(
         return ttnn::to_memory_config(input_tensor, mem_conf);
     }
 
-    // Route based on layout
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-        return operations::data_movement::detail::flip_tiled(input_tensor, normalized_dims, mem_conf);
-    }
-
-    // ROW_MAJOR — dispatch directly to MultiCoreRowMajor
     return ttnn::prim::flip(input_tensor, normalized_dims, mem_conf, std::nullopt);
 }
 

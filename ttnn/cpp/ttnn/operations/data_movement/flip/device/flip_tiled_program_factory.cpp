@@ -15,7 +15,7 @@ static uint32_t get_tile_num_tiles(const ttnn::Tensor& input_tensor) {
     return input_tensor.padded_shape().volume() / (tile_shape[0] * tile_shape[1]);
 }
 
-static ttnn::SmallVector<uint32_t> get_tile_tiled_shape(const ttnn::Tensor& input_tensor) {
+static ttnn::SmallVector<uint32_t> get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& shape = input_tensor.padded_shape();
     ttnn::SmallVector<uint32_t> tiled_shape;
@@ -61,11 +61,12 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
     uint32_t rank = input_tensor.logical_shape().rank();
     uint32_t element_size = input_tensor.element_size();
     uint32_t num_tiles = detail::get_tile_num_tiles(input_tensor);
+    const bool is_bfp8 = (input_tensor.dtype() == DataType::BFLOAT8_B);
 
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
-    auto tiled_shape = detail::get_tile_tiled_shape(input_tensor);
+    auto tiled_shape = detail::get_tiled_shape(input_tensor);
     auto tile_strides = detail::get_tile_strides(tiled_shape);
 
     std::vector<uint32_t> dims_to_flip(rank, 0);
@@ -86,6 +87,8 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
         CircularBufferConfig(2 * tile_size_bytes, {{CBIndex::c_0, data_format}})
             .set_page_size(CBIndex::c_0, tile_size_bytes));
 
+    const auto& logical_shape = input_tensor.logical_shape();
+
     std::vector<uint32_t> reader_compile_time_args = {};
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"rank", rank},
@@ -94,6 +97,9 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
         {"tile_width", tile_shape[1]},
         {"face_height", face_shape[0]},
         {"face_width", face_shape[1]},
+        {"logical_H", logical_shape[rank - 2]},
+        {"logical_W", logical_shape[rank - 1]},
+        {"is_bfp8", (uint32_t)is_bfp8},
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
