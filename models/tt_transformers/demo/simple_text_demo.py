@@ -1606,28 +1606,15 @@ def test_demo_text(
 
             if ci_targets:  # Only verify performance if we have targets for this model/device combination
                 high_tol_percentage = float(ci_targets.get("decode_tolerance", ci_targets.get("tolerance", 1.15)))
-                ci_targets_for_verify = {
-                    metric_name: metric_value
-                    for metric_name, metric_value in ci_targets.items()
-                    if metric_name in measurements
-                    and metric_name not in {"tolerance", "decode_tolerance"}
-                    and not metric_name.endswith("_tolerance")
-                }
-                if not ci_targets_for_verify:
-                    logger.warning(
-                        f"Centralized targets found for {model_name} on {tt_device_name}, but none match measured CI metrics."
-                    )
-                    ci_targets_for_verify = None
-                if ci_targets_for_verify:
-                    logger.info(
-                        f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}"
-                    )
-                    verify_perf(
-                        measurements,
-                        ci_targets_for_verify,
-                        high_tol_percentage=high_tol_percentage,
-                        expected_measurements={k: True for k in ci_targets_for_verify.keys()},
-                    )
+                logger.info(f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}")
+                verify_perf(
+                    measurements,
+                    high_tol_percentage=high_tol_percentage,
+                    model_name=model_name,
+                    sku=tt_device_name,
+                    batch_size=global_batch_size,
+                    seq_len=input_seq_len,
+                )
             else:
                 logger.warning(
                     f"No centralized CI performance targets found for model={model_name}, sku={tt_device_name}, "

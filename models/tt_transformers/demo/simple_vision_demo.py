@@ -671,17 +671,11 @@ def test_multimodal_demo_text(
         )
 
         if perf_targets:
-            perf_targets_for_verify = {
-                metric_name: metric_value
-                for metric_name, metric_value in perf_targets.items()
-                if metric_name in measurements
-                and metric_name not in {"tolerance", "decode_tolerance"}
-                and not metric_name.endswith("_tolerance")
-            }
-            if perf_targets_for_verify:
-                verify_perf(
-                    measurements,
-                    perf_targets_for_verify,
-                    high_tol_percentage=perf_tolerance,
-                    expected_measurements={k: True for k in perf_targets_for_verify.keys()},
-                )
+            verify_perf(
+                measurements,
+                high_tol_percentage=perf_tolerance,
+                model_name=base_model_name,
+                sku=tt_device_name,
+                batch_size=max_batch_size,
+                seq_len=input_seq_len,
+            )
