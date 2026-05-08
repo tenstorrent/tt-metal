@@ -117,6 +117,26 @@ def run(
             torch_input_tensor_b,
             input_b_tensor_placement,
         )
+        # Apply input_tensor_a_activations to ref_a so the golden matches the
+        # kernel's fused activation. Master traces this as e.g.
+        # [{"type": "UnaryOpType", "repr": "UnaryOpType.SILU"}].
+        _act_a = kwargs.get("input_tensor_a_activations") or []
+        if isinstance(_act_a, list):
+            for _a in _act_a:
+                _act_str = ""
+                if isinstance(_a, dict):
+                    _act_str = str(_a.get("repr", "")).upper()
+                else:
+                    _act_str = str(_a).upper()
+                if "SILU" in _act_str or "SWISH" in _act_str:
+                    ref_a = torch.nn.functional.silu(ref_a)
+                elif "GELU" in _act_str:
+                    _approx = "tanh" if "APPROX" in _act_str else "none"
+                    ref_a = torch.nn.functional.gelu(ref_a, approximate=_approx)
+                elif "RELU" in _act_str:
+                    ref_a = torch.nn.functional.relu(ref_a)
+                elif "TANH" in _act_str:
+                    ref_a = torch.tanh(ref_a)
         torch_output_tensor = torch.mul(ref_a, ref_b)
         is_scalar_multiply = False
 
@@ -161,14 +181,14 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # Re-add memory_config and dtype to op_kwargs when present in master config.
-    memory_config = kwargs.get("memory_config")
+    # NOTE: memory_config and dtype are declared as named params on run(), so
+    # they live in their own bindings — kwargs.get() would never see them.
     if memory_config is not None:
         parsed_mc = (
             parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
         )
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    dtype = kwargs.get("dtype")
     if dtype is not None:
         parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
         if parsed_dt is not None:

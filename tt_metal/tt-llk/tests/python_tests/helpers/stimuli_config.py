@@ -78,6 +78,7 @@ class StimuliConfig:
         write_full_tiles: bool = False,
         use_dense_tile_dimensions: bool = False,
         operand_res_tile_size: int = None,
+        twos_complement: bool = False,
     ):
 
         # Fields init
@@ -99,6 +100,7 @@ class StimuliConfig:
         self.write_full_tiles = write_full_tiles
         self.use_dense_tile_dimensions = use_dense_tile_dimensions
         self.operand_res_tile_size = operand_res_tile_size
+        self.twos_complement = twos_complement
 
         # Hardware flags injected by TestConfig via set_use_srcs() / set_dest_acc()
         self.use_srcs = False
@@ -276,6 +278,7 @@ class StimuliConfig:
         location: str = "0,0",
         write_full_tiles: bool = False,
         use_srcs: bool = False,
+        twos_complement: bool = False,
     ):
         """
         Original backward-compatible write_matrix.
@@ -305,6 +308,8 @@ class StimuliConfig:
                 return pack_function(
                     buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim
                 )
+            if twos_complement and pack_function in (pack_int32, pack_int16, pack_int8):
+                return pack_function(buffer_tile, twos_complement=True)
             return pack_function(buffer_tile)
 
         for ind in range(tile_count):
@@ -330,6 +335,7 @@ class StimuliConfig:
         tile_dimensions: list[int],
         location: str = "0,0",
         use_srcs: bool = False,
+        twos_complement: bool = False,
     ):
         """
         New write_matrix for variable tile dimensions with dense L1 data.
@@ -354,6 +360,8 @@ class StimuliConfig:
                 return pack_function(
                     buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim
                 )
+            if twos_complement and pack_function in (pack_int32, pack_int16, pack_int8):
+                return pack_function(buffer_tile, twos_complement=True)
             return pack_function(buffer_tile)
 
         for ind in range(tile_count):
@@ -431,6 +439,7 @@ class StimuliConfig:
             location,
             self.write_full_tiles,
             use_srcs=self.use_srcs,
+            twos_complement=self.twos_complement,
         )
 
         StimuliConfig.write_matrix(
@@ -444,6 +453,7 @@ class StimuliConfig:
             location,
             self.write_full_tiles,
             use_srcs=self.use_srcs,
+            twos_complement=self.twos_complement,
         )
 
         if self.buffer_C is not None:
@@ -463,6 +473,7 @@ class StimuliConfig:
                 location,
                 self.write_full_tiles,
                 use_srcs=self.use_srcs,
+                twos_complement=self.twos_complement,
             )
 
     def _write_dense_tile_dimensions(self, location: str = "0,0"):
@@ -490,6 +501,7 @@ class StimuliConfig:
             self.tile_dimensions,
             location,
             use_srcs=self.use_srcs,
+            twos_complement=self.twos_complement,
         )
         StimuliConfig.write_matrix_w_tile_dimensions(
             self.buffer_B,
@@ -502,6 +514,7 @@ class StimuliConfig:
             self.tile_dimensions,
             location,
             use_srcs=self.use_srcs,
+            twos_complement=self.twos_complement,
         )
 
         if self.buffer_C is not None:
@@ -521,6 +534,7 @@ class StimuliConfig:
                 self.tile_dimensions,
                 location,
                 use_srcs=self.use_srcs,
+                twos_complement=self.twos_complement,
             )
 
     def collect_results(self, location="0,0"):
@@ -568,6 +582,7 @@ class StimuliConfig:
             tile_stride_bytes=stride_bytes,
             use_srcs=self.use_srcs,
             dest_acc=self._dest_acc_32b,
+            twos_complement=self.twos_complement,
         )
         return res_from_L1
 
