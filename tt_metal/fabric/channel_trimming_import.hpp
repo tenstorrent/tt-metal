@@ -37,6 +37,17 @@ inline uint64_t make_override_key(ChipId chip_id, chan_id_t eth_chan) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(chip_id)) << 32) | eth_chan;
 }
 
+// True only when imported capture YAML contained an explicit row for this router.
+// Override-only mode may synthesize a fully-enabled baseline later, but that
+// synthetic state must not be treated as trustworthy forwarding metadata.
+inline bool has_real_channel_trimming_capture_entry(
+    const std::optional<ChannelTrimmingOverrideMap>& capture_overrides, ChipId chip_id, chan_id_t eth_chan) {
+    if (!capture_overrides.has_value()) {
+        return false;
+    }
+    return capture_overrides->find(make_override_key(chip_id, eth_chan)) != capture_overrides->end();
+}
+
 // Per-VC override specification for channel trimming.
 // Sender and receiver overrides are independent — specifying only sender overrides
 // for a VC will not affect receiver bits, and vice versa.

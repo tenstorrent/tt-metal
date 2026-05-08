@@ -1029,6 +1029,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     const auto& builder_context = fabric_context.get_builder_context();
     const auto& global_overrides = builder_context.get_channel_trimming_global_overrides();
+    const bool router_has_real_capture_entry = has_real_channel_trimming_capture_entry(
+        builder_context.get_channel_trimming_overrides(), local_physical_chip_id, my_eth_channel);
     // Global overrides replace the sender/receiver enablement decision for a VC,
     // but they do not rewrite the imported per-router "forwarded-to" capture.
     // Once a VC is overridden, we stop using that forwarding capture to infer a
@@ -1317,6 +1319,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto compute_disable_rx_forwarding = [&](size_t vc) -> uint32_t {
         if (vc == 0 && enable_speedy_vc0) {
             return 1;
+        }
+        if (!router_has_real_capture_entry) {
+            return 0;
         }
         if (!channel_trimming_overrides_.has_value() || !can_use_forwarding_capture_by_vc[vc]) {
             return 0;

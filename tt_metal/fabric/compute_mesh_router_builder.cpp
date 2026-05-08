@@ -190,8 +190,13 @@ std::optional<Vc0TrimFastPathInfo> resolve_vc0_trim_fast_path_info(
     ChipId chip_id,
     chan_id_t eth_chan,
     const RouterChannelCounts& channel_counts) {
+    const auto& capture_overrides = builder_context.get_channel_trimming_overrides();
+    if (!has_real_channel_trimming_capture_entry(capture_overrides, chip_id, eth_chan)) {
+        return std::nullopt;
+    }
+
     auto resolved_overrides = resolve_channel_trimming_for_router(
-        builder_context.get_channel_trimming_overrides(),
+        capture_overrides,
         builder_context.get_channel_trimming_global_overrides(),
         chip_id,
         eth_chan,
@@ -330,20 +335,24 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     }
 
     // Resolve channel trimming for this router: capture lookup + global override application
+    const auto& capture_overrides = builder_context.get_channel_trimming_overrides();
+    const bool local_router_has_real_capture_entry =
+        has_real_channel_trimming_capture_entry(capture_overrides, device->id(), location.eth_chan);
     auto channel_trimming_overrides_for_router = resolve_channel_trimming_for_router(
-        builder_context.get_channel_trimming_overrides(),
+        capture_overrides,
         builder_context.get_channel_trimming_global_overrides(),
         device->id(),
         location.eth_chan,
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc);
 
-    auto local_vc0_fast_path_info = channel_trimming_overrides_for_router.has_value()
-                                        ? try_derive_vc0_trim_fast_path_info(
-                                              *channel_trimming_overrides_for_router,
-                                              actual_sender_channels_per_vc[0],
-                                              builder_context.get_channel_trimming_global_overrides())
-                                        : std::nullopt;
+    auto local_vc0_fast_path_info =
+        local_router_has_real_capture_entry && channel_trimming_overrides_for_router.has_value()
+            ? try_derive_vc0_trim_fast_path_info(
+                  *channel_trimming_overrides_for_router,
+                  actual_sender_channels_per_vc[0],
+                  builder_context.get_channel_trimming_global_overrides())
+            : std::nullopt;
 
     // If this router trims down to a terminal-only VC0 shape, inspect the exact
     // peer router on this physical link and only enable speedy RX when that peer
