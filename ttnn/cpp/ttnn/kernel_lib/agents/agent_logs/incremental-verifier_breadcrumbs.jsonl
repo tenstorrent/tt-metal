@@ -1,0 +1,12 @@
+{"event":"start","details":"verification pass for eltwise_chain run7 refinement","ts":"2026-05-08T13:54:41+00:00"}
+{"event":"commits_listed","details":"8 eltwise v2 commits + 1 breadcrumb log between baseline and HEAD","ts":"2026-05-08T13:54:55+00:00"}
+{"event":"sanity_test_pass","details":"test_eltwise.py 453 passed / 7 skipped (implementer reported 449/7)","ts":"2026-05-08T13:56:20+00:00"}
+{"event":"start_eltwise_sweep","details":"running tests/ttnn/unit_tests/operations/eltwise/ in full","ts":"2026-05-08T13:57:30+00:00"}
+{"event":"regression_investigation","details":"checking if eltwise_binary_no_bcast preprocessor compile error is pre-existing on baseline 75868c9eff4","ts":"2026-05-08T14:00:37+00:00"}
+{"event":"running_baseline_check","details":"running test_add_with_batch_broadcast on baseline worktree to confirm pre-existing","ts":"2026-05-08T14:02:05+00:00"}
+{"event":"baseline_failure_confirmed","details":"test_add_with_batch_broadcast fails identically on baseline 75868c9eff4 — pre-existing bug, not regression","ts":"2026-05-08T14:02:23+00:00"}
+{"event":"strategy_change","details":"both test_add_with_batch_broadcast and test_non_4D_channel_bcast pre-existing failures on baseline 75868c9eff4. Switching to per-touched-kernel test cluster strategy.","ts":"2026-05-08T14:03:31+00:00"}
+{"event":"strategy_refined","details":"running per-test-file with per-failure baseline-diff strategy","ts":"2026-05-08T14:05:59+00:00"}
+{"event":"test_summary","details":"Tests run on HEAD vs baseline: kernel_lib 453/7 (NEW: implementer-reported 449/7, exact +4 for new optional test); test_unary 67f/700p match; test_activation 4f/118p match; test_composite 25f/154p match; test_binary_scalar 21f match; test_elt_binary 8f/3p match; test_dropout 2/0 match; test_clone 118/24 match; test_binary_ng_program_cache 3f/12p match; moreh_softmax 16f/77p/32sk match; moreh_adam 32f/100p (improvement vs 36f/96p baseline!); moreh_layer_norm 48p/48sk match; moreh_sgd 164p/352sk match; moreh_mean 76p/72sk match; moreh_clip_grad_norm 19f/1p match; deepseek_grouped_gate 5f/1p match; ssm_prefix_scan 14f/4p match; tanh/gelu_bw_ulp 111f match. ZERO REGRESSIONS.","ts":"2026-05-08T14:40:36+00:00"}
+{"event":"writing_deliverables","details":"writing verification_report.md, capabilities.md, changelog.md","ts":"2026-05-08T14:43:02+00:00"}
+{"event":"deliverables_written","details":"verification_report.md, capabilities.md, changelog.md all written. Verdict: GREEN.","ts":"2026-05-08T14:47:39+00:00"}
