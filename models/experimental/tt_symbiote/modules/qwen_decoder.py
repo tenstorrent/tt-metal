@@ -149,68 +149,70 @@ class TTNNQwen3MoeDecoderLayer(nn.Module):
         return None
 
     @staticmethod
-    def _materialize_to_match(t, device, config):
-        """Materialize ``t`` as a ttnn.Tensor on ``device`` using ``config``'s mesh layout.
+    def _per_device_shape(t):
+        """Return the *per-device* (i.e. ttnn-native) shape of ``t`` as a tuple.
 
-        The mesh mapper from ``config`` matters because the side that already has
-        TTNN backing may be col-sharded across the mesh (the steady-state output
-        layout of ``TTNNQwen3MoE`` / ``TTNNQwen3*Attention``); replicating ``t``
-        instead would yield a per-device shape mismatch on ``ttnn.add``.
-        Returns ``None`` if no torch backing can be located (caller should fall
-        back to the torch ``+`` operator in that case).
+        ``TorchTTNNTensor.shape`` is the *logical* shape (composed across the
+        mesh) -- comparing those to decide if ``ttnn.add`` is safe would let
+        through a replicated [B, S, H] vs col-sharded logical [B, S, H]
+        mismatch, which is exactly the bug the wrapper had originally.
+        Reading from the inner ``ttnn.Tensor.shape`` keeps us honest.
         """
-        # If we already have a TTNN-backed wrapper, just hand back the inner tensor
-        # (cheaper than going through `to_ttnn` which may re-stage from torch).
-        if isinstance(t, TorchTTNNTensor):
-            inner = getattr(t, "ttnn_tensor", None)
-            if inner is not None and inner.is_allocated():
-                return inner
-            torch_backing = getattr(t, "elem", None)
-        elif isinstance(t, torch.Tensor):
-            torch_backing = t
-        else:
-            return None
+        if isinstance(t, ttnn.Tensor):
+            return tuple(int(t.shape[i]) for i in range(len(t.shape)))
+        if isinstance(t, TorchTTNNTensor) and t.ttnn_tensor is not None:
+            inner = t.ttnn_tensor
+            return tuple(int(inner.shape[i]) for i in range(len(inner.shape)))
+        return None
 
-        if torch_backing is None:
-            return None
+    @staticmethod
+    def _configs_compatible(cfg_a, cfg_b):
+        """Conservative equality test for two ``DistributedTensorConfig``s.
 
-        # Pick the mesh_mapper from the matching side's config so the per-device
-        # shape lines up with the other operand. Default to replication on a
-        # multi-device mesh when no config is available (matches the typical
-        # behavior of `_to_ttnn` helpers throughout the symbiote stack).
-        if config is not None and getattr(config, "mesh_mapper", None) is not None:
-            mesh_mapper = config.mesh_mapper
-        elif device is not None and device.get_num_devices() > 1:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-        else:
-            mesh_mapper = None
-
-        return ttnn.from_torch(
-            torch_backing.detach().to(torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        Two configs are "the same" for residual-add purposes when both are
+        ``None`` (single-device replicate-by-default) or both reference the
+        same ``mesh_mapper`` / ``mesh_composer`` / ``logical_shape_fn``
+        objects. We avoid structural equality because ``mesh_mapper`` instances
+        compare by identity in ttnn -- two ``ShardTensorToMesh(dev, -1)`` calls
+        produce distinct objects even though they describe the same layout, so
+        this check is intentionally pessimistic. A pessimistic miss just costs
+        us the legacy torch ``+`` path (which is correct), whereas a false
+        positive would produce silent wrong values like the original wrapper.
+        """
+        if cfg_a is None and cfg_b is None:
+            return True
+        if cfg_a is None or cfg_b is None:
+            return False
+        return (
+            cfg_a.mesh_mapper is cfg_b.mesh_mapper
+            and cfg_a.mesh_composer is cfg_b.mesh_composer
+            and cfg_a.logical_shape_fn is cfg_b.logical_shape_fn
         )
 
     def _residual_add(self, residual, hidden_states):
-        """Compute ``residual + hidden_states``, preferring native ``ttnn.add``.
+        """Compute ``residual + hidden_states`` with a layout-safe fast path.
 
-        - **Both sides TTNN-backed** (the steady state for layers 1..N-1 once
-          the chain is primed): a single ``ttnn.add`` on device, no host work.
-        - **One side TTNN-backed** (notably layer 0 where ``residual`` is the
-          raw torch embedding while ``hidden_states`` has come back through
-          attention/MoE): we materialize the torch side onto the mesh using
-          the matching distributed config so per-device shapes line up, then
-          run ``ttnn.add``. This breaks the cascade where the torch fallback
-          would otherwise produce a torch-backed result and force every later
-          layer's residual to also fall back.
-        - **Neither side TTNN-backed**: defer to torch ``+`` so the existing
-          dispatcher path (and any wrappers) handles it as before.
+        The original wrapper called ``ttnn.add`` whenever both sides could be
+        unwrapped to a ``ttnn.Tensor``, but ``ttnn.add`` operates per-device
+        and is blind to high-level distributed configs (``logical_shape_fn``,
+        mesh mapper / composer choice). When the two operands disagree on
+        per-device layout -- e.g. the layer-0 case where ``residual`` is the
+        raw nn.Embedding output (replicated full-hidden when wrapped) and
+        ``hidden_states`` is the attention output (col-sharded along the last
+        dim with a ``logical_shape_fn``) -- the per-device shapes don't line
+        up and the silent-wrong-add cascades into gibberish across all 40
+        layers.
 
-        The escape hatch ``TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1`` forces the
-        torch ``+`` path on every call for A/B comparison.
+        The fast path here is now strictly opt-in: we only call ``ttnn.add``
+        when (a) both inputs are TTNN-backed, (b) both share the same device
+        and the same per-device shape, and (c) their distributed configs
+        reference the same mesh mapper / composer / logical_shape_fn. Anything
+        else falls through to the legacy ``residual + hidden_states`` path,
+        which the dispatcher reconciles via ``unwrap_to_torch`` / per-operand
+        ``mesh_composer`` and re-stages the result on device.
+
+        The escape hatch ``TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1`` keeps the torch
+        ``+`` path on every call for A/B comparison.
         """
         if self._use_torch_residual:
             return residual + hidden_states
@@ -218,31 +220,40 @@ class TTNNQwen3MoeDecoderLayer(nn.Module):
         a = self._extract_ttnn(residual)
         b = self._extract_ttnn(hidden_states)
 
-        if a is None and b is None:
-            # Pure torch on both sides; nothing to win by detouring to device.
+        # Both sides need an underlying ttnn.Tensor for the fast path. We
+        # intentionally do NOT materialize one side from torch here (the
+        # original wrapper did, but that's where the layer-0 layout mismatch
+        # came from -- the torch embedding's mesh staging used a different
+        # mesh_mapper than the attention output, and ttnn.add couldn't see the
+        # disagreement).
+        if a is None or b is None:
             return residual + hidden_states
 
-        # Materialize the side that doesn't have TTNN backing using the other
-        # side's distributed config so the mesh-level shapes match.
-        if a is None:
-            cfg = self._extract_dist_config(hidden_states)
-            a = self._materialize_to_match(residual, b.device(), cfg)
-            if a is None:
-                return residual + hidden_states
-        if b is None:
-            cfg = self._extract_dist_config(residual)
-            b = self._materialize_to_match(hidden_states, a.device(), cfg)
-            if b is None:
-                return residual + hidden_states
+        # Same device.
+        if a.device() != b.device():
+            return residual + hidden_states
+
+        # Same per-device shape -- guards against replicated-vs-sharded.
+        if self._per_device_shape(a) != self._per_device_shape(b):
+            return residual + hidden_states
+
+        # Same distributed config -- guards against two different col-sharded
+        # configs (e.g. the 2D ``ShardTensor2dMesh((0, -1))`` vs the 1D
+        # ``ShardTensorToMesh(dim=-1)`` flavor) that happen to produce the
+        # same per-device shape but disagree on what the logical tensor is.
+        cfg_a = self._extract_dist_config(residual)
+        cfg_b = self._extract_dist_config(hidden_states)
+        if not self._configs_compatible(cfg_a, cfg_b):
+            return residual + hidden_states
 
         out_ttnn = ttnn.add(a, b)
         out_wrapped = TorchTTNNTensor(out_ttnn)
-        # Propagate the distributed config so the NEXT layer's residual lookup
-        # finds a TTNN-backed tensor with a proper logical shape (and thus also
-        # takes the fast path here).
-        cfg = self._extract_dist_config(hidden_states) or self._extract_dist_config(residual)
-        if cfg is not None:
-            out_wrapped.set_distributed_tensor_config(cfg)
+        # Both configs are equivalent here; pick either one to propagate so
+        # the next layer's residual lookup also takes the fast path.
+        if cfg_b is not None:
+            out_wrapped.set_distributed_tensor_config(cfg_b)
+        elif cfg_a is not None:
+            out_wrapped.set_distributed_tensor_config(cfg_a)
         return out_wrapped
 
     # ------------------------------------------------------------------

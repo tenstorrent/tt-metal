@@ -8,11 +8,17 @@ import torch
 from torch import nn
 
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.module import (
+    TTNNModule,
+    run_on_devices,
+    DeviceArch,
+    set_distributed_tensor_config,
+)
 from models.experimental.tt_symbiote.core.run_config import (
     DistributedTensorConfig,
     trace_enabled,
 )
+from models.experimental.tt_symbiote.core.utils import tree_map
 from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
 
 
@@ -20,20 +26,50 @@ from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of
 class TTNNEmbedding(TTNNModule):
     """TTNN-accelerated embedding lookup for Ling/Bailing/Qwen models.
 
-    Replaces nn.Embedding (word_embeddings). Weight is replicated across all
-    devices on a mesh — no CCL needed since downstream column-parallel linears
-    expect replicated input.
+    Replaces ``nn.Embedding`` (typically the model's ``embed_tokens``). The
+    weight is sharded along the hidden dimension across the mesh's column
+    axis (``ShardTensor2dMesh(dims=(None, 1))``), so each device owns a
+    ``[V, H/num_devices]`` slice. With **replicated** indices (every device
+    sees the full ``[B, S]`` int tensor) every device looks up the same rows
+    in its own slice and the per-device output is ``[B, S, H/num_devices]`` --
+    exactly the col-sharded layout that the downstream Qwen ``input_layernorm``
+    / ``self_attn`` / ``mlp`` chain expects.
 
-    Index dtype handling: ``ttnn.embedding`` requires ``UINT32`` or
-    ``BFLOAT16`` indices. Most callers (Bailing / Gemma4 / etc.) pre-convert
-    via ``ttnn.from_torch(..., dtype=ttnn.uint32)`` before calling this op,
-    but when the wrapper is registered directly via
-    ``register_module_replacement_dict`` (as for Qwen3.6) the HF text model
-    hands us raw ``input_ids`` whose default TTNN dtype is ``INT32`` -- which
-    the kernel rejects. ``forward`` handles that case with a cached
-    pad-typecast-slice (``ttnn.typecast`` requires ``padded_shape[-1] % 32 ==
-    0``); the path is a no-op when the input is already ``UINT32`` /
-    ``BFLOAT16``, so existing callers are unaffected.
+    Two correctness gates that have to hold:
+
+    1. **Indices must reach this op replicated.** The dispatcher's
+       ``get_tensor_config_for_tensor`` heuristic uses the default
+       ``ShardTensor2dMesh((0, -1))`` config for any 2D tensor whose last dim
+       is divisible by ``mesh.shape[-1]`` -- so ``input_ids`` of shape
+       ``[1, T]`` with ``T`` divisible by ``num_devices`` ends up sharded
+       along the **seq** dim, and each device sees only ``T/num_devices``
+       tokens of the prompt. The embedding lookup then produces a
+       ``[1, T/num_devices, H]`` tensor that's far too short, and the model
+       generates fluent but completely off-topic text (e.g. a paper on
+       climate change in response to a question about condiments). We
+       intercept in ``call`` (overridden below) and pre-stage every
+       integer-dtype torch input as a ``ReplicateTensorToMesh`` ttnn.Tensor
+       *before* the dispatcher's wrap/transform pipeline runs, sidestepping
+       the heuristic entirely.
+
+    2. **The output config must describe what the data actually is.** The
+       default ``set_output_tensors_config_impl`` falls back to the device's
+       generic ``ShardTensor2dMesh((0, -1))`` config, which works in this case
+       but disagrees with the 1D-API ``ShardTensorToMesh(dim=-1)`` config that
+       ``TTNNQwen3FullAttention`` / ``TTNNQwen3MoE`` set on their own outputs.
+       We override below to set the same 1D-API config so a downstream
+       layout-aware op (e.g. ``TTNNQwen3MoeDecoderLayer._residual_add``) sees
+       a single consistent layout for every operand in the residual stream.
+
+    Index dtype handling: ``ttnn.embedding`` only accepts ``UINT32`` /
+    ``BFLOAT16``. Most callers pre-convert via
+    ``ttnn.from_torch(..., dtype=ttnn.uint32)`` before calling this op, but
+    when the wrapper is registered directly (as for Qwen3.6) the HF text
+    model hands us raw ``input_ids`` whose default TTNN dtype is ``INT32``.
+    ``_ensure_uint32`` covers that case with a cached pad-typecast-slice
+    (``ttnn.typecast`` requires ``padded_shape[-1] % 32 == 0``); the path is
+    a no-op when the input is already ``UINT32`` / ``BFLOAT16``, so existing
+    Bailing / Gemma4 callers are unaffected.
     """
 
     @classmethod
@@ -71,6 +107,97 @@ class TTNNEmbedding(TTNNModule):
     def deallocate_weights_impl(self):
         ttnn.deallocate(self.tt_weight)
         super().deallocate_weights_impl()
+
+    def call(self, *args, **kwds):
+        """Pre-stage integer index inputs as REPLICATED before the dispatcher sees them.
+
+        This is the actual fix for the off-topic-generation symptom that bit
+        Qwen3.6: the dispatcher's ``get_tensor_config_for_tensor`` checks
+        ``tensor.shape[-1] % mesh_device.shape[-1]`` -- when ``input_ids``
+        happens to be ``[1, T]`` with ``T`` divisible by ``num_devices`` (the
+        common case once a chat-template prompt + a few generated tokens add
+        up), it returns the default ``ShardTensor2dMesh((0, -1))`` config
+        which then **shards the prompt along the seq dim**: each device sees
+        only its ``T/num_devices`` slice of tokens. The embedding lookup then
+        produces a per-device output of length ``T/num_devices`` and the
+        composer assembles a [B, T/num_devices, H] tensor -- the model sees
+        only 1/8 of the real prompt and confidently generates fluent but
+        completely off-topic text.
+
+        We can't change the dispatcher's heuristic without touching every
+        other test in the repo, so we shortcut it here: re-stage every
+        integer-dtype torch input as a ``ReplicateTensorToMesh`` ttnn.Tensor
+        before calling the standard module pipeline. Once the input is
+        already a ttnn.Tensor with an explicit replicated mesh layout,
+        ``wrap_to_torch_ttnn_tensor`` preserves it and ``to_ttnn_wrap`` is a
+        no-op (it just hands back the existing ttnn.Tensor). Float inputs
+        (the embedding lookup never sees these in practice but be defensive)
+        and any non-tensor args fall through unchanged.
+        """
+        args = tuple(self._maybe_pre_stage_replicated(a) for a in args)
+        kwds = {k: self._maybe_pre_stage_replicated(v) for k, v in kwds.items()}
+        return super().call(*args, **kwds)
+
+    def _maybe_pre_stage_replicated(self, t):
+        """Stage an integer-index torch tensor as a replicated on-device ttnn.Tensor.
+
+        Only runs for genuine torch inputs whose dtype is integer (the index
+        case). Already-staged ttnn / TorchTTNN tensors and float tensors are
+        passed through unchanged so we don't disturb other call sites.
+        """
+        if self.device is None or self.device.get_num_devices() <= 1:
+            return t
+
+        # Late import to avoid a circular import via core/module.
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        # Skip anything already on device or wrapped (preserve caller intent).
+        if isinstance(t, (ttnn.Tensor, TorchTTNNTensor)):
+            return t
+        if not isinstance(t, torch.Tensor):
+            return t
+        if torch.is_floating_point(t):
+            return t
+        if t.device.type == "meta":
+            return t
+
+        # Stage as int32 replicated -- ``_ensure_uint32`` later promotes to
+        # uint32 inside ``forward`` since the kernel only accepts uint32 / bf16.
+        return ttnn.from_torch(
+            t.detach().to(torch.int32),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Set output tensor config for col-sharded (along hidden) output.
+
+        The per-device shape is ``[B, S, H/num_devices]`` and the logical
+        shape is ``[B, S, H]`` (last dim multiplied by num_devices). Mirrors
+        the config that ``TTNNQwen3FullAttention`` / ``TTNNQwen3MoE`` set on
+        their own outputs, so a layout-aware downstream op sees a single
+        consistent col-sharded layout for every tensor in the residual stream.
+        Falls back to the base implementation on a single-device mesh.
+        """
+        if self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        num_devices = self.device.get_num_devices()
+
+        def _logical_shape_for_col_sharded(shape):
+            shape_list = list(shape)
+            shape_list[-1] = shape_list[-1] * num_devices
+            return tuple(shape_list)
+
+        config = DistributedTensorConfig(
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=-1),
+            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=-1),
+            logical_shape_fn=_logical_shape_for_col_sharded,
+        )
+        return tree_map(set_distributed_tensor_config(config), output_tensors)
 
     def _ensure_uint32(self, tt_indices):
         """Convert ``tt_indices`` to UINT32 if it isn't already a kernel-compatible dtype.
@@ -130,6 +257,9 @@ class TTNNEmbedding(TTNNModule):
         return tt_indices
 
     def forward(self, tt_indices):
+        # ``call`` (overridden above) has already re-staged the indices as a
+        # replicated on-device int32 tensor; ``_ensure_uint32`` then promotes
+        # int32 -> uint32 for the kernel via the cached pad/typecast/slice.
         tt_indices = self._ensure_uint32(tt_indices)
         out = ttnn.embedding(
             tt_indices,
