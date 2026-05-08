@@ -332,6 +332,17 @@ def run_test_linear_impl(
     return check_result_list
 
 
+def _create_cluster_submesh(mesh_device, cluster_axis):
+    """Create a 1xN (or Nx1) submesh sized to the cluster axis ring.
+
+    The op only operates along cluster_axis, so the non-cluster axis is just
+    redundant compute. Sub-meshing keeps the test focused on a single ring.
+    """
+    submesh_shape = [1, 1]
+    submesh_shape[cluster_axis] = mesh_device.shape[cluster_axis]
+    return mesh_device.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
+
+
 def run_test_linear(
     device,
     M,
@@ -653,8 +664,9 @@ def test_linear(
     fuse_addcmul,
     chunks,
 ):
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
     check_result = run_test_linear(
-        mesh_device,
+        submesh,
         M,
         K,
         N,
@@ -682,7 +694,7 @@ def test_linear(
 
     for n in range(num_iters):
         for c in range(chunks):
-            for i in range(mesh_device.get_num_devices()):
+            for i in range(submesh.get_num_devices()):
                 assert check_result[n][c][i]["pcc"] > 0.999_500
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
 
@@ -724,8 +736,9 @@ def test_linear_addcmul_gate(
     broadcast_gate,
 ):
     """Test fused addcmul with both broadcast and non-broadcast (full) gate."""
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
     check_result = run_test_linear(
-        mesh_device,
+        submesh,
         M=3072,
         K=5120,
         N=1280,
@@ -748,6 +761,6 @@ def test_linear_addcmul_gate(
         cluster_axis=cluster_axis,
     )
     for c in range(1):
-        for i in range(mesh_device.get_num_devices()):
+        for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
             assert check_result[0][c][i]["relative_rmse"] < 0.02
