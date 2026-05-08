@@ -745,6 +745,7 @@ def test_demo(
     total_inference_prefill_time = sum(
         profiler.get_duration(f"inference_prefill_user_{i}", iteration=batch_idx) for i in range(batch_size)
     )
+    profiler.start_times[(batch_idx, "inference_prefill")] = total_inference_prefill_time
     total_inference_decode_time = 0
     for i in range(1, iteration):  # i == 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
