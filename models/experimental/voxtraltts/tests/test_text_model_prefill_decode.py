@@ -17,32 +17,13 @@ from models.experimental.voxtraltts.reference.functional import (
 from models.experimental.voxtraltts.tests.common import create_real_voxtral_text_model_or_skip
 
 
-@torch.no_grad()
-@pytest.mark.timeout(3600)
-def test_text_model_prefill_pcc(device, reset_seeds):
-    # Main parity test:
-    # compares final last-token logits from TT text_model prefill vs PyTorch reference backbone.
-    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat8_b)
-    args = model.inner.args
-    state_dict = args.load_state_dict()
+# tt_transformers prefill uses 32-token tiles: get_last_token must be the tile start index.
+def _prefill_tile_start(token_index: int) -> int:
+    return (int(token_index) // 32) * 32
 
-    seq_len = 128
-    tokens = torch.randint(0, model.inner.vocab_size, (1, seq_len), dtype=torch.int64)
 
-    # TT prefill path (final logits at last token)
-    tt_x, rot_mats_global, rot_mats_local, _, _ = model.prepare_inputs_prefill(tokens, start_pos=0)
-    tt_logits = model.inner.ttnn_prefill_forward(
-        tt_x,
-        rot_mats_global=rot_mats_global,
-        rot_mats_local=rot_mats_local,
-        get_last_token=((seq_len - 1) // 32) * 32,
-    )
-    tt_last_logits = model.inner.process_output_prefill(
-        tt_logits.cpu(),
-        last_token_idx=((seq_len - 1) % 32),
-    ).float()
-
-    # Reference full-text backbone forward using the same loaded checkpoint.
+def _reference_last_logits(state_dict, args, tokens: torch.Tensor) -> torch.Tensor:
+    seq_len = tokens.shape[1]
     ref_cfg = VoxtralTextConfig(
         hidden_size=args.dim,
         num_hidden_layers=args.n_layers,
@@ -64,7 +45,6 @@ def test_text_model_prefill_pcc(device, reset_seeds):
     )
     ref_attn_mask = torch.full((1, 1, seq_len, seq_len), float("-inf"), dtype=torch.float32)
     ref_attn_mask = torch.triu(ref_attn_mask, diagonal=1)
-
     for layer_idx in range(ref_cfg.num_hidden_layers):
         layer_weights = extract_layer_weights(state_dict, layer_idx, prefix="layers.")
         ref_hidden = reference_text_decoder_layer(
@@ -76,10 +56,85 @@ def test_text_model_prefill_pcc(device, reset_seeds):
             attention_mask=ref_attn_mask,
         )
     ref_hidden = reference_rms_norm(ref_hidden, state_dict["norm.weight"], eps=ref_cfg.rms_norm_eps)
-    ref_last_logits = F.linear(ref_hidden[:, -1, :], state_dict["output.weight"]).squeeze(0).float()
+    return F.linear(ref_hidden[:, -1, :], state_dict["output.weight"]).squeeze(0).float()
 
-    passing, pcc_message = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.90)
-    assert passing, f"Text model prefill logits mismatch vs reference: {pcc_message}"
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+def test_text_model_prefill_pcc(device, reset_seeds):
+    # Main parity test:
+    # compares final last-token logits from TT text_model prefill vs PyTorch reference backbone.
+    # bfloat16 weights — bfloat8_b vs fp32 reference does not reach 0.99 PCC.
+    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
+    args = model.inner.args
+    state_dict = args.load_state_dict()
+
+    seq_len = 128
+    tokens = torch.randint(0, model.inner.vocab_size, (1, seq_len), dtype=torch.int64)
+
+    # TT prefill path (final logits at last token)
+    tt_x, rot_mats_global, rot_mats_local, _, _ = model.prepare_inputs_prefill(tokens, start_pos=0)
+    tt_logits = model.inner.ttnn_prefill_forward(
+        tt_x,
+        rot_mats_global=rot_mats_global,
+        rot_mats_local=rot_mats_local,
+        get_last_token=_prefill_tile_start(seq_len - 1),
+    )
+    tt_last_logits = model.inner.process_output_prefill(
+        tt_logits.cpu(),
+        last_token_idx=((seq_len - 1) % 32),
+    ).float()
+
+    # Reference full-text backbone forward using the same loaded checkpoint.
+    ref_last_logits = _reference_last_logits(state_dict, args, tokens)
+
+    passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.98)
+    print(f"test_text_model_prefill_pcc PCC={float(pcc_value):.6f}")
+    assert passing, f"Text model prefill logits mismatch vs reference: {pcc_value}"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+def test_text_model_decode_reference_pcc(device, reset_seeds):
+    # Output parity test:
+    # compares TT decode logits with PyTorch reference logits at the same decode position.
+    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
+    args = model.inner.args
+    state_dict = args.load_state_dict()
+
+    prompt_len = 128
+    vocab_size = model.inner.vocab_size
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.int64)
+    decode_input_token = torch.randint(0, vocab_size, (1,), dtype=torch.int64)
+
+    # TT decode path.
+    tt_prompt_x, prompt_rot_global, prompt_rot_local, _, _ = model.prepare_inputs_prefill(prompt_tokens, start_pos=0)
+    _ = model.inner.ttnn_prefill_forward(
+        tt_prompt_x,
+        rot_mats_global=prompt_rot_global,
+        rot_mats_local=prompt_rot_local,
+        get_last_token=-1,
+    )
+    tt_tokens, tt_current_pos, tt_rope_idxs, tt_page_table = model.prepare_inputs_decode(
+        decode_input_token, torch.tensor([prompt_len], dtype=torch.int64)
+    )
+    tt_decode_logits, _ = model.inner.ttnn_decode_forward(
+        tt_tokens,
+        tt_current_pos,
+        rot_mat_idxs=tt_rope_idxs,
+        page_table=tt_page_table,
+        kv_cache=None,
+        sampling_on_device=False,
+    )
+    tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
+
+    # Reference decode-equivalent logits from full prefix.
+    ref_tokens = torch.cat([prompt_tokens, decode_input_token.view(1, 1)], dim=1)
+    ref_last_logits = _reference_last_logits(state_dict, args, ref_tokens)
+
+    passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.98)
+    print(f"test_text_model_decode_reference_pcc PCC={float(pcc_value):.6f}")
+    assert passing, f"Text model decode logits mismatch vs reference: {pcc_value}"
 
 
 @torch.no_grad()
@@ -87,7 +142,7 @@ def test_text_model_prefill_pcc(device, reset_seeds):
 def test_text_model_decode_single_step_pcc(device, reset_seeds):
     # Consistency test (TT-only):
     # compares one decode-step output vs equivalent-position prefill output.
-    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat8_b)
+    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
 
     prompt_len = 128
     extended_seq_len = 256
@@ -127,15 +182,16 @@ def test_text_model_decode_single_step_pcc(device, reset_seeds):
         tt_full_x,
         rot_mats_global=full_rot_global,
         rot_mats_local=full_rot_local,
-        get_last_token=prompt_len,
+        get_last_token=_prefill_tile_start(prompt_len),
     )
     prefill_logits = model.inner.process_output_prefill(
         tt_prefill_logits.cpu(),
         last_token_idx=(prompt_len % 32),
     ).float()
 
-    passing, pcc_message = comp_pcc(prefill_logits, decode_logits, pcc=0.95)
-    assert passing, f"Decode vs prefill consistency failed on real Voxtral weights: {pcc_message}"
+    passing, pcc_value = comp_pcc(prefill_logits, decode_logits, pcc=0.99)
+    print(f"test_text_model_decode_single_step_pcc PCC={float(pcc_value):.6f}")
+    assert passing, f"Decode vs prefill consistency failed on real Voxtral weights: {pcc_value}"
 
 
 @torch.no_grad()
@@ -144,7 +200,7 @@ def test_text_model_decode_single_step_pcc(device, reset_seeds):
 def test_text_model_decode_multistep_pcc(device, reset_seeds, decode_steps):
     # Consistency test (TT-only):
     # repeats decode-vs-prefill comparison across multiple decode steps.
-    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat8_b)
+    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
 
     prompt_len = 128
     extended_seq_len = 256
@@ -190,12 +246,13 @@ def test_text_model_decode_multistep_pcc(device, reset_seeds, decode_steps):
             tt_full_x,
             rot_mats_global=full_rot_global,
             rot_mats_local=full_rot_local,
-            get_last_token=current_pos,
+            get_last_token=_prefill_tile_start(current_pos),
         )
         prefill_logits = model.inner.process_output_prefill(
             tt_prefill_logits.cpu(),
             last_token_idx=(current_pos % 32),
         ).float()
 
-        passing, pcc_message = comp_pcc(prefill_logits, decode_logits, pcc=0.93)
-        assert passing, f"Step {step} decode/prefill consistency failed " f"(pos={current_pos}): {pcc_message}"
+        passing, pcc_value = comp_pcc(prefill_logits, decode_logits, pcc=0.99)
+        print(f"test_text_model_decode_multistep_pcc[{decode_steps}_steps] " f"step={step} PCC={float(pcc_value):.6f}")
+        assert passing, f"Step {step} decode/prefill consistency failed " f"(pos={current_pos}): {pcc_value}"
