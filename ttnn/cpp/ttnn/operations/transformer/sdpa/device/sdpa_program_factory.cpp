@@ -5,6 +5,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -68,16 +69,13 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
 }
 
 // Streaming compute v2 eligibility. Returns false for features the streaming kernel doesn't
-// support: user-provided mask, attention sink, sliding window, fp32_dest_acc.
+// support: user-provided mask, attention sink, sliding window.
 bool can_use_streaming_compute(
-    bool use_provided_mask,
-    bool use_attention_sink,
-    const std::optional<uint32_t>& sliding_window_size,
-    bool fp32_dest_acc_en) {
+    bool use_provided_mask, bool use_attention_sink, const std::optional<uint32_t>& sliding_window_size) {
     if (use_provided_mask || use_attention_sink) {
         return false;
     }
-    if (sliding_window_size.value_or(0) != 0 || fp32_dest_acc_en) {
+    if (sliding_window_size.value_or(0) != 0) {
         return false;
     }
     return true;
@@ -361,12 +359,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t qk_in0_block_w = DHt;
+    const bool use_streaming_compute =
+        can_use_streaming_compute(use_provided_mask, use_attention_sink, sliding_window_size);
+    const bool use_fp32_streaming_compute = use_streaming_compute && fp32_dest_acc_en;
 
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
-
-    const bool use_streaming_compute =
-        can_use_streaming_compute(use_provided_mask, use_attention_sink, sliding_window_size, fp32_dest_acc_en);
 
     const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
     const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
@@ -411,9 +409,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp).
+    // Streaming normally shrinks cb_out to a 2-slot ping-pong. FP32-dest
+    // streaming defers row output until the full chunk has been corrected, so
+    // it needs the full output tile count.
     if (use_streaming_compute) {
-        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
+        out0_t = use_fp32_streaming_compute ? Sq_chunk_t * vDHt
+                                            : detail::streaming_cb_out_tiles(
+                                                  out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
             Sq_chunk_t % out_out_subblock_h == 0,
             "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
@@ -566,8 +568,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    const bool uniform_dataformat = check_uniform_dataformat(
-        input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
+    const bool uniform_dataformat =
+        check_uniform_dataformat(
+            input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute) &&
+        !use_fp32_streaming_compute;
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -636,12 +640,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
-    // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
-    // both must share the same data format for the unpack config to be correct.
-    TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
+    tt::DataFormat sum_stats_df = use_fp32_streaming_compute ? tt::DataFormat::Float32 : im_df;
+    tt::DataFormat recip_scratch_df = use_fp32_streaming_compute ? tt::DataFormat::Float32 : im_df;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -650,6 +652,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t sum_stats_tile_size = tt::tile_size(sum_stats_df);
+    uint32_t recip_scratch_tile_size = tt::tile_size(recip_scratch_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -659,6 +663,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "sum_statistics_data_format: {}", sum_stats_df);
+    log_debug(tt::LogOp, "recip_scratch_data_format: {}", recip_scratch_df);
 
     // Q input
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
@@ -726,12 +732,22 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     }
 
     // Streaming compute v2: 1-tile recip scratch CB (c_4) for normalize_row_streaming.
-    // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
+    // No row buffers needed: cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
     // Safe: gating excludes use_attention_sink (which also uses c_4).
     if (use_streaming_compute) {
-        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_4, im_df}})
-                                          .set_page_size(tt::CBIndex::c_4, im_tile_size);
+        auto c_recip_scratch_config =
+            CircularBufferConfig(recip_scratch_tile_size, {{tt::CBIndex::c_4, recip_scratch_df}})
+                .set_page_size(tt::CBIndex::c_4, recip_scratch_tile_size);
         CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+    }
+
+    // FP32-dest streaming normalizes with SFPU dense tile multiply; keep a separate
+    // dense reciprocal tile so c_4 can retain the column-vector reciprocal layout.
+    if (use_fp32_streaming_compute) {
+        auto c_recip_dense_scratch_config =
+            CircularBufferConfig(recip_scratch_tile_size, {{tt::CBIndex::c_10, recip_scratch_df}})
+                .set_page_size(tt::CBIndex::c_10, recip_scratch_tile_size);
+        CreateCircularBuffer(program, core_grid, c_recip_dense_scratch_config);
     }
 
     // cb_qk_im
@@ -760,13 +776,15 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
+    auto c_intermed5_config =
+        CircularBufferConfig(statistics_tiles * sum_stats_tile_size, {{tt::CBIndex::c_29, sum_stats_df}})
+            .set_page_size(tt::CBIndex::c_29, sum_stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
+    auto c_intermed6_config =
+        CircularBufferConfig(statistics_tiles * sum_stats_tile_size, {{tt::CBIndex::c_30, sum_stats_df}})
+            .set_page_size(tt::CBIndex::c_30, sum_stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
@@ -1257,6 +1275,15 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (use_fp32_streaming_compute) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[tt::CBIndex::c_4] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_10] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_29] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_30] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
     auto reader_kernels_id = CreateKernel(
         program,
@@ -1277,6 +1304,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = defines});

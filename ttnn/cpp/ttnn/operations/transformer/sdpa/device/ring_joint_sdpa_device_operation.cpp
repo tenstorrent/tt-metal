@@ -16,14 +16,38 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
+
+#include <tuple>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
 using namespace experimental::ccl;
+
+namespace {
+
+bool uses_fp32_streaming_stats(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    auto compute_kernel_config_args =
+        get_compute_kernel_config_args(tensor_args.input_q.device()->arch(), args.compute_kernel_config);
+    const bool fp32_dest_acc_en = std::get<2>(compute_kernel_config_args);
+    if (!fp32_dest_acc_en) {
+        return false;
+    }
+
+    const uint32_t Sq_chunk_t = args.get_q_chunk_size() / tt::constants::TILE_HEIGHT;
+    const uint32_t Sk_chunk_t = args.get_k_chunk_size() / tt::constants::TILE_HEIGHT;
+    const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
+    auto [qk_out_subblock_h, qk_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+    const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
+    return qk_out_subblock_h <= 2 && Sk_chunk_t % qk_out_subblock_w == 0 && qk_in0_num_subblocks > 1;
+}
+
+}  // namespace
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
@@ -245,12 +269,14 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // head dim as v head dim
     out_shape[3] = tensor_args.input_v.logical_shape()[3];
 
+    const auto stats_dtype = uses_fp32_streaming_stats(args, tensor_args) ? DataType::FLOAT32 : DataType::BFLOAT16;
+
     return {
         TensorSpec(out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        TensorSpec(stats_shape, TensorLayout(stats_dtype, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(

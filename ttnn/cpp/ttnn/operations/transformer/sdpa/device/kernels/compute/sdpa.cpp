@@ -112,8 +112,9 @@ void kernel_main() {
 
     if constexpr (use_streaming_compute) {
         // Streaming SDPA v2: direct cb_qkt_im writes via cb_push_back_hold_wr_ptr.
-        // No row buffers needed. c_4 used only as 1-tile recip scratch for normalization.
+        // No row buffers needed. c_4 is the column-vector recip/sum scratch; c_10 is a 1-tile dense FP32 recip scratch.
         constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_4;
+        constexpr uint32_t cb_recip_dense_scratch = tt::CBIndex::c_10;
 
         // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
         cb_wait_front(cb_identity_scale_in, 1);
@@ -163,6 +164,7 @@ void kernel_main() {
                         cb_exp_max_diff,
                         cb_col_identity,
                         cb_recip_scratch,
+                        cb_recip_dense_scratch,
                         cb_out,  // normalized output goes directly to output CB
                         cb_mask_in,
                         uniform_dataformat,

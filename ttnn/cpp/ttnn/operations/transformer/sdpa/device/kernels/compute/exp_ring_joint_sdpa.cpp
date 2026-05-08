@@ -99,6 +99,7 @@ void kernel_main() {
     // Streaming compute uses c_9 as 1-tile recip scratch for normalize_row_streaming.
     // (c_4 is used by cb_scale_in in ring joint SDPA, unlike regular SDPA.)
     constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;
+    constexpr uint32_t cb_recip_dense_scratch = tt::CBIndex::c_13;
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
@@ -201,6 +202,7 @@ void kernel_main() {
                 cb_exp_max_diff,
                 cb_col_identity,
                 cb_recip_scratch,
+                cb_recip_dense_scratch,
                 cb_mask_in,
                 cb_scale_in,
                 cb_max_in,
@@ -212,7 +214,10 @@ void kernel_main() {
                 cb_sum_out,
                 cb_sum_in,
                 cb_signal,
-                needs_lightweight_mask>(
+                needs_lightweight_mask,
+                false,
+                false,
+                false>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,

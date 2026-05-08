@@ -76,7 +76,8 @@ void issue_restore_reads(
     const uint32_t cb_max_in,
     const uint32_t cb_sum_in,
     const uint32_t tile_bytes,
-    const uint32_t stats_tile_bytes) {
+    const uint32_t max_tile_bytes,
+    const uint32_t sum_tile_bytes) {
     // All accumulator tiles are valid (we wrote them), so bypass maybe_read_tile's
     // padding logic. This decouples restore from ring_id, enabling cross-ring prefetch.
     constexpr uint32_t end_seq_tile = 0xFFFFFFFF;
@@ -105,16 +106,17 @@ void issue_restore_reads(
     cb_reserve_back(cb_max_in, Sq_chunk_t);
     uint32_t max_addr = get_write_ptr(cb_max_in);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_read_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_addr);
-        max_addr += stats_tile_bytes;
+        noc_async_read(stats_writer.get_noc_addr(stats_tile_logical.id_of(nb, nq, i, 0)), max_addr, max_tile_bytes);
+        max_addr += max_tile_bytes;
     }
 
     // Issue sum reads
     cb_reserve_back(cb_sum_in, Sq_chunk_t);
     uint32_t sum_addr = get_write_ptr(cb_sum_in);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_read_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_addr);
-        sum_addr += stats_tile_bytes;
+        noc_async_read(
+            stats_writer.get_noc_addr(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0)), sum_addr, sum_tile_bytes);
+        sum_addr += sum_tile_bytes;
     }
     // NO barrier, NO push — caller must call complete_restore()
 }
@@ -190,7 +192,8 @@ void save_accumulators_with_trid(
     const uint32_t cb_max_out,
     const uint32_t cb_sum_out,
     const uint32_t tile_bytes,
-    const uint32_t stats_tile_bytes,
+    const uint32_t max_tile_bytes,
+    const uint32_t sum_tile_bytes,
     const uint32_t sbh,
     const uint32_t save_trid) {
     noc_async_write_set_trid(save_trid);
@@ -203,14 +206,15 @@ void save_accumulators_with_trid(
 
     uint32_t max_write_addr = get_read_ptr(cb_max_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
-        max_write_addr += stats_tile_bytes;
+        noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr, max_tile_bytes);
+        max_write_addr += max_tile_bytes;
     }
 
     uint32_t sum_write_addr = get_read_ptr(cb_sum_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
-        sum_write_addr += stats_tile_bytes;
+        noc_async_write_page(
+            stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr, sum_tile_bytes);
+        sum_write_addr += sum_tile_bytes;
     }
 
     noc_async_write_flushed_with_trid(save_trid);
@@ -494,6 +498,8 @@ void kernel_main() {
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
+            constexpr uint32_t max_tile_bytes = get_tile_size(cb_max_in);
+            constexpr uint32_t sum_tile_bytes = get_tile_size(cb_sum_in);
 
             const uint32_t q_per_core = global_q_end - global_q_start;
             const uint32_t last_q_index = q_per_core - 1;
@@ -534,7 +540,8 @@ void kernel_main() {
                     cb_max_in,
                     cb_sum_in,
                     tile_bytes,
-                    stats_tile_bytes);
+                    max_tile_bytes,
+                    sum_tile_bytes);
             };
 
             // Intra-ring prefetch: bounds-check next_q_index, then dispatch with the per-TRID
@@ -571,7 +578,8 @@ void kernel_main() {
                     cb_max_out,
                     cb_sum_out,
                     tile_bytes,
-                    stats_tile_bytes,
+                    max_tile_bytes,
+                    sum_tile_bytes,
                     out_subblock_h,
                     deferred.trid);
                 deferred.pending = false;

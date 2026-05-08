@@ -55,6 +55,7 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
+    constexpr bool multi_q_per_core = get_compile_time_arg_val(40) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
@@ -103,6 +104,7 @@ void kernel_main() {
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
     constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+    constexpr uint32_t cb_recip_dense_scratch = tt::CBIndex::c_13;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
@@ -241,6 +243,7 @@ void kernel_main() {
                 cb_exp_max_diff,
                 cb_col_identity,
                 cb_recip_scratch,
+                cb_recip_dense_scratch,
                 cb_mask_in,
                 cb_scale_in,
                 cb_max_in,
@@ -254,7 +257,8 @@ void kernel_main() {
                 cb_signal,
                 needs_lightweight_mask,
                 is_causal,
-                is_balanced>(
+                is_balanced,
+                multi_q_per_core>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,

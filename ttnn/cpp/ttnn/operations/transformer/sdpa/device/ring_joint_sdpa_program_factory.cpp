@@ -11,6 +11,7 @@
 #include <string>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -332,7 +333,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // The `Sk_chunk_t % qk_out_subblock_w == 0` clause is tautological — the selector already
     // guarantees it — but kept explicit for clarity of the subblock-tiling requirement.
     const bool use_streaming_compute =
-        !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % qk_out_subblock_w == 0 && qk_in0_num_subblocks > 1;
+        qk_out_subblock_h <= 2 && Sk_chunk_t % qk_out_subblock_w == 0 && qk_in0_num_subblocks > 1;
+    const bool use_fp32_streaming_compute = use_streaming_compute && fp32_dest_acc_en;
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -353,8 +355,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // when Phase-2's save_to_staging branch can't fire — i.e. `is_last_k && !is_last_ring_iter
     // && q_per_core > 1` is always false. That branch packs at offset qktv_h*vDHt and would
     // overrun the 2*qktv_h*vDHt buffer on its 2nd Q chunk.
-    const bool streaming_shrink_safe =
-        use_streaming_compute && (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1);
+    const bool streaming_shrink_safe = use_streaming_compute && !use_fp32_streaming_compute &&
+                                       (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1);
     if (streaming_shrink_safe) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
@@ -552,7 +554,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
     const bool uniform_dataformat =
         (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
-         q_df_early == mask_df_early && q_df_early == im_df_early);
+         q_df_early == mask_df_early && q_df_early == im_df_early) &&
+        !use_fp32_streaming_compute;
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -594,7 +597,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         (std::uint32_t)uniform_dataformat,
         args.is_causal,
         args.is_balanced,
-        static_cast<uint32_t>(enable_zigzag_balancing)};
+        static_cast<uint32_t>(enable_zigzag_balancing),
+        static_cast<uint32_t>(max_q_per_core > 1)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -619,9 +623,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
+    tt::DataFormat sum_stats_df = use_fp32_streaming_compute ? tt::DataFormat::Float32 : stats_df;
+    tt::DataFormat recip_scratch_df = use_fp32_streaming_compute ? tt::DataFormat::Float32 : im_df;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -631,6 +636,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t sum_stats_tile_size = tt::tile_size(sum_stats_df);
+    uint32_t recip_scratch_tile_size = tt::tile_size(recip_scratch_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -640,6 +647,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "sum_statistics_data_format: {}", sum_stats_df);
+    log_debug(tt::LogOp, "recip_scratch_data_format: {}", recip_scratch_df);
 
     // Q input
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
@@ -715,13 +724,15 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
+    auto c_intermed5_config =
+        CircularBufferConfig(statistics_tiles * sum_stats_tile_size, {{tt::CBIndex::c_29, sum_stats_df}})
+            .set_page_size(tt::CBIndex::c_29, sum_stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
+    auto c_intermed6_config =
+        CircularBufferConfig(statistics_tiles * sum_stats_tile_size, {{tt::CBIndex::c_30, sum_stats_df}})
+            .set_page_size(tt::CBIndex::c_30, sum_stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
@@ -742,9 +753,17 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
     // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
     if (use_streaming_compute) {
-        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
-                                          .set_page_size(tt::CBIndex::c_9, im_tile_size);
+        auto c_recip_scratch_config =
+            CircularBufferConfig(recip_scratch_tile_size, {{tt::CBIndex::c_9, recip_scratch_df}})
+                .set_page_size(tt::CBIndex::c_9, recip_scratch_tile_size);
         CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+    }
+
+    if (use_fp32_streaming_compute) {
+        auto c_recip_dense_scratch_config =
+            CircularBufferConfig(recip_scratch_tile_size, {{tt::CBIndex::c_13, recip_scratch_df}})
+                .set_page_size(tt::CBIndex::c_13, recip_scratch_tile_size);
+        CreateCircularBuffer(program, core_grid, c_recip_dense_scratch_config);
     }
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
@@ -752,12 +771,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
     if (use_streaming_compute) {
         auto c_sum_out_config =
-            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
-                .set_page_size(tt::CBIndex::c_10, stats_tile_size);
+            CircularBufferConfig(statistics_tiles * sum_stats_tile_size, {{tt::CBIndex::c_10, sum_stats_df}})
+                .set_page_size(tt::CBIndex::c_10, sum_stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_out_config);
 
-        auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
-                                   .set_page_size(tt::CBIndex::c_11, stats_tile_size);
+        auto c_sum_in_config =
+            CircularBufferConfig(statistics_tiles * sum_stats_tile_size, {{tt::CBIndex::c_11, sum_stats_df}})
+                .set_page_size(tt::CBIndex::c_11, sum_stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
 
         // Signal CB (c_12): compute signals writer when last K-chunk starts.
@@ -1299,6 +1319,17 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         log_info(tt::LogOp, "K chain mode: head (NHK != 1, {})", head_mcast_enabled ? "mcast" : "unicast");
     }
 
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (use_fp32_streaming_compute) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[tt::CBIndex::c_9] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_10] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_11] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_13] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_29] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_30] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
     auto reader_kernels_id = CreateKernel(
         program,
@@ -1319,6 +1350,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = defines});

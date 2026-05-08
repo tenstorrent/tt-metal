@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
+#include "api/compute/eltwise_binary_sfpu.h"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -321,16 +322,13 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
-        // Pack back to inout_cb at the same absolute positions.
-        // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
-        // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
-        // reconfigure here when the caller guarantees the state.
         if (skip_pack_configure) {
             pack_contiguous_rows_nocfg(
                 inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         } else {
             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         }
+        pack_reconfig_data_format(reduce_cb);
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
@@ -370,6 +368,8 @@ SDPA_NOINLINE void sub_exp_first_col_blocks(
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
+    exp_packthread_tile_init<EXP_APPROX_MODE>();
+    reconfig_data_format(in0_cb, in1_cb);
     sub_tiles_init(in0_cb, in1_cb);
 
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
@@ -391,6 +391,7 @@ SDPA_NOINLINE void sub_exp_first_col_blocks(
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
+        pack_reconfig_data_format(out_cb);
         configure_single_tile_pack(out_cb);
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             pack_tile<false>(i, out_cb);
@@ -486,6 +487,105 @@ void salad_correct_fused(
 }
 
 /**
+ * FP32-dest streaming SALAD correction for deferred row groups.
+ *
+ * c31 stores exp(prev_max - cur_max) in the legacy column-broadcast layout, so
+ * expand each row to a dense FP32 scratch tile before doing the output and sum
+ * recurrence in DST:
+ *   out = cur_out + prev_out * exp_delta
+ *   sum = cur_sum + prev_sum * exp_delta
+ */
+template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
+void salad_correct_fp32_dst_merge(
+    uint32_t out_in_cb,
+    uint32_t sum_in_cb,
+    uint32_t bcast_cb,
+    uint32_t out_out_cb,
+    uint32_t sum_out_cb,
+    uint32_t scratch_cb,
+    uint32_t bcast_q_subblock,
+    uint32_t write_q_subblock) {
+    constexpr uint32_t tiles_per_row = sbh_t;
+    constexpr uint32_t tiles_per_column = sbw_t;
+    const uint32_t bcast_row_base = bcast_q_subblock * tiles_per_row;
+    const uint32_t write_row_base = write_q_subblock * tiles_per_row;
+
+    cb_wait_front(out_in_cb, tiles_per_row * tiles_per_column);
+    cb_wait_front(sum_in_cb, tiles_per_row);
+    cb_wait_front(bcast_cb, (bcast_q_subblock + 1) * tiles_per_row);
+    cb_wait_front(out_out_cb, (write_q_subblock + 1) * tiles_per_row * tiles_per_column);
+    cb_wait_front(sum_out_cb, (write_q_subblock + 1) * tiles_per_row);
+
+    uint32_t last_srca_cb = bcast_cb;
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        unary_bcast_init<BroadcastType::COL>(bcast_cb, scratch_cb);
+        cb_reserve_back(scratch_cb, 1);
+        tile_regs_acquire();
+        unary_bcast<BroadcastType::COL>(bcast_cb, bcast_row_base + i, 0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, scratch_cb);
+        tile_regs_release();
+        cb_push_back(scratch_cb, 1);
+        last_srca_cb = bcast_cb;
+
+        pack_reconfig_data_format(out_out_cb);
+        configure_single_tile_pack(out_out_cb);
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        for (uint32_t j = 0; j < tiles_per_column; ++j) {
+            const uint32_t prev_tile_index = i * tiles_per_column + j;
+            const uint32_t out_idx = (write_row_base + i) * tiles_per_column + j;
+
+            copy_tile_to_dst_init_short_with_dt(last_srca_cb, out_out_cb);
+            last_srca_cb = out_out_cb;
+            mul_binary_tile_init();
+            tile_regs_acquire();
+            copy_tile(out_out_cb, out_idx, 0);
+            copy_tile_to_dst_init_short_with_dt(out_out_cb, out_in_cb);
+            last_srca_cb = out_in_cb;
+            copy_tile(out_in_cb, prev_tile_index, 1);
+            copy_tile_to_dst_init_short_with_dt(out_in_cb, scratch_cb);
+            last_srca_cb = scratch_cb;
+            copy_tile(scratch_cb, 0, 2);
+            mul_binary_tile(1, 2, 1);
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 0);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile<true>(0, out_out_cb, out_idx);
+            tile_regs_release();
+        }
+
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        pack_reconfig_data_format(sum_out_cb);
+        configure_single_tile_pack(sum_out_cb);
+        copy_tile_to_dst_init_short_with_dt(last_srca_cb, sum_out_cb);
+        last_srca_cb = sum_out_cb;
+        mul_binary_tile_init();
+        tile_regs_acquire();
+        copy_tile(sum_out_cb, write_row_base + i, 0);
+        copy_tile_to_dst_init_short_with_dt(sum_out_cb, sum_in_cb);
+        last_srca_cb = sum_in_cb;
+        copy_tile(sum_in_cb, i, 1);
+        copy_tile_to_dst_init_short_with_dt(sum_in_cb, scratch_cb);
+        last_srca_cb = scratch_cb;
+        copy_tile(scratch_cb, 0, 2);
+        mul_binary_tile(1, 2, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile<true>(0, sum_out_cb, write_row_base + i);
+        tile_regs_release();
+        cb_pop_front(scratch_cb, 1);
+    }
+}
+
+/**
  * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
@@ -497,28 +597,123 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
     uint32_t normalized_out_cb,
-    uint32_t sbh) {
-    configure_single_tile_pack(scratch_cb);
-    for (uint32_t s = 0; s < sbh; s++) {
-        // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
-        {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
-            constexpr uint32_t N = 1;
-            mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
-            reconfig_data_format(col_identity_cb, cur_sum_cb);
-            // Pack format follows scratch_cb (Float16_b intermediate) for the recip output.
-            // Required when normalized_out_cb has a different format (e.g., Bfp8 output dtype):
-            // s>0 iterations re-enter here after the bcast loop set pack format to normalized_out_cb.
-            if constexpr (!uniform_pack_format) {
-                pack_reconfig_data_format(scratch_cb);
+    uint32_t sbh,
+    uint32_t dense_scratch_cb = INVALID_CB) {
+    if constexpr (DST_ACCUM_MODE) {
+        for (uint32_t s = 0; s < sbh; s++) {
+            // In fp32-dest mode the running sum tile is dense FP32. The
+            // streaming merge keeps it in that format, then this local row
+            // reduce produces the denominator in column 0.
+            {
+                MaybeDeviceZoneScopedN(profiling_enabled, "NORM_FP32_RECIP");
+                copy_tile_to_dst_init_short_with_dt(cur_out_cb, cur_sum_cb);
+                sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+                if constexpr (!uniform_pack_format) {
+                    pack_reconfig_data_format(scratch_cb);
+                }
+                configure_single_tile_pack(scratch_cb);
+                cb_wait_front(cur_sum_cb, 1);
+
+                cb_reserve_back(scratch_cb, 1);
+                tile_regs_acquire();
+                copy_tile(cur_sum_cb, 0, 0);
+                sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+#ifdef ARCH_BLACKHOLE
+                recip_tile_init<false>();
+                MATH((recip_tile<false>(0, (int)VectorMode::C)));
+#else
+                recip_tile_init();
+                MATH((recip_tile_first_column_wh_idst0_direct()));
+#endif
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile(0, scratch_cb);
+                tile_regs_release();
+                cb_push_back(scratch_cb, 1);
+
+                cb_pop_front(cur_sum_cb, 1);
             }
 
-            cb_wait_front(col_identity_cb, N);
-            cb_wait_front(cur_sum_cb, 1);
+            {
+                MaybeDeviceZoneScopedN(profiling_enabled, "NORM_FP32_RECIP_EXPAND");
+                unary_bcast_init<BroadcastType::COL>(scratch_cb, dense_scratch_cb);
+                if constexpr (!uniform_pack_format) {
+                    pack_reconfig_data_format(dense_scratch_cb);
+                }
+                configure_single_tile_pack(dense_scratch_cb);
+                cb_wait_front(scratch_cb, 1);
 
-            cb_reserve_back(scratch_cb, 1);
-            tile_regs_acquire();
-            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+                cb_reserve_back(dense_scratch_cb, 1);
+                tile_regs_acquire();
+                unary_bcast<BroadcastType::COL>(scratch_cb, 0, 0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile(0, dense_scratch_cb);
+                tile_regs_release();
+                cb_push_back(dense_scratch_cb, 1);
+            }
+
+            {
+                MaybeDeviceZoneScopedN(profiling_enabled, "NORM_FP32_MUL");
+                constexpr uint32_t batch = (head_dim_t_ < (dst_size - 1)) ? head_dim_t_ : (dst_size - 1);
+                constexpr uint32_t last_batch = head_dim_t_ % batch;
+
+                mul_binary_tile_init();
+                if constexpr (!uniform_pack_format) {
+                    pack_reconfig_data_format(normalized_out_cb);
+                }
+                configure_single_tile_pack(normalized_out_cb);
+                cb_wait_front(cur_out_cb, head_dim_t_);
+                cb_wait_front(dense_scratch_cb, 1);
+
+                cb_reserve_back(normalized_out_cb, head_dim_t_);
+                for (uint32_t base = 0; base < head_dim_t_; base += batch) {
+                    const uint32_t cur_batch = (base + batch <= head_dim_t_) ? batch : last_batch;
+                    copy_tile_to_dst_init_short_with_dt(cur_out_cb, dense_scratch_cb);
+                    tile_regs_acquire();
+                    copy_tile(dense_scratch_cb, 0, 0);
+                    copy_tile_to_dst_init_short_with_dt(dense_scratch_cb, cur_out_cb);
+                    for (uint32_t j = 0; j < cur_batch; ++j) {
+                        copy_tile(cur_out_cb, base + j, j + 1);
+                    }
+                    for (uint32_t j = 0; j < cur_batch; ++j) {
+                        mul_binary_tile(j + 1, 0, j + 1);
+                    }
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    for (uint32_t j = 0; j < cur_batch; ++j) {
+                        pack_tile(j + 1, normalized_out_cb);
+                    }
+                    tile_regs_release();
+                }
+                cb_push_back(normalized_out_cb, head_dim_t_);
+
+                cb_pop_front(scratch_cb, 1);
+                cb_pop_front(dense_scratch_cb, 1);
+                cb_pop_front(cur_out_cb, head_dim_t_);
+            }
+        }
+    } else {
+        for (uint32_t s = 0; s < sbh; s++) {
+            // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
+            {
+                MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+                constexpr uint32_t N = 1;
+                reconfig_data_format(col_identity_cb, cur_sum_cb);
+                mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
+                cb_wait_front(col_identity_cb, N);
+                if constexpr (!uniform_pack_format) {
+                    pack_reconfig_data_format(scratch_cb);
+                }
+                configure_single_tile_pack(scratch_cb);
+                cb_wait_front(cur_sum_cb, 1);
+
+                cb_reserve_back(scratch_cb, 1);
+                tile_regs_acquire();
+                matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0, (int)VectorMode::C)));
@@ -534,7 +729,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             cb_push_back(scratch_cb, 1);
 
             cb_pop_front(cur_sum_cb, 1);
-        }
+            }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
         // Process in batches of up to dst_size tiles (DST capacity).
@@ -569,6 +764,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 
             cb_pop_front(scratch_cb, 1);
             cb_pop_front(cur_out_cb, head_dim_t_);
+        }
         }
     }
     // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
@@ -696,6 +892,7 @@ template <
     uint32_t cb_exp_max_diff = 0,
     uint32_t cb_col_identity = 0,
     uint32_t cb_recip_scratch = 0,
+    uint32_t cb_recip_dense_scratch = 0,
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0,
     uint32_t KT_stride = Sk_chunk_t>
@@ -725,6 +922,7 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t row_tiles = qkt_subblock_h * KT_stride;  // Use KT_stride for cb_qkt_im row width
 
     static_assert(!(use_padded_mask && ring_mode), "use_padded_mask and ring_mode are mutually exclusive");
+    static_assert(qkt_subblock_h * qkt_subblock_w <= dst_size, "QK subblock must fit in destination registers");
 
     // When all CBs share the same data format (e.g. all Float16_b for bf16 models),
     // reconfig calls are no-ops — skip entirely to save code size.
@@ -737,7 +935,8 @@ static void sdpa_inner_loop_step(
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
 
-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    constexpr InputClamping exp_input_clamping = InputClamping::None;
+    exp_packthread_tile_init<true, scale_fp32, exp_input_clamping>();
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * KT_stride);
@@ -900,12 +1099,16 @@ static void sdpa_inner_loop_step(
             ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
         constexpr uint32_t qktv_remainder_h = Sq_chunk_t % qktv_h;
         constexpr bool has_qktv_remainder = qktv_remainder_h != 0;
+        // FP32-dest streaming merges the running-softmax state after all row
+        // groups are produced so output and sum can be corrected in DST.
+        constexpr bool fp32_dest_merge = DST_ACCUM_MODE;
         static_assert(Sq_chunk_t >= qktv_h, "Sq_chunk_t must be at least qktv_h");
 
         static_assert(vDHt % qktv_subblock_w == 0, "vDHt must be evenly divisible by qktv_subblock_w");
         static_assert(qktv_h * qktv_subblock_w <= dst_size, "qktv subblock must fit in dest register file");
         constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_h;  // full subblocks only
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
+        constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
         // cb_qkt_im row width is KT_stride (for pointer alignment), not Sk_chunk_t
         constexpr uint32_t qktv_in0_row_tiles = qktv_h * KT_stride;
@@ -920,6 +1123,21 @@ static void sdpa_inner_loop_step(
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
         cb_reserve_back(out_cb, qktv_output_num_tiles);
+
+        if constexpr (fp32_dest_merge) {
+            if (!is_first_iter) {
+                cb_reserve_back(cb_exp_max_diff, Sq_chunk_t);
+                for (uint32_t exp_group = 0; exp_group < total_v_row_groups; ++exp_group) {
+                    const bool is_remainder_group = has_qktv_remainder && (exp_group == qktv_q_num_subblocks);
+                    const uint32_t exp_h = is_remainder_group ? qktv_remainder_h : qktv_h;
+                    const uint32_t exp_read_row = is_remainder_group ? (qktv_q_num_subblocks * qktv_h) : exp_group;
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, exp_read_row, exp_h);
+                }
+                cb_push_back(cb_exp_max_diff, Sq_chunk_t);
+                exp_packthread_tile_init<true, scale_fp32, exp_input_clamping>();
+            }
+        }
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
@@ -966,7 +1184,9 @@ static void sdpa_inner_loop_step(
                     // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                     // still limits how many V rows are multiplied.
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                    // Configure once before v_subblock loop; skip inside.
+                    if constexpr (!uniform_pack_format) {
+                        pack_reconfig_data_format(out_cb);
+                    }
                     configure_row_pack_width(out_cb, qktv_subblock_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1007,14 +1227,23 @@ static void sdpa_inner_loop_step(
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 
+        if constexpr (fp32_dest_merge) {
+            // Front the full current sum chunk so the FP32 DST merge can read
+            // current sums and overwrite them in place. The write pointer is
+            // rewound so pack_tile<true> offsets still address this chunk.
+            cb_push_back_hold_wr_ptr(cur.sum, Sq_chunk_t);
+        }
+
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
-            cb_push_back(cur.sum, sbh);
+            if constexpr (!fp32_dest_merge) {
+                cb_push_back(cur.sum, sbh);
+            }
             cb_push_back(out_cb, sbh * vDHt);
             normalize_row_streaming<profiling_enabled, vDHt, dst_size, uniform_pack_format>(
-                cur.sum, out_cb, cb_col_identity, cb_recip_scratch, cb_normalized_out, sbh);
+                cur.sum, out_cb, cb_col_identity, cb_recip_scratch, cb_normalized_out, sbh, cb_recip_dense_scratch);
             pushed++;
         };
 
@@ -1022,34 +1251,69 @@ static void sdpa_inner_loop_step(
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
-            PACK((llk_pack_reconfig_l1_acc(1)));
+            if constexpr (!fp32_dest_merge) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
-                // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
-                // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
-                if constexpr (has_qktv_remainder) {
-                    if (sbh == qktv_remainder_h) {
-                        salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                // The fp32 merge consumes prev.out and prev.sum row-group by
+                // row-group from the CB front. cb_exp_max_diff keeps cumulative
+                // indexing because it is reused for both output and sum.
+                if constexpr (fp32_dest_merge) {
+                    if constexpr (has_qktv_remainder) {
+                        if (sbh == qktv_remainder_h) {
+                            salad_correct_fp32_dst_merge<qktv_remainder_h, vDHt, dst_size>(
+                                prev.out,
+                                prev.sum,
+                                cb_exp_max_diff,
+                                out_cb,
+                                cur.sum,
+                                cb_recip_scratch,
+                                salad_row,
+                                w_salad);
+                        } else {
+                            salad_correct_fp32_dst_merge<qktv_h, vDHt, dst_size>(
+                                prev.out,
+                                prev.sum,
+                                cb_exp_max_diff,
+                                out_cb,
+                                cur.sum,
+                                cb_recip_scratch,
+                                salad_row,
+                                w_salad);
+                        }
+                    } else {
+                        salad_correct_fp32_dst_merge<qktv_h, vDHt, dst_size>(
+                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, cb_recip_scratch, salad_row, w_salad);
+                    }
+                } else {
+                    if constexpr (has_qktv_remainder) {
+                        if (sbh == qktv_remainder_h) {
+                            salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
+                                prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        } else {
+                            salad_correct_fused<qktv_h, vDHt, dst_size>(
+                                prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        }
                     } else {
                         salad_correct_fused<qktv_h, vDHt, dst_size>(
                             prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                     }
-                } else {
-                    salad_correct_fused<qktv_h, vDHt, dst_size>(
-                        prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                 }
             }
-            cb_pop_front(cb_exp_max_diff, sbh);
+            if constexpr (!fp32_dest_merge) {
+                cb_pop_front(cb_exp_max_diff, sbh);
+            }
             cb_pop_front(prev.out, sbh * vDHt);
+            if constexpr (fp32_dest_merge) {
+                cb_pop_front(prev.sum, sbh);
+            }
             PACK((llk_pack_reconfig_l1_acc(0)));
         };
 
         // q_subblock 1..N-1 (+ optional remainder): SALAD(prev) overlapped with matmul(cur)
         // When Sq_chunk_t is not divisible by qktv_h, the last iteration handles the
         // remainder row(s) with a smaller V matmul height.
-        constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
-        exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             const bool is_remainder_iter = has_qktv_remainder && (q_subblock == qktv_q_num_subblocks);
@@ -1064,10 +1328,12 @@ static void sdpa_inner_loop_step(
 
             // SALAD for previous group (always a full group, h=qktv_h)
             if (!is_first_iter) {
-                cb_reserve_back(cb_exp_max_diff, qktv_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
-                cb_push_back(cb_exp_max_diff, qktv_h);
+                if constexpr (!fp32_dest_merge) {
+                    cb_reserve_back(cb_exp_max_diff, qktv_h);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
+                    cb_push_back(cb_exp_max_diff, qktv_h);
+                }
             }
 
             // V matmul for current row group — cur_h adapts for remainder
@@ -1085,7 +1351,9 @@ static void sdpa_inner_loop_step(
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
                 mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
-                // Configure once before v_subblock loop; skip inside.
+                if constexpr (!uniform_pack_format) {
+                    pack_reconfig_data_format(out_cb);
+                }
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1109,55 +1377,57 @@ static void sdpa_inner_loop_step(
                 }
             }
 
-            // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
-            if (!is_first_iter) {
-                // Last main-loop iteration: hoist drain's sub_exp so both salads
-                // (current row and drain row) chain back-to-back with one FPU init.
-                if (q_subblock == total_v_row_groups - 1) {
-                    constexpr uint32_t drain_h = has_qktv_remainder ? qktv_remainder_h : qktv_h;
-                    const uint32_t drain_salad_row =
-                        has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
+            if constexpr (!fp32_dest_merge) {
+                // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
+                if (!is_first_iter) {
+                    // Last main-loop iteration: hoist drain's sub_exp so both salads
+                    // (current row and drain row) chain back-to-back with one FPU init.
+                    if (q_subblock == total_v_row_groups - 1) {
+                        constexpr uint32_t drain_h = has_qktv_remainder ? qktv_remainder_h : qktv_h;
+                        const uint32_t drain_salad_row =
+                            has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
 
-                    cb_reserve_back(cb_exp_max_diff, drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
-                    cb_push_back(cb_exp_max_diff, drain_h);
+                        cb_reserve_back(cb_exp_max_diff, drain_h);
+                        sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                            prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                        cb_push_back(cb_exp_max_diff, drain_h);
 
-                    salad_correct_row(salad_row, w_salad, qktv_h);
-                    if (is_last_iter) {
-                        normalize_row(pushed_rows, qktv_h);
+                        salad_correct_row(salad_row, w_salad, qktv_h);
+                        if (is_last_iter) {
+                            normalize_row(pushed_rows, qktv_h);
+                        } else {
+                            cb_push_back(cur.sum, qktv_h);
+                            cb_push_back(out_cb, qktv_h * vDHt);
+                            pushed_rows++;
+                        }
+
+                        const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)
+                                                                    : (qktv_q_num_subblocks - 1 - pushed_rows);
+                        salad_correct_row(drain_salad_row, drain_w, drain_h);
+                        if (is_last_iter) {
+                            normalize_row(pushed_rows, drain_h);
+                        } else {
+                            cb_push_back(cur.sum, drain_h);
+                            cb_push_back(out_cb, drain_h * vDHt);
+                            pushed_rows++;
+                        }
                     } else {
-                        cb_push_back(cur.sum, qktv_h);
-                        cb_push_back(out_cb, qktv_h * vDHt);
-                        pushed_rows++;
+                        salad_correct_row(salad_row, w_salad, qktv_h);
+                        if (is_last_iter) {
+                            normalize_row(pushed_rows, qktv_h);
+                        } else {
+                            cb_push_back(cur.sum, qktv_h);
+                            cb_push_back(out_cb, qktv_h * vDHt);
+                            pushed_rows++;
+                        }
                     }
-
-                    const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)
-                                                                : (qktv_q_num_subblocks - 1 - pushed_rows);
-                    salad_correct_row(drain_salad_row, drain_w, drain_h);
-                    if (is_last_iter) {
-                        normalize_row(pushed_rows, drain_h);
-                    } else {
-                        cb_push_back(cur.sum, drain_h);
-                        cb_push_back(out_cb, drain_h * vDHt);
-                        pushed_rows++;
-                    }
+                } else if (is_last_iter) {
+                    normalize_row(pushed_rows, qktv_h);
                 } else {
-                    salad_correct_row(salad_row, w_salad, qktv_h);
-                    if (is_last_iter) {
-                        normalize_row(pushed_rows, qktv_h);
-                    } else {
-                        cb_push_back(cur.sum, qktv_h);
-                        cb_push_back(out_cb, qktv_h * vDHt);
-                        pushed_rows++;
-                    }
+                    cb_push_back(cur.sum, qktv_h);
+                    cb_push_back(out_cb, qktv_h * vDHt);
+                    pushed_rows++;
                 }
-            } else if (is_last_iter) {
-                normalize_row(pushed_rows, qktv_h);
-            } else {
-                cb_push_back(cur.sum, qktv_h);
-                cb_push_back(out_cb, qktv_h * vDHt);
-                pushed_rows++;
             }
 
             qktv_in0_index_offset += cur_h * KT_stride;
@@ -1167,28 +1437,18 @@ static void sdpa_inner_loop_step(
         // Pipeline drain: SALAD for the last group
         {
             constexpr uint32_t drain_h = has_qktv_remainder ? qktv_remainder_h : qktv_h;
-            if constexpr (total_v_row_groups == 1) {
-                // Single row group: the main loop never ran, so the drain must
-                // perform the full SALAD correction (sub_exp + correct) here.
-                if (!is_first_iter) {
-                    constexpr uint32_t drain_salad_row = 0;
-                    cb_reserve_back(cb_exp_max_diff, drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
-                    cb_push_back(cb_exp_max_diff, drain_h);
-                    salad_correct_row(drain_salad_row, 0, drain_h);
-                }
-                if (is_last_iter) {
-                    normalize_row(pushed_rows, drain_h);
-                } else {
-                    cb_push_back(cur.sum, drain_h);
-                    cb_push_back(out_cb, drain_h * vDHt);
-                    pushed_rows++;
-                }
-            } else {
-                // Drain was hoisted into the last main-loop iteration above.
-                // For is_first_iter (no SALAD), the drain row still needs push/normalize.
-                if (is_first_iter) {
+            if constexpr (!fp32_dest_merge) {
+                if constexpr (total_v_row_groups == 1) {
+                    // Single row group: the main loop never ran, so the drain must
+                    // perform the full SALAD correction (sub_exp + correct) here.
+                    if (!is_first_iter) {
+                        constexpr uint32_t drain_salad_row = 0;
+                        cb_reserve_back(cb_exp_max_diff, drain_h);
+                        sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                            prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                        cb_push_back(cb_exp_max_diff, drain_h);
+                        salad_correct_row(drain_salad_row, 0, drain_h);
+                    }
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
@@ -1196,11 +1456,54 @@ static void sdpa_inner_loop_step(
                         cb_push_back(out_cb, drain_h * vDHt);
                         pushed_rows++;
                     }
+                } else {
+                    // Drain was hoisted into the last main-loop iteration above.
+                    // For is_first_iter (no SALAD), the drain row still needs push/normalize.
+                    if (is_first_iter) {
+                        if (is_last_iter) {
+                            normalize_row(pushed_rows, drain_h);
+                        } else {
+                            cb_push_back(cur.sum, drain_h);
+                            cb_push_back(out_cb, drain_h * vDHt);
+                            pushed_rows++;
+                        }
+                    }
                 }
             }
         }
 
-        // All rows pushed individually — no bulk push needed.
+        if constexpr (fp32_dest_merge) {
+            cb_push_back_hold_wr_ptr(out_cb, qktv_output_num_tiles);
+            if (!is_first_iter) {
+                for (uint32_t post_group = 0; post_group < qktv_q_num_subblocks; ++post_group) {
+                    salad_correct_row(post_group, post_group, qktv_h);
+                }
+                if constexpr (has_qktv_remainder) {
+                    constexpr uint32_t remainder_read_row = qktv_q_num_subblocks * qktv_h;
+                    constexpr uint32_t remainder_write_group = remainder_read_row / qktv_remainder_h;
+                    salad_correct_row(remainder_read_row, remainder_write_group, qktv_remainder_h);
+                }
+            }
+
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+
+            if (is_last_iter) {
+                normalize_row_streaming<profiling_enabled, vDHt, dst_size, uniform_pack_format>(
+                    cur.sum,
+                    out_cb,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_normalized_out,
+                    Sq_chunk_t,
+                    cb_recip_dense_scratch);
+            }
+
+            if (!is_first_iter) {
+                cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
+            }
+        }
 
         cb_pop_front(cb_v_in, KT_stride * vDHt);
         cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
@@ -1246,6 +1549,7 @@ template <
     uint32_t cb_exp_max_diff,
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
+    uint32_t cb_recip_dense_scratch,
     uint32_t cb_normalized_out,
     uint32_t cb_mask_in,
     bool uniform_dataformat = false,
@@ -1355,6 +1659,7 @@ void sdpa_standard_v2(
                 cb_exp_max_diff,
                 cb_col_identity,
                 cb_recip_scratch,
+                cb_recip_dense_scratch,
                 cb_normalized_out,
                 cb_mask_in>(
                 prev,
@@ -1430,7 +1735,9 @@ void sdpa_standard_v2(
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {
                 cb_pop_front(prev.max, Sq_chunk_t);
-                cb_pop_front(prev.sum, Sq_chunk_t);
+                if constexpr (!DST_ACCUM_MODE) {
+                    cb_pop_front(prev.sum, Sq_chunk_t);
+                }
             }
 
             if (is_last) {
@@ -1494,6 +1801,7 @@ template <
     uint32_t cb_exp_max_diff,
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
+    uint32_t cb_recip_dense_scratch,
     uint32_t cb_mask_in,
     uint32_t cb_scale_in,
     uint32_t cb_max_in,
@@ -1507,7 +1815,8 @@ template <
     uint32_t cb_signal = 0,
     bool lightweight_mask_enabled = false,
     bool is_causal_sdpa = false,
-    bool is_balanced_sdpa = false>
+    bool is_balanced_sdpa = false,
+    bool multi_q_per_core = true>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1576,16 +1885,26 @@ void sdpa_ring_v2(
         if constexpr (is_balanced_sdpa) {
             if (skip_first_half_q && q_chunk < num_q_chunks / 2 && is_last_ring_iter) {
                 AccumulatorHalf q_prev_norm = acc_state.prev;
-                if (q_per_core > 1 && ring_iter > 0) {
-                    q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
+                if constexpr (multi_q_per_core) {
+                    if (q_per_core > 1 && ring_iter > 0) {
+                        q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
+                    }
                 }
                 constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
                 normalize_row_streaming<false, vDHt, norm_dst_size, uniform_format>(
-                    q_prev_norm.sum, q_prev_norm.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, Sq_chunk_t);
+                    q_prev_norm.sum,
+                    q_prev_norm.out,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_normalized_out,
+                    Sq_chunk_t,
+                    cb_recip_dense_scratch);
                 cb_pop_front(q_prev_norm.max, Sq_chunk_t);
-                if (q_per_core > 1) {
-                    cb_reserve_back(cb_signal, 1);
-                    cb_push_back(cb_signal, 1);
+                if constexpr (multi_q_per_core) {
+                    if (q_per_core > 1) {
+                        cb_reserve_back(cb_signal, 1);
+                        cb_push_back(cb_signal, 1);
+                    }
                 }
                 return true;
             }
@@ -1667,7 +1986,7 @@ void sdpa_ring_v2(
         // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
         // After K0's swap, reset q_cur to original accumulator CBs for normal ping-pong.
         const AccumulatorHalf original_prev = q_prev;
-        const bool restore_from_staging = (q_per_core > 1 && ring_iter > 0);
+        const bool restore_from_staging = multi_q_per_core && q_per_core > 1 && ring_iter > 0;
         if (restore_from_staging) {
             q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
         }
@@ -1693,9 +2012,11 @@ void sdpa_ring_v2(
             const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
-            if (is_last_k && q_per_core > 1) {
-                cb_reserve_back(cb_signal, 1);
-                cb_push_back(cb_signal, 1);
+            if constexpr (multi_q_per_core) {
+                if (is_last_k && q_per_core > 1) {
+                    cb_reserve_back(cb_signal, 1);
+                    cb_push_back(cb_signal, 1);
+                }
             }
 
             // Determine if this K chunk needs masking (partial tile within a tile boundary)
@@ -1758,7 +2079,7 @@ void sdpa_ring_v2(
             // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
             // to writer-staging CBs, eliminating post-loop copy_block calls.
             // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
-            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+            const bool save_to_staging = multi_q_per_core && q_per_core > 1 && is_last_k && !is_last_ring_iter;
             const uint32_t step_save_out_cb = save_to_staging ? cb_out : INVALID_CB;
             const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : INVALID_CB;
             if (save_to_staging) {
@@ -1789,6 +2110,7 @@ void sdpa_ring_v2(
                 cb_exp_max_diff,
                 cb_col_identity,
                 cb_recip_scratch,
+                cb_recip_dense_scratch,
                 cb_normalized_out,
                 cb_mask_in>(
                 q_prev,
@@ -1812,7 +2134,9 @@ void sdpa_ring_v2(
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {
                 cb_pop_front(q_prev.max, Sq_chunk_t);
-                cb_pop_front(q_prev.sum, Sq_chunk_t);
+                if constexpr (!DST_ACCUM_MODE) {
+                    cb_pop_front(q_prev.sum, Sq_chunk_t);
+                }
             }
 
             if (is_last_k_of_last_ring_iter) {
@@ -1830,24 +2154,34 @@ void sdpa_ring_v2(
         // Pop Q — not popped inside step since ring_mode gates the early Q pop.
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
         // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
-        if (q_per_core > 1 || is_last_ring_iter) {
+        if constexpr (multi_q_per_core) {
+            if (q_per_core > 1 || is_last_ring_iter) {
+                cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+            }
+        } else if (is_last_ring_iter) {
             cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
         }
 
         // Persist or save accumulators for next ring iteration
-        if (q_per_core == 1) {
+        if constexpr (!multi_q_per_core) {
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;
-        } else if (!is_last_ring_iter) {
-            // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
-            // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
-            // Sum already in cb_sum_out (redirected via q_cur.sum on last K-chunk).
-            // Max already in cb_max_out (dual-write from DST during reduce on last K-chunk).
-            // Pop the accumulator CB for max — dual-write doesn't replace the alias,
-            // so the accumulator CB still has tiles from the last K-chunk's reduce.
-            // (Sum doesn't need this because planting replaced the alias entirely.)
-            cb_pop_front(q_prev.max, Sq_chunk_t);
+        } else {
+            if (q_per_core == 1) {
+                // Single Q-chunk: persist in L1 (no DRAM round-trip)
+                acc_state.prev = q_prev;
+                acc_state.cur = q_cur;
+            } else if (!is_last_ring_iter) {
+                // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
+                // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
+                // Sum already in cb_sum_out (redirected via q_cur.sum on last K-chunk).
+                // Max already in cb_max_out (dual-write from DST during reduce on last K-chunk).
+                // Pop the accumulator CB for max — dual-write doesn't replace the alias,
+                // so the accumulator CB still has tiles from the last K-chunk's reduce.
+                // (Sum doesn't need this because planting replaced the alias entirely.)
+                cb_pop_front(q_prev.max, Sq_chunk_t);
+            }
         }
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
     }
