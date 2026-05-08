@@ -28,3 +28,20 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors);
 std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor);
 
 }  // namespace ttnn::experimental::unit_mesh
+
+// Compatibility bridges - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal::experimental::unit_mesh {
+
+template <int = 0>
+[[deprecated("use ttnn::experimental::unit_mesh::aggregate instead. This alias may be removed after Jun 2026.")]]
+inline ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
+    return ttnn::experimental::unit_mesh::aggregate(tensors);
+}
+
+template <int = 0>
+[[deprecated("use ttnn::experimental::unit_mesh::disaggregate instead. This alias may be removed after Jun 2026.")]]
+inline std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
+    return ttnn::experimental::unit_mesh::disaggregate(tensor);
+}
+
+}  // namespace tt::tt_metal::experimental::unit_mesh

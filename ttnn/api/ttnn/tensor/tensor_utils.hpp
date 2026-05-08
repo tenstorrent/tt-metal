@@ -80,3 +80,45 @@ inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
 }
 
 }  // namespace ttnn
+
+// Compatibility bridges - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal {
+
+template <int = 0>
+[[deprecated("use ttnn::is_cpu_tensor instead. This alias may be removed after Jun 2026.")]]
+inline bool is_cpu_tensor(const ttnn::Tensor& tensor) {
+    return ttnn::is_cpu_tensor(tensor);
+}
+
+template <int = 0>
+[[deprecated("use ttnn::is_device_tensor instead. This alias may be removed after Jun 2026.")]]
+inline bool is_device_tensor(const ttnn::Tensor& tensor) {
+    return ttnn::is_device_tensor(tensor);
+}
+
+template <int = 0>
+[[deprecated(
+    "use ttnn::get_optimal_worker_cores_for_sharded_tensor instead. This alias may be removed after Jun 2026.")]]
+inline std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
+    const ttnn::Tensor& tensor, NOC noc = NOC::RISCV_0_default) {
+    return ttnn::get_optimal_worker_cores_for_sharded_tensor(tensor, noc);
+}
+
+template <int = 0>
+[[deprecated("use ttnn::cb_descriptor_from_sharded_tensor instead. This alias may be removed after Jun 2026.")]]
+inline CBDescriptor cb_descriptor_from_sharded_tensor(
+    uint8_t cb_index,
+    const ttnn::Tensor& tensor,
+    uint32_t address_offset = 0,
+    uint32_t total_size = 0,
+    const std::optional<CoreRangeSet>& core_ranges = std::nullopt) {
+    return ttnn::cb_descriptor_from_sharded_tensor(cb_index, tensor, address_offset, total_size, core_ranges);
+}
+
+template <int = 0>
+[[deprecated("use ttnn::get_cb_address instead. This alias may be removed after Jun 2026.")]]
+inline uint32_t get_cb_address(const CBDescriptor& desc) {
+    return ttnn::get_cb_address(desc);
+}
+
+}  // namespace tt::tt_metal

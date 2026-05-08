@@ -42,3 +42,22 @@ using Array7D = std::array<uint32_t, 7>;
 using Array8D = std::array<uint32_t, 8>;
 
 }  // namespace ttnn
+
+// Compatibility aliases - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal {
+
+[[deprecated("use ttnn::MAX_NUM_DIMENSIONS instead. This alias may be removed after Jun 2026.")]]
+static constexpr std::size_t MAX_NUM_DIMENSIONS = ttnn::MAX_NUM_DIMENSIONS;
+
+using StorageType [[deprecated("use ttnn::StorageType instead. This alias may be removed after Jun 2026.")]] =
+    ttnn::StorageType;
+using Array1D [[deprecated("use ttnn::Array1D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array1D;
+using Array2D [[deprecated("use ttnn::Array2D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array2D;
+using Array3D [[deprecated("use ttnn::Array3D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array3D;
+using Array4D [[deprecated("use ttnn::Array4D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array4D;
+using Array5D [[deprecated("use ttnn::Array5D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array5D;
+using Array6D [[deprecated("use ttnn::Array6D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array6D;
+using Array7D [[deprecated("use ttnn::Array7D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array7D;
+using Array8D [[deprecated("use ttnn::Array8D instead. This alias may be removed after Jun 2026.")]] = ttnn::Array8D;
+
+}  // namespace tt::tt_metal

@@ -60,3 +60,14 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
 ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim = 0);
 
 }  // namespace ttnn::experimental::xtensor
+
+// Compatibility bridge - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal::experimental::xtensor {
+
+template <int = 0>
+[[deprecated("use ttnn::experimental::xtensor::concat instead. This alias may be removed after Jun 2026.")]]
+inline ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim = 0) {
+    return ttnn::experimental::xtensor::concat(tensors, dim);
+}
+
+}  // namespace tt::tt_metal::experimental::xtensor

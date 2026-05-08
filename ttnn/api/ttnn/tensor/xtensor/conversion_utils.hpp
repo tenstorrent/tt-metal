@@ -123,3 +123,20 @@ xt::xarray<T> to_xtensor(const ttnn::Tensor& tensor) {
 }
 
 }  // namespace ttnn::experimental::xtensor
+
+// Compatibility bridges - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal::experimental::xtensor {
+
+template <typename T, int = 0>
+[[deprecated("use ttnn::experimental::xtensor::from_xtensor instead. This alias may be removed after Jun 2026.")]]
+inline ttnn::Tensor from_xtensor(const xt::xarray<T>& buffer, const tt::tt_metal::TensorSpec& spec) {
+    return ttnn::experimental::xtensor::from_xtensor<T>(buffer, spec);
+}
+
+template <typename T, int = 0>
+[[deprecated("use ttnn::experimental::xtensor::to_xtensor instead. This alias may be removed after Jun 2026.")]]
+inline xt::xarray<T> to_xtensor(const ttnn::Tensor& tensor) {
+    return ttnn::experimental::xtensor::to_xtensor<T>(tensor);
+}
+
+}  // namespace tt::tt_metal::experimental::xtensor

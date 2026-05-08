@@ -285,3 +285,10 @@ Tensor set_tensor_id(const Tensor& tensor);
 std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
 }  // namespace ttnn
+
+// Compatibility alias - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal {
+
+using Tensor [[deprecated("use ttnn::Tensor instead. This alias may be removed after Jun 2026.")]] = ttnn::Tensor;
+
+}  // namespace tt::tt_metal

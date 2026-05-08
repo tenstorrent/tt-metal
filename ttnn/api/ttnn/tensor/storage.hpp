@@ -216,3 +216,14 @@ private:
 using Storage = std::variant<HostStorage, DeviceStorage>;
 
 }  // namespace ttnn
+
+// Compatibility aliases - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal {
+
+using HostStorage [[deprecated("use ttnn::HostStorage instead. This alias may be removed after Jun 2026.")]] =
+    ttnn::HostStorage;
+using DeviceStorage [[deprecated("use ttnn::DeviceStorage instead. This alias may be removed after Jun 2026.")]] =
+    ttnn::DeviceStorage;
+using Storage [[deprecated("use ttnn::Storage instead. This alias may be removed after Jun 2026.")]] = ttnn::Storage;
+
+}  // namespace tt::tt_metal

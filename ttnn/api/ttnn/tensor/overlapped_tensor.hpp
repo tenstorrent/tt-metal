@@ -30,3 +30,26 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
     const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device = nullptr);
 
 }  // namespace ttnn
+
+// Compatibility aliases - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal {
+
+using OverlappedTensorView
+    [[deprecated("use ttnn::OverlappedTensorView instead. This alias may be removed after Jun 2026.")]] =
+        ttnn::OverlappedTensorView;
+
+template <int = 0>
+[[deprecated("use ttnn::dump_overlapped_tensors instead. This alias may be removed after Jun 2026.")]]
+inline void dump_overlapped_tensors(
+    const std::string& file_name, const std::vector<ttnn::OverlappedTensorView>& views) {
+    ttnn::dump_overlapped_tensors(file_name, views);
+}
+
+template <int = 0>
+[[deprecated("use ttnn::load_overlapped_tensors instead. This alias may be removed after Jun 2026.")]]
+inline std::vector<ttnn::OverlappedTensorView> load_overlapped_tensors(
+    const std::string& file_name, distributed::MeshDevice* device = nullptr) {
+    return ttnn::load_overlapped_tensors(file_name, device);
+}
+
+}  // namespace tt::tt_metal

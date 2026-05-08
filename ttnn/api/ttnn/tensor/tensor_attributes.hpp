@@ -33,3 +33,11 @@ private:
 };
 
 }  // namespace ttnn
+
+// Compatibility alias - ttnn tensor infrastructure has moved to the ttnn namespace.
+namespace tt::tt_metal {
+
+using TensorAttributes [[deprecated("use ttnn::TensorAttributes instead. This alias may be removed after Jun 2026.")]] =
+    ttnn::TensorAttributes;
+
+}  // namespace tt::tt_metal
