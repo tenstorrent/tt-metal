@@ -511,6 +511,12 @@ class TtLlamaMLP(LightweightModule):
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
+        # OLMo: bf16 for W1/W3/W2 prefill matmul outputs (parallel to the decode fix).
+        # bf8 outputs introduced ~+4% per-layer magnitude bias which compounds through
+        # 64 layers and inflates V cache by ~10% at deep layers (V doesn't have a norm
+        # to reset the residual-stream magnitude). Costs 2× L1 on the prefill RS
+        # persistent buffers (FF1/FF3/FF2) which are bumped to bf16 in llama_ccl.py.
+        ff_out_dtype = ttnn.bfloat16 if is_olmo else ttnn.bfloat8_b
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:
             w1_out = ttnn.linear(
@@ -519,18 +525,21 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=(
                     self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi2_fp16
+                    else (
+                        self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
+                    )
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ff_out_dtype,
                 program_config=short_lens_pc_1_3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
             # When seq_len is in tt_ccl.support_seqlens, ring_reduce_scatter uses a
-            # persistent bfloat8_b buffer — minimal_matmul output dtype must match.
+            # persistent buffer — minimal_matmul output dtype must match.
             # When not listed, there is no persistent buffer (barrier path); dtype=None
             # lets the op follow input/compute (typically bfloat16).
-            w1_minimal_dtype = ttnn.bfloat8_b if seq_len in _rs_buf_seqlens else None
+            _rs_buf_dtype = ttnn.bfloat16 if is_olmo else ttnn.bfloat8_b
+            w1_minimal_dtype = _rs_buf_dtype if seq_len in _rs_buf_seqlens else None
             w1_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -561,14 +570,16 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=(
                     self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi2_fp16
+                    else (
+                        self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
+                    )
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ff_out_dtype,
                 program_config=short_lens_pc_1_3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            w3_minimal_dtype = ttnn.bfloat8_b if seq_len in _rs_buf_seqlens else None
+            w3_minimal_dtype = _rs_buf_dtype if seq_len in _rs_buf_seqlens else None
             w3_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -635,19 +646,23 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in_gathered,
                 self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
+                compute_kernel_config=(
+                    self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
+                ),
+                dtype=ff_out_dtype,
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            w2_minimal_dtype = ttnn.bfloat8_b if seq_len in _rs_buf_seqlens else None
+            w2_minimal_dtype = _rs_buf_dtype if seq_len in _rs_buf_seqlens else None
             w2_out = ttnn.experimental.minimal_matmul(
                 input_tensor=w2_in_gathered,
                 weight_tensor=self.w2_interleaved,
                 config=minimal_pc_2,
                 dtype=w2_minimal_dtype,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=(
+                    self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 

@@ -799,17 +799,22 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                 }
+            # OLMo: bf16 prefill RS/AR persistent buffers for FF1/FF3/FF2 so the prefill
+            # MLP matmul outputs can stay in bf16 (parallels the decode-side fix).
+            # Costs 2× DRAM per buffer; QKV stays bf8 (its path doesn't have the bias).
             for key, shape in buffers_dict.items():
+                buf_dtype = ttnn.bfloat16 if (self.is_olmo and key in ("FF1", "FF3", "FF2")) else ttnn.bfloat8_b
+                _suffix = f"_{buf_dtype.name}" if buf_dtype != ttnn.bfloat8_b else ""
                 tt_buffers = []
                 for i in range(1):
                     tt_buffer = ttnn.as_tensor(
                         torch.zeros(shape[1]),
                         device=self.mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=buf_dtype,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                        cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_{i}_{seqlen}"),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_{i}_{seqlen}{_suffix}"),
                     )
                     tt_buffers.append(tt_buffer)
                 for i in range(2):
@@ -817,10 +822,10 @@ class TT_CCL:
                         torch.zeros(shape[0]),
                         device=self.mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=buf_dtype,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                        cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_{i}_{seqlen}"),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_{i}_{seqlen}{_suffix}"),
                     )
                     tt_buffers.append(tt_buffer)
                 for i in range(2):
@@ -828,10 +833,10 @@ class TT_CCL:
                         torch.zeros(shape[1]),
                         device=self.mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=buf_dtype,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                        cache_file_name=self.weight_cache_path / (f"pb_rs_02_{key}_{i}_{seqlen}"),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_02_{key}_{i}_{seqlen}{_suffix}"),
                     )
                     tt_buffers.append(tt_buffer)
                 persistent_buffers[key] = tt_buffers
