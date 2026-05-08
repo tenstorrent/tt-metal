@@ -224,7 +224,7 @@ class TtDeepSeekPrefillPipeline:
         if actual_isl is None:
             actual_isl = len(token_ids)
 
-        tt_token_ids = self._prepare_input_tensor(token_ids, actual_isl)
+        tt_token_ids = self._prepare_input_tensor(token_ids)
         on_layer_complete = self._build_migration_callback(slot_id, actual_isl)
 
         first_token_id, _first_token_prob, _ = self.model.forward(
@@ -240,10 +240,10 @@ class TtDeepSeekPrefillPipeline:
     # Helpers
     # ----------------------------------------------------------------
 
-    def _prepare_input_tensor(self, token_ids: list[int], actual_isl: int) -> ttnn.Tensor:
+    def _prepare_input_tensor(self, token_ids: list[int]) -> ttnn.Tensor:
         """Zigzag-reorder tokens (if is_balanced) and shard to the global mesh."""
         sp_factor = self.config.sp_factor
-        isl_per_chip = actual_isl // sp_factor
+        isl_per_chip = len(token_ids) // sp_factor
 
         if self.config.is_balanced:
             # Reorder into zigzag chunk order so each SP device gets one chunk
