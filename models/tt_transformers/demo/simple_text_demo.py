@@ -1571,7 +1571,9 @@ def test_demo_text(
 
             if ci_targets:  # Only verify performance if we have targets for this model/device combination
                 high_tol_percentage = float(ci_targets.get("decode_tolerance", ci_targets.get("tolerance", 1.15)))
-                logger.info(f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}")
+                logger.info(
+                    f"Using centralized targets from models/model_targets.yaml for {model_name}/{tt_device_name}"
+                )
                 verify_perf(
                     measurements,
                     high_tol_percentage=high_tol_percentage,
