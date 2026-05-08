@@ -217,10 +217,16 @@ void kernel_main() {
                 {
                     using namespace compute_kernel_lib;
                     using MulElt = BinaryFpu<
-                        cb_y, cb_dycopy, BinaryFpuOp::Mul, BroadcastDim::None,
-                        BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                        CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-                        CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                        cb_y,
+                        cb_dycopy,
+                        /*CbOut=*/0,
+                        BinaryFpuOp::Mul,
+                        BroadcastDim::None,
+                        BinaryDataFormatReconfig::Input,
+                        CopyTilePolicy::WaitAndPop,
+                        CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::FirstTile,
+                        Dst::D0>;
                     eltwise_chain(
                         onetile,
                         MulElt{},

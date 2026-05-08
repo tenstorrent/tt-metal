@@ -33,16 +33,14 @@ void kernel_main() {
     using BinElt = BinaryFpu<
         cb_a,
         cb_b,
+        cb_out,
         FPU_OP,
         BroadcastDim::Col,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::None,
         CopyTilePolicy::WaitAndPop,
         CopyTilePolicy::NoWaitNoPop,
         CbIndexMode::FirstTile,
-        CbIndexMode::FirstTile,
-        Dst::D0,
-        cb_out>;
+        Dst::D0>;
 
     for (uint32_t b = 0; b < B; ++b) {
         for (uint32_t h = 0; h < Ht; ++h) {

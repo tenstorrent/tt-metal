@@ -114,15 +114,15 @@ template <
     uint32_t CbB,
     BinaryFpuOp Op,
     uint32_t BlockSize,
+    uint32_t CbOut = 0,
     Dst BaseDst = Dst::D0,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig DF = BinaryDataFormatReconfig::None,
     CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
-    CbIndexMode AIndex = CbIndexMode::BlockIter,
-    CbIndexMode BIndex = CbIndexMode::BlockIter,
-    uint32_t BWaitTiles = 0,  // override for B wait count when BIndex == FirstTile (e.g. 1 for scalar)
-    uint32_t CbOut = 0>
+    CbIndexMode Index = CbIndexMode::BlockIter,
+    uint32_t BWaitTiles = 0,  // override for B wait count when Index == FirstTile (e.g. 1 for scalar)
+    bool EnableFp32DestAccV = false>
 struct BlockBinaryFpu : BinaryFpuTag {
     static_assert(to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT,
                   "BlockBinaryFpu: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
@@ -167,9 +167,16 @@ struct BlockBinaryFpu : BinaryFpuTag {
         }
     }
 
-    static constexpr uint32_t b_wait_count = (BIndex == CbIndexMode::FirstTile)
-                                               ? (BWaitTiles == 0 ? 1u : BWaitTiles)
-                                               : BlockSize;
+    // D6 static_assert (CARRY) + member exposure for fold SFINAE probe.
+    static_assert(
+        !EnableFp32DestAccV || DST_ACCUM_MODE,
+        "BlockBinaryFpu<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN "
+        "(DST_ACCUM_MODE must be 1).");
+    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
+
+    // Q4 v6 collapse: b_wait_count keys on the single Index template.
+    static constexpr uint32_t b_wait_count =
+        (Index == CbIndexMode::FirstTile) ? (BWaitTiles == 0 ? 1u : BWaitTiles) : BlockSize;
 
     ALWI void wait_per_tile(uint32_t /*i*/) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::WaitNoPop) {
@@ -187,8 +194,11 @@ struct BlockBinaryFpu : BinaryFpuTag {
     ALWI void exec(uint32_t /*i*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             const uint32_t dst = to_u32(BaseDst) + j;
-            const uint32_t a_idx = (AIndex == CbIndexMode::BlockIter) ? j : 0u;
-            const uint32_t b_idx = (BIndex == CbIndexMode::BlockIter) ? j : 0u;
+            // Q4 v6 collapse: single Index drives both sides. (Per-side runtime
+            // tile-index member fields aren't a feature on BlockBinaryFpu — block
+            // walks always start at j=0.)
+            const uint32_t a_idx = (Index == CbIndexMode::BlockIter) ? j : 0u;
+            const uint32_t b_idx = (Index == CbIndexMode::BlockIter) ? j : 0u;
             if constexpr (Bcast == BroadcastDim::None) {
                 if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
                 else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, dst);
@@ -225,10 +235,15 @@ template <
     uint32_t BlockSize,
     Dst BaseDst = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::None,
+    bool EnableFp32DestAccV = false>
 struct BlockPackTile : PackTileTag {
     static_assert(to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT,
                   "BlockPackTile: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
+    static_assert(
+        !EnableFp32DestAccV || DST_ACCUM_MODE,
+        "BlockPackTile<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
+    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t       cb                  = Cb;
     static constexpr uint32_t       pack_cb_id()        { return Cb; }

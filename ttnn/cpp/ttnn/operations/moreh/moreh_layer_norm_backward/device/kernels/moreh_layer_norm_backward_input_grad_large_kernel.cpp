@@ -254,10 +254,16 @@ void kernel_main() {
             {
                 using namespace compute_kernel_lib;
                 using MulElt = BinaryFpu<
-                    cb_y, cb_dycopy, BinaryFpuOp::Mul, BroadcastDim::None,
-                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                    CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
-                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                    cb_y,
+                    cb_dycopy,
+                    /*CbOut=*/0,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>;
                 eltwise_chain(
                     onetile,
                     MulElt{},
@@ -318,16 +324,14 @@ void kernel_main() {
             using MulBcast = BinaryFpu<
                 cb_n_recip_n,
                 cb_rstd,
+                cb_recip_nrstd,
                 BinaryFpuOp::Mul,
                 BCAST_DIM,
-                BinaryFpuOutputPolicy::PerTile,
                 BinaryDataFormatReconfig::Input,
                 CopyTilePolicy::NoWaitNoPop,
                 CopyTilePolicy::NoWaitNoPop,
                 CbIndexMode::Pinned,
-                CbIndexMode::FirstTile,
-                Dst::D0,
-                cb_recip_nrstd>;
+                Dst::D0>;
             MulBcast elt{};
             elt.a_tile_idx = 1;
             eltwise_chain(
@@ -433,10 +437,16 @@ void kernel_main() {
             {
                 using namespace compute_kernel_lib;
                 using MulElt = BinaryFpu<
-                    cb_n_recip_n, cb_dycopy, BinaryFpuOp::Mul, BroadcastDim::None,
-                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                    CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::WaitAndPop,
-                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                    cb_n_recip_n,
+                    cb_dycopy,
+                    /*CbOut=*/0,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::None,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>;
                 eltwise_chain(
                     onetile,
                     MulElt{},
@@ -556,10 +566,16 @@ void kernel_main() {
             {
                 using namespace compute_kernel_lib;
                 using SubElt = BinaryFpu<
-                    cb_ndymdysum, cb_yydysum, BinaryFpuOp::Sub, BroadcastDim::None,
-                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                    CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
-                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                    cb_ndymdysum,
+                    cb_yydysum,
+                    /*CbOut=*/0,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>;
                 eltwise_chain(
                     onetile,
                     SubElt{},
@@ -572,10 +588,16 @@ void kernel_main() {
             {
                 using namespace compute_kernel_lib;
                 using MulElt = BinaryFpu<
-                    cb_tmp4, cb_recip_nrstd, BinaryFpuOp::Mul, BroadcastDim::None,
-                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                    CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                    cb_tmp4,
+                    cb_recip_nrstd,
+                    /*CbOut=*/0,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>;
                 eltwise_chain(
                     onetile,
                     MulElt{},

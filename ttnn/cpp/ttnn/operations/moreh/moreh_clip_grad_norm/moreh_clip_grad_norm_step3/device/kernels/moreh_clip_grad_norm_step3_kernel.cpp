@@ -27,16 +27,14 @@ void kernel_main() {
         using MulBcast = BinaryFpu<
             cb_x,
             cb_clip_coef_clamped,
+            cb_y,
             BinaryFpuOp::Mul,
             BroadcastDim::Scalar,
-            BinaryFpuOutputPolicy::PerTile,
             BinaryDataFormatReconfig::None,
             CopyTilePolicy::WaitAndPop,
             CopyTilePolicy::NoWaitNoPop,
             CbIndexMode::FirstTile,
-            CbIndexMode::FirstTile,
-            Dst::D0,
-            cb_y>;
+            Dst::D0>;
         eltwise_chain(
             num_tiles,
             MulBcast{},

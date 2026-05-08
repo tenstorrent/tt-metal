@@ -22,13 +22,12 @@ ALWI void binary_op(uint32_t n_tiles) {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
+        CbOut,
         Op,
         BroadcastDim::None,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::None,
         CopyTilePolicy::WaitAndPop,
         CopyTilePolicy::WaitAndPop,
-        CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0>;
     // D8: caller-side BIG init. The convenience wrapper boots the engine for the

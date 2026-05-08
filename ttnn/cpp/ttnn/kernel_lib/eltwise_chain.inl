@@ -304,8 +304,13 @@ template <uint32_t Cb,
           Dst DstSlot,
           PackTilePolicy Policy,
           PackTileIndexMode IndexMode,
-          PackTileReconfig Reconfig>
+          PackTileReconfig Reconfig,
+          bool EnableFp32DestAccV>
 struct PackTile : PackTileTag {
+    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
+                  "PackTile<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
+    // D6 carry: expose member name EnableFp32DestAcc for the SFINAE fold probe.
+    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == PackTilePolicy::PerTileReserveAndPush && IndexMode == PackTileIndexMode::BlockIter),
@@ -385,12 +390,16 @@ template <uint32_t Cb,
           Dst FirstSlot,
           uint32_t NTiles,
           PackTilePolicy Policy,
-          PackTileReconfig Reconfig>
+          PackTileReconfig Reconfig,
+          bool EnableFp32DestAccV>
 struct PackTileBlock : PackTileTag {
     static_assert(NTiles >= 1 && NTiles <= DEST_AUTO_LIMIT,
                   "PackTileBlock: NTiles must be in [1, DEST_AUTO_LIMIT]");
     static_assert(to_u32(FirstSlot) + NTiles <= DEST_AUTO_LIMIT,
                   "PackTileBlock: FirstSlot + NTiles exceeds DEST_AUTO_LIMIT (consecutive slots required)");
+    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
+                  "PackTileBlock<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
+    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t cb           = Cb;
     static constexpr uint32_t pack_cb_id() { return Cb; }
@@ -441,24 +450,30 @@ struct PackTileBlock : PackTileTag {
 
 template <uint32_t CbA,
           uint32_t CbB,
+          uint32_t CbOut,
           BinaryFpuOp Op,
           BroadcastDim Bcast,
-          BinaryFpuOutputPolicy OutPolicy,
           BinaryDataFormatReconfig DfReconfig,
           CopyTilePolicy APolicy,
           CopyTilePolicy BPolicy,
-          CbIndexMode AIndex,
-          CbIndexMode BIndex,
+          CbIndexMode Index,
           Dst DstSlot,
-          uint32_t CbOut>
+          bool EnableFp32DestAccV>
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
-    // BinaryFpu reads each operand once per tile — index modes constrained like CopyTile.
-    static_assert(!(APolicy == CopyTilePolicy::WaitAndPop && AIndex == CbIndexMode::BlockIter),
-                  "BinaryFpu A: BlockIter index requires Upfront / NoWaitNoPop policy");
-    static_assert(!(BPolicy == CopyTilePolicy::WaitAndPop && BIndex == CbIndexMode::BlockIter),
-                  "BinaryFpu B: BlockIter index requires Upfront / NoWaitNoPop policy");
+    // BinaryFpu reads each operand once per tile — index mode constrained like CopyTile.
+    // The OR over per-side policies guards both A and B in the collapsed-Index world
+    // (Q4 v6 collapse).
+    static_assert(!((APolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitAndPop)
+                    && Index == CbIndexMode::BlockIter),
+                  "BinaryFpu: BlockIter index requires Upfront / NoWaitNoPop policy on both sides");
+    // D6: EnableFp32DestAcc requires the kernel was built with FP32_DEST_ACC_EN.
+    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
+                  "BinaryFpu<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN "
+                  "(DST_ACCUM_MODE must be 1).");
+    // D6 carry: expose member name EnableFp32DestAcc for the SFINAE fold probe.
+    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t      cb_a_id()  { return CbA; }
     static constexpr uint32_t      cb_b_id()  { return CbB; }
@@ -525,16 +540,16 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     ALWI void exec(uint32_t i) const {
-        const uint32_t a_idx = [&]() -> uint32_t {
-            if constexpr (AIndex == CbIndexMode::FirstTile) return 0;
-            else if constexpr (AIndex == CbIndexMode::BlockIter) return i;
-            else return a_tile_idx;
-        }();
-        const uint32_t b_idx = [&]() -> uint32_t {
-            if constexpr (BIndex == CbIndexMode::FirstTile) return 0;
-            else if constexpr (BIndex == CbIndexMode::BlockIter) return i;
-            else return b_tile_idx;
-        }();
+        // Q4 v6 collapse: single Index mode drives both A-side and B-side index
+        // computation. Per-side runtime tile index member fields (a_tile_idx,
+        // b_tile_idx) remain independent — only the MODE template collapsed.
+        const auto idx_for = [&](uint32_t pinned_val) -> uint32_t {
+            if constexpr (Index == CbIndexMode::FirstTile) return 0;
+            else if constexpr (Index == CbIndexMode::BlockIter) return i;
+            else return pinned_val;  // Pinned / Absolute
+        };
+        const uint32_t a_idx = idx_for(a_tile_idx);
+        const uint32_t b_idx = idx_for(b_tile_idx);
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
@@ -575,12 +590,16 @@ template <uint32_t Cb,
           Dst DstOut,
           DestReuseReconfig Reconfig,
           CopyTilePolicy Policy,
-          CbIndexMode IndexMode>
+          CbIndexMode IndexMode,
+          bool EnableFp32DestAccV>
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == CopyTilePolicy::WaitAndPop && IndexMode == CbIndexMode::BlockIter),
                   "DestReuseBinary: BlockIter index requires Upfront / NoWaitNoPop policy");
+    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
+                  "DestReuseBinary<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
+    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
@@ -653,10 +672,14 @@ template <BroadcastDim Dim,
           uint32_t CbOut,
           Dst DstSlot,
           CopyTilePolicy Policy,
-          UnaryBcastReconfig Reconfig>
+          UnaryBcastReconfig Reconfig,
+          bool EnableFp32DestAccV>
 struct UnaryBcast : UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
+    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
+                  "UnaryBcast<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
+    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }

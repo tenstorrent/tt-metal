@@ -67,16 +67,14 @@ void kernel_main() {
             using MulScalar = BinaryFpu<
                 cb_intermed0,
                 cb_scalar,
+                cb_out0,
                 BinaryFpuOp::Mul,
                 BroadcastDim::Scalar,
-                BinaryFpuOutputPolicy::PerTile,
                 BinaryDataFormatReconfig::Input,
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::NoWaitNoPop,
                 CbIndexMode::FirstTile,
-                CbIndexMode::FirstTile,
-                Dst::D0,
-                cb_out0>;
+                Dst::D0>;
             eltwise_chain(
                 onetile,
                 MulScalar{},

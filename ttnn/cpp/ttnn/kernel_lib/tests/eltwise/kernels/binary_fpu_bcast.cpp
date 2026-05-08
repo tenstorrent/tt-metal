@@ -35,16 +35,14 @@ void kernel_main() {
     using BinElt = BinaryFpu<
         cb_a,
         cb_b,
+        cb_out,
         op,
         dim,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::None,
         CopyTilePolicy::WaitAndPop,
         CopyTilePolicy::WaitNoPop,
         CbIndexMode::FirstTile,
-        CbIndexMode::FirstTile,
-        Dst::D0,
-        cb_out>;
+        Dst::D0>;
 
     eltwise_chain(
         num_tiles,

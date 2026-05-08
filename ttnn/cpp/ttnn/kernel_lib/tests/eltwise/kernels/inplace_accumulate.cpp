@@ -37,16 +37,14 @@ void kernel_main() {
     using AccumElt = BinaryFpu<
         cb_in,
         cb_acc,
+        cb_acc,
         BinaryFpuOp::Add,
         BroadcastDim::None,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::None,
         CopyTilePolicy::WaitAndPop,
         CopyTilePolicy::WaitAndPop,
         CbIndexMode::FirstTile,
-        CbIndexMode::FirstTile,
-        Dst::D0,
-        cb_acc>;
+        Dst::D0>;
 
     if (num_iters > 1) {
         eltwise_chain(

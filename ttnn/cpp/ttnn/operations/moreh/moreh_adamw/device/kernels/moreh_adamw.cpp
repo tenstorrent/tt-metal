@@ -29,16 +29,14 @@ ALWI void moreh_bin_chain() {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
+        CbOut,
         Op,
         BroadcastDim::None,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::InputAndOutput,
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
-        IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
-        IdxB == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
-        Dst::D0,
-        CbOut>;
+        CbIndexMode::Pinned,
+        Dst::D0>;
     BinElt elt{};
     elt.a_tile_idx = IdxA;
     elt.b_tile_idx = IdxB;

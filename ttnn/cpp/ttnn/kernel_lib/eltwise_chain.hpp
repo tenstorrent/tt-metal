@@ -236,12 +236,6 @@ enum class CopyTileReconfig : uint8_t {
 /// FPU binary op selector.
 enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 
-/// FPU binary output sync policy.
-enum class BinaryFpuOutputPolicy : uint8_t {
-    PerTile,              // default — release/acquire each tile
-    HoistAcquireRelease,  // single acquire/release wraps the whole loop
-};
-
 /// FPU binary dtype-reconfig.
 enum class BinaryDataFormatReconfig : uint8_t {
     None,
@@ -431,16 +425,15 @@ struct CopyTile;
 template <
     uint32_t CbA,
     uint32_t CbB,
-    BinaryFpuOp Op,
+    uint32_t CbOut = 0,
+    BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryFpuOutputPolicy OutPolicy = BinaryFpuOutputPolicy::PerTile,
     BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::InputAndOutput,
     CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
-    CbIndexMode AIndex = CbIndexMode::FirstTile,
-    CbIndexMode BIndex = CbIndexMode::FirstTile,
+    CbIndexMode Index = CbIndexMode::FirstTile,
     Dst DstSlot = Dst::D0,
-    uint32_t CbOut = 0>
+    bool EnableFp32DestAcc = false>
 struct BinaryFpu;
 
 template <
@@ -451,7 +444,8 @@ template <
     Dst DstOut = Dst::D0,
     DestReuseReconfig Reconfig = DestReuseReconfig::None,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    CbIndexMode IndexMode = CbIndexMode::FirstTile>
+    CbIndexMode IndexMode = CbIndexMode::FirstTile,
+    bool EnableFp32DestAcc = false>
 struct DestReuseBinary;
 
 template <
@@ -460,7 +454,8 @@ template <
     uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None>
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None,
+    bool EnableFp32DestAcc = false>
 struct UnaryBcast;
 
 template <
@@ -468,7 +463,8 @@ template <
     Dst DstSlot = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
     PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::None,
+    bool EnableFp32DestAcc = false>
 struct PackTile;
 
 template <
@@ -476,7 +472,8 @@ template <
     Dst FirstSlot,
     uint32_t NTiles,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::None,
+    bool EnableFp32DestAcc = false>
 struct PackTileBlock;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.

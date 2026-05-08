@@ -32,19 +32,20 @@ template <
     bool PopB>
 ALWI void moreh_bin_chain() {
     using namespace compute_kernel_lib;
+    // v6 Q4 collapse: conditional `IdxX == 0 ? FirstTile : Pinned` per-side has been
+    // collapsed to uniform `Pinned`. Pinned-with-tile_idx=0 ≡ FirstTile semantically
+    // (chain.inl exec() reads the per-side member field — default 0 propagates as 0).
     using BinElt = BinaryFpu<
         CbA,
         CbB,
+        CbOut,
         Op,
         BroadcastDim::None,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::InputAndOutput,
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
-        IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
-        IdxB == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
-        Dst::D0,
-        CbOut>;
+        CbIndexMode::Pinned,
+        Dst::D0>;
     BinElt elt{};
     elt.a_tile_idx = IdxA;
     elt.b_tile_idx = IdxB;

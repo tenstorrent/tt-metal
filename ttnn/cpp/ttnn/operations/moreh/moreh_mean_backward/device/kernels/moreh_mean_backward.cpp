@@ -44,16 +44,14 @@ void kernel_main() {
                 using AddBcast = BinaryFpu<
                     cb_in1,
                     cb_in0,
+                    cb_intermed0,
                     BinaryFpuOp::Add,
                     BCAST_DIM,
-                    BinaryFpuOutputPolicy::PerTile,
                     BinaryDataFormatReconfig::Input,
                     CopyTilePolicy::NoWaitNoPop,
                     CopyTilePolicy::WaitAndPop,
                     CbIndexMode::FirstTile,
-                    CbIndexMode::FirstTile,
-                    Dst::D0,
-                    cb_intermed0>;
+                    Dst::D0>;
                 eltwise_chain(
                     onetile,
                     AddBcast{},
@@ -72,16 +70,14 @@ void kernel_main() {
             using MulScalar = BinaryFpu<
                 cb_intermed0,
                 cb_scalar,
+                cb_out0,
                 BinaryFpuOp::Mul,
                 BroadcastDim::Scalar,
-                BinaryFpuOutputPolicy::PerTile,
                 BinaryDataFormatReconfig::Input,
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::NoWaitNoPop,
                 CbIndexMode::FirstTile,
-                CbIndexMode::FirstTile,
-                Dst::D0,
-                cb_out0>;
+                Dst::D0>;
             eltwise_chain(
                 onetile,
                 MulScalar{},

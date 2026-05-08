@@ -35,16 +35,14 @@ void kernel_main() {
     using BinElt = BinaryFpu<
         cb_a,
         cb_b,
+        cb_out,
         FPU_OP,
         BroadcastDim::Scalar,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::None,
         CopyTilePolicy::WaitAndPop,
         CopyTilePolicy::NoWaitNoPop,
         CbIndexMode::FirstTile,
-        CbIndexMode::FirstTile,
-        Dst::D0,
-        cb_out>;
+        Dst::D0>;
     cb_wait_front(cb_b, 1);
     eltwise_chain(num_tiles, BinElt{},
                   PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
@@ -52,16 +50,14 @@ void kernel_main() {
     using BinElt = BinaryFpu<
         cb_a,
         cb_b,
+        cb_out,
         FPU_OP,
         BroadcastDim::Scalar,
-        BinaryFpuOutputPolicy::PerTile,
         BinaryDataFormatReconfig::None,
         CopyTilePolicy::WaitAndPop,
         CopyTilePolicy::WaitAndPop,
         CbIndexMode::FirstTile,
-        CbIndexMode::FirstTile,
-        Dst::D0,
-        cb_out>;
+        Dst::D0>;
     eltwise_chain(num_tiles, BinElt{},
                   PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #endif

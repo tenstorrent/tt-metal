@@ -323,10 +323,16 @@ void kernel_main() {
         {
             using namespace compute_kernel_lib;
             using AddRsqrt = BinaryFpu<
-                cb_var, cb_eps, BinaryFpuOp::Add, BroadcastDim::None,
-                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-                CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                cb_var,
+                cb_eps,
+                /*CbOut=*/0,
+                BinaryFpuOp::Add,
+                BroadcastDim::None,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>;
             eltwise_chain(
                 onetile,
                 AddRsqrt{},

@@ -38,24 +38,33 @@ void sigmoid(uint32_t width_tiles) {
 
 template <uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biased_scores>
 void add_bias(uint32_t width_tiles) {
-    // Perform add bias on sigmoid scores
-    // cb_sigmoid_scores: pre-waited upfront, NoWaitNoPop with BlockIter index (caller leaves tiles).
-    // cb_in_bias: per-tile WaitAndPop at index 0.
+    // v6 Q4 collapse regression (disposition (c)):
+    //
+    // The chain helper's `BinaryFpu` no longer expresses asymmetric per-side index
+    // *modes* (per-side `AIndex / BIndex` collapsed to a single `Index` in commit 5).
+    // This block needs A=BlockIter (walk pre-waited tiles) AND B=FirstTile (single bias
+    // tile pinned at index 0) — no symmetric mode covers both. We revert to raw LLK:
+    // explicit acquire/add_tiles/commit/wait/pack/release per-tile loop.
+    //
+    // The other helper-driven blocks in this kernel (compute_sigmoid, normalize_scores,
+    // scale) continue to use the chain helper unchanged. Tracked as a known regression
+    // in the v6 design's Section E; future recovery via a `BinaryFpuPerTileScalarB` /
+    // similar element type is out of scope.
     using namespace compute_kernel_lib;
     cb_wait_front(cb_sigmoid_scores, width_tiles);
-    eltwise_chain(
-        width_tiles,
-        BinaryFpu<cb_sigmoid_scores, cb_in_bias,
-                  BinaryFpuOp::Add,
-                  BroadcastDim::None,
-                  BinaryFpuOutputPolicy::PerTile,
-                  BinaryDataFormatReconfig::None,
-                  CopyTilePolicy::NoWaitNoPop,   // A: pre-waited
-                  CopyTilePolicy::WaitAndPop,    // B: per-tile
-                  CbIndexMode::BlockIter,
-                  CbIndexMode::FirstTile,
-                  Dst::D0>{},
-        PackTile<cb_biased_scores, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    cb_wait_front(cb_in_bias, 1);
+    add_tiles_init(cb_sigmoid_scores, cb_in_bias);
+    for (uint32_t i = 0; i < width_tiles; ++i) {
+        tile_regs_acquire();
+        add_tiles(cb_sigmoid_scores, cb_in_bias, /*a_idx=*/i, /*b_idx=*/0, /*dst=*/0);
+        tile_regs_commit();
+        cb_reserve_back(cb_biased_scores, 1);
+        tile_regs_wait();
+        pack_tile(0, cb_biased_scores);
+        tile_regs_release();
+        cb_push_back(cb_biased_scores, 1);
+    }
+    cb_pop_front(cb_in_bias, 1);
 }
 
 void process_and_sort_tiles(

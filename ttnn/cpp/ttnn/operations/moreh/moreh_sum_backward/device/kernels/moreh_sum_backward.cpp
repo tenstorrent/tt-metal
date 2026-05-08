@@ -32,16 +32,14 @@ void kernel_main() {
             using AddBcast = BinaryFpu<
                 cb_in1,
                 cb_in0,
+                cb_out0,
                 BinaryFpuOp::Add,
                 BCAST_DIM,
-                BinaryFpuOutputPolicy::PerTile,
                 BinaryDataFormatReconfig::None,
                 CopyTilePolicy::NoWaitNoPop,
                 CopyTilePolicy::WaitAndPop,
                 CbIndexMode::FirstTile,
-                CbIndexMode::FirstTile,
-                Dst::D0,
-                cb_out0>;
+                Dst::D0>;
             eltwise_chain(
                 num_output_tiles,
                 AddBcast{},

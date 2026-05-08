@@ -62,16 +62,14 @@ FORCE_INLINE void mul() {
         BinaryFpu<
             cb_a,
             cb_b,
+            cb_out,
             BinaryFpuOp::Mul,
             BroadcastDim::None,
-            BinaryFpuOutputPolicy::PerTile,
             BinaryDataFormatReconfig::InputAndOutput,
             CopyTilePolicy::WaitAndPop,
             CopyTilePolicy::WaitAndPop,
             CbIndexMode::FirstTile,
-            CbIndexMode::FirstTile,
-            Dst::D0,
-            cb_out>{},
+            Dst::D0>{},
         PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
@@ -83,16 +81,14 @@ FORCE_INLINE void sum() {
         BinaryFpu<
             cb_a,
             cb_b,
+            cb_out,
             BinaryFpuOp::Add,
             BroadcastDim::None,
-            BinaryFpuOutputPolicy::PerTile,
             BinaryDataFormatReconfig::InputAndOutput,
             CopyTilePolicy::WaitAndPop,
             CopyTilePolicy::WaitAndPop,
             CbIndexMode::FirstTile,
-            CbIndexMode::FirstTile,
-            Dst::D0,
-            cb_out>{},
+            Dst::D0>{},
         PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
