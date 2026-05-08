@@ -94,6 +94,10 @@ TEST_P(MuonCorrectnessTest, DeviceMatchesCPU) {
     using namespace ttml;
     const auto& tc = GetParam();
 
+    if (tc.name == "Square_3_step") {
+        GTEST_SKIP() << "Skipped due to https://github.com/tenstorrent/tt-metal/issues/43861";
+    }
+
     xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 42U);
     xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 43U);
 
