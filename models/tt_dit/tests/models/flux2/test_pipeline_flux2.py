@@ -9,8 +9,13 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
+
+# Flux2 VAE uses conv2d which needs L1_SMALL buffers.
+line_params_flux2 = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}
+ring_params_flux2 = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 32768}
 
 
 @pytest.mark.parametrize(
@@ -19,85 +24,23 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [line_params_flux2],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 12)])
 @pytest.mark.parametrize(
-    (
-        "mesh_device",
-        "sp",
-        "tp",
-        "encoder_tp",
-        "vae_tp",
-        "topology",
-        "num_links",
-        "mesh_test_id",
-        "is_fsdp",
-        "dynamic_load",
-    ),
+    "mesh_device, sp_axis, tp_axis, encoder_tp_factor, vae_tp_factor, topology, num_links, is_fsdp, dynamic_load, traced",
     [
-        pytest.param(
-            (1, 8),  # mesh_device
-            (1, 0),  # sp
-            (8, 1),  # tp
-            (8, 1),  # encoder_tp
-            (8, 1),  # vae_tp
-            ttnn.Topology.Linear,
-            1,  # num_links
-            "1x8tp1",
-            False,  # is_fsdp
-            True,  # dynamic_loadm  ;.ohl
-            id="1x8tp1",
-        ),
-        pytest.param(
-            (4, 8),  # mesh_device
-            (4, 0),  # sp
-            (8, 1),  # tp
-            (8, 1),  # encoder_tp
-            (8, 1),  # vae_tp
-            ttnn.Topology.Linear,
-            4,  # num_links
-            "wh_4x8",
-            True,  # is_fsdp
-            False,  # dynamic_load
-            id="wh_4x8",
-        ),
-        pytest.param(
-            (4, 8),  # mesh_device
-            (4, 0),  # sp
-            (8, 1),  # tp
-            (8, 1),  # encoder_tp
-            (8, 1),  # vae_tp
-            ttnn.Topology.Linear,
-            2,  # num_links
-            "bh_4x8",
-            False,  # is_fsdp
-            False,  # dynamic_load
-            id="bh_4x8",
-        ),
-        # pytest.param(
-        #     (4, 8),  # mesh_device
-        #     (4, 0),  # sp
-        #     (8, 1),  # tp
-        #     (8, 1),  # encoder_tp
-        #     (32, 1),  # vae_tp
-        #     ttnn.Topology.Linear,
-        #     2,  # num_links
-        #     "bh_4x8_v32",
-        #     False,  # is_fsdp
-        #     False,  # dynamic_load
-        #     id="bh_4x8_v32",
-        # )
+        [(1, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 1, False, True, False],
+        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 4, True, False, True],
+        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 2, False, False, True],
+    ],
+    ids=[
+        "1x8tp1",
+        "wh_4x8",
+        "bh_4x8",
     ],
     indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "traced",
-    [
-        pytest.param(True, id="trace_on"),
-        pytest.param(False, id="trace_off"),
-    ],
 )
 def test_pipeline(
     *,
@@ -105,24 +48,26 @@ def test_pipeline(
     width: int,
     height: int,
     num_inference_steps: int,
-    sp: tuple[int, int],
-    tp: tuple[int, int],
-    encoder_tp: tuple[int, int],
-    vae_tp: tuple[int, int],
+    sp_axis: int,
+    tp_axis: int,
+    encoder_tp_factor: int,
+    vae_tp_factor: int,
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
     traced: bool,
-    mesh_test_id: str,
     is_fsdp: bool,
     dynamic_load: bool,
+    model_location_generator,
+    is_ci_env: bool,
 ) -> None:
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
-        dit_sp=sp,
-        dit_tp=tp,
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
+        checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        encoder_tp_factor=encoder_tp_factor,
+        vae_tp_factor=vae_tp_factor,
         num_links=num_links,
         topology=topology,
         width=width,
@@ -144,7 +89,9 @@ def test_pipeline(
         # "Futuristic Tokyo street market, vibrant signage, motion blur",
     ]
 
-    filename_prefix = f"flux2_{width}_{height}_{mesh_test_id}"
+    arch = "bh" if is_blackhole() else "wh"
+    mesh_tag = "x".join(str(s) for s in mesh_device.shape)
+    filename_prefix = f"flux2_{arch}_{width}_{height}_{mesh_tag}"
     if not traced:
         filename_prefix += "_untraced"
 
