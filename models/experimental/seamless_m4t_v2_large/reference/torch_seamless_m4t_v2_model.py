@@ -1,16 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PyTorch reference for [`SeamlessM4Tv2Model`] (Hugging Face)."""
+"""PyTorch reference for [`SeamlessM4Tv2Model`] (Hugging Face).
+
+[`SeamlessM4Tv2Model.generate`] is the custom two-stage pipeline (text ``GenerationMixin`` then
+``t2u_model`` + ``vocoder``). This module exposes it explicitly; see upstream:
+
+https://github.com/huggingface/transformers/blob/main/src/transformers/models/seamless_m4t_v2/modeling_seamless_m4t_v2.py
+"""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 from transformers import SeamlessM4Tv2Config, SeamlessM4Tv2Model
+from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import SeamlessM4Tv2GenerationOutput
 
 
 def load_pretrained_seamless_m4t_v2_model(
@@ -67,3 +74,37 @@ def forward_text_modality_logits(
             return_dict=True,
         )
     return out.logits
+
+
+@torch.no_grad()
+def generate(
+    model: SeamlessM4Tv2Model,
+    *,
+    input_ids: Optional[torch.Tensor] = None,
+    input_features: Optional[torch.Tensor] = None,
+    return_intermediate_token_ids: Optional[bool] = None,
+    tgt_lang: Optional[str] = None,
+    speaker_id: int = 0,
+    generate_speech: bool = True,
+    **kwargs,
+) -> Union[torch.Tensor, SeamlessM4Tv2GenerationOutput, tuple]:
+    """
+    Hugging Face [`SeamlessM4Tv2Model.generate`]: text generation (``super().generate``) then,
+    when ``generate_speech=True``, T2U + vocoder for waveforms.
+
+    Parameters match the Transformers implementation (including ``text_*`` / ``speech_*`` kwargs
+    routing via ``format_speech_generation_kwargs`` inside the model).
+
+    Returns:
+        Same types as HF: ``ModelOutput`` / sequences when ``generate_speech=False``;
+        ``(waveform, waveform_lengths)`` or [`SeamlessM4Tv2GenerationOutput`] when ``generate_speech=True``.
+    """
+    return model.generate(
+        input_ids=input_ids,
+        input_features=input_features,
+        return_intermediate_token_ids=return_intermediate_token_ids,
+        tgt_lang=tgt_lang,
+        speaker_id=speaker_id,
+        generate_speech=generate_speech,
+        **kwargs,
+    )
