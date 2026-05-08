@@ -115,9 +115,7 @@ def test_model_targets_resolver_none_query_prefers_generic_entry(tmp_path: Path,
     assert generic_entry["perf"]["decode_t/s/u"] == 10
 
 
-def test_model_targets_resolver_requires_configured_seq_len_match(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_model_targets_resolver_requires_configured_seq_len_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     targets = {
         "version": 1,
         "targets": {
