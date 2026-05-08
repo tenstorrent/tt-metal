@@ -125,6 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -158,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
 #endif
 
-    _llk_pack_init_<false, false>(PACK_FMT);
+    _llk_pack_init_wrapper_<false, false>(PACK_FMT);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

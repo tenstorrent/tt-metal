@@ -37,6 +37,7 @@
 #include <tt-metalium/experimental/host_api.hpp>  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -1031,6 +1032,150 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("do not share identical WorkUnitSpec membership")));
 }
+
+// ----------------------------------------------------------------------------
+// KernelSpec::dfb_compute_self_loop_scopes validation tests
+// ----------------------------------------------------------------------------
+// This advanced option only applies to compute kernels that self-loop a DFB (bind it
+// as both producer and consumer). All misapplications must fail loudly so authors
+// never silently get the wrong scope. INTER is recognized but not yet implemented.
+
+TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "self_loop_inter";
+
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.dfb_compute_self_loop_scopes.push_back(
+        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTER});
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.disable_implicit_sync = true;
+
+    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("INTER scope is not yet supported by the runtime")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "self_loop_on_dm";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    // Misapplied: self-loop scope entries are valid only on compute kernels.
+    producer.dfb_compute_self_loop_scopes.push_back(
+        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    auto consumer = MakeMinimalDMKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a compute kernel")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "self_loop_unknown_dfb";
+
+    auto compute = MakeMinimalComputeKernel("compute");
+    // Misapplied: there is no DFB named "ghost" in the spec.
+    compute.dfb_compute_self_loop_scopes.push_back(
+        {.dfb_spec_name = "ghost", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.disable_implicit_sync = true;
+
+    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("entry referencing unknown DFB 'ghost'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "self_loop_not_self_looped";
+
+    auto compute = MakeMinimalComputeKernel("compute");
+    // Misapplied: the kernel only produces; it does not self-loop the DFB.
+    compute.dfb_compute_self_loop_scopes.push_back(
+        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(dm_consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {compute, dm_consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute", "dm_consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not self-loop this DFB")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "self_loop_duplicate";
+
+    auto compute = MakeMinimalComputeKernel("compute");
+    // Two entries for the same DFB on the same kernel.
+    compute.dfb_compute_self_loop_scopes.push_back(
+        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    compute.dfb_compute_self_loop_scopes.push_back(
+        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.disable_implicit_sync = true;
+
+    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("duplicate dfb_compute_self_loop_scopes entries")));
+}
+
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
@@ -1042,6 +1187,60 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
 
 TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
+    // The 99.5% case: a compute kernel that self-loops a DFB and does NOT explicitly declare a
+    // dfb_compute_self_loop_scopes entry. The implementation must default to INTRA so the
+    // lower-layer DFB layer (which requires an explicit scope for Tensix-to-Tensix DFBs) accepts
+    // the program.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "self_loop_implicit_intra";
+
+    auto compute = MakeMinimalComputeKernel("compute");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    // INTRA requires implicit-sync OFF at the lower DFB layer.
+    dfb.disable_implicit_sync = true;
+
+    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
+    // Identical to the implicit case, but with an explicit INTRA entry on the kernel. The
+    // explicit declaration is redundant with the default but must be accepted (and produce
+    // the same program) so that authors can write self-documenting specs.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "self_loop_explicit_intra";
+
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.dfb_compute_self_loop_scopes.push_back(
+        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.disable_implicit_sync = true;
+
+    BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2071,6 +2270,215 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name")));
+}
+
+// ============================================================================
+// SECTION 9: TensorParameter Validation Tests (Gen1 / WH)
+// ============================================================================
+// Spec-level validation for the Metal 2.0 TensorAccessor binding feature. These tests exercise
+// CollectSpecData paths only — they do not need a MeshTensor at enqueue (those run-params paths
+// are covered in test_program_run_params.cpp). Hardware-agnostic; using the Gen1 fixture for
+// lower-likelihood-of-unrelated-mock-issues per Audrey's guidance.
+
+using test_helpers::BindTensorParameterToKernel;
+using test_helpers::MakeMinimalTensorParameter;
+
+TEST_F(ProgramSpecTestGen1, DuplicateTensorParameterNameFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    auto binding_a = MakeMinimalTensorParameter("input_tensor");
+    auto binding_b = MakeMinimalTensorParameter("input_tensor");  // duplicate!
+    spec.tensor_parameters = {binding_a, binding_b};
+
+    // Bind one of them to a kernel so the "every binding must be bound" check is satisfied;
+    // the duplicate-name check fires first regardless.
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate TensorParameter name 'input_tensor'")));
+}
+
+TEST_F(ProgramSpecTestGen1, KernelReferencesUnknownTensorParameterFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    // Reference a TensorParameter that doesn't exist in the program.
+    BindTensorParameterToKernel(spec.kernels[0], "nonexistent_tensor", "input_ta");
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("references unknown TensorParameter 'nonexistent_tensor'")));
+}
+
+TEST_F(ProgramSpecTestGen1, UnboundTensorParameterFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    // Declare a TensorParameter but don't bind it to any kernel.
+    spec.tensor_parameters = {MakeMinimalTensorParameter("orphan_tensor")};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("TensorParameter 'orphan_tensor' is defined but not bound by any kernel")));
+}
+
+TEST_F(ProgramSpecTestGen1, DuplicateTensorAccessorNameWithinKernelFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_parameters = {
+        MakeMinimalTensorParameter("input_tensor"),
+        MakeMinimalTensorParameter("output_tensor"),
+    };
+    // Two bindings on the same kernel under the same accessor_name — illegal.
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "same_accessor");
+    BindTensorParameterToKernel(spec.kernels[0], "output_tensor", "same_accessor");
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has duplicate tensor accessor_name 'same_accessor'")));
+}
+
+TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
+    // Smoke-tests the IsValidCppIdentifier check on tensor accessor names. The check is the
+    // same one DFB / Semaphore use; one bad name here is sufficient (full coverage lives in
+    // the DFB version of this test).
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "has-dash");  // not a valid identifier
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("tensor accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
+    // DFB / Semaphore / TensorAccessor accessor names live in separate namespaces (each gets
+    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, ta::). Reusing
+    // the same identifier across categories within one kernel must be allowed.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    // The minimal program already has a DFB binding under accessor_name "input_dfb". Add a
+    // semaphore and a tensor accessor, both also named "input_dfb" — the same string at a
+    // C++ level — which should pass because they're in different namespaces.
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "input_dfb"}};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_dfb");
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) {
+    // Positive baseline: a program with one TensorParameter bound to one kernel constructs
+    // successfully. Exercises CollectSpecData validation, the host-side resolution helper
+    // (TensorSpec → CTA payload using mesh_device.allocator() + virtual_core_from_logical_core),
+    // TensorBinding address slot assignment, kernel ctor plumbing, and ProgramImpl registration.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// ============================================================================
+// SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
+// ============================================================================
+// Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
+// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `ta::` namespace)
+// must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
+// validate runtime behavior — catches regressions in codegen string-formatting, token type alias
+// generation, and include-path resolution.
+//
+// DM-only by design: tensor_accessor.h pulls in NoC-using headers (dataflow_api_addrgen.h,
+// pages_address_iterator.h with ASSERT) that don't compile on TRISC. There are no compute-kernel
+// uses of TensorAccessor in the wild; the device-side library was built for DM kernels.
+// Compute-kernel TensorAccessor bindings are unsupported in this PR; making them work would
+// require restructuring tensor_accessor.h to isolate the constexpr-only parts.
+
+TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
+    // DM kernel constructs a TensorAccessor from a binding token + invokes a NoC-using method.
+    // Exercises: ta:: namespace token, type alias <name>_t, the token ctor and its deduction
+    // guide, get_common_arg_val for the implicit base address.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "ta_smoke_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    TensorAccessor accessor(ta::input_tensor);
+    auto noc_addr = accessor.get_noc_addr(0);
+    (void)noc_addr;
+}
+)"};
+
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ============================================================================
+// Kernel hash sensitivity to TensorParameter spec
+// ============================================================================
+//
+// The kernel's JIT cache key is its compute_hash(); two kernels that hash equal share a cached
+// binary. The TensorParameter's TensorSpec flows into the kernel's positional CTAs (via
+// ResolveTensorParameterStaticCTAs), and compile_time_args_ is part of the hash, so:
+//   - same kernel source + different TensorSpec  =>  different hash  =>  forced recompile
+//   - same kernel source + identical TensorSpec  =>  same hash       =>  cache reuse
+// These are regression canaries for the cache-key chain. If a future refactor drops a field from
+// the CTA payload, or changes compute_hash to skip compile_time_args_, the silent failure mode is
+// a stale cached binary running with mismatched layout metadata — nasty to debug in prod.
+
+TEST_F(ProgramSpecTestGen1, DifferentTensorSpecProducesDifferentKernelHash) {
+    // Same kernel source, same accessor name. The two TensorParameters differ only in BufferType
+    // (DRAM vs L1), which flips the is_dram bit in the binding's args_config CTA word.
+    auto make_spec = [](tt::tt_metal::BufferType buffer_type) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor", buffer_type)};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+    Program prog_dram = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::BufferType::DRAM));
+    Program prog_l1 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::BufferType::L1));
+
+    auto hash_dram = prog_dram.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    auto hash_l1 = prog_l1.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_NE(hash_dram, hash_l1);
+}
+
+TEST_F(ProgramSpecTestGen1, IdenticalTensorSpecProducesIdenticalKernelHash) {
+    // Determinism canary: two specs constructed identically must hash identically. If this ever
+    // fails, something nondeterministic crept into the hash (iteration order over a hash map,
+    // pointer values, timestamps, etc.).
+    auto make_spec = [] {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+    Program prog_a = MakeProgramFromSpec(*mesh_device_, make_spec());
+    Program prog_b = MakeProgramFromSpec(*mesh_device_, make_spec());
+
+    auto hash_a = prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    auto hash_b = prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_EQ(hash_a, hash_b);
 }
 
 }  // namespace
