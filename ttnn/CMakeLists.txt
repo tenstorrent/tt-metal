@@ -705,6 +705,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental::DropoutNew
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
@@ -962,6 +963,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
+add_subdirectory(cpp/ttnn/operations/experimental/dropout_new)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
