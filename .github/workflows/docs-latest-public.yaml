@@ -13,6 +13,11 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      build-type:
+        description: 'Build type (Release or ASan). ASan builds require LD_PRELOAD of the ASan runtime.'
+        required: false
+        type: string
+        default: 'Release'
       dry-run:
         required: false
         type: boolean
@@ -59,6 +64,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          if [ "${{ inputs.build-type }}" = "ASan" ]; then
+            export LD_PRELOAD="$(clang-20 -print-resource-dir)/lib/linux/libclang_rt.asan-x86_64.so"
+            export ASAN_OPTIONS="detect_leaks=0:symbolize=1:abort_on_error=0"
+          fi
           ./tests/scripts/run_build_docs.sh
       - name: Prepare artifact - move output
         run: |
