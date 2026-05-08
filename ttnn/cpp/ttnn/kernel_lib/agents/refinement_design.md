@@ -1,8 +1,10 @@
-# `eltwise_chain` (run7) — Refinement Design (v4)
+# `eltwise_chain` (run7) — Refinement Design (v5)
 
 ## Section A — Scope
 
-**Branch:** `astancov/eltwise_run7_refined` — hard-reset to `75868c9eff4` (run7 baseline). Two off-script implementation commits and three prior design commits (v1, v2, v3) sit on top. v4 builds on v3 (915-line design at blob `6160335fd85^`) by amending it with **D7** (drop `OldCb*` from Block elements; extend the prev-CB / prev-fp32 fold to the block path) and **D8** (helper does not wrap "BIG inits" — generalise D1's caller-owned-`compute_kernel_hw_startup` into a full caller-init contract).
+**Branch:** `astancov/eltwise_run7_refined` — hard-reset to `75868c9eff4` (run7 baseline). Two off-script implementation commits and four prior design commits (v1, v2, v3, v4) sit on top. v5 narrows **D6** scope per user clarification — the per-element `EnableFp32DestAcc` flag is added **only to elements that emit DEST-format-sensitive LLK**, not to every chain element. v4 (995-line design at commit `19fd0e8f3f2`) earlier built on v3 (915-line at blob `6160335fd85^`) by amending it with **D7** (drop `OldCb*` from Block elements; extend the prev-CB / prev-fp32 fold to the block path) and **D8** (helper does not wrap "BIG inits" — generalise D1's caller-owned-`compute_kernel_hw_startup` into a full caller-init contract).
+
+**v5 surgical update (this revision):** D6 narrowed to a CARRY/SKIP element split. Sections updated: A directive table (D6 row), A LOC delta (R-4), B group P1+U1-OldCb-streaming (Step 3b transition fold + SFINAE probe), B group P1-block (block-element fp32 fold), B group U3 (Step 6 — explicit per-element CARRY/SKIP table), B group U6 (doxygen — only CARRY elements expose `@tparam EnableFp32DestAcc`), F Q6 (note on SKIP-element default moot-ness), F Q10 (`static_assert` only fires on CARRY), F Q13 (uniform fold mechanism), F Q16 (NEW — SFINAE detection for SKIP elements). All other sections untouched.
 
 **Already landed (out of this design's scope as fixes — but the *shape* of one of them is being reworked):**
 - `16f0b759c93` — F-UX-12 fix-in-place (`first_cb_b` walk inside `EltwiseChainPipelineInit::run()`) and F-UX-11 (`RandTile` static-init via NTTP seed).
@@ -27,7 +29,7 @@ These commits are not on `astancov/eltwise_run7_refined` HEAD (which is `75868c9
 | **D3** | Doxygen on helper headers + caller-init contract spec + minimal example per chain shape. Header doxygen carries: caller's full init contract (D8), lifecycle expectations, table mapping chain shape → required pre-chain inits, 2-3 example kernel snippets per chain shape. | U6 |
 | **D4** | "No production callers" is NOT a kill criterion — grep raw-LLK pattern in unmigrated kernels. Delete only what is provably absent codebase-wide (`EltwiseChainOptions`; streaming `OldCb*`; **D7** Block `OldCb*`). Keep `BinaryFpuOutputPolicy::HoistAcquireRelease`, `PackTileIndexMode::{BlockIter,Pinned,Absolute}`, `WaitUpfrontPopAtEnd`/`UpfrontReservePushAtEnd`, `OutputConditional`, `FillBitcast`, `FillInt`, `BWaitTiles`, per-side `AIndex/BIndex`. | U1, U3 |
 | **D5** | `compute_kernel_hw_startup` placement contract: caller calls it as the **first statement of `MAIN()`** if the chain shape needs it; otherwise omits it (calling it elsewhere is undefined). Doxygen encodes a chain-shape → boot-needed table; the U2 sweep enforces top-of-`MAIN()` placement and removes spurious mid-`MAIN()` calls. | U2 (sweep), U6 (doc) |
-| **D6** | `enable_fp32_dest_acc` is **per-element**, not chain-level. Each chain element type carries a `bool EnableFp32DestAcc = false` template param. Pipeline machinery composes per-element fp32-dest-acc transitions into the prev-CB fold. `EltwiseChainOptions::enable_fp32_dest_acc` (chain-level) is deleted; the field's intent is replaced by per-element control via `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` LLK toggles (`tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:96-120`). | U1 (delete `EltwiseChainOptions`), U3 (per-element flag added to `BinaryFpu`/`BlockBinaryFpu`), P1 (transition logic in fold), U6 (doc) |
+| **D6** | `enable_fp32_dest_acc` is **per-element**, not chain-level. The flag is added **only to elements that emit DEST-format-sensitive LLK** (the **CARRY list**: `BinaryFpu`, `BlockBinaryFpu`, the `BinarySfpu` op-struct family in `eltwise_binary_sfpu.hpp` — `AddBinary`/`SubBinary`/`MulBinary`/`DivBinary`, `DestReuseBinary`, `BroadcastFpu`, `UnaryBcast`, `PackTile`, `BlockPackTile`). Elements that do NOT have dest-mode-dependent LLK behavior (the **SKIP list**: `CopyTile`, `BlockCopyTile` — input-side, no dest-mode-sensitive LLK selection; `FillScalar`, `RandTile`, `FillInt`, `FillBitcast` — constant fill, dest-mode-irrelevant; `OptionalChainElement<COND, Inner>` — forwards to `Inner`, which carries the flag if applicable) do NOT carry the template parameter. Pipeline machinery composes per-element fp32-dest-acc transitions into the prev-CB fold; the fold treats SKIP-list elements as transparent (passes the running prev-fp32 value through unchanged — see Q16). `EltwiseChainOptions::enable_fp32_dest_acc` (chain-level) is deleted; the field's intent is replaced by per-CARRY-element control via `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` LLK toggles (`tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:96-120`). | U1 (delete `EltwiseChainOptions`), U3 (per-element flag added to CARRY list only), P1 (transition logic in fold + SFINAE detection for SKIP elements), U6 (doc) |
 | **D7** *(new)* | Drop `OldCb*` template params from `BlockCopyTile`, `BlockBinaryFpu`, `BlockPackTile`. Generalise the **D2** prev-CB fold and the **D6** prev-fp32-dest-acc fold to the block path so that the `_with_dt` two-arg LLK forms at `eltwise_block.hpp:72,236` and the explicit `srca/srcb` reconfig pair at `eltwise_block.hpp:142-143` consume chain-derived prev-CB info instead of template-passed `OldCb*`. Reverses Q12's defer in v3. | P1-block (NEW commit 3) |
 | **D8** *(new)* | Helper does not wrap "BIG inits". Caller owns engine-wide setup (`compute_kernel_hw_startup`, `binary_op_init_common`, `mm_init`, `reduce_init`); chain owns per-element setup only (`add_tiles_init`, `*_tile_init`, `init_bcast`, `copy_tile_to_dst_init_short`, `reconfig_data_format_*`, `tile_regs_*` lifecycle). U6 doxygen documents the boundary; U2 audits the helper for any other BIG init. | U2 (audit + sweep), U6 (doc) |
 
@@ -39,7 +41,7 @@ These commits are not on `astancov/eltwise_run7_refined` HEAD (which is `75868c9
 | R-2    | F-UX-7, F-PERF-1 follow-up, **D6 transition fold** | P1+U1-OldCb-streaming (commit 2) | `eltwise_chain.{hpp,inl}` | +95 / -90 |
 | R-2b   | **D7 block extension** | P1-block (commit 3) | `eltwise_chain.inl` (fold generalisation), `eltwise_block.hpp` (drop `OldCb*`, route via fold) | +50 / -35 |
 | R-3    | F-UX-7 sweep tail, **D6 `EltwiseChainOptions` delete**, **D7 block-kernel sweep** | U1 (genuinely-dead-only) | `eltwise_chain.hpp` (decls), 17+ binary kernels (incl. block-element call sites) | +0 / -100 |
-| R-4    | F-UX-2, F-UX-5, **D6 per-element flag** | U3 (`BinaryFpu` params)   | `eltwise_chain.{hpp,inl}`, `eltwise_block.hpp`, ~17 kernels | +35 / -100 |
+| R-4    | F-UX-2, F-UX-5, **D6 per-element flag (CARRY list only — narrowed in v5)** | U3 (`BinaryFpu` params)   | `eltwise_chain.{hpp,inl}`, `eltwise_block.hpp`, `eltwise_binary_sfpu.hpp`, ~17 kernels | +30 / -100 |
 | R-5    | F-UX-1 wrapper                       | U4 (`eltwise_chain_with_init`) | `eltwise_chain.hpp`, ≤25 kernels (sweep set)   | +30 / -150 |
 | R-6    | F-UX-8                               | U5 (`OptionalChainElement` adoption) | `logit_kernel.cpp`, `where_tss_kernel.cpp`, new test kernel + py | +60 / -40 |
 | R-7    | F-UX-1 docs, F-UX-16 docs, **D5 placement table**, **D6 per-element notes**, **D7 block-fold docs**, **D8 caller-init contract** | U6 (Doxygen + spec) | `eltwise_chain.hpp`, `eltwise_block.hpp`, key element headers | +250 / 0 |
@@ -199,14 +201,26 @@ constexpr uint32_t prev_cb_for_idx() { /* index_sequence fold over Es */ }
 
 **Step 3 — Per-element compile-time elision.** Inside the per-element init dispatch wrap each reconfig in `if constexpr (current_cb != prev_cb) reconfig_data_format_*(current_cb);` — zero runtime cost, all elision is compile-time. Both boot-time and (under `clash_gate == true`) per-tile init paths use the same elision — the gate now decides **"emit min-set at boot only"** vs **"emit min-set per-tile too"**; the min-set itself is compile-time-computed.
 
-**Step 3b — D6 transition fold.** Augment the per-element walk with a parallel scan over each element's `EnableFp32DestAcc` template flag:
+**Step 3b — D6 transition fold (v5: SKIP-element-aware).** Augment the per-element walk with a parallel scan over each element's `EnableFp32DestAcc` template flag — but ONLY for elements on the CARRY list (those with DEST-format-sensitive LLK). SKIP-list elements (`CopyTile`, `BlockCopyTile`, `FillScalar`, `FillInt`, `FillBitcast`, `RandTile`, `OptionalChainElement<COND, Inner>` when `Inner` is itself a SKIP element) have NO `EnableFp32DestAcc` member; the fold treats them as **transparent** — the running prev-fp32 value passes through unchanged when the walk encounters them.
 
 ```cpp
 // Symmetric to prev_cb_for_idx, but tracking the boolean fp32-dest-acc flag.
-// Walks Es[0..I-1] backwards; returns the most recent EnableFp32DestAcc value, or
-// the chain's default (false) if no prior element set it.
+// Walks Es[0..I-1] backwards; returns the most recent EnableFp32DestAcc value
+// from a CARRY-list element, or the chain's default (false) if no prior CARRY
+// element exists. SKIP-list elements (no EnableFp32DestAcc member) are skipped
+// transparently via the SFINAE probe below — see Q16.
 template <std::size_t I, class... Es>
 constexpr bool prev_fp32_dest_acc_for_idx() { /* index_sequence fold over Es */ }
+
+// SFINAE probe — Q16's chosen mechanism. Returns E::EnableFp32DestAcc when
+// the member exists; returns the supplied default otherwise (used by the fold
+// to pass `prev` through unchanged for SKIP-list elements).
+template <class E, bool Default, class = void>
+struct fp32_or_default { static constexpr bool value = Default; };
+template <class E, bool Default>
+struct fp32_or_default<E, Default, std::void_t<decltype(E::EnableFp32DestAcc)>> {
+    static constexpr bool value = E::EnableFp32DestAcc;
+};
 ```
 
 Per-element dispatch:
@@ -215,7 +229,9 @@ Per-element dispatch:
 template <class E, std::size_t I, class... Es>
 ALWI void emit_pre_element_transitions() {
     constexpr bool prev_fp32 = detail::prev_fp32_dest_acc_for_idx<I, Es...>();
-    constexpr bool curr_fp32 = E::EnableFp32DestAcc;
+    // For CARRY elements, curr_fp32 = E::EnableFp32DestAcc.
+    // For SKIP elements (no member), curr_fp32 = prev_fp32 (transparent).
+    constexpr bool curr_fp32 = detail::fp32_or_default<E, prev_fp32>::value;
     if constexpr (curr_fp32 != prev_fp32) {
         if constexpr (curr_fp32) { enable_fp32_dest_acc(); }
         else                     { disable_fp32_dest_acc(); }
@@ -223,6 +239,8 @@ ALWI void emit_pre_element_transitions() {
     // ... then the prev-CB reconfig elision per Step 3 ...
 }
 ```
+
+**SKIP-element handling at fold position J.** When the fold walks `Es[0..I-1]` backwards and hits a SKIP element at position J, the SFINAE probe returns `fp32_or_default<E_J, prev>::value == prev` — the running `prev` is NOT updated by element J; the walk continues backwards. SKIP elements do not "anchor" fp32 state; only CARRY elements do. (Worked walk in Q13.)
 
 `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` are documented as "lightweight, standalone reconfiguration that is safe to call mid-kernel without re-running compute_kernel_hw_startup" (`tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:84-91`). They are the right primitive for mid-chain transitions.
 
@@ -298,8 +316,8 @@ template <uint32_t Cb,
           uint32_t BlockSize,
           Dst BaseDst                = Dst::D0,
           CopyTilePolicy Policy      = CopyTilePolicy::WaitAndPop,
-          CopyTileReconfig Reconfig  = CopyTileReconfig::None,
-          bool EnableFp32DestAcc     = false>      // D6 — added by U3 in commit 5
+          CopyTileReconfig Reconfig  = CopyTileReconfig::None>
+                                                  // v5: BlockCopyTile is SKIP — no EnableFp32DestAcc.
 struct BlockCopyTile : CopyTileTag {
     // ...
     static constexpr uint32_t reconfig_srca_cb = Cb;
@@ -369,8 +387,8 @@ The two-arg form (`pack_reconfig_data_format(prev_pack, Cb)`) is selected by the
 | Chain's pre-element fold doesn't dispatch correctly for block elements (e.g. confuses `block_size=N` with `block_size=1` streaming) | Block-element `block_size` is independent of the fold's per-element reconfig — fold operates on `reconfig_*_cb` accessors which are uniform across streaming and block. Detected by `test_binary_ng.py` block-mode rows. |
 | `_with_dt` two-arg form fires with `prev_a == NO_PREV_CB` (first element of chain is a `BlockCopyTile`) — old code unconditionally called the two-arg form with `OldCb=0` (which is invalid CB ID) | Falls back to single-arg form per Step 2 — correct behaviour and matches the v3 streaming pattern. Detected by 401-suite `test_2_*` rows that start with a `BlockCopyTile`. |
 | `pack_reconfig_data_format(prev_pack, Cb)` two-arg form selected when `prev_pack` is some unrelated upstream pack (e.g. multi-stage where pack CB changed). | The fold only knows the chain's element pack — multi-stage kernels emit one `compute_kernel_hw_startup` per stage (D5 row 4) which resets pack programming. The chain's prev-pack tracking restarts at each chain call. Documented in U6. |
-| Mixed streaming + block-element chain (e.g. `CopyTile + BlockBinaryFpu + BlockPackTile`) — the fold must walk both kinds | The fold reads `reconfig_*_cb` and `EnableFp32DestAcc` uniformly. Mixed shapes already exist in test kernel `multi_chain.cpp`. Add a row to that test that mixes streaming and block elements explicitly. See Q13 below. |
-| **D6** in block path — `BlockBinaryFpu` with `EnableFp32DestAcc=true` at element I, `BlockBinaryFpu` with `=false` at element I+1 | Same compile-time-elided transition emit as streaming. The block element's per-iter loop runs entirely under one fp32 mode (no per-iter mode toggle inside `exec()`). Detected by a new 401-suite row exercising mixed-mode block chain. |
+| Mixed streaming + block-element chain (e.g. `CopyTile + BlockBinaryFpu + BlockPackTile`) — the fold must walk both kinds | The fold reads `reconfig_*_cb` uniformly across streaming and block elements; for `EnableFp32DestAcc` the SFINAE probe (Q16) handles SKIP elements (`CopyTile`, `BlockCopyTile`) transparently — only `BlockBinaryFpu` and `BlockPackTile` participate in the block-side fp32 fold; `BlockCopyTile` is treated as transparent (passes prev value through). Mixed shapes already exist in test kernel `multi_chain.cpp`. Add a row to that test that mixes streaming and block elements explicitly. See Q13 below. |
+| **D6** in block path — `BlockBinaryFpu` with `EnableFp32DestAcc=true` at element I, `BlockBinaryFpu` with `=false` at element I+1 | Same compile-time-elided transition emit as streaming. The block element's per-iter loop runs entirely under one fp32 mode (no per-iter mode toggle inside `exec()`). Block-element CARRY list: `BlockBinaryFpu`, `BlockPackTile`. Block-element SKIP list: `BlockCopyTile` (input-side, no dest-mode-sensitive LLK selection — the `_with_dt` form at `eltwise_block.hpp:72` selects on data-format pair, not dest mode). Detected by a new 401-suite row exercising mixed-mode block chain. |
 | Block-element `init()` is now empty for some shapes (all reconfig hoisted to fold) → harmless but easy to write a stub method that confuses readers | Doxygen in U6 documents the shift: `init()` is now per-op LLK programming only (`add_tiles_init`, `init_bcast`, etc.); reconfig is fold-driven. |
 
 #### Acceptance criteria
@@ -452,7 +470,7 @@ Sweep set (streaming residue): `data_movement/bcast/.../{bcast_h,hw,w}.cpp` (3),
 #### Audit findings addressed
 - **F-UX-2** — `BinaryFpu` 15-param surface.
 - **F-UX-5** — `BinaryFpuOutputPolicy` enum dead-default → optional.
-- **D6** — adds `EnableFp32DestAcc` template param to `BinaryFpu` and `BlockBinaryFpu` (and every other element).
+- **D6** — adds `EnableFp32DestAcc` template param ONLY to elements on the CARRY list (DEST-format-sensitive LLK). The SKIP list (input-side / fill / forwarding wrappers) gets no flag. **v5 narrows the v4 "every element" wording.**
 
 #### Pre-conditions
 - U2 shipped (callers already moved off `eltwise_pipeline_init`; D5 + D8 enforced).
@@ -492,28 +510,34 @@ The audit's "~8" target is approximate. **9 effective + 4 rarely-overridden trai
 
 **Step 5 — `BlockBinaryFpu`** at `eltwise_block.hpp:107-122` (post-commit-3 shape, no `OldCb*`) mirrors the same reorder. `BWaitTiles` stays (real semantics per Directive 4 evidence). `EnableFp32DestAcc` added as trailing default in the same position as `BinaryFpu`.
 
-**Step 6 — D6 on every other streaming + block element.** Each chain element type carries `EnableFp32DestAcc` as a trailing default:
+**Step 6 — D6 on the CARRY list only (v5 narrowing).** Only elements on the CARRY list grow their template parameter list by one to add `EnableFp32DestAcc` as a trailing default. SKIP-list elements are untouched — their template parameter lists do not change. The fold tolerates the absence via SFINAE (Q16).
 
-| Element            | Position of `EnableFp32DestAcc` |
-|--------------------|---------------------------------|
-| `CopyTile`         | trailing (after current `Reconfig` param) |
-| `BinaryFpu`        | trailing (Step 4 above) |
-| `DestReuseBinary`  | trailing (after `IndexMode`) |
-| `UnaryBcast`       | trailing (after `Reconfig`) |
-| `PackTile`         | trailing (after `Reconfig`) |
-| `PackTileBlock`    | trailing (after `Reconfig`) |
-| `BlockCopyTile`    | trailing (after current params, post-D7) |
-| `BlockBinaryFpu`   | trailing (Step 5 above, post-D7) |
-| `BlockPackTile`    | trailing (after current params, post-D7) |
-| `FillScalar`, `FillInt`, `FillBitcast`, `RandTile` | trailing (after `DstSlot`) |
-| SFPU op-structs (CRTP base `UnaryOp`/`BinaryOp`/`TernaryOp`/`QuaternaryOp`) | inherited via the base; default `false` |
+| Element                     | List   | Position of `EnableFp32DestAcc` (CARRY) / Reason for skip (SKIP) |
+|-----------------------------|--------|------------------------------------------------------------------|
+| `BinaryFpu`                 | CARRY  | trailing (Step 4 above) |
+| `BlockBinaryFpu`            | CARRY  | trailing (Step 5 above, post-D7) |
+| `BinarySfpu` op-struct family (`AddBinary`, `SubBinary`, `MulBinary`, `DivBinary` in `eltwise_binary_sfpu.hpp:24,30,36,42`) | CARRY  | trailing on each struct (binary FPU/SFPU emits dest-mode-dependent LLK) |
+| `DestReuseBinary`           | CARRY  | trailing (after `IndexMode`) |
+| `BroadcastFpu`              | CARRY  | trailing (after `Bcast` param) — broadcast FPU is dest-format-sensitive (matches `BinaryFpu` reasoning) |
+| `UnaryBcast`                | CARRY  | trailing (after `Reconfig`) |
+| `PackTile`                  | CARRY  | trailing (after `Reconfig`) — pack readout from DEST is dest-mode-sensitive |
+| `BlockPackTile`             | CARRY  | trailing (after current params, post-D7) |
+| `CopyTile`                  | SKIP   | Input-side; copies into DEST without dest-mode-sensitive LLK selection. No template change. |
+| `BlockCopyTile`             | SKIP   | Block input-side; same reasoning as `CopyTile`. The `_with_dt` two-arg form at `eltwise_block.hpp:72` selects on data-format pair, not dest mode. No template change. |
+| `FillScalar`                | SKIP   | Constant fill; dest-mode-irrelevant. No template change. |
+| `FillInt`                   | SKIP   | Constant fill of integer dtype; dest-mode-irrelevant. No template change. |
+| `FillBitcast`               | SKIP   | Constant fill via bitcast; dest-mode-irrelevant. No template change. |
+| `RandTile` (NTTP-seed fix from `16f0b759c93`) | SKIP   | Random tile fill; dest-mode-irrelevant. No template change. |
+| `OptionalChainElement<COND, Inner>` | SKIP (transparent forwarder) | Forwards to `Inner`. The wrapper itself does not expose `EnableFp32DestAcc`; if `Inner` is a CARRY element, `Inner::EnableFp32DestAcc` participates in the fold via the SFINAE probe seeing through to the inner. (`eltwise_optional.hpp:55-84` — the conditional ladder selects an `Inner` or a no-op tag-only specialisation; either way the wrapper exposes no `EnableFp32DestAcc` directly.) |
+| SFPU unary op-structs (CRTP base `UnaryOp`/`TernaryOp`/`QuaternaryOp` in `eltwise_chain.hpp:314-329`) | mixed (carry per struct) | DEST-format-sensitive unary SFPU ops (those reading/writing DEST under dest-mode-dependent LLK) carry the flag at the struct definition level. Pure SFPU compute (math on DEST values) is dest-mode-sensitive — see Q6 default discussion. CRTP base provides `static constexpr bool EnableFp32DestAcc = false;` default that derived structs override. |
 
-Each element exposes `static constexpr bool EnableFp32DestAcc = ...;` so the P1 fold's `prev_fp32_dest_acc_for_idx<I, Es...>()` walk can read it uniformly.
+Each CARRY element exposes `static constexpr bool EnableFp32DestAcc = …;`; the P1 fold's `prev_fp32_dest_acc_for_idx<I, Es...>()` reads it via the SFINAE probe (Q16). SKIP elements have no such member — the probe returns the supplied default (the running `prev`), passing through unchanged. Authors writing a chain composed only of SKIP elements (e.g. `CopyTile + FillScalar`) do not need to think about fp32 mode at all — the chain-default `false` flows through with no transitions emitted.
 
 #### Files to touch
-- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp` — `BinaryFpu` decl at lines 442-458 → new 13-param shape; same shape on every other streaming element (`CopyTile` at 432-440, `DestReuseBinary` at 460-470, `UnaryBcast` at 472-481, `PackTile` at 483-490, `PackTileBlock` at 492-499, `FillScalar`/`FillInt`/`FillBitcast`/`RandTile` at 502-509).
-- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl` — `BinaryFpu` impl at line 295-416 (template-arg-list head only; body untouched). Other elements: same surgical head-only edit. CRTP bases (`UnaryOp`/`BinaryOp`/`TernaryOp`/`QuaternaryOp` at lines 314-329 of `eltwise_chain.hpp`) get a `static constexpr bool EnableFp32DestAcc = false;` declaration that derived structs can override.
-- `ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp` — `BlockBinaryFpu` decl at 107-122 (post-D7); `BlockCopyTile` and `BlockPackTile` at their respective decls.
+- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp` — `BinaryFpu` decl at lines 442-458 → new 13-param shape (CARRY). Other CARRY-list streaming elements: `DestReuseBinary` at 460-470, `UnaryBcast` at 472-481, `PackTile` at 483-490, `PackTileBlock` at 492-499 — each grows by one trailing default. SKIP-list streaming elements (`CopyTile` at 432-440, `FillScalar`/`FillInt`/`FillBitcast`/`RandTile` at 502-509) are NOT touched (no `EnableFp32DestAcc` member added).
+- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl` — `BinaryFpu` impl at line 295-416 (template-arg-list head only; body untouched). Other CARRY elements: same surgical head-only edit. SKIP-element impls untouched. CRTP base `BinaryOp` at `eltwise_chain.hpp:314-329` gets a `static constexpr bool EnableFp32DestAcc = false;` declaration that derived CARRY structs (e.g. `BinarySfpu` op-struct family) override; `UnaryOp`/`TernaryOp`/`QuaternaryOp` bases get the same default for derived CARRY structs (harmless on SKIP-derived structs — the SFINAE probe returns the inherited member matching the chain default).
+- `ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp` — `BlockBinaryFpu` decl at 107-122 (post-D7) and `BlockPackTile` at line 222 grow by one trailing default (CARRY). `BlockCopyTile` at line 55 is NOT touched (SKIP).
+- `ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp` — `AddBinary`/`SubBinary`/`MulBinary`/`DivBinary` at lines 24/30/36/42 grow by one trailing default each (CARRY).
 - 17 binary kernels (same U1 set, second pass — implementer reorders the template lists). Most kernels do NOT need to spell `EnableFp32DestAcc` because the default `false` matches their behavior (see "D6 grep findings" in the final report).
 
 #### Risk assessment
@@ -663,7 +687,7 @@ F-UX-8 explicit user direction: adopt in 2 production kernels + a test. Smallest
 
 - `@section hw_startup_placement` — **D5 explicit rule** (verbatim from group U2 above): `compute_kernel_hw_startup` is the first statement of `MAIN()` if the chain shape requires it; mid-`MAIN()` is undefined per `compute_kernel_hw_startup.h:26-30`. Multi-stage exception per row 4 of the placement table. **Q15 resolution:** the same once-at-MAIN()-top rule applies symmetrically to other BIG inits (`binary_op_init_common`, `mm_init`, `reduce_init`).
 
-- `@section per_element_fp32_dest_acc` — **D6 explicit rule:** each element carries `EnableFp32DestAcc` (default `false`); the fold emits `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` at transitions; `static_assert(!EnableFp32DestAcc || DST_ACCUM_MODE)` enforces DST sizing coherence (Q10). Doxygen warns the chain inherits NO fp32 state from the kernel — use the per-element flag uniformly.
+- `@section per_element_fp32_dest_acc` — **D6 explicit rule (v5-narrowed):** only **CARRY-list** elements (DEST-format-sensitive LLK) expose `EnableFp32DestAcc` as a template parameter (default `false`). The CARRY list: `BinaryFpu`, `BlockBinaryFpu`, `BinarySfpu` op-struct family (`AddBinary`/`SubBinary`/`MulBinary`/`DivBinary`), `DestReuseBinary`, `BroadcastFpu`, `UnaryBcast`, `PackTile`, `BlockPackTile`. The SKIP list (`CopyTile`, `BlockCopyTile`, `FillScalar`, `FillInt`, `FillBitcast`, `RandTile`, `OptionalChainElement<COND, Inner>`) does NOT expose the template parameter. The fold (Q16) detects the absence via SFINAE and treats SKIP elements as transparent (passes prev value through). The fold emits `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` at transitions; `static_assert(!EnableFp32DestAcc || DST_ACCUM_MODE)` (Q10) fires only on CARRY elements (naturally — only they declare the flag). Doxygen warns the chain inherits NO fp32 state from the kernel — use the per-CARRY-element flag uniformly. Authors writing a chain composed only of SKIP elements (e.g. CopyTile + Fill) do not think about fp32 mode at all unless the kernel itself preset it.
 
 - `@section deduced_wrapper` — when to use `eltwise_chain_with_init` vs. the explicit boot (single-stage only).
 
@@ -671,11 +695,11 @@ F-UX-8 explicit user direction: adopt in 2 production kernels + a test. Smallest
 
 - `@section examples` — five canonical kernel snippets: unary (CopyTile + SFPU + Pack); binary (BinaryFpu + Pack); two-stage logit-style with re-boot; D6 mixed-fp32 chain; **D7** block + streaming mixed chain illustrating uniform fold dispatch.
 
-**Per-element `///` blocks** on `CopyTile`, `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`, `PackTile`, `PackTileBlock` — `@tparam` for every parameter (including the new `EnableFp32DestAcc`); explicit "the element does NOT emit `compute_kernel_hw_startup` — caller's pre-chain init must cover its CBs" reminder; cross-link `@ref caller_init_contract` and `@ref per_element_fp32_dest_acc`.
+**Per-element `///` blocks** on `CopyTile`, `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`, `PackTile`, `PackTileBlock` — `@tparam` for every parameter; the new `EnableFp32DestAcc` `@tparam` is present **only on CARRY-list elements** (`BinaryFpu`, `DestReuseBinary`, `UnaryBcast`, `PackTile`, `PackTileBlock`). SKIP-list elements (`CopyTile`) get an explicit doxygen note: "this element is dest-mode-transparent — it does not affect or read the chain's fp32-dest-acc state; cross-element transitions are decided by adjacent CARRY elements". Both lists carry the explicit "the element does NOT emit `compute_kernel_hw_startup` — caller's pre-chain init must cover its CBs" reminder; cross-link `@ref caller_init_contract` and `@ref per_element_fp32_dest_acc`.
 
 **`eltwise_block.hpp`** — top-of-file doxygen explaining "block elements use the same prev-CB fold as streaming elements (post-D7); no `OldCb*` template params, no per-element reconfig in `init()`. The `_with_dt` two-arg LLK form fires at the chain level, fold-driven." + same D6 per-element fp32 notes; per-element `///` blocks on `BlockCopyTile`, `BlockBinaryFpu`, `BlockPackTile`.
 
-**Element headers** — `eltwise_fill.hpp`, `eltwise_optional.hpp`, `eltwise_rand.hpp` — short header doxygen + per-struct `@brief` + `@tparam` lines (including any `EnableFp32DestAcc` for fill/rand structs, although these inherit from `DestOnlyTag`/`UnaryOp` and the default `false` is right for them in the common case).
+**Element headers** — `eltwise_fill.hpp`, `eltwise_optional.hpp`, `eltwise_rand.hpp` — short header doxygen + per-struct `@brief` + `@tparam` lines. Per v5: these are SKIP-list elements; they do NOT expose `EnableFp32DestAcc`. Doxygen explicitly notes "dest-mode-transparent: this element does not affect or read the chain's fp32-dest-acc state; constant fill / forwarding has no DEST-format-dependent LLK". `eltwise_optional.hpp` documents that `OptionalChainElement<COND, Inner>` forwards to `Inner` — when `Inner` is a CARRY element, the inner's `EnableFp32DestAcc` participates in the fold (the SFINAE probe sees through the wrapper because the wrapper's chosen specialisation IS the `Inner` struct, per the `std::conditional_t` ladder at lines 57-65).
 
 **Aggregator** `eltwise_helpers.hpp` — list which element-family headers it pulls and what each ships.
 
@@ -875,15 +899,15 @@ Test kernel shape: `CopyTile<…> + OptionalChainElement<COND, Inner> + PackTile
 
 ### Q6 (newly surfaced — D6) — What is the default for `EnableFp32DestAcc`?
 
-**Resolved: default `false` for run7 compatibility; transparent migration via macro is a recommended *non-default* pattern.**
+**Resolved: default `false` for run7 compatibility; transparent migration via macro is a recommended *non-default* pattern.** **v5 note:** the question is moot for SKIP-list elements (`CopyTile`, `BlockCopyTile`, `FillScalar`, `RandTile`, `FillInt`, `FillBitcast`, `OptionalChainElement<COND, Inner>`) — they have no `EnableFp32DestAcc` template param to default. The fold's SFINAE probe (Q16) returns the running `prev` for them — they pass through transparently and require no chain-level default.
 
-Rationale + alternatives considered:
+Rationale + alternatives considered (applies to CARRY-list elements only):
 
 | Option | Behavior | Verdict |
 |---|---|---|
-| (A) **Default `false` everywhere** (chosen) | Every existing call site compiles unchanged. Per-element fp32 must be opted in explicitly. | **Chosen.** Zero call-site churn. Run7-compat. |
-| (B) Default derived from `FP32_DEST_ACC_EN` macro at element instantiation | `static constexpr bool EnableFp32DestAcc = bool(FP32_DEST_ACC_EN)` — every element auto-enables when the kernel is built with fp32. | Rejected as default. Kernels currently use `#ifdef FP32_DEST_ACC_EN` blocks for DST sizing / scalar packing — making elements auto-enable would mid-chain-toggle fp32 mode for kernels that have always treated fp32 as a build-time global. Risk: silent behavior change in 15+ migrated moreh kernels. |
-| (C) Require explicit opt-in per element with no default | Every element must spell `EnableFp32DestAcc=false` or `=true`. | Rejected — every existing call site breaks. |
+| (A) **Default `false` everywhere on CARRY** (chosen) | Every existing CARRY-element call site compiles unchanged. Per-element fp32 must be opted in explicitly. | **Chosen.** Zero call-site churn. Run7-compat. |
+| (B) Default derived from `FP32_DEST_ACC_EN` macro at element instantiation | `static constexpr bool EnableFp32DestAcc = bool(FP32_DEST_ACC_EN)` — every CARRY element auto-enables when the kernel is built with fp32. | Rejected as default. Kernels currently use `#ifdef FP32_DEST_ACC_EN` blocks for DST sizing / scalar packing — making elements auto-enable would mid-chain-toggle fp32 mode for kernels that have always treated fp32 as a build-time global. Risk: silent behavior change in 15+ migrated moreh kernels. |
+| (C) Require explicit opt-in per element with no default | Every CARRY element must spell `EnableFp32DestAcc=false` or `=true`. | Rejected — every existing call site breaks. |
 
 **The recommended pattern for kernels wanting "global fp32 chain":**
 
@@ -932,7 +956,7 @@ This is intentionally light tooling. A grep-based checker is brittle; the human 
 
 ### Q10 (newly surfaced — D6 + DST sizing) — How does the chain coordinate per-element fp32 with kernel-level DST_ACCUM_MODE?
 
-**Resolved: `static_assert` on every element with `EnableFp32DestAcc=true`.**
+**Resolved: `static_assert` on every CARRY-list element with `EnableFp32DestAcc=true`.** v5 narrowing: SKIP-list elements have no `EnableFp32DestAcc` template parameter, so the `static_assert` mechanically cannot fire on them — that's the desired behaviour (SKIP elements are dest-mode-irrelevant; their compilation does not depend on `DST_ACCUM_MODE`).
 
 ```cpp
 template <..., bool EnableFp32DestAcc = false>
@@ -943,6 +967,8 @@ struct BinaryFpu {
     // ...
 };
 ```
+
+The same `static_assert` lives on every other CARRY-list element (`BlockBinaryFpu`, the `BinarySfpu` op-struct family, `DestReuseBinary`, `BroadcastFpu`, `UnaryBcast`, `PackTile`, `BlockPackTile`). It does NOT live on SKIP elements — they have no flag to assert against.
 
 `DST_ACCUM_MODE` is a compile-time integer the kernel build defines as `1` when `FP32_DEST_ACC_EN` is set, `0` otherwise (`tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:43,45,46`). The `static_assert` rejects element-level `EnableFp32DestAcc=true` if the kernel did not opt into fp32 DST sizing — preventing the silent garbage-DST-readout failure mode noted in U3's risk table.
 
@@ -956,12 +982,18 @@ The streaming-vs-block split (commit 2 vs commit 3) is the orthogonal axis and I
 
 ### Q13 (newly surfaced — D7) — How does the prev-CB fold handle mixed streaming + block element packs?
 
-**Resolved: symmetric treatment.** Every element (streaming and block) exposes `static constexpr uint32_t reconfig_srca_cb / reconfig_srcb_cb / reconfig_pack_cb;` and `static constexpr bool EnableFp32DestAcc;` (D6). The `prev_cb_for_idx<Side, I, Es...>()` fold walks them uniformly and returns the most recent non-`NO_PREV_CB` value backwards from `I-1`. Block-element-specific fields (e.g. `block_size`) are orthogonal — fold ignores them.
+**Resolved: symmetric treatment for `reconfig_*_cb`; SFINAE-detected for `EnableFp32DestAcc`.**
 
-Worked walk for `CopyTile<cb_in> + BlockBinaryFpu<cb_in, cb_b, …, CbOut=cb_tmp> + BlockPackTile<cb_out>`:
-- I=0 `CopyTile`: srca=cb_in, srcb/pack=NO_PREV.
-- I=1 `BlockBinaryFpu`: srca=cb_in (matches prev → elide), srcb=cb_b (emit `reconfig_data_format_srcb(cb_b)`), pack=cb_tmp (emit `pack_reconfig_data_format(cb_tmp)`).
-- I=2 `BlockPackTile`: pack=cb_out (prev=cb_tmp differs → emit two-arg `pack_reconfig_data_format(cb_tmp, cb_out)`).
+Every element (streaming and block) — CARRY and SKIP alike — exposes `static constexpr uint32_t reconfig_srca_cb / reconfig_srcb_cb / reconfig_pack_cb;` (using `NO_PREV_CB = 0xFFFFFFFFu` when an element does not touch a side). The `prev_cb_for_idx<Side, I, Es...>()` fold walks them uniformly. **The CB-side fold has no SKIP/CARRY distinction — every element exposes the three accessors.**
+
+For `EnableFp32DestAcc` (D6, v5-narrowed), only CARRY elements expose the member. The `prev_fp32_dest_acc_for_idx<I, Es...>()` fold uses the SFINAE probe from Q16 (`fp32_or_default<E, prev>::value`) to read CARRY members and pass-through SKIP elements. This is uniform-by-design: the fold loop body is identical for all elements; the SFINAE probe absorbs the CARRY/SKIP difference at compile time.
+
+Block-element-specific fields (e.g. `block_size`) are orthogonal — fold ignores them.
+
+Worked walk for `CopyTile<cb_in> + BlockBinaryFpu<cb_in, cb_b, …, CbOut=cb_tmp, EnableFp32DestAcc=true> + BlockPackTile<cb_out, EnableFp32DestAcc=true>`:
+- I=0 `CopyTile` (SKIP): srca=cb_in, srcb/pack=NO_PREV. fp32 fold: SFINAE probe returns `prev` (chain default `false`); no transition emit at I=0.
+- I=1 `BlockBinaryFpu` (CARRY, fp32=true): srca=cb_in (matches prev → elide), srcb=cb_b (emit `reconfig_data_format_srcb(cb_b)`), pack=cb_tmp (emit `pack_reconfig_data_format(cb_tmp)`). fp32 fold: prev=`false` (from SKIP I=0), curr=`true` → emit `enable_fp32_dest_acc()`.
+- I=2 `BlockPackTile` (CARRY, fp32=true): pack=cb_out (prev=cb_tmp differs → emit two-arg `pack_reconfig_data_format(cb_tmp, cb_out)`). fp32 fold: prev=`true` (from I=1), curr=`true` → no transition emit.
 
 Test coverage: add a `multi_chain.cpp` row exercising this exact shape post-commit-3.
 
@@ -974,6 +1006,20 @@ Test coverage: add a `multi_chain.cpp` row exercising this exact shape post-comm
 **Resolved: yes, symmetric. Document in U6.** D5 says `compute_kernel_hw_startup` is once at top of `MAIN()`. D8 generalises: every BIG init (`binary_op_init_common`, `mm_init`, `reduce_init`) is also called once at top of `MAIN()`, before any chain or raw call. Rationale: `binary_op_init_common` programs unpack/math binary state via MMIO writes (`compute_kernel_api/eltwise_binary.h`); mid-`MAIN()` carries the same hazard as `compute_kernel_hw_startup`. Multi-stage exception (D5 row 4) extends symmetrically.
 
 Concrete example: in `eltwise_binary_no_bcast.cpp` activations branch, the kernel calls `compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out)` first (engine boot, D5 row 2), then `binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out)` (binary-state programming, required because the kernel also uses raw binary primitives). Both are caller-side per D8; order matches the documented LLK requirement (`binary_op_init_common` assumes hw_startup already ran).
+
+### Q16 (newly surfaced — D6 v5 narrowing) — How does the fold handle elements without an `EnableFp32DestAcc` member?
+
+**Resolved: SFINAE detection probe in `detail::`, returning a caller-supplied default for elements without the member.** Cleanest of three options considered.
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| (A) **SFINAE probe (chosen)** | Primary `fp32_or_default<E, Default>::value = Default;` + partial specialisation `fp32_or_default<E, Default, std::void_t<decltype(E::EnableFp32DestAcc)>>::value = E::EnableFp32DestAcc;`. The fold passes its running `prev` as `Default` so SKIP elements pass through. See Step 3b code block. | **Chosen.** Element struct definitions stay clean (no placeholder member polluting SKIP elements). Fold logic is uniform — `fp32_or_default<E, prev>::value` is the only call site; behaviour differs by C++17 SFINAE at compile time. Zero runtime cost. C++17 `std::void_t` is already used in trait predicates (`eltwise_chain.inl:583-657`), confirming the project's C++ standard supports this idiom. |
+| (B) Element-side placeholder member | Every SKIP element carries a placeholder `static constexpr bool EnableFp32DestAcc = false;`; fold reads uniformly. | Rejected. Pollutes SKIP structs with a member they do not semantically own; the placeholder lies (`@tparam` doxygen would mis-imply opt-in); chain default repeated everywhere → fragile if it changes. |
+| (C) C++20 `requires` member-presence test | `if constexpr (requires { E::EnableFp32DestAcc; })` per iteration. | Rejected for portability. Compute-kernel build path is C++17 (`-std=c++17` per `tt_metal/jit_build/build.cpp`); C++20 `requires` unavailable. SFINAE is the C++17 idiom. |
+
+**Element-side authoring contract:** CARRY-list elements declare `EnableFp32DestAcc` as a template parameter AND a public `static constexpr bool EnableFp32DestAcc = …;` member mirroring it (so the SFINAE probe finds it). SKIP-list elements declare neither.
+
+**Verification:** SFINAE detection is exercised by every chain mixing CARRY and SKIP elements. The `multi_chain.cpp` row added in Q13's worked walk is sufficient — `CopyTile` (SKIP) feeding `BlockBinaryFpu` (CARRY) feeding `BlockPackTile` (CARRY). A negative test row (purely-SKIP `CopyTile + FillScalar`) confirms the chain-default `false` flows through with no transitions emitted.
 
 ---
 
