@@ -1595,14 +1595,11 @@ public:
         uint32_t offset_bytes = offset_words * sizeof(uint32_t);
         helper.add_linear_read(worker_range, length_bytes, offset_bytes);
 
-        // Section 7: Write offset
-        // Simple Smoke test: do a change write_offset_idx to 48 and back to 0
-        std::array<uint32_t, CQ_DISPATCH_MAX_WRITE_OFFSETS> write_offset1 = {48, 0, 0, 0};
-        std::array<uint32_t, CQ_DISPATCH_MAX_WRITE_OFFSETS> write_offset2 = {};
-        HostMemDeviceCommand write_offset_cmd1 = CommandBuilder::build_dispatch_write_offset(write_offset1);
-        HostMemDeviceCommand write_offset_cmd2 = CommandBuilder::build_dispatch_write_offset(write_offset2);
-        commands_per_iteration.push_back(std::move(write_offset_cmd1));
-        commands_per_iteration.push_back(std::move(write_offset_cmd2));
+        // CQ_DISPATCH_CMD_SET_WRITE_OFFSET is exercised indirectly by every test that launches
+        // a real program (EnqueueProgram emits it via add_dispatch_set_write_offset).  No
+        // standalone smoke coverage here: the profiler integration in cq_dispatch.cpp's handler
+        // spins on program_id_fifo_append when realtime_profiler_core_noc_xy != 0 (FD), and
+        // synthetic commands have no paired profiler-side drain.
 
         // PHASE 2, 3, 4: Execute and Validate
         execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
