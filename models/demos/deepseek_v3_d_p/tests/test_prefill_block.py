@@ -139,9 +139,8 @@ def test_prefill_block(
     ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
     torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
 
-    need_hf_model = not ttnn_cache_complete or (
-        (pcc_validation or input_source == "abc_1k") and not torch_ref_cache.exists()
-    )
+    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source == "abc_1k")
+    need_hf_model = not ttnn_cache_complete or ((pcc_validation or input_source == "abc_1k") and not ref_cache_loadable)
     logger.info(
         f"Cache status: TTNN={ttnn_cache_complete}, ref_cache={torch_ref_cache.exists()}, "
         f"need_hf_model={need_hf_model}"
@@ -161,8 +160,19 @@ def test_prefill_block(
         logger.info("TTNN cache complete, skipping torch weight creation")
         state_dict = {}
 
-    # --- Create input ---
-    if input_source == "abc_1k" and hf_model is not None:
+    # --- Resolve torch_input and torch reference (single decision point for ref_cache) ---
+    torch_output = None
+    ref_kvpe = None
+    if ref_cache_loadable:
+        logger.info(f"Loading cached reference from {torch_ref_cache}")
+        profiler.start("reference_loading")
+        ref_cached = torch.load(torch_ref_cache, weights_only=True)
+        torch_input = ref_cached["torch_input"]
+        if pcc_validation:
+            torch_output = ref_cached["torch_output"]
+            ref_kvpe = ref_cached["ref_kvpe"]
+        profiler.end("reference_loading")
+    elif input_source == "abc_1k":
         profiler.start("tokenization")
         prompts = load_prompts_from_json(str(ABC_1K_PATH))
         prompt_text = prompts[0] if isinstance(prompts, list) else prompts
@@ -175,52 +185,36 @@ def test_prefill_block(
         with torch.no_grad():
             torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
         logger.info(f"Embedded input shape: {torch_input.shape}")
-    elif input_source == "abc_1k" and hf_model is None:
-        logger.info("Loading abc_1k torch_input from reference cache")
-        ref_cached = torch.load(torch_ref_cache, weights_only=True)
-        torch_input = ref_cached["torch_input"]
     else:
         torch.manual_seed(123)
         torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
 
-    # --- Torch reference (with caching) ---
-    torch_output = None
-    ref_kvpe = None
-    if pcc_validation:
-        if torch_ref_cache.exists():
-            logger.info(f"Loading cached reference from {torch_ref_cache}")
-            profiler.start("reference_loading")
-            ref_cached = torch.load(torch_ref_cache, weights_only=True)
-            torch_input = ref_cached["torch_input"]
-            torch_output = ref_cached["torch_output"]
-            ref_kvpe = ref_cached["ref_kvpe"]
-            profiler.end("reference_loading")
-        else:
-            profiler.start("torch_reference")
-            logger.info("Running torch reference forward...")
-            position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
-            attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
-            ref_cache = DynamicCache()
-            with torch.no_grad():
-                layer_out = hf_model.layers[layer_idx](
-                    torch_input,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-                torch_output = layer_out[0]
-            logger.info(f"Torch reference output shape: {torch_output.shape}")
-            if ref_cache is not None:
-                ref_kvpe = ref_cache.key_cache[layer_idx]
-                logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
-            profiler.end("torch_reference")
-
-            logger.info(f"Saving reference to {torch_ref_cache}")
-            torch.save(
-                {"torch_input": torch_input, "torch_output": torch_output, "ref_kvpe": ref_kvpe},
-                torch_ref_cache,
+    if pcc_validation and torch_output is None:
+        profiler.start("torch_reference")
+        logger.info("Running torch reference forward...")
+        position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
+        attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
+        ref_cache = DynamicCache()
+        with torch.no_grad():
+            layer_out = hf_model.layers[layer_idx](
+                torch_input,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=ref_cache,
+                use_cache=True,
             )
+            torch_output = layer_out[0]
+        logger.info(f"Torch reference output shape: {torch_output.shape}")
+        if ref_cache is not None:
+            ref_kvpe = ref_cache.key_cache[layer_idx]
+            logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
+        profiler.end("torch_reference")
+
+        logger.info(f"Saving reference to {torch_ref_cache}")
+        torch.save(
+            {"torch_input": torch_input, "torch_output": torch_output, "ref_kvpe": ref_kvpe},
+            torch_ref_cache,
+        )
 
     # Free HF model early
     if hf_model is not None:
