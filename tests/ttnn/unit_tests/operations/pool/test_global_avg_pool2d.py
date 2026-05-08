@@ -88,7 +88,7 @@ def test_global_avg_pool2d_non_tile_aligned(
 @pytest.mark.parametrize(
     "h_w, channels, grid_end",
     [
-        (49, 1280, (7, 0)),
+        (49, 1280, (7, 0)),  # 1280 ch (EfficientNet head), 8-way ND shard; h_w=49 is not tile-aligned
         (25, 320, (4, 0)),
         (49, 64, (0, 0)),
     ],
