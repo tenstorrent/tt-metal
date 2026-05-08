@@ -209,21 +209,33 @@ def normalize_existing_source_file_path(file_path: str | None) -> str | None:
 
 
 def read_source_file(normalized_path: str) -> str | None:
-    """Read UTF-8 text for a stack-trace path after realpath, regular-file, and allowlist checks."""
+    """Read UTF-8 text for a stack-trace path after realpath, regular-file, and allowlist checks.
+
+    Performs the path join + canonical boundary pattern recommended for CWE-22 (safelist roots
+    as *BASE_DIRECTORY*, stack-derived path only inside that tree via relative join).
+    """
     if not normalized_path:
         return None
     resolved = _trusted_resolved_stack_trace_path_for_read(normalized_path)
     if resolved is None:
         return None
     roots = _stack_trace_read_allowlist_roots()
-    base_directory = _first_allowlist_root_containing(resolved, roots)
-    if base_directory is None:
+    base_candidate = _first_allowlist_root_containing(resolved, roots)
+    if base_candidate is None:
         return None
-    # Remediation shape: canonical path must stay under a fixed allowlist prefix (CWE-22).
-    if not _path_is_under_root(resolved, base_directory):
+    BASE_DIRECTORY = os.path.abspath(base_candidate)
+    dynamic_input = os.path.relpath(resolved, BASE_DIRECTORY)
+    # Reject relpath escape (shouldn't happen once *resolved* is under BASE_DIRECTORY).
+    if dynamic_input == ".." or dynamic_input.startswith(".." + os.sep):
+        return None
+    # Documented CWE-22 pattern: derive path only from fixed base + constrained relative suffix.
+    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, dynamic_input))
+    if not _path_is_under_root(my_path, BASE_DIRECTORY):
+        return None
+    if _realpath(my_path) != resolved:
         return None
     try:
-        with open(resolved, encoding="utf-8", errors="replace") as handle:  # security-reviewed
+        with open(my_path, encoding="utf-8", errors="replace") as handle:
             return handle.read()
     except OSError:
         return None
