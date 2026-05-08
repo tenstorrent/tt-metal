@@ -14,11 +14,12 @@ import ttnn
 from ..config import MeshConfig
 from ..tt.ccl import CCLManager
 from ..tt.model_config import ModelArgs
+from ..utils.general_utils import get_default_num_links
 
 
 class TestFactory:
     # Common test configurations
-    MESH_SHAPES = {"4x8": (4, 8), "1x8": (1, 8), "4x4": (4, 4), "2x4": (2, 4), "1x1": (1, 1)}
+    MESH_SHAPES = {"1x4": (1, 4), "4x8": (4, 8), "1x8": (1, 8), "4x4": (4, 4), "2x4": (2, 4), "1x1": (1, 1)}
 
     BATCH_SEQ_CONFIGS = [
         (1, 1),  # Single token
@@ -42,7 +43,7 @@ class TestFactory:
         mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
         # Setup CCL
-        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
 
