@@ -32,10 +32,10 @@ void kernel_main() {
     // D5/D8: caller-side BIG init at the top of MAIN().
     compute_kernel_hw_startup(cb_in, cb_in, cb_out);
 
-    constexpr EltwiseChainOptions opts = []() {
-        EltwiseChainOptions o{};
-        o.upfront_block_size = upfront_n;
-        return o;
-    }();
-    eltwise_chain<opts>(num_tiles, CopyElt{}, Exp<>{}, PackElt{});
+    // Upfront-block path is auto-detected via the elements' `is_upfront` traits
+    // (CopyElt has WaitUpfrontPopAtEnd; PackElt has UpfrontReservePushAtEnd).
+    // The chain waits / pops `num_tiles` upfront and runs `num_tiles` inner iterations.
+    // Note: this test requires num_tiles == UPFRONT_N at the test harness level.
+    (void)upfront_n;
+    eltwise_chain(num_tiles, CopyElt{}, Exp<>{}, PackElt{});
 }

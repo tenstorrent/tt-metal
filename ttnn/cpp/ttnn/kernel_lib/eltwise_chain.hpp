@@ -49,8 +49,8 @@
  *       PackTile<cb_out_b, Dst::D1, PackTilePolicy::PerTileReserveAndPush>{}
  *   );
  *
- *   // Block reduction with upfront reserve / pop-at-end
- *   eltwise_chain<EltwiseChainOptions{ .upfront_block_size = 64 }>(
+ *   // Block reduction with upfront reserve / pop-at-end (auto-detected via `Es::is_upfront`)
+ *   eltwise_chain(num_tiles,
  *       CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd, CbIndexMode::BlockIter>{},
  *       Exp<>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::UpfrontReservePushAtEnd, PackTileIndexMode::BlockIter>{}
@@ -302,17 +302,7 @@ enum class PackTileReconfig : uint8_t {
 };
 
 // =============================================================================
-// 5. EltwiseChainOptions — compile-time NTTP carrying chain-wide knobs
-// =============================================================================
-
-struct EltwiseChainOptions {
-    bool enable_fp32_dest_acc = false;
-    uint32_t upfront_block_size = 0;  // > 0 enables UpfrontReservePushAtEnd / WaitUpfrontPopAtEnd policies.
-    // dst sync is always modern — no field, no enum.
-};
-
-// =============================================================================
-// 6. CRTP bases — UnaryOp / BinaryOp / TernaryOp / QuaternaryOp
+// 5. CRTP bases — UnaryOp / BinaryOp / TernaryOp / QuaternaryOp
 // =============================================================================
 //
 // Derived structs supply `init()` and `call()`. The base provides slot fields,
@@ -571,7 +561,10 @@ inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 ///   - duplicate upfront CBs across CB-readers static_assert.
 ///   - colliding pack writes static_assert.
 ///   - hoist requested on non-hoist-safe chain static_assert.
-template <EltwiseChainOptions Opts = EltwiseChainOptions{}, class... Es>
+///
+/// Block-mode auto-detection: if any element in `Es...` exposes `is_upfront == true`,
+/// the helper takes the upfront-block path (wait N upfront, loop, pop N at end).
+template <class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 
 }  // namespace compute_kernel_lib

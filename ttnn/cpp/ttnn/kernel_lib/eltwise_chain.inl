@@ -1029,7 +1029,7 @@ ALWI void hoisted_init_for_each(std::index_sequence<Is...>, Es&... elts) {
 //     immediately before that stage's chain call).
 // =============================================================================
 
-template <EltwiseChainOptions Opts, class... Es>
+template <class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     using Chain = EltwiseChain<Es...>;
 
@@ -1041,13 +1041,8 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
                   "eltwise_chain: two PackTile elements collide on (cb, dst_slot). "
                   "Pack writes must target distinct (cb, dst) tuples.");
 
-    // ---- Detect upfront-block path ----
-    constexpr bool any_upfront = ((Es::is_upfront) || ...);
-    constexpr bool block_path  = (Opts.upfront_block_size > 0) || any_upfront;
-    constexpr uint32_t block_n = (Opts.upfront_block_size > 0) ? Opts.upfront_block_size : 0;
-
-    static_assert(!any_upfront || block_path,
-                  "eltwise_chain: upfront policy used but EltwiseChainOptions.upfront_block_size == 0");
+    // ---- Detect upfront-block path (auto-detected via per-element `is_upfront`) ----
+    constexpr bool block_path = ((Es::is_upfront) || ...);
 
     // ---- F-PERF-1: per-tile init gate on FPU clash ----
     //
@@ -1071,8 +1066,11 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     }
 
     if constexpr (block_path) {
-        (detail::elem_wait_upfront(elts, block_n), ...);
-        (detail::elem_reserve_upfront(elts, block_n), ...);
+        // Upfront block path: wait/reserve `n_tiles` worth of CB tiles upfront,
+        // run the per-tile loop, pop/push at end. Element types with block-size
+        // multipliers (e.g. BlockCopyTile<Cb, BlockSize>) scale `n_tiles` internally.
+        (detail::elem_wait_upfront(elts, n_tiles), ...);
+        (detail::elem_reserve_upfront(elts, n_tiles), ...);
 
         for (uint32_t i = 0; i < n_tiles; ++i) {
             tile_regs_acquire();
@@ -1085,8 +1083,8 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
             tile_regs_release();
         }
 
-        (detail::elem_pop_upfront_end(elts, block_n), ...);
-        (detail::elem_push_at_end(elts, block_n), ...);
+        (detail::elem_pop_upfront_end(elts, n_tiles), ...);
+        (detail::elem_push_at_end(elts, n_tiles), ...);
     } else {
         // Per-tile path (default — PerTile policies).
         for (uint32_t i = 0; i < n_tiles; ++i) {
