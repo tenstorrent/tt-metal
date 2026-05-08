@@ -435,9 +435,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";
         compute_kernel_defines["ISCLOSE_RTOL_RT_ARG_IDX"] = "3";
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
-        compute_kernel_defines.erase("BINARY_SFPU_OP");
-        compute_kernel_defines["BINARY_SFPU_OP(a,b,c,rtol,atol)"] =
-            "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>(a, b, c, rtol, atol)";
     }
 
     {
