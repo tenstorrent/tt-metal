@@ -46,7 +46,7 @@ AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::c
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = AllBroadcastProgramFactory::create_at(
-            operation_attributes, coord, input, output_tensors, final_barrier_semaphore, init_barrier_semaphore);
+            operation_attributes, coord, input, output_tensors, init_barrier_semaphore, final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }

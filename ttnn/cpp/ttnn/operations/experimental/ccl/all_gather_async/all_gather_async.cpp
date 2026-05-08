@@ -314,7 +314,10 @@ ttnn::Tensor all_gather_async_reversed(
             resolved_num_links,
             memory_config,
             subdevice_id,
-            /*cluster_axis*/ std::nullopt);
+            /*cluster_axis*/ std::nullopt,
+            /*use_l1_small_for_semaphores*/ false,
+            multi_device_global_semaphore[0],
+            barrier_semaphore);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
@@ -370,7 +373,15 @@ ttnn::Tensor all_gather_async_reversed(
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
-            input_tensor, dim, resolved_num_links, memory_config, subdevice_id, cluster_axis);
+            input_tensor,
+            dim,
+            resolved_num_links,
+            memory_config,
+            subdevice_id,
+            cluster_axis,
+            /*use_l1_small_for_semaphores*/ false,
+            multi_device_global_semaphore[0],
+            barrier_semaphore);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
@@ -424,7 +435,15 @@ ttnn::Tensor all_gather_async_reversed(
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
-            input_tensor, dim, resolved_links, memory_config, subdevice_id, cluster_axis);
+            input_tensor,
+            dim,
+            resolved_links,
+            memory_config,
+            subdevice_id,
+            cluster_axis,
+            /*use_l1_small_for_semaphores*/ false,
+            multi_device_global_semaphore[0],
+            barrier_semaphore);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
