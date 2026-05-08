@@ -30,8 +30,8 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 
 
 def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
-    """Program configs for the gate / up / down matmuls on Blackhole (11x9 sub-device)."""
-    grid = ttnn.CoreCoord(11, 9)
+    """Program configs for the gate / up / down matmuls on Blackhole."""
+    grid = ttnn.CoreCoord(11, 10)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
@@ -67,8 +67,8 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
 
 
 def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
-    """Program configs for the gate / up / down matmuls on Wormhole (8x7 sub-device)."""
-    grid = ttnn.CoreCoord(8, 7)
+    """Program configs for the gate / up / down matmuls on Wormhole."""
+    grid = ttnn.CoreCoord(8, 8)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=1,

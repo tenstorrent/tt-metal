@@ -265,11 +265,8 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
-<<<<<<< HEAD
             use_fp8_dispatch=self.fp8_output,
-=======
             subdevice_id=self.subdevice_id,
->>>>>>> 342f03bb946 (Seems like I split shared_expert and dispatch into two subdevices)
         )
 
         if tt_dispatched_buffer.dtype == ttnn.uint8:
