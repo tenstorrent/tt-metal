@@ -363,6 +363,10 @@ class Flux2SingleTransformerBlock(Module):
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         mlp_hidden_dim = 3 * dim
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+        # When head padding is applied (e.g., 48 heads padded to 64 for tp=32),
+        # the per-device attention output is padded_inner_dim/tp, not dim/tp.
+        # proj_out must be sized accordingly so K matches K_w.
+        padded_inner_dim = padding_config.target_dim if padding_config is not None else dim
 
         self.attn = Flux2Attention(
             query_dim=dim,
@@ -403,7 +407,7 @@ class Flux2SingleTransformerBlock(Module):
         )
 
         self.proj_out = RowParallelLinear(
-            dim + mlp_hidden_dim,
+            padded_inner_dim + mlp_hidden_dim,
             dim,
             bias=False,
             mesh_device=device,
@@ -414,6 +418,7 @@ class Flux2SingleTransformerBlock(Module):
 
         self._dim = dim
         self._mlp_hidden_dim = mlp_hidden_dim
+        self._padded_inner_dim = padded_inner_dim
         self._tp_axis = tp_axis
         self._tp_factor = parallel_config.tensor_parallel.factor
         self._ccl_manager = ccl_manager
@@ -431,9 +436,17 @@ class Flux2SingleTransformerBlock(Module):
 
         proj_out_weight = state.pop("attn.to_out.weight", None)
         if proj_out_weight is not None:
+            if self._padded_inner_dim != self._dim:
+                # Head padding is active: attn output per device is padded_inner_dim/tp,
+                # not dim/tp. Zero-pad the attn input columns of the proj_out weight
+                # so that the padding head slots contribute zero to the output.
+                attn_w = proj_out_weight[:, : self._dim]
+                mlp_w = proj_out_weight[:, self._dim :]
+                pad = torch.zeros(attn_w.shape[0], self._padded_inner_dim - self._dim, dtype=attn_w.dtype)
+                proj_out_weight = torch.cat([attn_w, pad, mlp_w], dim=1)
             state["proj_out.weight"] = _prepare_weight_for_concatenated_input(
                 proj_out_weight,
-                [self._dim, self._mlp_hidden_dim],
+                [self._padded_inner_dim, self._mlp_hidden_dim],
                 device_count=self._tp_factor,
             )
 
@@ -686,6 +699,11 @@ class Flux2Transformer(Module):
         spatial = spatial * (1 + scale) + shift
 
         return self.proj_out(spatial)
+
+    def release_traces(self):
+        tracer = Flux2Transformer.forward._tracers.get(self)
+        if tracer is not None:
+            tracer.release_trace()
 
 
 def _prepare_weight_for_concatenated_input(

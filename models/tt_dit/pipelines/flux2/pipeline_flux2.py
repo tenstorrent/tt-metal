@@ -185,16 +185,18 @@ class Flux2Pipeline:
 
         with mesh_reshape(self._mesh_device, self._encoder_mesh_shape):
             logger.info("creating TT-NN text encoder...")
+            self._encoder_ccl_manager = CCLManager(self._mesh_device, num_links=num_links, topology=topology)
             self._prompt_encoder = PromptEncoder(
                 checkpoint_name=checkpoint_name,
                 use_torch_encoder=False,
                 device=self._mesh_device,
                 parallel_config=self._encoder_parallel_config,
-                ccl_manager=self._ccl_manager,
+                ccl_manager=self._encoder_ccl_manager,
             )
 
         with mesh_reshape(self._mesh_device, self._vae_mesh_shape):
             logger.info("creating TT-NN VAE decoder...")
+            self._vae_ccl_manager = CCLManager(self._mesh_device, num_links=num_links, topology=topology)
             self._vae_decoder = Flux2VaeDecoder(
                 out_channels=3,
                 block_out_channels=[128, 256, 512, 512],
@@ -202,7 +204,7 @@ class Flux2Pipeline:
                 z_channels=32,
                 device=self._mesh_device,
                 parallel_config=self._vae_parallel_config,
-                ccl_manager=self._ccl_manager,
+                ccl_manager=self._vae_ccl_manager,
             )
 
         if self.dynamic_load:
@@ -277,10 +279,10 @@ class Flux2Pipeline:
     def create_pipeline(
         *,
         mesh_device: ttnn.MeshDevice,
-        dit_sp: tuple[int, int],
-        dit_tp: tuple[int, int],
-        encoder_tp: tuple[int, int],
-        vae_tp: tuple[int, int],
+        sp_axis: int,
+        tp_axis: int,
+        encoder_tp_factor: int,
+        vae_tp_factor: int,
         num_links: int,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         width: int = 1024,
@@ -288,22 +290,16 @@ class Flux2Pipeline:
         is_fsdp: bool = False,
         dynamic_load: bool = False,
         trace_warmup: bool = False,
+        checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
     ) -> Flux2Pipeline:
-        sp_factor, sp_axis = dit_sp
-        tp_factor, tp_axis = dit_tp
-        encoder_tp_factor, encoder_tp_axis = encoder_tp
-        vae_tp_factor, vae_tp_axis = vae_tp
-
         dit_parallel_config = DiTGParallelConfigNoCFG(
-            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-            sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+            tensor_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=mesh_device.shape[sp_axis], mesh_axis=sp_axis),
         )
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=encoder_tp_factor, mesh_axis=encoder_tp_axis)
+            tensor_parallel=ParallelFactor(factor=encoder_tp_factor, mesh_axis=1)
         )
-        vae_parallel_config = VAEParallelConfig(
-            tensor_parallel=ParallelFactor(factor=vae_tp_factor, mesh_axis=vae_tp_axis)
-        )
+        vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=vae_tp_factor, mesh_axis=1))
 
         # logger.info(f"Mesh device shape: {mesh_device.shape}")
         logger.info(f"Parallel config: {dit_parallel_config}")
@@ -312,6 +308,7 @@ class Flux2Pipeline:
 
         return Flux2Pipeline(
             mesh_device=mesh_device,
+            checkpoint_name=checkpoint_name,
             parallel_config=dit_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             vae_parallel_config=vae_parallel_config,

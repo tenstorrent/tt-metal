@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
 
 import pytest
@@ -9,13 +10,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
-
-# Flux2 VAE uses conv2d which needs L1_SMALL buffers.
-_flux2_line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}
-_flux2_ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 32768}
+from .test_pipeline_flux2 import line_params_flux2, ring_params_flux2
 
 NUM_INFERENCE_STEPS = 50
 NUM_PERF_RUNS = 3
@@ -37,12 +36,12 @@ NUM_PERF_RUNS = 3
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, is_fsdp, topology",
+    "mesh_device, sp_axis, tp_axis, encoder_tp_factor, vae_tp_factor, topology, num_links, is_fsdp, dynamic_load, device_params",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, _flux2_line_params, True, ttnn.Topology.Linear],
-        [(2, 4), (2, 4), 0, 1, 2, False, _flux2_line_params, False, ttnn.Topology.Linear],
-        [(4, 8), (4, 8), 0, 1, 2, False, _flux2_line_params, False, ttnn.Topology.Linear],
-        [(4, 8), (4, 8), 0, 1, 2, False, _flux2_ring_params, False, ttnn.Topology.Ring],
+        [(2, 2), 0, 1, 8, 8, ttnn.Topology.Linear, 2, True, False, line_params_flux2],
+        [(2, 4), 0, 1, 8, 8, ttnn.Topology.Linear, 2, False, False, line_params_flux2],
+        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 2, False, False, line_params_flux2],
+        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Ring, 2, False, False, ring_params_flux2],
     ],
     ids=[
         "bh_qb",
@@ -55,15 +54,17 @@ NUM_PERF_RUNS = 3
 def test_flux2_performance(
     *,
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple,
     sp_axis: int,
     tp_axis: int,
-    num_links: int,
-    dynamic_load: bool,
-    is_fsdp: bool,
+    encoder_tp_factor: int,
+    vae_tp_factor: int,
     topology: ttnn.Topology,
+    num_links: int,
+    is_fsdp: bool,
+    dynamic_load: bool,
     width: int,
     height: int,
+    model_location_generator,
     is_ci_env: bool,
 ) -> None:
     """Performance test for Flux2 pipeline across machine types and resolutions."""
@@ -78,25 +79,21 @@ def test_flux2_performance(
         f"sp={sp_factor}, tp={tp_factor}, topology={topology}"
     )
 
-    # Encoder/VAE TP covers the full submesh so the encoder mesh shape matches
-    # the submesh directly (e.g. a 4x8 submesh stays 4x8, no reshape needed).
-    submesh_size = sp_factor * tp_factor
-    encoder_tp = (8, 1)  # (submesh_size, sp_axis)
-    vae_tp = (8, 1)  # (submesh_size, sp_axis)
-
     # Pipeline creation includes internal warmup (2 steps at target resolution).
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
-        dit_sp=(sp_factor, sp_axis),
-        dit_tp=(tp_factor, tp_axis),
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
+        checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        encoder_tp_factor=encoder_tp_factor,
+        vae_tp_factor=vae_tp_factor,
         num_links=num_links,
         topology=topology,
         width=width,
         height=height,
         dynamic_load=dynamic_load,
         is_fsdp=is_fsdp,
+        trace_warmup=True,
     )
 
     # Performance measurement runs
@@ -197,8 +194,8 @@ def test_flux2_performance(
     if is_ci_env:
         device_name_map = {
             (2, 2): "BH_QB",
-            (2, 4): "BH_LB",
-            (4, 8): "BH_GLX",
+            (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
 
         benchmark_data = BenchmarkData()
@@ -214,8 +211,8 @@ def test_flux2_performance(
                 )
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type=device_name_map.get(mesh_shape, "UNKNOWN"),
-            ml_model_name="Flux2",
+            run_type=device_name_map.get(tuple(mesh_device.shape), "UNKNOWN"),
+            ml_model_name=os.path.basename(pipeline.checkpoint_name),
             batch_size=1,
             config_params={
                 "width": width,
