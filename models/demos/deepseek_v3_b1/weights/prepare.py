@@ -50,8 +50,6 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
 )
 from models.demos.deepseek_v3_b1.weights.sram_slots import (
-    _COMBINED_ATTN_SRAM_CAP_BYTES,
-    _SHARED_EXPERT_FIELDS,
     SramCompressedExpertSlots,
     _compute_sram_trim_budget,
     prepare_compressed_sram_slots,
@@ -1509,6 +1507,23 @@ def prepare_dense_layer_weights(
     )
     logger.info("Dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result
+
+
+# Combined per-core cap for persistent attention weights + SRAM-hot experts.
+# Applies to every core in the SRAM binding set (gate ∪ up ∪ down grids):
+# ``attn_bytes[c] + sram_hot_expert_bytes[c] <= _COMBINED_ATTN_SRAM_CAP_BYTES``.
+# Shared expert L1 weights are intentionally *not* counted here -- they are
+# staged after the SRAM trim runs and land below the SRAM band in the
+# ``worker_l1_size - cap`` reserve along with runtime scratch (CBs, activation
+# shards, allocator bookkeeping).  Raise the cap only if scratch + shared
+# headroom measurements confirm it's safe.
+_COMBINED_ATTN_SRAM_CAP_BYTES = 960 * 1024
+
+
+# Dataclass field names of the shared expert L1 weights inside
+# :class:`DeepSeekV3MoELayerWeights` -- skipped by ``eager_upload_l1_lockstep``
+# so they don't contribute to the SRAM trim's per-core ``initial_lowest_addr``.
+_SHARED_EXPERT_FIELDS = ("shared_gate_proj", "shared_up_proj", "shared_down_proj")
 
 
 def prepare_moe_layer_weights(

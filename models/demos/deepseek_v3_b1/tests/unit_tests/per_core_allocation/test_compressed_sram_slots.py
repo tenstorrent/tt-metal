@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext,
 from models.demos.deepseek_v3_b1.weights.sram_slots import (
     SramCompressedExpertSlots,
     _build_l1_compressed_tensor,
+    _MemoryConfigSpec,
     prepare_compressed_sram_slots,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
@@ -151,7 +152,8 @@ def test_build_l1_compressed_tensor(device):
     torch.manual_seed(42)
     weight = torch.randn(K, N).float()
 
-    ct = _build_l1_compressed_tensor(weight, core_grid, assigner=assigner, device=device)
+    spec = _MemoryConfigSpec(layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, core_range_set=core_grid)
+    ct = _build_l1_compressed_tensor(weight, spec, assigner=assigner, device=device)
     assert isinstance(ct, CompressedTensor)
 
     cores = ttnn.corerange_to_cores(core_grid)
@@ -682,7 +684,8 @@ def test_build_l1_compressed_tensor_bspm(device):
     torch.manual_seed(0)
     weight = torch.randn(K, N).float()
 
-    ct = _build_l1_compressed_tensor(weight, core_grid, assignment=assignment, device=device)
+    spec = _MemoryConfigSpec(layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, core_range_set=core_grid)
+    ct = _build_l1_compressed_tensor(weight, spec, assignment=assignment, device=device)
 
     assert isinstance(ct, CompressedTensor)
     assert (
@@ -717,7 +720,8 @@ def test_build_l1_compressed_tensor_bspm_down_proj(device):
     torch.manual_seed(1)
     weight = torch.randn(K, N).float()
 
-    ct = _build_l1_compressed_tensor(weight, core_grid, assignment=assignment, device=device)
+    spec = _MemoryConfigSpec(layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, core_range_set=core_grid)
+    ct = _build_l1_compressed_tensor(weight, spec, assignment=assignment, device=device)
 
     assert isinstance(ct, CompressedTensor)
     assert ct.tile_counts.get("bfp8", 0) == 0, f"Real BSPM 3.5 b/e should have 0 bfp8 tiles, got {ct.tile_counts}"
