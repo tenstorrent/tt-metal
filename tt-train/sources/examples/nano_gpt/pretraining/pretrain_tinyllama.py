@@ -1383,7 +1383,7 @@ def save_checkpoint(
     optimizer_lr = None
     if optimizer is not None:
         optimizer_state = _serialize_optimizer_state(optimizer.get_state_dict())
-        optimizer_lr = optimizer.get_lr()
+        # optimizer_lr = optimizer.get_lr()
 
     checkpoint = {
         "step": step,
@@ -1392,7 +1392,7 @@ def save_checkpoint(
         "model_config": model_config,
         "training_config": training_config,
         "optimizer_state": optimizer_state,
-        "optimizer_lr": optimizer_lr,  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
+        # "optimizer_lr": optimizer_lr,  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
         "train_iter_state": train_iter_state,
     }
 
@@ -1469,7 +1469,7 @@ def load_model_from_checkpoint(
     training_config = checkpoint.get("training_config", None)
     step = checkpoint.get("step", 0)
     optimizer_state = checkpoint.get("optimizer_state", None)
-    optimizer_lr = checkpoint.get("optimizer_lr", None)
+    # optimizer_lr = checkpoint.get("optimizer_lr", None)
     train_iter_state = checkpoint.get("train_iter_state", None)
 
     # Create model from config
@@ -1489,7 +1489,7 @@ def load_model_from_checkpoint(
         model_params[name].assign(restored_tensor)
     print(f"  Checkpoint loaded from step {step}")
 
-    return model, tokenizer, model_config, training_config, step, optimizer_state, optimizer_lr, train_iter_state
+    return model, tokenizer, model_config, training_config, step, optimizer_state, train_iter_state
 
 
 def main():
@@ -1795,7 +1795,7 @@ def main():
                 training_config,
                 loaded_step,
                 _opt_state,
-                _opt_lr,
+                # _opt_lr,
                 _train_iter_state,
             ) = load_model_from_checkpoint(
                 args.model_path,
@@ -1941,7 +1941,7 @@ def main():
         start_step = 0
         resume_path = None
         resume_optimizer_state: Optional[dict] = None
-        resume_optimizer_lr: Optional[float] = None
+        # resume_optimizer_lr: Optional[float] = None
         resume_train_iter_state: Optional[dict] = None
 
         if not args.fresh:
@@ -1965,7 +1965,7 @@ def main():
                     _,  # training_config from checkpoint (we use CLI config instead)
                     start_step,
                     resume_optimizer_state,
-                    resume_optimizer_lr,
+                    # resume_optimizer_lr,
                     resume_train_iter_state,
                 ) = load_model_from_checkpoint(resume_path)
                 # Use tokenizer from checkpoint to ensure vocab consistency
@@ -2054,13 +2054,13 @@ def main():
             except Exception as e:
                 print(f"   - WARNING: failed to restore optimizer state ({e}); continuing with fresh moments")
 
-        # Restore the LR saved at checkpoint time so the first optimizer.step()
-        # on resume uses the same LR as the interrupted run would have.
-        if (
-            resume_optimizer_lr is not None
-        ):  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
-            optimizer.set_lr(resume_optimizer_lr)
-            print(f"   - Restored LR to {resume_optimizer_lr:.6e} from checkpoint")
+        # # Restore the LR saved at checkpoint time so the first optimizer.step()
+        # # on resume uses the same LR as the interrupted run would have.
+        # if (
+        #     resume_optimizer_lr is not None
+        # ):  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
+        #     optimizer.set_lr(resume_optimizer_lr)
+        #     print(f"   - Restored LR to {resume_optimizer_lr:.6e} from checkpoint")
 
         # Memory snapshot after optimizer creation
         if args.track_memory:
@@ -2355,6 +2355,19 @@ def main():
 
                 if global_step >= max_steps:
                     break
+
+        # Final validation eval after training (packed mode only).
+        if packed_val_pds is not None and training_config.eval_iters > 0:
+            _run_eval(
+                model,
+                packed_val_pds,
+                eval_iters=training_config.eval_iters,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                attn_mask=attn_mask,
+                log_step=global_step,
+                wandb_enabled=wandb_enabled,
+            )
 
         # Save final checkpoint after training
         if args.model_save_path:
