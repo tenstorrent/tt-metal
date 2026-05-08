@@ -41,7 +41,8 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
     ProgramDescriptor desc;
 
     auto* device = input.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size =
+        device->compute_with_storage_grid_size();  // This can be replaced with get_worker_cores in subdevices
 
     const auto& logical_shape = input.logical_shape();
     const auto& tile = input.tensor_spec().tile();
@@ -62,6 +63,8 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
+    // Configuring the CB that store input pages
+
     const auto input_pages_cb_index = tt::CBIndex::c_0;
     auto output_page_cb_index = input_pages_cb_index;
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -81,8 +84,11 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
     if (convert_df) {
+        // Configuring the CB that stores output pages if we need to convert data formats through the compute kernel
         output_page_cb_index = tt::CBIndex::c_16;
         const auto aligned_output_page_size = output.buffer()->aligned_page_size();
+        // Since we are double buffering, the output page_size must be
+        // aligned so the noc_write reads from an aligned address in the CB
 
         desc.cbs.push_back(CBDescriptor{
             .total_size = 2 * aligned_output_page_size,
@@ -94,10 +100,11 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
             }}},
         });
     }
-
+    // Reader kernel config with compile-time args
     KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
 
+    // Writer kernel config with compile-time args
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {static_cast<uint32_t>(output_page_cb_index)};
 
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
@@ -126,16 +133,18 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
         compute_desc.config = ComputeConfigDescriptor{};
     }
 
+    // Set runtime args
     uint32_t start_tile_id = 0;
     for (const auto& core : ordered_cores) {
         uint32_t num_tiles_to_process = num_tiles_per_core_group_1;
         if (core_group_2.contains(core)) {
             num_tiles_to_process = num_tiles_per_core_group_2;
         }
+        // Reader run-time args
         reader_desc.emplace_runtime_args(core, {input.buffer(), num_tiles_to_process, start_tile_id});
         writer_desc.emplace_runtime_args(core, {output.buffer(), num_tiles_to_process, start_tile_id});
         start_tile_id += num_tiles_to_process;
-
+        // Set run-time arg
         if (use_compute) {
             compute_desc.emplace_runtime_args(core, {num_tiles_to_process});
         }

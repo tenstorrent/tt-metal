@@ -72,13 +72,20 @@ ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    constexpr uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;
+    constexpr uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;  // Chosen empirically to prevent large row OOM CB error
     uint32_t input_page_size = input.buffer()->page_size();
-    uint32_t aligned_output_page_size = output.buffer()->aligned_page_size();
+    uint32_t aligned_output_page_size =
+        output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so
+    // the noc_write reads from an aligned address in the CB
     uint32_t input_subblock_size_bytes = elements_per_input_page * bytes_per_element;
-    uint32_t output_subblock_size_bytes = elements_per_output_page * bytes_per_element;
+    uint32_t output_subblock_size_bytes =
+        elements_per_output_page *
+        bytes_per_element;  // If the input/output row size is not too large, we can just set the subblock to be the
+    // page and reduce the number of NoC reads/writes from/to pages.
 
-    if (input_page_size > MAX_SUBBLOCK_SIZE_BYTES) {
+    if (input_page_size >
+        MAX_SUBBLOCK_SIZE_BYTES) {  // If the input/output row size is too large, the page size will be too large for
+        // the CB, so we process data in subblock units of MAX_SUBBLOCK_SIZE_BYTES instead
         input_page_size = MAX_SUBBLOCK_SIZE_BYTES;
         input_subblock_size_bytes = MAX_SUBBLOCK_SIZE_BYTES;
     }
@@ -86,6 +93,8 @@ ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
         aligned_output_page_size = MAX_SUBBLOCK_SIZE_BYTES;
         output_subblock_size_bytes = MAX_SUBBLOCK_SIZE_BYTES;
     }
+
+    // Configuring the CB that store input pages
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     desc.cbs.push_back(CBDescriptor{
@@ -98,6 +107,8 @@ ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
         }}},
     });
 
+    // Configuring the CB that stores output pages. This one is double buffered, since it is shared between the reader
+    // and writer kernels.
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * aligned_output_page_size,
@@ -109,6 +120,7 @@ ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
         }}},
     });
 
+    // Reader kernel config with compile-time args
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         static_cast<uint32_t>(input_pages_cb_index),
         static_cast<uint32_t>(output_page_cb_index),
@@ -123,6 +135,7 @@ ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
     };
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
 
+    // Writer kernel config with compile-time args
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
         static_cast<uint32_t>(output_page_cb_index),
         static_cast<uint32_t>(num_output_pages_in_row),
@@ -148,12 +161,14 @@ ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
+    // Set runtime args
     uint32_t start_row_id = 0;
     for (const auto& core : ordered_cores) {
         uint32_t num_rows_to_process = num_rows_per_core_group_1;
         if (core_group_2.contains(core)) {
             num_rows_to_process = num_rows_per_core_group_2;
         }
+        // Set run-time arg
         reader_desc.emplace_runtime_args(core, {input.buffer(), start_row_id, num_rows_to_process});
         writer_desc.emplace_runtime_args(core, {output.buffer(), start_row_id, num_rows_to_process});
 
