@@ -100,13 +100,14 @@ class TTSeamlessM4Tv2Decoder:
         bias: ttnn.Tensor,
         *,
         compute_cfg: Optional[ttnn.DeviceComputeKernelConfig] = None,
+        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         return ttnn.linear(
             x,
             weight,
             bias=bias,
             core_grid=_core_grid(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=memory_config,
             compute_kernel_config=compute_cfg if compute_cfg is not None else self._linear_ln_compute_cfg,
         )
 
@@ -150,9 +151,14 @@ class TTSeamlessM4Tv2Decoder:
         q_src = hidden_states
         kv_src = hidden_states if encoder_hidden_states is None else encoder_hidden_states
 
-        q = self._linear(q_src, attn_module.q_proj.weight, attn_module.q_proj.bias)
-        k = self._linear(kv_src, attn_module.k_proj.weight, attn_module.k_proj.bias)
-        v = self._linear(kv_src, attn_module.v_proj.weight, attn_module.v_proj.bias)
+        # Keep short-lived attention projection outputs in L1 until SDPA consumes them.
+        q = self._linear(q_src, attn_module.q_proj.weight, attn_module.q_proj.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = self._linear(
+            kv_src, attn_module.k_proj.weight, attn_module.k_proj.bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        v = self._linear(
+            kv_src, attn_module.v_proj.weight, attn_module.v_proj.bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         qh = self._heads(q, batch, seq_q, num_heads, head_dim)
         kh = self._heads(k, batch, seq_k, num_heads, head_dim)
@@ -308,10 +314,11 @@ class TTSeamlessM4Tv2Decoder:
                 layer.ffn.fc1.weight,
                 layer.ffn.fc1.bias,
                 compute_cfg=self._ffn_fc1_compute_cfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(normed)
             ff_in = ff
-            ff = ttnn.relu(ff_in, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ff = ttnn.relu(ff_in, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(ff_in)
             ff_in = ff
             ff = self._linear(
