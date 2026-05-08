@@ -1094,7 +1094,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"token_expert_row_offset", token_expert_row_offset},
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", combine_data_parallel_cores},
-        {"moe_config_type", 0u},  // DEPRECATED — no longer read by kernels
         {"hidden_tiles", hidden_tiles},
         {"intermediate_tiles", intermediate_tiles},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
