@@ -226,9 +226,9 @@ class GemmaAttentionTTNN:
             packer_l1_acc=True,
         )
 
-        # SDPA config using full device grid
+        # SDPA compute config - HiFi2 sufficient for attention (matches tt_transformers)
         self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
