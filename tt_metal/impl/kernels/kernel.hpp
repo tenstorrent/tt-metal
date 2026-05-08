@@ -280,10 +280,9 @@ protected:
     // Populated by subclass constructors via set_compiler_include_paths()
     std::vector<std::string> resolved_compiler_include_paths_;
 
-    // Resolve user-supplied include paths and store them on the kernel. Absolute
-    // paths pass through unmodified; relative paths are resolved against the current
-    // working directory and must point at an existing directory (typos throw at
-    // kernel construction rather than producing a confusing build failure later).
+    // Resolve user-supplied include paths and store them on the kernel:
+    //  - Absolute paths pass through unmodified
+    //  - Relative paths are resolved against the current working directory
     void set_compiler_include_paths(const std::vector<std::filesystem::path>& paths);
 
     virtual std::string config_hash() const = 0;

@@ -89,11 +89,14 @@ fs::path resolve_path(const fs::path& given_file_name) {
     TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
 
-// Resolve a user-supplied compiler include path (-I). Absolute paths pass through
-// unchanged (the user has been explicit; gcc itself will warn at compile time if the
-// directory doesn't exist). Relative paths are resolved against the current working
-// directory and must point at an existing directory — typos fail fast at kernel
-// construction rather than producing a confusing build failure later.
+// Resolve a user-supplied compiler include path (-I):
+//  - Absolute paths pass through unchanged
+//  - Relative paths are resolved against the current working directory
+//
+// If the user-supplied path doesn't exist:
+//  - Absolute path will go straight to gcc, which will warn about the missing dir
+//  - Unresolved relative path will throw here
+//
 fs::path resolve_compiler_include_dir(const fs::path& given) {
     if (given.is_absolute()) {
         return given;
