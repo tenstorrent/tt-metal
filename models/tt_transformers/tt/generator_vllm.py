@@ -257,7 +257,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         is_wormhole = is_wormhole_b0()
 
         # Llama90B on WH T3K
-        if "3.2-90B" in model_name and devices_per_dp_cache == 8 and is_wormhole:
+        if "Llama-3.2-90B" in model_name and devices_per_dp_cache == 8 and is_wormhole:
             return 65_536
         return super().get_max_tokens_all_users(
             model_name=model_name,
@@ -376,7 +376,7 @@ class LlamaForCausalLM(Generator):
         is_wormhole = is_wormhole_b0()
 
         # Llama8B on N150
-        if "3.1-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+        if "Llama-3.1-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
             return 32_768
         return super().get_max_tokens_all_users(
             model_name=model_name,
@@ -460,7 +460,7 @@ class QwenForCausalLM(Generator):
         is_wormhole = is_wormhole_b0()
 
         # Qwen3-8B on N150 (same constraint as Llama8B-N150)
-        if "3-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+        if "Qwen3-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
             return 32_768
         # DeepSeek-R1-Distill-Qwen-14B / Qwen2.5-14B on N300
         if (
@@ -537,8 +537,8 @@ class MistralForCausalLM(Generator):
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
-        # Mistral7B on N150
-        if "7B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+        # Mistral-7B on N150
+        if "Mistral-7B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
             return 65_536
         return super().get_max_tokens_all_users(
             model_name=model_name,
@@ -613,8 +613,8 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
-        # gemma3-4b on wormhole configurations with up to 2 devices per DP shard
-        if "4b" in model_name.lower() and devices_per_dp_cache <= 2 and is_wormhole:
+        # gemma-3-4b on wormhole configurations with up to 2 devices per DP shard
+        if "gemma-3-4b" in model_name.lower() and devices_per_dp_cache in (1, 2) and is_wormhole:
             return 65_536
         return super().get_max_tokens_all_users(
             model_name=model_name,
