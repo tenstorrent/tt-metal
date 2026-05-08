@@ -1,10 +1,10 @@
-# `eltwise_chain` (run7) — Refinement Design (v5)
+# `eltwise_chain` (run7) — Refinement Design (v6)
 
 ## Section A — Scope
 
-**Branch:** `astancov/eltwise_run7_refined` — hard-reset to `75868c9eff4` (run7 baseline). Two off-script implementation commits and four prior design commits (v1, v2, v3, v4) sit on top. v5 narrows **D6** scope per user clarification — the per-element `EnableFp32DestAcc` flag is added **only to elements that emit DEST-format-sensitive LLK**, not to every chain element. v4 (995-line design at commit `19fd0e8f3f2`) earlier built on v3 (915-line at blob `6160335fd85^`) by amending it with **D7** (drop `OldCb*` from Block elements; extend the prev-CB / prev-fp32 fold to the block path) and **D8** (helper does not wrap "BIG inits" — generalise D1's caller-owned-`compute_kernel_hw_startup` into a full caller-init contract).
+**Branch:** `astancov/eltwise_run7_refined` — hard-reset to `75868c9eff4` (run7 baseline). Two off-script implementation commits and five prior design commits (v1, v2, v3, v4, v5) sit on top. **v6 reverses the v5 verdict on Q4** per user override: `BinaryFpu`'s per-side `AIndex / BIndex` template params (and `BlockBinaryFpu`'s) are now **collapsed to a single `Index` mode**. The cost is paid in the asymmetric callers — see Section B U3 / Q4 / new Q17 for the per-kernel disposition. v5 narrowed **D6** to a CARRY/SKIP element split — that decision is preserved unchanged. v4 (995-line design at commit `19fd0e8f3f2`) earlier built on v3 (915-line at blob `6160335fd85^`) by amending it with **D7** (drop `OldCb*` from Block elements; extend the prev-CB / prev-fp32 fold to the block path) and **D8** (helper does not wrap "BIG inits" — generalise D1's caller-owned-`compute_kernel_hw_startup` into a full caller-init contract).
 
-**v5 surgical update (this revision):** D6 narrowed to a CARRY/SKIP element split. Sections updated: A directive table (D6 row), A LOC delta (R-4), B group P1+U1-OldCb-streaming (Step 3b transition fold + SFINAE probe), B group P1-block (block-element fp32 fold), B group U3 (Step 6 — explicit per-element CARRY/SKIP table), B group U6 (doxygen — only CARRY elements expose `@tparam EnableFp32DestAcc`), F Q6 (note on SKIP-element default moot-ness), F Q10 (`static_assert` only fires on CARRY), F Q13 (uniform fold mechanism), F Q16 (NEW — SFINAE detection for SKIP elements). All other sections untouched.
+**v6 surgical update (this revision):** Q4 verdict reversed. Sections updated: A directive table (D4 row — per-side AIndex/BIndex moves from "Keep" to "Delete"), A LOC delta (R-4 widened — param list shrinks by 1 but kernels touched grows by ~6 asymmetric callers), B group U1 Directive-4 evidence table (CbIndexMode per-side row removed from "Keep"; new "Delete" row added for the AIndex/BIndex collapse), B group U3 Directive-4 / Q4 subsection (rewritten — cites user override; per-kernel disposition table a/b/c/d), B group U3 Step 4 (param list shrunk from 13 to 12 named; reorder canonicalised), B group U3 sweep set (asymmetric callers added or flagged), D acceptance test plan (new rows for rewritten / regressed kernels), E out-of-scope (regressed-asymmetric-kernels list), F Q4 (rewritten verdict), F Q17 (new — collapsed-Index expression contract for asymmetric semantics with concrete code example). v5's other resolved questions (Q1 RandTile, Q6 EnableFp32DestAcc default `false`) are carried forward unchanged; Q1/Q6 language tightened in place where ambiguity could remain.
 
 **Already landed (out of this design's scope as fixes — but the *shape* of one of them is being reworked):**
 - `16f0b759c93` — F-UX-12 fix-in-place (`first_cb_b` walk inside `EltwiseChainPipelineInit::run()`) and F-UX-11 (`RandTile` static-init via NTTP seed).
@@ -27,7 +27,7 @@ These commits are not on `astancov/eltwise_run7_refined` HEAD (which is `75868c9
 | **D1** | Delete `eltwise_pipeline_init`. Caller writes `compute_kernel_hw_startup(...)` themselves in `MAIN()`. Per-element bootstrap (`add_tiles_init`, `*_tile_init`, `init_bcast`, etc.) stays inside the chain. | U2 |
 | **D2** | Pipeline-internal compile-time prev-CB tracking. Drop `OldCb*` from streaming elements; `prev_cb_for_idx` fold over the chain element pack at compile time; per-element reconfig becomes `if constexpr (current_cb != prev_cb)`. | P1+U1-OldCb (streaming) |
 | **D3** | Doxygen on helper headers + caller-init contract spec + minimal example per chain shape. Header doxygen carries: caller's full init contract (D8), lifecycle expectations, table mapping chain shape → required pre-chain inits, 2-3 example kernel snippets per chain shape. | U6 |
-| **D4** | "No production callers" is NOT a kill criterion — grep raw-LLK pattern in unmigrated kernels. Delete only what is provably absent codebase-wide (`EltwiseChainOptions`; streaming `OldCb*`; **D7** Block `OldCb*`). Keep `BinaryFpuOutputPolicy::HoistAcquireRelease`, `PackTileIndexMode::{BlockIter,Pinned,Absolute}`, `WaitUpfrontPopAtEnd`/`UpfrontReservePushAtEnd`, `OutputConditional`, `FillBitcast`, `FillInt`, `BWaitTiles`, per-side `AIndex/BIndex`. | U1, U3 |
+| **D4** | "No production callers" is NOT a kill criterion — grep raw-LLK pattern in unmigrated kernels. Delete only what is provably absent codebase-wide (`EltwiseChainOptions`; streaming `OldCb*`; **D7** Block `OldCb*`; **v6 Q4-reversal** per-side `AIndex/BIndex` collapsed to single `Index`). Keep `BinaryFpuOutputPolicy::HoistAcquireRelease`, `PackTileIndexMode::{BlockIter,Pinned,Absolute}`, `WaitUpfrontPopAtEnd`/`UpfrontReservePushAtEnd`, `OutputConditional`, `FillBitcast`, `FillInt`, `BWaitTiles`. **v6 note:** the v5-kept "per-side `AIndex/BIndex`" item is overridden by user direction; collapse to single `Index` (mode) — runtime tile index member fields (`a_tile_idx` / `b_tile_idx`) remain independent. Asymmetric-mode callers fall into one of (a) symmetric refit, (b) helper alternative, (c) regress-to-raw, (d) drop-migration; see U3 / Q4 / Q17. | U1, U3 |
 | **D5** | `compute_kernel_hw_startup` placement contract: caller calls it as the **first statement of `MAIN()`** if the chain shape needs it; otherwise omits it (calling it elsewhere is undefined). Doxygen encodes a chain-shape → boot-needed table; the U2 sweep enforces top-of-`MAIN()` placement and removes spurious mid-`MAIN()` calls. | U2 (sweep), U6 (doc) |
 | **D6** | `enable_fp32_dest_acc` is **per-element**, not chain-level. The flag is added **only to elements that emit DEST-format-sensitive LLK** (the **CARRY list**: `BinaryFpu`, `BlockBinaryFpu`, the `BinarySfpu` op-struct family in `eltwise_binary_sfpu.hpp` — `AddBinary`/`SubBinary`/`MulBinary`/`DivBinary`, `DestReuseBinary`, `BroadcastFpu`, `UnaryBcast`, `PackTile`, `BlockPackTile`). Elements that do NOT have dest-mode-dependent LLK behavior (the **SKIP list**: `CopyTile`, `BlockCopyTile` — input-side, no dest-mode-sensitive LLK selection; `FillScalar`, `RandTile`, `FillInt`, `FillBitcast` — constant fill, dest-mode-irrelevant; `OptionalChainElement<COND, Inner>` — forwards to `Inner`, which carries the flag if applicable) do NOT carry the template parameter. Pipeline machinery composes per-element fp32-dest-acc transitions into the prev-CB fold; the fold treats SKIP-list elements as transparent (passes the running prev-fp32 value through unchanged — see Q16). `EltwiseChainOptions::enable_fp32_dest_acc` (chain-level) is deleted; the field's intent is replaced by per-CARRY-element control via `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` LLK toggles (`tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:96-120`). | U1 (delete `EltwiseChainOptions`), U3 (per-element flag added to CARRY list only), P1 (transition logic in fold + SFINAE detection for SKIP elements), U6 (doc) |
 | **D7** *(new)* | Drop `OldCb*` template params from `BlockCopyTile`, `BlockBinaryFpu`, `BlockPackTile`. Generalise the **D2** prev-CB fold and the **D6** prev-fp32-dest-acc fold to the block path so that the `_with_dt` two-arg LLK forms at `eltwise_block.hpp:72,236` and the explicit `srca/srcb` reconfig pair at `eltwise_block.hpp:142-143` consume chain-derived prev-CB info instead of template-passed `OldCb*`. Reverses Q12's defer in v3. | P1-block (NEW commit 3) |
@@ -41,12 +41,12 @@ These commits are not on `astancov/eltwise_run7_refined` HEAD (which is `75868c9
 | R-2    | F-UX-7, F-PERF-1 follow-up, **D6 transition fold** | P1+U1-OldCb-streaming (commit 2) | `eltwise_chain.{hpp,inl}` | +95 / -90 |
 | R-2b   | **D7 block extension** | P1-block (commit 3) | `eltwise_chain.inl` (fold generalisation), `eltwise_block.hpp` (drop `OldCb*`, route via fold) | +50 / -35 |
 | R-3    | F-UX-7 sweep tail, **D6 `EltwiseChainOptions` delete**, **D7 block-kernel sweep** | U1 (genuinely-dead-only) | `eltwise_chain.hpp` (decls), 17+ binary kernels (incl. block-element call sites) | +0 / -100 |
-| R-4    | F-UX-2, F-UX-5, **D6 per-element flag (CARRY list only — narrowed in v5)** | U3 (`BinaryFpu` params)   | `eltwise_chain.{hpp,inl}`, `eltwise_block.hpp`, `eltwise_binary_sfpu.hpp`, ~17 kernels | +30 / -100 |
+| R-4    | F-UX-2, F-UX-5, **D6 per-element flag (CARRY list only — narrowed in v5)**, **v6 Q4-reversal: collapse `AIndex/BIndex` → single `Index`** | U3 (`BinaryFpu` params)   | `eltwise_chain.{hpp,inl}`, `eltwise_block.hpp`, `eltwise_binary_sfpu.hpp`, ~17 streaming kernels + 6 asymmetric callers | +30 / -110 |
 | R-5    | F-UX-1 wrapper                       | U4 (`eltwise_chain_with_init`) | `eltwise_chain.hpp`, ≤25 kernels (sweep set)   | +30 / -150 |
 | R-6    | F-UX-8                               | U5 (`OptionalChainElement` adoption) | `logit_kernel.cpp`, `where_tss_kernel.cpp`, new test kernel + py | +60 / -40 |
 | R-7    | F-UX-1 docs, F-UX-16 docs, **D5 placement table**, **D6 per-element notes**, **D7 block-fold docs**, **D8 caller-init contract** | U6 (Doxygen + spec) | `eltwise_chain.hpp`, `eltwise_block.hpp`, key element headers | +250 / 0 |
 
-Net LOC reclaim: ~715 removed, ~580 added. **D7 net** is approximately +15 LOC: +20 LOC in the fold generalisation (block-path entries in the per-element traits walk), ~10 LOC removed from `eltwise_block.hpp` (`OldCb` / `OldCbA` / `OldCbB` / `OldCbOut` template lines), and ~5 LOC removed from kernel call sites (block-element trailing zeros). **D8 net** is small to negative: the only BIG init currently in the helper is `compute_kernel_hw_startup` (already removed by D1 in commit 1). No additional helper-side LOC moves; D8 ships as ~30 LOC of doxygen plus a one-line CI-grep gate documented in U6.
+Net LOC reclaim: ~725 removed, ~580 added. **D7 net** is approximately +15 LOC: +20 LOC in the fold generalisation (block-path entries in the per-element traits walk), ~10 LOC removed from `eltwise_block.hpp` (`OldCb` / `OldCbA` / `OldCbB` / `OldCbOut` template lines), and ~5 LOC removed from kernel call sites (block-element trailing zeros). **D8 net** is small to negative: the only BIG init currently in the helper is `compute_kernel_hw_startup` (already removed by D1 in commit 1). No additional helper-side LOC moves; D8 ships as ~30 LOC of doxygen plus a one-line CI-grep gate documented in U6. **v6 Q4-reversal net** is approximately -10 LOC: -2 LOC per affected kernel for the symmetric-refit cases (collapse two conditional template lines to one literal × ~6 callers), ~+10 LOC across the regression cases for the inline raw-LLK comments documenting the regression, and -2 LOC at the helper decl head (one fewer template parameter on `BinaryFpu` and on `BlockBinaryFpu`).
 
 ---
 
@@ -425,7 +425,8 @@ The original design's Appendix B / U1 deletion list is re-evaluated against the 
 | `EltwiseChainOptions::upfront_block_size` | 0 callers | **DELETE** | Same grep. `block_path` auto-fires on `Es::is_upfront == true` (`eltwise_chain.inl:871`). Field is redundant. |
 | `EltwiseChainOptions` struct + NTTP | 0 callers | **DELETE** | Both fields go, struct goes. `eltwise_chain` signature simplifies (drops the `template <EltwiseChainOptions Opts = ...>` NTTP at `eltwise_chain.hpp:579`). |
 | `PackTileIndexMode` enum (whole) | mostly dead | **KEEP** | Pattern alive in unmigrated kernels. `experimental/transformer/rotary_embedding_llama/.../rotary_embedding_llama.cpp:73,84,94,111` does `pack_tile(j, cb, j)` inside a `for (j)` loop = BlockIter. `experimental/transformer/all_reduce_create_qkv_heads/.../reduction.cpp:50` does `pack_tile(i, cb_out0, p * max_dst_tiles + i)` = Absolute. `topk.cpp:67` does `pack_tile(base_offset + 1, cb1)`. ~6 kernels. |
-| `CbIndexMode::Pinned` (used in BinaryFpu / DestReuseBinary) | dead | **KEEP — migrated callers exist** | `moreh_adam.cpp:44-45` `IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned`; `moreh_softmax_backward_{h,w,c_large,h_large,w_large}.cpp:34-35,52-67` use `Pinned` as part of already-migrated kernels. |
+| `CbIndexMode::Pinned` (the enum value itself, used in BinaryFpu / DestReuseBinary) | dead | **KEEP — migrated callers exist** | `moreh_adam.cpp:44-45` `IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned`; `moreh_softmax_backward_{h,w,c_large,h_large,w_large}.cpp:34-35,52-67` use `Pinned` as part of already-migrated kernels. The enum value stays available; only the per-side split goes (next row, v6). |
+| **v6 NEW** Per-side `AIndex/BIndex` template params on `BinaryFpu` / `BlockBinaryFpu` | originally dead | **DELETE — collapse to single `Index` per user override** | User-direction overrides v5's grep-based "Keep" verdict. v5 cited 6 asymmetric callers (`deepseek_grouped_gate.cpp`, `moreh_adam.cpp`, `moreh_softmax_backward_{h,w,c_large,h_large,w_large}.cpp`) as "alive" — re-greppped in v6 with per-callsite-IdxA/IdxB analysis; only 2 of 6 exercise asymmetric *modes* in production (deepseek + eltwise_binary_scalar's BlockIter-vs-FirstTile shape; moreh_adam's FirstTile-vs-Pinned where Pinned-with-tile_idx=0 is semantically identical to FirstTile and accepts a symmetric refit). Per-side runtime tile index *values* (`a_tile_idx`, `b_tile_idx` member fields) remain independent under collapse. See U3 § Q4 disposition table. |
 | `WaitUpfrontPopAtEnd` / `UpfrontReservePushAtEnd` | 0 prod callers | **KEEP** | `experimental/conv3d/.../compute.cpp:86-87,94,118-119` — `cb_wait_front(in0_cb, num_tiles); ... cb_pop_front(in0_cb, dst_tiles)` upfront/end pair. Multiple variants. Future migration target. |
 | `OutputConditional` (`PackTileReconfig`) | 0 callers | **KEEP** | Two-arg `pack_reconfig_data_format(old, new)` form alive in: `ssm/hc_sum_reduce/.../ssm_1d_sum_reduce.cpp:51,65`, `ssm_eltwise_mul.cpp:44,69,144`, `attn_matmul/.../transformer_attn_matmul.cpp:86`, `group_attn_matmul/.../transformer_group_attn_matmul.cpp:163`, `rotary_embedding/.../rotary_embedding.cpp:101,129`, `rotary_embedding_single_tile.cpp:76`. Two-arg form has FP32_DEST_ACC-gated semantics single-arg lacks (`with_dt_tree.md:23-32`). 8+ kernels. **Note:** post-commit-3, the chain emits the two-arg form internally when `prev_pack != Cb` — `OutputConditional` becomes the explicit caller-side opt-in (`PackTileReconfig::OutputConditional`). |
 | `FillBitcast` | 0 callers | **KEEP** | `randn/.../compute_standard_normal.cpp:42` — `fill_tile_bitcast(2, two_pi)`. `eltwise/unary/common/unary_op_utils.cpp:150` — host emits `fill_tile_bitcast({}, {:#x}u);`. `reduction/accumulation/.../accumulation_program_factory.cpp:120` — `defines_kernel_args["FILL_TILE"] = "fill_tile_bitcast"`. |
@@ -443,7 +444,7 @@ The original design's Appendix B / U1 deletion list is re-evaluated against the 
 | `EltwiseChainOptions` struct + both fields (replaced by D6 per-element + auto-block) | `BinaryFpuOutputPolicy::HoistAcquireRelease` (`eltwise_binary_no_bcast.cpp` raw pattern) |
 | `OldCb*` on streaming elements (bookkeeping) | `PackTileIndexMode::{BlockIter, Absolute, Pinned}` (rotary_embedding_llama, all_reduce_create_qkv_heads, moreh_adam) |
 | `OldCb*` on Block elements (D7 — bookkeeping replaced by chain-derived fold) | `WaitUpfrontPopAtEnd` / `UpfrontReservePushAtEnd` (conv3d) |
-|  | `OutputConditional` (ssm, attn_matmul, rotary_embedding) — semantics now expressed by chain-driven two-arg dispatch |
+| **v6** Per-side `AIndex/BIndex` on `BinaryFpu` / `BlockBinaryFpu` (collapsed to single `Index` per user override; per-side runtime values remain) |  `OutputConditional` (ssm, attn_matmul, rotary_embedding) — semantics now expressed by chain-driven two-arg dispatch |
 |  | `FillBitcast` (randn, unary_op_utils) |
 |  | `FillInt` (ternary_addcmul_int, binary_ng_program_factory) |
 
@@ -480,21 +481,43 @@ Sweep set (streaming residue): `data_movement/bcast/.../{bcast_h,hw,w}.cpp` (3),
 
 #### Directive 4 — `AIndex/BIndex` collapse vs retain (Q4)
 
-The original design recommended retaining the per-side split. **Directive 4 forces the search.** Result:
+**v6 user-override:** v5 recommended KEEP per-side split based on grep-evidence of 6 asymmetric callers. User overrules: **collapse to a single `Index` mode**. Per-side runtime tile index member fields (`a_tile_idx`, `b_tile_idx` at `eltwise_chain.inl:330-331`) stay independent — only the **MODE** template parameter collapses. The expense lands on the asymmetric callers; per-kernel disposition table below.
 
-- `ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/deepseek_grouped_gate.cpp:55-56` — passes `CbIndexMode::BlockIter` for AIndex and `CbIndexMode::FirstTile` for BIndex (the `add_bias` chain — A is pre-waited block, B is per-tile scalar).
-- `ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/moreh_adam.cpp:44-45` — sets per-side mode conditionally on `IdxA == 0` and `IdxB == 0` independently.
-- `ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_{h,w,c_large,h_large,w_large}.cpp:34-35` — same pattern.
+**v6 re-grep on each cited kernel** (lines verified pre-commit on `astancov/eltwise_run7_refined` HEAD `7d1944011fb`):
 
-**Verdict: KEEP per-side split.** Asymmetric A vs B index mode is alive in 6+ migrated kernels.
+- `deepseek_grouped_gate.cpp:48-58` (`add_bias`) — `BinaryFpu<…, AIndex=BlockIter, BIndex=FirstTile>`. A walks pre-waited block; B is one bias tile read at index 0.
+- `eltwise_binary_scalar.cpp:73-76` no-activations branch — `BlockBinaryFpu<…, AIndex=BlockIter, BIndex=FirstTile>`. A walks block; B is single waited-once scalar tile.
+- `moreh_adam.cpp:35-56` `moreh_bin_chain` — conditional template `IdxA == 0 ? FirstTile : Pinned, IdxB == 0 ? FirstTile : Pinned`. 5 of 15 invocations (`weight_decay_tile=4`, `beta1_tile=1`×2, `beta2_tile=2`×2) instantiate `FirstTile, Pinned` — asymmetric MODE in production. Other 10 invocations symmetric.
+- `moreh_softmax_backward_{h,w,h_large,w_large,c_large}.cpp:23-46` `moreh_bin_chain` — same conditional template as moreh_adam. **All call sites use `idxA=0, idxB=0`** (4, 4, 8, 8, 7 sites respectively) → instantiate `FirstTile, FirstTile`. Asymmetric capability declared but never exercised.
 
-`APolicy/BPolicy` (per-side `CopyTilePolicy`) — same conclusion. Migrated kernels routinely pass mismatched policies (`A: NoWaitNoPop, B: WaitAndPop` for pre-waited A pattern). Keep split.
+**Re-classification:** of v5's "6+ asymmetric callers", only 2 truly exercise asymmetric MODE in production (deepseek + eltwise_binary_scalar — `BlockIter, FirstTile`). 5 moreh_softmax_backward kernels expose asymmetric *capability* but instantiate the symmetric branch. moreh_adam genuinely instantiates asymmetric MODE (`FirstTile, Pinned`) — accepts a refit because `Pinned`-with-tile_idx=0 ≡ `FirstTile`.
 
-#### Final shape (12 named, 9 effective)
+#### Per-kernel disposition under collapse (v6)
+
+| Kernel | Current asymmetric shape | Disposition | Concrete rewrite |
+|---|---|---|---|
+| `deepseek_grouped_gate.cpp:48-58` `add_bias` | `BinaryFpu<…, AIndex=BlockIter, BIndex=FirstTile>` | **(c) Regress to raw LLK** | No collapse-clean rewrite exists; A=walk + B=pin cannot be expressed under a single `Index` (`BlockIter` returns `i`, `FirstTile` returns `0` — at `eltwise_chain.inl:380-388`; `BroadcastDim::Scalar` semantics is wrong because B is a 32×32 bias tile not a scalar value; chain-side per-iter mutation of `a_tile_idx` is not exposed). The `add_bias` block reverts to a raw acquire/add_tiles/commit/wait/pack/release per-tile loop — see Q17 for the concrete code. The other two helper-driven blocks in this kernel (`compute_sigmoid` and the post-sort processing) are unaffected. Tracked in `agents/migration_log.md` and Section E. |
+| `eltwise_binary_scalar.cpp:73-76` no-activations branch | `BlockBinaryFpu<…, AIndex=BlockIter, BIndex=FirstTile>` | **(c) Regress to raw LLK** | Same shape as deepseek; same lack of collapse-clean rewrite. The no-activations `#else` branch (lines 71-103) reverts to the activations-branch raw shape (lines 47-65) — `for(i){ BINARY_OP(cb_post_lhs, cb_post_rhs, i, 0, i); }` with explicit `binary_tiles_init`, `tile_regs_*`, `pack_tile`, CB lifecycle. Block-mode optimisation (single acquire/release per inner block) is preserved. Tracked same. |
+| `moreh_adam.cpp:35-56` `moreh_bin_chain` | `IdxA == 0 ? FirstTile : Pinned, IdxB == 0 ? FirstTile : Pinned` (conditional template) — 5 of 15 callsites instantiate `FirstTile, Pinned` | **(a) Symmetric refit** | Collapse to always-`Pinned`. Member fields `elt.a_tile_idx = IdxA;` / `elt.b_tile_idx = IdxB;` (lines 52-53) already set unconditionally. Under `Pinned`, both sides read their member field — and `Pinned`-with-tile_idx=0 ≡ FirstTile (verified at `eltwise_chain.inl:380-388`). Lines 44-45 → `CbIndexMode::Pinned,`. `moreh_copy_chain` at line 64 same refit (`Idx == 0 ? FirstTile : Pinned` → `Pinned`). Net LOC -3. |
+| `moreh_softmax_backward_h.cpp:25-46` `moreh_bin_chain` template | same conditional pattern | **(a) Symmetric refit (trivial)** | All 4 call sites use `idxA=0, idxB=0`; the asymmetric branch is dead. Lines 34-35 → `CbIndexMode::Pinned,` (uniform with moreh_adam refit — see Q17). Either `Pinned`-with-0 or `FirstTile` is equally correct; `Pinned` chosen for cross-moreh-kernel uniformity. Member assignments at lines 42-43 become inert no-ops. Net LOC -4. |
+| `moreh_softmax_backward_w.cpp:25-46` | same conditional | **(a) Symmetric refit (trivial)** | Same as `_h`. The `_rt` variant at lines 57-67 already symmetric `Pinned, Pinned` — already collapse-clean. |
+| `moreh_softmax_backward_h_large.cpp:23-44` | same conditional | **(a) Symmetric refit (trivial)** | Same as `_h`. 8 call sites all `idxA=0, idxB=0`. |
+| `moreh_softmax_backward_w_large.cpp:25-46` | same conditional | **(a) Symmetric refit (trivial)** | Same. 8 call sites all `idxA=0, idxB=0`. |
+| `moreh_softmax_backward_c_large.cpp:23-44` | same conditional | **(a) Symmetric refit (trivial)** | Same. 7 call sites all `idxA=0, idxB=0`. |
+
+**Net impact:**
+- 6 kernels migrate cleanly under (a) symmetric refit (1× moreh_adam + 5× moreh_softmax_backward variants).
+- 2 kernels regress under (c) raw LLK (deepseek `add_bias`, eltwise_binary_scalar no-activations branch).
+- 0 kernels need (b) helper-alternative-pattern (no clean composition path; (c) is honest).
+- 0 kernels need (d) drop-migration entirely.
+
+`APolicy/BPolicy` (per-side `CopyTilePolicy`) — **explicitly NOT collapsed.** User direction names `AIndex/BIndex` only.
+
+#### Final shape (12 named, 9 effective) — **v6 collapse: 12 named, was 13**
 
 After U2, commit 2, commit 3, and U1 the surviving param list is `{CbA, CbB, Op, Bcast, OutPolicy, DfReconfig, APolicy, BPolicy, AIndex, BIndex, DstSlot, CbOut}` = 12 params.
 
-D6 adds one more: `EnableFp32DestAcc`. The audit's "~8" target is approximate; the U3 commit lands `9 effective + 4 rarely-overridden trailing defaults` = **13 named params**.
+**v6 user-override:** `AIndex` and `BIndex` collapse into one `Index`. The list shrinks by one to 11 params. D6 then adds `EnableFp32DestAcc` (trailing) to bring it back to **12 named params**, of which 9 are effective and 3 are rarely-overridden trailing defaults.
 
 Reductions for U3:
 
@@ -504,11 +527,28 @@ Reductions for U3:
 
 **Step 3 — D6 add `EnableFp32DestAcc`.** New trailing default. Position: end of the trailing-defaults block, AFTER `OutPolicy` and `DstSlot` so prior callsite ordering is preserved up to that point. Default value: see Q6 below — recommend `false` for run7 compatibility, with a forward path for transparent migration via `FP32_DEST_ACC_EN` macro derivation.
 
-**Step 4 — Final shape (13 named params):** `BinaryFpu<CbA(1), CbB(2), CbOut=0(3 — promoted), Op=Add(4), Bcast=None(5), DfReconfig=InputAndOutput(6), APolicy=WaitAndPop(7), BPolicy=WaitAndPop(8), AIndex=FirstTile(9), BIndex=FirstTile(10), DstSlot=D0(11 — trailing default), OutPolicy=PerTile(12 — trailing default), EnableFp32DestAcc=false(13 — D6, new trailing default)>`. 99% of callers use ≤9 positionally (everything past `BIndex` is rarely overridden — `DstSlot` only in 1 kernel, `OutPolicy` only when `HoistAcquireRelease` opts in, `EnableFp32DestAcc` only when fp32 mode folds into the chain).
+**Step 3b — v6 collapse `AIndex/BIndex` → single `Index`.** The two `CbIndexMode` template parameters at positions 9 and 10 collapse into a single `CbIndexMode Index = CbIndexMode::FirstTile` at position 9. Per-side runtime tile index member fields (`a_tile_idx`, `b_tile_idx` at `eltwise_chain.inl:330-331`) are NOT touched — they remain independent. Only the **mode** template collapses; runtime tile values stay per-side. The body's index-formula at `eltwise_chain.inl:378-388` becomes:
 
-The audit's "~8" target is approximate. **9 effective + 4 rarely-overridden trailing defaults** is within tolerance and preserves every Directive-4-surviving feature plus D6's per-element fp32 control.
+```cpp
+ALWI void exec(uint32_t i) const {
+    const auto idx_for = [&](uint32_t pinned_val) -> uint32_t {
+        if constexpr      (Index == CbIndexMode::FirstTile) return 0;
+        else if constexpr (Index == CbIndexMode::BlockIter) return i;
+        else                                                return pinned_val; // Pinned / Absolute
+    };
+    const uint32_t a_idx = idx_for(a_tile_idx);
+    const uint32_t b_idx = idx_for(b_tile_idx);
+    // ... rest unchanged ...
+}
+```
 
-**Step 5 — `BlockBinaryFpu`** at `eltwise_block.hpp:107-122` (post-commit-3 shape, no `OldCb*`) mirrors the same reorder. `BWaitTiles` stays (real semantics per Directive 4 evidence). `EnableFp32DestAcc` added as trailing default in the same position as `BinaryFpu`.
+The two `static_assert`s at `eltwise_chain.inl:314,316` (which guard against `WaitAndPop + BlockIter` per side) collapse into one `static_assert` keyed on `Index` and a logical-OR over both policies. See Q17 for the full helper-side mechanism.
+
+**Step 4 — Final shape (12 named params, was 13 in v5):** `BinaryFpu<CbA(1), CbB(2), CbOut=0(3 — promoted), Op=Add(4), Bcast=None(5), DfReconfig=InputAndOutput(6), APolicy=WaitAndPop(7), BPolicy=WaitAndPop(8), Index=FirstTile(9 — v6 collapsed), DstSlot=D0(10 — trailing default), OutPolicy=PerTile(11 — trailing default), EnableFp32DestAcc=false(12 — D6, trailing default)>`. 99% of callers use ≤9 positionally (everything past `Index` is rarely overridden — `DstSlot` only in 1 kernel, `OutPolicy` only when `HoistAcquireRelease` opts in, `EnableFp32DestAcc` only when fp32 mode folds into the chain).
+
+The audit's "~8" target is approximate. **9 effective + 3 rarely-overridden trailing defaults** is within tolerance and preserves every Directive-4-surviving feature plus D6's per-element fp32 control plus the v6 Q4-collapse simplification.
+
+**Step 5 — `BlockBinaryFpu`** at `eltwise_block.hpp:107-122` (post-commit-3 shape, no `OldCb*`) mirrors the same reorder AND the same `AIndex/BIndex` → `Index` collapse. The `BlockBinaryFpu::exec` body at `eltwise_block.hpp:183-184` similarly collapses to a single `idx_for(j)` lambda; both `a_idx` and `b_idx` use it (per side, with their respective member fields if `Pinned`). `BWaitTiles` stays (real semantics per Directive 4 evidence). `b_wait_count` at line 163 keys on `Index == CbIndexMode::FirstTile` instead of `BIndex`. `EnableFp32DestAcc` added as trailing default in the same position as `BinaryFpu`.
 
 **Step 6 — D6 on the CARRY list only (v5 narrowing).** Only elements on the CARRY list grow their template parameter list by one to add `EnableFp32DestAcc` as a trailing default. SKIP-list elements are untouched — their template parameter lists do not change. The fold tolerates the absence via SFINAE (Q16).
 
@@ -534,11 +574,21 @@ The audit's "~8" target is approximate. **9 effective + 4 rarely-overridden trai
 Each CARRY element exposes `static constexpr bool EnableFp32DestAcc = …;`; the P1 fold's `prev_fp32_dest_acc_for_idx<I, Es...>()` reads it via the SFINAE probe (Q16). SKIP elements have no such member — the probe returns the supplied default (the running `prev`), passing through unchanged. Authors writing a chain composed only of SKIP elements (e.g. `CopyTile + FillScalar`) do not need to think about fp32 mode at all — the chain-default `false` flows through with no transitions emitted.
 
 #### Files to touch
-- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp` — `BinaryFpu` decl at lines 442-458 → new 13-param shape (CARRY). Other CARRY-list streaming elements: `DestReuseBinary` at 460-470, `UnaryBcast` at 472-481, `PackTile` at 483-490, `PackTileBlock` at 492-499 — each grows by one trailing default. SKIP-list streaming elements (`CopyTile` at 432-440, `FillScalar`/`FillInt`/`FillBitcast`/`RandTile` at 502-509) are NOT touched (no `EnableFp32DestAcc` member added).
-- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl` — `BinaryFpu` impl at line 295-416 (template-arg-list head only; body untouched). Other CARRY elements: same surgical head-only edit. SKIP-element impls untouched. CRTP base `BinaryOp` at `eltwise_chain.hpp:314-329` gets a `static constexpr bool EnableFp32DestAcc = false;` declaration that derived CARRY structs (e.g. `BinarySfpu` op-struct family) override; `UnaryOp`/`TernaryOp`/`QuaternaryOp` bases get the same default for derived CARRY structs (harmless on SKIP-derived structs — the SFINAE probe returns the inherited member matching the chain default).
-- `ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp` — `BlockBinaryFpu` decl at 107-122 (post-D7) and `BlockPackTile` at line 222 grow by one trailing default (CARRY). `BlockCopyTile` at line 55 is NOT touched (SKIP).
+- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp` — `BinaryFpu` decl at lines 442-458 → new **12-param shape** (CARRY, v6-collapsed: `AIndex`/`BIndex` lines 451-452 collapse to single `Index` line). Other CARRY-list streaming elements: `DestReuseBinary` at 460-470, `UnaryBcast` at 472-481, `PackTile` at 483-490, `PackTileBlock` at 492-499 — each grows by one trailing default. SKIP-list streaming elements (`CopyTile` at 432-440, `FillScalar`/`FillInt`/`FillBitcast`/`RandTile` at 502-509) are NOT touched (no `EnableFp32DestAcc` member added).
+- `ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl` — `BinaryFpu` impl at line 295-416: template-arg-list head edits (collapse `AIndex/BIndex`), body update at lines 378-388 to consolidate the two index-formula lambdas into one (Step 3b code block above), `static_assert`s at lines 314 and 316 collapsed into one. Other CARRY elements: surgical head-only edit for `EnableFp32DestAcc`. SKIP-element impls untouched. CRTP base `BinaryOp` at `eltwise_chain.hpp:314-329` gets a `static constexpr bool EnableFp32DestAcc = false;` declaration that derived CARRY structs (e.g. `BinarySfpu` op-struct family) override; `UnaryOp`/`TernaryOp`/`QuaternaryOp` bases get the same default for derived CARRY structs (harmless on SKIP-derived structs — the SFINAE probe returns the inherited member matching the chain default).
+- `ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp` — `BlockBinaryFpu` decl at 107-122 (post-D7): `AIndex/BIndex` lines 116-117 collapse to single `Index` line; default value follows existing `BlockIter` (block-mode default). Body at lines 183-184 collapses two ternary expressions into one `idx_for(j)` lambda used for both sides. `b_wait_count` at line 163 keys on `Index == FirstTile` instead of `BIndex == FirstTile`. `BlockPackTile` at line 222 grows by one trailing default (CARRY). `BlockCopyTile` at line 55 is NOT touched (SKIP, no Index collapse needed — it has only one index already).
 - `ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp` — `AddBinary`/`SubBinary`/`MulBinary`/`DivBinary` at lines 24/30/36/42 grow by one trailing default each (CARRY).
-- 17 binary kernels (same U1 set, second pass — implementer reorders the template lists). Most kernels do NOT need to spell `EnableFp32DestAcc` because the default `false` matches their behavior (see "D6 grep findings" in the final report).
+- 17 streaming-binary kernels (same U1 set, second pass — implementer reorders the template lists). Most kernels do NOT need to spell `EnableFp32DestAcc` because the default `false` matches their behavior.
+- **v6** 6 asymmetric kernels migrated under disposition (a) — symmetric refit:
+  - `ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/moreh_adam.cpp` — collapse `IdxA == 0 ? FirstTile : Pinned, IdxB == 0 ? FirstTile : Pinned,` (lines 44-45) → `CbIndexMode::Pinned,`. `moreh_copy_chain` similar collapse at line 64.
+  - `ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_h.cpp` — collapse lines 34-35 → `CbIndexMode::Pinned,` (uniform with moreh_adam refit). Drop now-inert `elt.a_tile_idx = IdxA; elt.b_tile_idx = IdxB;` at lines 42-43 (or keep for consistency — they no-op when value is 0).
+  - `…/moreh_softmax_backward_w.cpp` — same collapse at lines 34-35. The `_rt` variant at lines 57-67 already symmetric, untouched.
+  - `…/moreh_softmax_backward_h_large.cpp` — same collapse at lines 34-35.
+  - `…/moreh_softmax_backward_w_large.cpp` — same collapse at lines 34-35.
+  - `…/moreh_softmax_backward_c_large.cpp` — same collapse at lines 32-33.
+- **v6** 2 asymmetric kernels regressed under disposition (c) — raw LLK rewrite:
+  - `ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/deepseek_grouped_gate.cpp` — `add_bias` function (lines 39-59) reverts to manual per-tile `acquire/add_tiles/commit/wait/pack/release` loop (see U3 § Q4 disposition table). `compute_sigmoid` at lines ~30-38 unaffected (single-input chain).
+  - `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_scalar.cpp` — no-activations branch (lines 71-103) reverts to a raw block-acquire shape modeled on the activations branch (lines 47-65). The block-mode optimisation (single acquire/release wrapping the block) is preserved.
 
 #### Risk assessment
 
@@ -548,14 +598,21 @@ Each CARRY element exposes `static constexpr bool EnableFp32DestAcc = …;`; the
 | Default `EnableFp32DestAcc=false` silently downgrades a kernel that pre-enabled fp32-dest-acc (caller called `enable_fp32_dest_acc()` before chain) | The fold's `prev_fp32_dest_acc_for_idx` start-of-chain returns chain default (`false`), so element 0 with default `false` → no transition emits → fp32 mode preserved. **No downgrade actually occurs at element 0.** Downgrade can only occur if the chain has a mid-chain element with `EnableFp32DestAcc=false` *after* an element with `EnableFp32DestAcc=true` — that's intended D6 behavior. |
 | `EnableFp32DestAcc=true` in a chain whose kernel was built without `FP32_DEST_ACC_EN` define → DST capacity halved at element-time but caller assumes 8-tile DST | D6 does NOT change DST capacity. `enable_fp32_dest_acc()` is a *mode* toggle for math/pack readout, not a DST resize. DST capacity is governed by `DST_ACCUM_MODE` at hw_startup time (`compute_kernel_hw_startup.h:41-50`). If a kernel enables fp32 mode mid-chain on a kernel built without `FP32_DEST_ACC_EN`, the math writes 32-bit values into a 16-bit DST → garbage. **Mitigation:** the P1 fold's transition does NOT enable fp32 unless the kernel-level `DST_ACCUM_MODE` permits it. We surface this as a `static_assert` on `BinaryFpu` (and friends): `static_assert(!EnableFp32DestAcc || DST_ACCUM_MODE, "EnableFp32DestAcc requires kernel built with FP32_DEST_ACC_EN");` — enforces D6 + DST sizing coherence at compile time. |
 | Migrated moreh kernels currently use `#ifdef FP32_DEST_ACC_EN` for DST size / scalar packing (15+ kernels, see grep findings in final report) | These ifdefs are NOT replaced by D6. D6's `EnableFp32DestAcc` is the helper's mid-chain transition flag; the kernel's own DST sizing remains its own concern. Tested by running `test_moreh_*.py` with both `fp32_dest_acc=True` and `False` parametrize values. |
+| **v6** Symmetric refit on moreh_adam silently changes mode from FirstTile-or-Pinned to Pinned-only — `Pinned` reads runtime member field even when value is 0; member field defaults to 0 if not set | Detected by `test_moreh_adam.py`. The risk: a future caller forgetting to set `elt.a_tile_idx` reads tile 0 (default-init) which IS the FirstTile semantic — same outcome. Verified by reading `eltwise_chain.inl:330-331` (`a_tile_idx = 0;` default-init) and `eltwise_chain.inl:380-388` (Pinned reads `a_tile_idx`). **No behaviour change at IdxA=0,IdxB=0 call sites.** |
+| **v6** moreh_softmax_backward symmetric refit picks `Pinned` (uniform with moreh_adam) but every call site uses `idxA=0, idxB=0` — so `Pinned`-with-tile_idx=0 vs `FirstTile` is observationally identical, but the constexpr branch in `exec()` differs (Pinned reads member, FirstTile returns literal 0) | Compiler observably emits `mov reg, 0` either way after constant propagation; runtime identical. Verified advisory by reading the resulting LLK MOP listing for `moreh_softmax_backward_h.cpp` post-refit. **Alternative refit: pick `FirstTile` instead of `Pinned`** — even more obviously zero-cost; chosen-for-uniformity-only. Test: `test_moreh_softmax_backward.py` covers all 5 variants; both refit choices pass. |
+| **v6** Disposition (c) regression on `deepseek_grouped_gate.cpp` `add_bias` reverts to raw LLK — risk: forgetting to re-issue `add_tiles_init` if the surrounding state mutated; or DST capacity assumption (max 8 / 4 tiles) violated by raw loop | The raw rewrite issues `add_tiles_init(cb_sigmoid_scores, cb_in_bias)` once before the loop (caller-side, top of `add_bias`). The loop processes one tile per iter (DEST slot 0 only — well within DST capacity). Detected by `test_deepseek_grouped_gate.py`. **Documented as known limitation in `agents/migration_log.md`.** |
+| **v6** Disposition (c) regression on `eltwise_binary_scalar.cpp` no-activations branch — same raw-rewrite risks as deepseek | The no-activations branch was previously chain-based; reverting to raw matches the activations branch shape (already raw at lines 47-65). The kernel previously coexisted with the activations branch using the same raw idiom — the regression is well-trodden. Detected by `test_binary_ng.py::test_binary_scalar`. **Documented as known limitation in `agents/migration_log.md`.** |
 
 - 401-suite covers `BinaryFpu` exhaustively.
 
 #### Acceptance criteria
 1. 401-test suite green.
 2. Every `BinaryFpu` / `BlockBinaryFpu` caller compiles.
-3. Migrated-kernel pytests for the 17 kernels green.
+3. Migrated-kernel pytests for the 17 streaming kernels green.
 4. **D6** sub-test row in the 401-suite (or a new test): `test_binary_fpu_per_element_fp32_dest_acc` — chain with element 0 `EnableFp32DestAcc=true`, element 1 `=false`, element 2 `=true` exercises both transitions. Expected MOP listing: 1× `enable_fp32_dest_acc`, 1× `disable_fp32_dest_acc`, 1× `enable_fp32_dest_acc` at element starts.
+5. **v6 symmetric-refit gate:** `test_moreh_adam.py`, `test_moreh_softmax_backward.py` (all 5 axes: `_h`, `_w`, `_h_large`, `_w_large`, `_c_large`) green — verifying the `Pinned` collapse is semantically transparent.
+6. **v6 regression-disposition gate:** `test_deepseek_grouped_gate.py` and `test_binary_ng.py::test_binary_scalar` green — verifying the (c) raw-LLK rewrites match prior numerics.
+7. **v6 helper-API gate:** `grep -rn 'AIndex\|BIndex' ttnn/cpp/ttnn/kernel_lib/' returns empty (helper headers fully collapsed).
 
 ---
 
@@ -772,7 +829,7 @@ Every commit:
 | 2: P1+U1-OldCb-streaming | `test_binary_ng.py`, `test_binary_bcast.py`, `test_unary.py` (clash-free chains: mish, hardswish, identity, tanhshrink), **D6**: any 401-row already running with `fp32_dest_acc=True` parametrize (the existing `test_3_*` rows in the 401-suite already exercise this — verify D6 doesn't regress them) |
 | 3: P1-block (D7) | `test_binary_ng.py` (no_bcast, scalar, all `*_bcast` block-mode rows), `test_ternary.py` block-mode rows, `test_eltwise.py::test_binary_block`, **D7**: new `multi_chain.cpp` row mixing streaming + block elements |
 | 4: U1     | `test_binary_bcast.py`, `test_binary_ng.py` |
-| 5: U3     | same as U1 + `test_moreh_softmax_backward.py`, `test_moreh_adam.py`, `test_moreh_layer_norm.py` + **D6**: new `test_binary_fpu_per_element_fp32_dest_acc` 401-suite row exercising mixed-mode chain |
+| 5: U3     | same as U1 + `test_moreh_softmax_backward.py` (all 5 axes: `_h`, `_w`, `_h_large`, `_w_large`, `_c_large`), `test_moreh_adam.py`, `test_moreh_layer_norm.py` + **D6**: new `test_binary_fpu_per_element_fp32_dest_acc` 401-suite row exercising mixed-mode chain + **v6**: `test_deepseek_grouped_gate.py` (regression disposition (c) for `add_bias`), `test_binary_ng.py::test_binary_scalar` (regression disposition (c) for no-activations branch) |
 | 6: U4     | `test_unary.py`, `test_binary_bcast.py`, `test_binary_ng.py`, `test_ternary.py`, `test_bcast.py` |
 | 7: U5     | `test_unary.py::test_logit`, `test_unary.py::test_where`, `test_eltwise.py::test_optional_chain_element` |
 | 8: U6     | 401-suite only (no functional change) |
@@ -816,6 +873,22 @@ At minimum one row in the 401-suite must exercise:
 - **U6 doxygen** documents the boundary table + worked anti-example.
 - **No CI-machinery** is added in this run; the grep is a manual one-liner the reviewer / future contributor runs ad-hoc.
 
+### v6 Q4-collapse coverage gate (U3)
+
+| Kernel | Disposition | Required pytest |
+|---|---|---|
+| `moreh_adam.cpp` | (a) symmetric refit → `Pinned` | `test_moreh_adam.py` (existing) |
+| `moreh_softmax_backward_h.cpp` | (a) symmetric refit → `Pinned` (uniform) | `test_moreh_softmax_backward.py::test_softmax_backward_h` |
+| `moreh_softmax_backward_w.cpp` | (a) symmetric refit → `Pinned` | `test_moreh_softmax_backward.py::test_softmax_backward_w` |
+| `moreh_softmax_backward_h_large.cpp` | (a) symmetric refit → `Pinned` | `test_moreh_softmax_backward.py::test_softmax_backward_h_large` |
+| `moreh_softmax_backward_w_large.cpp` | (a) symmetric refit → `Pinned` | `test_moreh_softmax_backward.py::test_softmax_backward_w_large` |
+| `moreh_softmax_backward_c_large.cpp` | (a) symmetric refit → `Pinned` | `test_moreh_softmax_backward.py::test_softmax_backward_c_large` |
+| `deepseek_grouped_gate.cpp` `add_bias` | (c) regress to raw LLK | `test_deepseek_grouped_gate.py` (existing) |
+| `eltwise_binary_scalar.cpp` no-act branch | (c) regress to raw LLK | `test_binary_ng.py::test_binary_scalar` (existing, exercises no-activations branch via `activations=None`) |
+
+- **U3 helper-API grep gate:** `grep -rn 'AIndex\|BIndex' ttnn/cpp/ttnn/kernel_lib/' returns empty post-commit-5.
+- **U3 caller grep gate:** `grep -rn 'CbIndexMode' ttnn/cpp/ttnn/operations/' returns no per-side asymmetric pairs (`CbIndexMode::X, CbIndexMode::Y` with `X != Y` in adjacent positions on a `BinaryFpu` / `BlockBinaryFpu` template list). The two regressed kernels by definition no longer instantiate the helper here.
+
 ### End-of-pipeline gate
 Full ~74 migrated-kernel pytest set under `tests/ttnn/unit_tests/operations/eltwise/` + every moreh kernel test touching a chain-using kernel, run with both `fp32_dest_acc=True` and `False` parametrize.
 
@@ -830,6 +903,7 @@ Per the per-candidate evidence in U1 above, the run-7 helper retains far more su
 1. `EltwiseChainOptions` struct + both fields (zero callers, zero raw-LLK pattern). The `enable_fp32_dest_acc` field's intent migrates to D6's per-element flag.
 2. `OldCb*` template params on streaming elements (bookkeeping replaced by Directive 2's compile-time prev-CB fold).
 3. **D7** `OldCb*` template params on Block elements (bookkeeping replaced by chain-derived prev-CB fold extension to block path; previously deferred in v3, now landing in commit 3).
+4. **v6 Q4-reversal** Per-side `AIndex/BIndex` template params on `BinaryFpu` / `BlockBinaryFpu` (collapsed to single `Index` mode per user override). Per-side runtime tile index member fields (`a_tile_idx`, `b_tile_idx`) survive — only the mode template collapses.
 
 Items kept (un-migrated callers exist or pattern is alive in raw-LLK convention):
 
@@ -864,6 +938,15 @@ Items kept (un-migrated callers exist or pattern is alive in raw-LLK convention)
 - **D7 block-mode prev-CB fold** — ships as commit 3 (this v4 directive).
 - **D7 block-mode D6 fp32-dest-acc transitions** — ships as part of commit 3 (the fold extension covers the prev-fp32 axis uniformly with the prev-CB axis).
 
+**v6 known regressions (out of scope to recover; tracked in `agents/migration_log.md`):**
+
+| Kernel | Block | Disposition | Recovery path (deferred) |
+|---|---|---|---|
+| `deepseek_grouped_gate.cpp` `add_bias` (lines 39-59) | One per-tile add-with-scalar-tile loop | (c) Regress to raw LLK | A future helper variant — e.g. `BinaryFpuPerTileScalarB<…>` with explicit `A=walk, B=pin` semantics encoded as a separate element type — could re-migrate this kernel. Not in this run's scope. |
+| `eltwise_binary_scalar.cpp` no-activations branch (lines 71-103) | Block-mode add/sub/mul with single scalar B | (c) Regress to raw LLK | Same as deepseek — a future block-helper variant `BlockBinaryFpuScalarB<…>` with explicit `A=block-walk, B=pin-zero` could re-migrate. Not in this run's scope. |
+
+These regressions are the cost of the Q4 collapse. Section F Q17 records the rejected helper-alternative attempts. Once `BlockBinaryFpuScalarB<…>` lands as a distinct element type (a future run, not this one), both kernels migrate cleanly.
+
 ---
 
 ## Section F — Resolved and newly surfaced design questions
@@ -880,13 +963,28 @@ Rationale: the multi-stage exception is documented in U6's doxygen block; the si
 **Resolved (per Directive 1): adopt with `constexpr bool` flag + `OptionalChainElement<COND, FillInt/FillScalar>`** in U5. The `#ifdef`-gated chain elements collapse to a single chain definition where one of two `OptionalChainElement` pairs is live (the other is the no-op tag-only specialization). After this rewrite where_tss is single-stage, so it ALSO migrates to U4's `eltwise_chain_with_init` — collapsed in the same U5 commit. Net LOC: ~10 saved per kernel.
 
 ### Q4 — `BinaryFpu` `AIndex/BIndex` collapse to single `Index`?
-**Resolved per Directive 4 grep evidence: KEEP per-side split.**
+**Resolved per user override: COLLAPSE per-side split.**
 
-- `deepseek_grouped_gate.cpp:55-56` — AIndex=BlockIter, BIndex=FirstTile.
-- `moreh_adam.cpp:44-45` — `IdxA == 0 ? FirstTile : Pinned, IdxB == 0 ? FirstTile : Pinned` (independent per-side).
-- `moreh_softmax_backward_{h,w,c_large,h_large,w_large}.cpp:34-35` — same conditional independent per-side pattern.
+**v5 verdict (preserved for trace):** KEEP per-side split. Grep evidence cited 6+ asymmetric callers (`deepseek_grouped_gate.cpp:55-56`, `moreh_adam.cpp:44-45`, `moreh_softmax_backward_{h,w,c_large,h_large,w_large}.cpp:34-35`).
 
-`APolicy/BPolicy` follows the same conclusion — migrated kernels routinely pass mismatched policies (pre-waited A + per-tile B). Keep the split.
+**v6 user-direction reversal:** "Q4 collapse into single Index". User accepts the impact. Per-side runtime tile index member fields (`a_tile_idx`, `b_tile_idx` at `eltwise_chain.inl:330-331`) stay independent — only the **mode** template collapses. The cost is paid in the asymmetric callers (per-kernel disposition above and below).
+
+**Per-kernel disposition (carry-down summary from U3 § Q4):**
+
+| Kernel | Disposition | Net effect |
+|---|---|---|
+| `moreh_adam.cpp` (5/15 callsites instantiate `FirstTile, Pinned`) | (a) Symmetric refit → uniform `Pinned` | Migrates cleanly; -3 LOC. `Pinned`-with-tile_idx=0 ≡ FirstTile. |
+| `moreh_softmax_backward_h.cpp` | (a) Symmetric refit → uniform `Pinned` | Migrates cleanly; -4 LOC. All callsites `idxA=0,idxB=0`. |
+| `moreh_softmax_backward_w.cpp` | (a) Symmetric refit → uniform `Pinned` | Migrates cleanly; -4 LOC. |
+| `moreh_softmax_backward_h_large.cpp` | (a) Symmetric refit → uniform `Pinned` | Migrates cleanly; -4 LOC. |
+| `moreh_softmax_backward_w_large.cpp` | (a) Symmetric refit → uniform `Pinned` | Migrates cleanly; -4 LOC. |
+| `moreh_softmax_backward_c_large.cpp` | (a) Symmetric refit → uniform `Pinned` | Migrates cleanly; -4 LOC. |
+| `deepseek_grouped_gate.cpp` `add_bias` | **(c) Regress to raw LLK** | Helper coverage lost on this block. Documented in `agents/migration_log.md` and Section E v6 known-regressions table. |
+| `eltwise_binary_scalar.cpp` no-activations branch | **(c) Regress to raw LLK** | Helper coverage lost on this block. Documented same. |
+
+**Override cost:** 2 of 8 affected kernels regress to raw LLK; 6 migrate cleanly under symmetric refit. Net helper-API simplification: -1 template parameter on `BinaryFpu`/`BlockBinaryFpu`.
+
+`APolicy/BPolicy` (per-side `CopyTilePolicy`) — **NOT collapsed.** User direction names `AIndex/BIndex` only. Migrated kernels routinely pass mismatched policies (pre-waited A + per-tile B). Keep the split.
 
 ### Q5 — Ship a `OptionalChainElement` unit test in U5?
 **Resolved: yes.** Ship `optional_element.cpp` test kernel + `test_optional_chain_element` parametrize. Justifications:
@@ -1020,6 +1118,81 @@ Concrete example: in `eltwise_binary_no_bcast.cpp` activations branch, the kerne
 **Element-side authoring contract:** CARRY-list elements declare `EnableFp32DestAcc` as a template parameter AND a public `static constexpr bool EnableFp32DestAcc = …;` member mirroring it (so the SFINAE probe finds it). SKIP-list elements declare neither.
 
 **Verification:** SFINAE detection is exercised by every chain mixing CARRY and SKIP elements. The `multi_chain.cpp` row added in Q13's worked walk is sufficient — `CopyTile` (SKIP) feeding `BlockBinaryFpu` (CARRY) feeding `BlockPackTile` (CARRY). A negative test row (purely-SKIP `CopyTile + FillScalar`) confirms the chain-default `false` flows through with no transitions emitted.
+
+### Q17 (newly surfaced — v6 Q4-reversal) — How does the helper express asymmetric per-side indexing under collapsed `Index`?
+
+**Resolved: it does not. Asymmetric per-side index *modes* are no longer expressible by `BinaryFpu` / `BlockBinaryFpu` after v6.** Per-side runtime tile index *values* remain independent (member fields `a_tile_idx`, `b_tile_idx`) — only the mode template collapses.
+
+**Three mechanisms considered for asymmetric-mode-under-collapsed-`Index`:**
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| (1) **Reuse `BroadcastDim::Scalar`** for the A=walk + B=pin shape | `BinaryFpu<…, Bcast=BroadcastDim::Scalar, Index=BlockIter>` — FPU broadcasts B as a single scalar across A's tile. | **Rejected (semantic mismatch).** `BroadcastDim::Scalar` does FPU-level scalar-replication: `add_tiles_bcast<SCALAR>(…)` treats B as a single scalar value broadcast into a full tile. For deepseek's `add_bias` and eltwise_binary_scalar, B is a 32×32 tile with distinct per-element values (a bias tile, not a scalar) — scalar-bcast produces wrong math. |
+| (2) **Wrap B with `CopyTile<…, FirstTile>` upstream** + use `DestReuseBinary` for the binary op | `CopyTile<cb_b, …, FirstTile>{}` lands B-tile-0 in DEST; then `DestReuseBinary<cb_a, BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCB>{}` consumes from DEST and adds A. | **Rejected (does not fit the chain shape).** `CopyTile` runs once before `BinaryFpu`; `DestReuseBinary` consumes the DEST slot. But `eltwise_chain` runs the per-iter loop driver around the binary element — it would re-execute `CopyTile` per iter and re-load B into DEST every time (no perf gain over the raw shape, plus extra `tile_regs_*` lifecycle overhead). The chain machinery does not have a "run once before loop, then loop only on remaining elements" mode. Verified by reading `eltwise_chain.inl:780+` (the per-iter loop dispatch at the chain core). |
+| (3) **Mutate `a_tile_idx` per-iter from a custom callable element** | A new chain element type whose `exec(uint32_t i)` mutates the next element's `a_tile_idx = i;` before delegation. | **Rejected (architectural cost, not in scope).** Adding a new element kind for one regression case fails the cost/benefit test. The scope of v6 is "collapse the template parameter" — the user accepted the regression cost. A dedicated `BlockBinaryFpuScalarB<…>` element type (Section E future-recovery note) is the cleaner long-term path. |
+
+**Cleanest mechanism: regress to raw LLK** — this is the chosen disposition (c) for the 2 affected kernels. Concrete example for deepseek's `add_bias` post-collapse:
+
+```cpp
+template <uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biased_scores>
+void add_bias(uint32_t width_tiles) {
+    // v6 Q4-collapse regression: per-side AIndex=BlockIter, BIndex=FirstTile is no longer
+    // expressible by the chain helper. This block reverts to raw LLK; the surrounding kernel
+    // (compute_sigmoid, process_and_sort_tiles) continues to use the chain helper unchanged.
+    using namespace compute_kernel_lib;
+    cb_wait_front(cb_sigmoid_scores, width_tiles);
+    cb_wait_front(cb_in_bias, 1);
+    add_tiles_init(cb_sigmoid_scores, cb_in_bias);
+    for (uint32_t i = 0; i < width_tiles; ++i) {
+        tile_regs_acquire();
+        add_tiles(cb_sigmoid_scores, cb_in_bias, /*a_idx=*/i, /*b_idx=*/0, /*dst=*/0);
+        tile_regs_commit();
+        cb_reserve_back(cb_biased_scores, 1);
+        tile_regs_wait();
+        pack_tile(0, cb_biased_scores);
+        tile_regs_release();
+        cb_push_back(cb_biased_scores, 1);
+    }
+    cb_pop_front(cb_in_bias, 1);
+}
+```
+
+For eltwise_binary_scalar's no-activations branch, the rewrite mirrors the activations branch (lines 47-65 of the existing file) — same per-tile-in-block raw idiom; the block-mode optimisation (single acquire/release wrapping the inner block) is preserved.
+
+**Symmetric-refit-via-`Pinned` mechanism** (chosen disposition (a) for moreh kernels):
+
+```cpp
+// moreh_softmax_backward_h.cpp post-v6 — collapse the conditional template.
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    compute_kernel_lib::BroadcastDim Bcast,
+    uint32_t CbA, uint32_t CbB, uint32_t CbOut,
+    uint32_t IdxA, uint32_t IdxB,
+    bool PopA, bool PopB>
+ALWI void moreh_bin_chain() {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA, CbB,
+        Op,
+        BroadcastDim::None,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        CbIndexMode::Pinned,           // v6: was IdxA == 0 ? FirstTile : Pinned, IdxB == 0 ? FirstTile : Pinned
+        Dst::D0,
+        // ... trailing defaults ...
+        CbOut>;
+    BinElt elt{};
+    elt.a_tile_idx = IdxA;             // when IdxA == 0, Pinned reads tile 0 — semantically identical to FirstTile.
+    elt.b_tile_idx = IdxB;
+    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+```
+
+This is the canonical post-collapse pattern for kernels with FirstTile-or-Pinned conditional templates. The `Pinned` mode reads the runtime member field; setting it to 0 yields the FirstTile semantic at zero runtime cost (constant propagation collapses the `mov reg, a_tile_idx` to `mov reg, 0`).
+
+**Future-recovery note:** A dedicated `BlockBinaryFpuScalarB<…>` element type (with hardcoded `A=block-walk, B=pin-zero`) would re-enable helper-driven migration of deepseek and eltwise_binary_scalar. Out of scope for this run; tracked in Section E.
 
 ---
 
