@@ -75,6 +75,13 @@ void bind_reduction_topk_operation(nb::module_& mod) {
             Memory Support:
                 - Interleaved: DRAM and L1
 
+            Performance guidance:
+                - For best performance, make the dimension passed to :attr:`dim` the last dimension of the tensor before calling :func:`ttnn.topk`.
+                - The fastest path is intended for wide top-k dimensions with :attr:`k` <= 64. Shape or pad the top-k dimension to a power-of-two width that is at least 8192 and below 65536; practical target widths are 8192, 16384, and 32768.
+                - If the model's natural top-k width is not one of those sizes, pad it before calling :func:`ttnn.topk` with values that are guaranteed to sort outside the valid model values, so padded elements cannot win. For example, use ``-inf`` when :attr:`largest` is ``True`` or ``+inf`` when :attr:`largest` is ``False`` only if those values cannot appear as real candidates in the model output.
+                - Prefer the default :attr:`sub_core_grids` for best performance. Restricting the core range can prevent the fastest path from being used.
+                - Other shapes are supported, but non-power-of-two top-k widths, :attr:`k` > 64, or very large widths may use a less parallel path and run significantly slower.
+
             Limitations:
                 - Inputs must be located on-device.
                 - The op fundamentally operates on 4D tensors with shape [N, C, H, W], and with :attr:`dim` of -1. The tensor will be manipulated as needed when this is not the case, and restored afterwards.
@@ -82,7 +89,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 - W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.
                 - The width of :attr:`input_tensor` along :attr:`dim` should be a multiple of tile width, and will be padded to the nearest multiple of tile width if needed.
                 - The padding is currently only supported for bfloat16, float32, int32, and uint32.
-                - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
+                - To enable the fastest multicore execution path, the width of :attr:`input_tensor` along :attr:`dim` must be a power of two, ≥8192, and <65536, and :attr:`k` must be ≤64.
                 - All shape validations are performed on padded shapes.
                 - Sharded output memory configs are not supported for this operation.
         )doc";
