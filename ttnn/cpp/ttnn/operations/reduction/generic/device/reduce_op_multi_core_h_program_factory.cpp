@@ -420,8 +420,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = std::move(dataflow_buffers);
     spec.tensor_parameters = {
-        m2::TensorParameter{.unique_id = H_INPUT_TENSOR, .spec = a.tensor_spec()},
-        m2::TensorParameter{.unique_id = H_OUTPUT_TENSOR, .spec = output.tensor_spec()},
+        m2::TensorParameter{.unique_id = H_INPUT_TENSOR, .spec = a.mesh_tensor().tensor_spec()},
+        m2::TensorParameter{.unique_id = H_OUTPUT_TENSOR, .spec = output.mesh_tensor().tensor_spec()},
     };
     spec.work_units = {std::move(work_unit)};
 
