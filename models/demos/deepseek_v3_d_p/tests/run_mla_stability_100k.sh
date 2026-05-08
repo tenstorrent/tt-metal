@@ -8,18 +8,16 @@
 #   1. Run the selected pytest node under a wall-clock deadline.
 #   2. If it finishes cleanly (pass or fail) -> run tt-smi -glx_reset and
 #      continue to the next iteration (with the other fabric variant).
-#   3. If it hangs past the deadline -> run ./tools/tt-triage.py -vv against
-#      the live HW (output captured to a per-hang log), then kill -9 the
-#      hung pytest, run tt-smi -glx_reset, and continue to the next iteration.
+#   3. If it hangs past the deadline -> log the hang and exit the script
+#      immediately, leaving the pytest process alive on live HW for manual
+#      inspection. No triage, no kill, no reset.
 #
-# All stdout/stderr is mirrored to a log file. Per-hang triage output goes
-# to a sibling log named like <log>_triage_iter<i>_<variant>.log.
+# All stdout/stderr is mirrored to a log file.
 #
 # Usage:
 #   ./run_mla_stability_100k.sh <num_iterations> [log_file]
 #
-# Must be run from the tt-metal repo root (pytest picks up conftest.py and
-# tt-triage is invoked as ./tools/tt-triage.py).
+# Must be run from the tt-metal repo root (pytest picks up conftest.py).
 
 set -u
 
@@ -30,10 +28,6 @@ LOG_FILE="${2:-stability_mla_100k_$(date +%Y%m%d_%H%M%S).log}"
 # Override via env if needed: PYTEST_TIMEOUT_SEC=2400 ./run_mla_stability_100k.sh ...
 PYTEST_TIMEOUT_SEC="${PYTEST_TIMEOUT_SEC:-1800}"
 POLL_INTERVAL_SEC=5
-
-# Cap triage so a hung tt-triage.py can't stall the outer loop forever.
-TRIAGE_TIMEOUT_SEC="${TRIAGE_TIMEOUT_SEC:-600}"
-TRIAGE_CMD=("./tools/tt-triage.py" "-vv")
 
 # A failed reset cannot leak into the next iteration — running pytest on a
 # half-reset mesh produces noise hangs that confuse triage. Retry the reset
@@ -61,7 +55,6 @@ pass_count=0
 fail_count=0
 hang_count=0
 reset_fail_count=0
-triage_fail_count=0
 hang_log=""  # accumulating "iter<i>(<variant>)" tokens, one per hang
 
 log() { printf '%s\n' "$*" | tee -a "${LOG_FILE}"; }
@@ -106,7 +99,6 @@ on_exit() {
     log "Pass:            ${pass_count}"
     log "Fail (non-hang): ${fail_count}"
     log "Hangs:           ${hang_count}${hang_log:+ at ${hang_log}}"
-    log "Triage errors:   ${triage_fail_count}"
     log "Reset errors:    ${reset_fail_count}"
     log "Total runs:      $((pass_count + fail_count + hang_count))"
     log "Log file:        ${LOG_FILE}"
@@ -118,8 +110,6 @@ log "=================================================="
 log "MLA stability run started at $(date -Is)"
 log "Outer iterations:            ${NUM_ITERATIONS}"
 log "Pytest deadline (s):         ${PYTEST_TIMEOUT_SEC}"
-log "Triage deadline (s):         ${TRIAGE_TIMEOUT_SEC}"
-log "Triage command:              ${TRIAGE_CMD[*]}"
 log "Reset max attempts:          ${RESET_MAX_ATTEMPTS}"
 log "Reset retry sleep (s):       ${RESET_RETRY_SLEEP_SEC}"
 log "DEEPSEEK_V3_HF_MODEL=${DEEPSEEK_V3_HF_MODEL}"
@@ -167,62 +157,18 @@ for (( i=1; i<=NUM_ITERATIONS; i++ )); do
         hang_count=$((hang_count + 1))
         hang_log+="${hang_log:+, }iter${i}(${variant})"
 
-        # Per-hang triage log lives next to the main log.
-        log_dir="$(dirname "${LOG_FILE}")"
-        log_base="$(basename "${LOG_FILE}" .log)"
-        triage_log="${log_dir}/${log_base}_triage_iter${i}_${variant}.log"
-
         log ""
         log "############################################################"
         log "### PYTEST HANG DETECTED at iteration ${i}/${NUM_ITERATIONS} (${variant})"
         log "### duration=${iter_duration}s (deadline=${PYTEST_TIMEOUT_SEC}s)"
-        log "### pytest pid=${pytest_pid} (will be killed after triage)"
-        log "### Running triage: ${TRIAGE_CMD[*]}"
-        log "### Triage log:    ${triage_log}"
+        log "### pytest pid=${pytest_pid} (LEFT ALIVE for manual inspection)"
+        log "### No triage, no kill, no reset. Exiting stability run."
         log "############################################################"
 
-        # Run triage against the still-live HW. timeout(1) caps it so a stuck
-        # triage can't stall the outer loop. Output goes to its own log so
-        # the main stability log stays readable.
-        triage_start=$(date +%s)
-        timeout --kill-after=30s "${TRIAGE_TIMEOUT_SEC}" "${TRIAGE_CMD[@]}" \
-            > "${triage_log}" 2>&1
-        triage_exit=$?
-        triage_duration=$(( $(date +%s) - triage_start ))
-
-        case "${triage_exit}" in
-            0)
-                log "Triage finished OK (${triage_duration}s) -> ${triage_log}"
-                ;;
-            124|137)
-                triage_fail_count=$((triage_fail_count + 1))
-                log "Triage TIMED OUT after ${triage_duration}s (exit=${triage_exit}) -> ${triage_log}"
-                ;;
-            *)
-                triage_fail_count=$((triage_fail_count + 1))
-                log "Triage FAILED (exit=${triage_exit}, ${triage_duration}s) -> ${triage_log}"
-                ;;
-        esac
-
-        # Kill the hung pytest tree (children first, then the leader).
-        log "Killing hung pytest pid=${pytest_pid} and its descendants..."
-        pkill -KILL -P "${pytest_pid}" 2>/dev/null || true
-        kill -9 "${pytest_pid}" 2>/dev/null || true
-        # Give the kernel a moment to reap.
-        for _ in 1 2 3 4 5; do
-            kill -0 "${pytest_pid}" 2>/dev/null || break
-            sleep 1
-        done
-        if kill -0 "${pytest_pid}" 2>/dev/null; then
-            log "WARNING: pytest pid=${pytest_pid} still alive after kill -9"
-        fi
-        wait "${pytest_pid}" 2>/dev/null || true
-
-        reset_until_success "after hang at iter ${i} (${variant})"
-
-        # Continue to the next iteration (do not run the post-success
-        # reset path below).
-        continue
+        # Make sure the backgrounded pytest survives this script's exit so
+        # the user can attach/inspect the live HW state.
+        disown "${pytest_pid}" 2>/dev/null || true
+        exit 2
     fi
 
     # Pytest exited on its own - collect status and classify.
