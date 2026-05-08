@@ -10,6 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
+from models.demos.deepseek_v3.tt.moe_expert_mapping import OPTIMIZED_MOE_CLUSTER_AXIS, create_expert_mapping_tensor
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
@@ -123,8 +124,11 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         )
 
         num_experts = num_devices * num_experts_per_device
-        torch_expert_mapping_tensor = (
-            (torch.arange(num_experts) // num_experts_per_device).unsqueeze(0).repeat(num_devices, 1)
+        torch_expert_mapping_tensor = create_expert_mapping_tensor(
+            mesh_device.shape,
+            OPTIMIZED_MOE_CLUSTER_AXIS,
+            num_experts,
+            num_experts_per_device,
         )
         expert_mapping_tensor = ttnn.from_torch(
             torch_expert_mapping_tensor,
@@ -267,7 +271,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             worker_mode=ttnn.WorkerMode.DIRECT,
             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
             drain_sync_tilizer_core=(6, 9),
-            cluster_axis=0,
+            cluster_axis=OPTIMIZED_MOE_CLUSTER_AXIS,
             num_links=4,
             cross_device_semaphore=None,
         )
@@ -287,7 +291,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         config["quad_ring_moe_compute"] = MoEComputeConfig(
             output_height_shard_dim=4,
             output_width_shard_dim=4,
-            cluster_axis=0,
+            cluster_axis=OPTIMIZED_MOE_CLUSTER_AXIS,
         )
         config["quad_ring_selective_reduce_combine"] = SelectiveReduceCombineConfig(
             hidden_size=hf_config.hidden_size,
@@ -295,7 +299,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             seq_size=seq_len,
             select_experts_k=hf_config.num_experts_per_tok,
             experts=hf_config.n_routed_experts,
-            cluster_axis=0,
+            cluster_axis=OPTIMIZED_MOE_CLUSTER_AXIS,
             token_parallel_core_dim=4,
             data_parallel_core_dim=4,
             worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
