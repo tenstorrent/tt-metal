@@ -531,8 +531,10 @@ def run(
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
-        absent_keys = set(kwargs.get("__absent_keys__") or [])
-        if "memory_config" not in absent_keys:
+        absent_keys = kwargs.get("__absent_keys__")
+        has_absent_info = absent_keys is not None
+        absent_keys = set(absent_keys or [])
+        if has_absent_info and "memory_config" not in absent_keys:
             if memory_config is not None:
                 linear_kwargs["memory_config"] = memory_config
             else:
@@ -542,12 +544,12 @@ def run(
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
-        if "dtype" not in absent_keys:
+        if has_absent_info and "dtype" not in absent_keys:
             linear_kwargs["dtype"] = dtype
         elif dtype is not None:
             linear_kwargs["dtype"] = dtype
 
-        if "program_config" not in absent_keys:
+        if has_absent_info and "program_config" not in absent_keys:
             linear_kwargs["program_config"] = program_config
         elif program_config is not None:
             linear_kwargs["program_config"] = program_config
@@ -556,12 +558,12 @@ def run(
         # when the model explicitly passed it (including None). Use __absent_keys__
         # (injected by execute_test) to distinguish "master had ckc=None" from
         # "master never passed ckc". Falls back to value-based check for older callers.
-        if "compute_kernel_config" not in absent_keys:
+        if has_absent_info and "compute_kernel_config" not in absent_keys:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
         elif compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        if "core_grid" not in absent_keys:
+        if has_absent_info and "core_grid" not in absent_keys:
             linear_kwargs["core_grid"] = core_grid
         elif core_grid is not None:
             linear_kwargs["core_grid"] = core_grid
