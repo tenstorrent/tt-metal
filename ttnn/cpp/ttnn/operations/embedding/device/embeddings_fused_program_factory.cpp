@@ -103,16 +103,22 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     // For very large embeddings, use chunked processing
     uint32_t tiles_per_chunk;
     uint32_t num_chunks;
+    uint32_t last_chunk_tiles;
     uint32_t buffering;
 
     if (use_chunked_processing) {
+        // Keep tiles_per_chunk near the cap and let the last chunk be partial.
+        // Reader/compute kernels handle the partial trailing chunk explicitly
+        // via last_chunk_tiles.
         tiles_per_chunk = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
         num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
+        last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
         buffering = tiles_per_chunk > max_double_buffer_tiles ? 1 : 2;
     } else {
         // Use original non-chunked approach for smaller embeddings
         tiles_per_chunk = num_tiles_per_block;
         num_chunks = 1;
+        last_chunk_tiles = num_tiles_per_block;
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
     }
 
@@ -179,7 +185,8 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
         (std::uint32_t)weight_block_size,
         (std::uint32_t)tiles_per_chunk,
         (std::uint32_t)input_block_size_bytes,
-        (std::uint32_t)num_chunks};
+        (std::uint32_t)num_chunks,
+        (std::uint32_t)last_chunk_tiles};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -198,7 +205,8 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
             uint32_t(output_cb_index),              // output_cb_index
             uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
             uint32_t(tiles_per_chunk),              // tiles_per_chunk
-            uint32_t(num_chunks)                    // num_chunks per block
+            uint32_t(num_chunks),                   // num_chunks per block
+            uint32_t(last_chunk_tiles)              // last_chunk_tiles
         };
         tt::tt_metal::CreateKernel(
             program,
@@ -214,7 +222,8 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
             uint32_t(output_cb_index),              // output_cb_index
             uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
             uint32_t(tiles_per_chunk),              // tiles_per_chunk
-            uint32_t(num_chunks)                    // num_chunks per block
+            uint32_t(num_chunks),                   // num_chunks per block
+            uint32_t(last_chunk_tiles)              // last_chunk_tiles
         };
         tt::tt_metal::CreateKernel(
             program,
