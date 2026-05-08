@@ -57,6 +57,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
+    // Int32 max/min uses SFPU reduce path
+    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_int32_path;
+
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
     uint32_t num_cores;
@@ -111,7 +115,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .tensor = &a,
         });
     } else {
-        uint32_t num_input_tiles = operation_attributes.negate ? chunk_size : 2;
+        uint32_t num_input_tiles = use_fpu_negate ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_input_tiles * src0_single_tile_size,
             .core_ranges = all_cores,
@@ -148,7 +152,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .tensor = &output,
         });
     } else {
-        uint32_t num_output_tiles = operation_attributes.negate ? chunk_size : 2;
+        uint32_t num_output_tiles = use_fpu_negate ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_tiles * dst_single_tile_size,
             .core_ranges = all_cores,
@@ -163,7 +167,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    if (operation_attributes.negate) {
+    if (use_fpu_negate) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
         // via push_back(ntiles).  The CB FIFO write pointer only wraps when
         // wr_ptr exactly reaches fifo_limit, so it is not enough for the CB
@@ -259,6 +263,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
+    if (use_sfpu_int32_path) {
+        reduce_defines["REDUCE_FORMAT"] = "DataFormat::Int32";
+    }
+
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
@@ -327,8 +335,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     };
 
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
-        (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/") +
+        (use_sfpu_int32_path ? "reduce_sfpu" : "reduce") + (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;
