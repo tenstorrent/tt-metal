@@ -194,3 +194,17 @@ registry:
     config_count: 209
     loaded_at: '2026-05-01'
     notes: 'flux 1 dev via pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py   -k "4x8sp0tp1 and encoder_device and 28 and yes_use_cache and not not_traced"'
+
+  - trace_id: 23
+    status: draft
+    models: [qwen3-32b_3]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: fea8b85d-4bd3-44e1-a7a5-0a758ecda3a2
+    tt_metal_sha: 5fe598dcfd332905d1b5ccc7810b9b1c2c048c32
+    config_count: 35
+    loaded_at: '2026-05-07'
+    notes: ''
+    pytest_args: '--timeout 10000'
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.2.0.0"
