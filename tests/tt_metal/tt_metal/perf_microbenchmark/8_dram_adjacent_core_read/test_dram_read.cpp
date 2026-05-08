@@ -333,9 +333,7 @@ void get_optimal_dram_bank_to_reader_assignment(
 // the same horizontal corridor while ensuring its vertical down-leg into the DRAM column stays distinct
 // from the original reader's, minimising NoC contention.
 std::optional<CoreCoord> find_next_unused_worker_core_on_same_row(
-    tt_metal::distributed::MeshDevice* device,
-    const CoreCoord& preferred_core,
-    const std::set<CoreCoord>& used_cores) {
+    tt_metal::distributed::MeshDevice* device, const CoreCoord& preferred_core, const std::set<CoreCoord>& used_cores) {
     const auto grid_size = device->compute_with_storage_grid_size();
     const auto& storage_only_cores = device->storage_only_cores();
     const uint32_t y = preferred_core.y;
@@ -360,9 +358,7 @@ std::optional<CoreCoord> find_next_unused_worker_core_on_same_row(
 }
 
 void make_dram_reader_cores_unique(
-    tt_metal::distributed::MeshDevice* device,
-    std::vector<CoreCoord>& reader_cores,
-    uint32_t bank_start_id) {
+    tt_metal::distributed::MeshDevice* device, std::vector<CoreCoord>& reader_cores, uint32_t bank_start_id) {
     std::set<CoreCoord> used_cores;
     for (uint32_t i = 0; i < reader_cores.size(); ++i) {
         const auto preferred_core = reader_cores[i];
