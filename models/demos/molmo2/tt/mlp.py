@@ -185,11 +185,11 @@ class TtMolmo2TextMLP(LightweightModule):
         return out
 
     def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Optimized single-token decode: all projections in L1, ttnn.all_reduce.
+        """Optimized single-token decode: all projections in L1, async RS+AG.
 
-        For [1,1,1,dim] decode tensors, L1 eliminates DRAM round-trips between ops.
-        ttnn.all_reduce(cluster_axis=1) is a single TTNN primitive (vs async RS+AG).
-        NOTE: not replayed inside a TTNN trace — called eagerly each decode step.
+        Uses tt_all_reduce + tt_all_gather (async reduce_scatter + all_gather)
+        which enables the device CQ to overlap CCL with next-layer compute —
+        matching the async pattern from forward() that achieves better pipelining.
         """
         w1_out = ttnn.linear(
             x,
@@ -226,11 +226,23 @@ class TtMolmo2TextMLP(LightweightModule):
         )
         ttnn.deallocate(w2_in)
 
-        if self.num_devices > 1:
-            out = ttnn.all_reduce(
-                out,
-                cluster_axis=1,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        # Async RS+AG — same as forward(), enables CCL-compute overlap in device CQ
+        scattered = tt_all_reduce(
+            out,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=ttnn.Topology.Linear,
+        )
+        out = tt_all_gather(
+            scattered,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=None,
+            dim=3,
+            topology=ttnn.Topology.Linear,
+        )
+        if out is not scattered:
+            scattered.deallocate(True)
         return out

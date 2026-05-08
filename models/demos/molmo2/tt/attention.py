@@ -25,6 +25,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 
 
@@ -49,6 +50,7 @@ class TtMolmo2TextAttention(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -204,8 +206,26 @@ class TtMolmo2TextAttention(LightweightModule):
             )
             ttnn.deallocate(attn_11SH)
             if self.is_multichip:
+                # Async RS+AG for better CCL-compute overlap in device CQ
                 out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-                out = ttnn.all_reduce(out, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                scattered = tt_all_reduce(
+                    out,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=0,
+                    dim=3,
+                    topology=ttnn.Topology.Linear,
+                )
+                out = tt_all_gather(
+                    scattered,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=None,
+                    dim=3,
+                    topology=ttnn.Topology.Linear,
+                )
+                if out is not scattered:
+                    scattered.deallocate(True)
         else:
             # Prefill: AllGather → replicated wo (original path, preserves accuracy)
             if self.is_multichip:
