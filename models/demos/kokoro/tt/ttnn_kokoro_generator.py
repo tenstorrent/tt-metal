@@ -164,6 +164,13 @@ def _crop_len_nlc(x: ttnn.Tensor, out_len: int) -> ttnn.Tensor:
     return ttnn.slice(x, (0, 0, 0), (x.shape[0], out_len, x.shape[2]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def _reflection_pad_left1_nlc(x: ttnn.Tensor) -> ttnn.Tensor:
+    # PyTorch ReflectionPad1d((1,0)): left pad is x[:, 1] (reflect excluding edge)
+    assert int(x.shape[1]) >= 2
+    left = ttnn.slice(x, (0, 1, 0), (x.shape[0], 2, x.shape[2]), memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B,1,C]
+    return ttnn.concat([left, x], dim=1)
+
+
 def adain_resblock1_forward_nlc(
     *,
     x_nlc: ttnn.Tensor,
@@ -374,7 +381,8 @@ class TtKokoroGeneratorCore:
             )
             x = _maybe_to_interleaved(x)
 
-            # reflection_pad for last stage is skipped here; handled later (or ported with slice/concat)
+            if i == self.params.num_upsamples - 1:
+                x = _reflection_pad_left1_nlc(x)
             out_len = min(int(x.shape[1]), int(x_source.shape[1]))
             x = _crop_len_nlc(x, out_len)
             x_source = _crop_len_nlc(x_source, out_len)
