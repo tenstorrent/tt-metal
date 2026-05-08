@@ -1,0 +1,415 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+name: "HuggingFace model weight download"
+run-name: "HF download: ${{ inputs.model }} @ ${{ inputs.revision }}"
+
+# Download HuggingFace model weights to the runner systems selected below.
+#
+# Storage topology — determines how many jobs run:
+#
+#   MLPerf NFS (shared Weka mount at /mnt/MLPerf):
+#     WH N150, N300, T3K/LLMBox, WH Galaxy, BH P150 (cloud), BH LoudBox
+#     → ONE job on wh_n150 writes once; all of the above see the result.
+#
+#   Local disk (/localdev/blackhole_demos/huggingface_data):
+#     BH LLMBox, BH QB2, BH P300, BH Galaxy
+#     → ONE job PER SYSTEM; each machine downloads independently.
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      model:
+        description: >
+          HuggingFace model ID (e.g. meta-llama/Llama-3.1-8B-Instruct).
+          Must match the canonical repo_id as it appears on huggingface.co.
+        required: true
+        type: string
+
+      revision:
+        description: "Branch, tag, or commit SHA to download (default: main)"
+        required: false
+        type: string
+        default: "main"
+
+      ignore_patterns:
+        description: >
+          Comma-separated glob patterns to skip (e.g. original/*,*.bin).
+          Default skips original-format shards when safetensors are present.
+        required: false
+        type: string
+        default: "original/*"
+
+      dry_run:
+        description: "Dry-run: print what would be downloaded without writing any files"
+        required: false
+        type: boolean
+        default: false
+
+      # ── Wormhole ─────────────────────────────────────────────────────────
+      # Any WH box OR bh_p150 OR bh_loudbox triggers ONE job on wh_n150
+      # that writes to the shared /mnt/MLPerf NFS, covering all of them.
+
+      wh_all:
+        description: "ALL WORMHOLE (N150 + N300 + T3K/LLMBox + WH Galaxy)"
+        required: false
+        type: boolean
+        default: false
+
+      wh_n150:
+        description: "WH N150"
+        required: false
+        type: boolean
+        default: false
+
+      wh_n300:
+        description: "WH N300"
+        required: false
+        type: boolean
+        default: false
+
+      wh_t3k:
+        description: "WH T3K / LLMBox (8-card)"
+        required: false
+        type: boolean
+        default: false
+
+      wh_galaxy:
+        description: "WH Galaxy (6U)"
+        required: false
+        type: boolean
+        default: false
+
+      # ── Blackhole ─────────────────────────────────────────────────────────
+
+      bh_all:
+        description: "ALL BLACKHOLE (P150 + LLMBox + LoudBox + P300 + QB2 + BH Galaxy)"
+        required: false
+        type: boolean
+        default: false
+
+      bh_p150:
+        description: "BH P150 (cloud-mlperf — shares WH NFS, no extra job)"
+        required: false
+        type: boolean
+        default: false
+
+      bh_llmbox:
+        description: "BH LLMBox / QuietBox (4×P150, local-disk — per-machine download)"
+        required: false
+        type: boolean
+        default: false
+
+      bh_loudbox:
+        description: "BH LoudBox (8×P150, cloud-mlperf — shares WH NFS, no extra job)"
+        required: false
+        type: boolean
+        default: false
+
+      bh_p300:
+        description: "BH P300 (local-disk — per-machine download)"
+        required: false
+        type: boolean
+        default: false
+
+      bh_quietbox_2:
+        description: "BH QuietBox 2 / QB2 (2×P300, local-disk — per-machine download)"
+        required: false
+        type: boolean
+        default: false
+
+      bh_galaxy:
+        description: "BH Galaxy (6U, local-disk — per-machine download)"
+        required: false
+        type: boolean
+        default: false
+
+      # ── Convenience ───────────────────────────────────────────────────────
+
+      all_systems:
+        description: "ALL SYSTEMS — download everywhere"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+
+  # ── Resolve which jobs need to run ─────────────────────────────────────────
+  # Runs on a cheap ubuntu-latest runner with no hardware. Evaluates all the
+  # boolean inputs (including the wh_all / bh_all / all_systems shortcuts) and
+  # emits a true/false output for each downstream job to gate on.
+
+  resolve-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      run_wh_nfs:    ${{ steps.resolve.outputs.run_wh_nfs }}
+      run_bh_llmbox: ${{ steps.resolve.outputs.run_bh_llmbox }}
+      run_bh_p300:   ${{ steps.resolve.outputs.run_bh_p300 }}
+      run_bh_qb2:    ${{ steps.resolve.outputs.run_bh_qb2 }}
+      run_bh_galaxy: ${{ steps.resolve.outputs.run_bh_galaxy }}
+    steps:
+      - name: Evaluate target systems
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          ALL="${{ inputs.all_systems }}"
+          WH_ALL="${{ inputs.wh_all }}"
+          BH_ALL="${{ inputs.bh_all }}"
+
+          # WH NFS — one job covers: N150, N300, T3K, WH Galaxy, BH P150, BH LoudBox
+          run_wh_nfs=false
+          if [[ "$ALL"    == "true" || "$WH_ALL"               == "true" ||
+                "${{ inputs.wh_n150 }}"  == "true" || "${{ inputs.wh_n300 }}"   == "true" ||
+                "${{ inputs.wh_t3k }}"   == "true" || "${{ inputs.wh_galaxy }}" == "true" ||
+                "$BH_ALL" == "true" ||
+                "${{ inputs.bh_p150 }}"  == "true" || "${{ inputs.bh_loudbox }}" == "true" ]]; then
+            run_wh_nfs=true
+          fi
+
+          run_bh_llmbox=false
+          if [[ "$ALL" == "true" || "$BH_ALL" == "true" || "${{ inputs.bh_llmbox }}" == "true" ]]; then
+            run_bh_llmbox=true
+          fi
+
+          run_bh_p300=false
+          if [[ "$ALL" == "true" || "$BH_ALL" == "true" || "${{ inputs.bh_p300 }}" == "true" ]]; then
+            run_bh_p300=true
+          fi
+
+          run_bh_qb2=false
+          if [[ "$ALL" == "true" || "$BH_ALL" == "true" || "${{ inputs.bh_quietbox_2 }}" == "true" ]]; then
+            run_bh_qb2=true
+          fi
+
+          run_bh_galaxy=false
+          if [[ "$ALL" == "true" || "$BH_ALL" == "true" || "${{ inputs.bh_galaxy }}" == "true" ]]; then
+            run_bh_galaxy=true
+          fi
+
+          echo "run_wh_nfs=${run_wh_nfs}"       >> "$GITHUB_OUTPUT"
+          echo "run_bh_llmbox=${run_bh_llmbox}" >> "$GITHUB_OUTPUT"
+          echo "run_bh_p300=${run_bh_p300}"     >> "$GITHUB_OUTPUT"
+          echo "run_bh_qb2=${run_bh_qb2}"       >> "$GITHUB_OUTPUT"
+          echo "run_bh_galaxy=${run_bh_galaxy}" >> "$GITHUB_OUTPUT"
+
+          echo "Target summary:"
+          echo "  WH NFS (N150/N300/T3K/Galaxy + BH P150/LoudBox): ${run_wh_nfs}"
+          echo "  BH LLMBox:                                        ${run_bh_llmbox}"
+          echo "  BH P300:                                          ${run_bh_p300}"
+          echo "  BH QuietBox 2:                                    ${run_bh_qb2}"
+          echo "  BH Galaxy:                                        ${run_bh_galaxy}"
+
+  # ── Shared download script ─────────────────────────────────────────────────
+  # Used verbatim in each job below via a multi-line run: block.
+  # HF_HOME and HF_HUB_CACHE must be set in the job's env: before calling this.
+
+  # ── WH NFS — one job covers all MLPerf-mounted systems ────────────────────
+
+  download-wh-nfs:
+    needs: resolve-targets
+    if: needs.resolve-targets.outputs.run_wh_nfs == 'true'
+    runs-on: [N150, in-service, cloud-virtual-machine]
+    env:
+      HF_HOME: /mnt/MLPerf/huggingface
+      HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      MODEL: ${{ inputs.model }}
+      REVISION: ${{ inputs.revision }}
+      IGNORE: ${{ inputs.ignore_patterns }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    timeout-minutes: 360
+    steps:
+      - name: Install huggingface_hub
+        run: pip3 install --quiet "huggingface_hub>=0.23"
+
+      - name: Download ${{ inputs.model }} to MLPerf NFS
+        run: |
+          set -euo pipefail
+          echo "Destination: ${HF_HUB_CACHE}"
+          echo "Model:       ${MODEL} @ ${REVISION}"
+          echo "Ignoring:    ${IGNORE}"
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "DRY RUN — skipping download"
+            exit 0
+          fi
+          python3 - << 'PYEOF'
+          import os
+          from huggingface_hub import snapshot_download
+
+          dest = snapshot_download(
+              repo_id=os.environ["MODEL"],
+              revision=os.environ["REVISION"],
+              token=os.environ.get("HF_TOKEN") or None,
+              ignore_patterns=[p.strip() for p in os.environ.get("IGNORE", "original/*").split(",") if p.strip()] or None,
+              resume_download=True,
+          )
+          print(f"Downloaded to: {dest}", flush=True)
+          PYEOF
+
+  # ── BH local-disk — one job per system ────────────────────────────────────
+
+  download-bh-llmbox:
+    needs: resolve-targets
+    if: needs.resolve-targets.outputs.run_bh_llmbox == 'true'
+    runs-on: [in-service, arch-blackhole, BH-LLMBox, pipeline-perf]
+    env:
+      HF_HOME: /localdev/blackhole_demos/huggingface_data
+      HF_HUB_CACHE: /localdev/blackhole_demos/huggingface_data/hub
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      MODEL: ${{ inputs.model }}
+      REVISION: ${{ inputs.revision }}
+      IGNORE: ${{ inputs.ignore_patterns }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    timeout-minutes: 360
+    steps:
+      - name: Install huggingface_hub
+        run: pip3 install --quiet "huggingface_hub>=0.23"
+
+      - name: Download ${{ inputs.model }} to BH LLMBox local disk
+        run: |
+          set -euo pipefail
+          echo "Destination: ${HF_HUB_CACHE}"
+          echo "Model:       ${MODEL} @ ${REVISION}"
+          echo "Ignoring:    ${IGNORE}"
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "DRY RUN — skipping download"
+            exit 0
+          fi
+          python3 - << 'PYEOF'
+          import os
+          from huggingface_hub import snapshot_download
+
+          dest = snapshot_download(
+              repo_id=os.environ["MODEL"],
+              revision=os.environ["REVISION"],
+              token=os.environ.get("HF_TOKEN") or None,
+              ignore_patterns=[p.strip() for p in os.environ.get("IGNORE", "original/*").split(",") if p.strip()] or None,
+              resume_download=True,
+          )
+          print(f"Downloaded to: {dest}", flush=True)
+          PYEOF
+
+  download-bh-p300:
+    needs: resolve-targets
+    if: needs.resolve-targets.outputs.run_bh_p300 == 'true'
+    runs-on: [in-service, arch-blackhole, P300-viommu, pipeline-yyz2-lfc]
+    env:
+      HF_HOME: /localdev/blackhole_demos/huggingface_data
+      HF_HUB_CACHE: /localdev/blackhole_demos/huggingface_data/hub
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      MODEL: ${{ inputs.model }}
+      REVISION: ${{ inputs.revision }}
+      IGNORE: ${{ inputs.ignore_patterns }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    timeout-minutes: 360
+    steps:
+      - name: Install huggingface_hub
+        run: pip3 install --quiet "huggingface_hub>=0.23"
+
+      - name: Download ${{ inputs.model }} to BH P300 local disk
+        run: |
+          set -euo pipefail
+          echo "Destination: ${HF_HUB_CACHE}"
+          echo "Model:       ${MODEL} @ ${REVISION}"
+          echo "Ignoring:    ${IGNORE}"
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "DRY RUN — skipping download"
+            exit 0
+          fi
+          python3 - << 'PYEOF'
+          import os
+          from huggingface_hub import snapshot_download
+
+          dest = snapshot_download(
+              repo_id=os.environ["MODEL"],
+              revision=os.environ["REVISION"],
+              token=os.environ.get("HF_TOKEN") or None,
+              ignore_patterns=[p.strip() for p in os.environ.get("IGNORE", "original/*").split(",") if p.strip()] or None,
+              resume_download=True,
+          )
+          print(f"Downloaded to: {dest}", flush=True)
+          PYEOF
+
+  download-bh-quietbox-2:
+    needs: resolve-targets
+    if: needs.resolve-targets.outputs.run_bh_qb2 == 'true'
+    runs-on: [BH-QB-GE, pipeline-perf, in-service]
+    env:
+      HF_HOME: /localdev/blackhole_demos/huggingface_data
+      HF_HUB_CACHE: /localdev/blackhole_demos/huggingface_data/hub
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      MODEL: ${{ inputs.model }}
+      REVISION: ${{ inputs.revision }}
+      IGNORE: ${{ inputs.ignore_patterns }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    timeout-minutes: 360
+    steps:
+      - name: Install huggingface_hub
+        run: pip3 install --quiet "huggingface_hub>=0.23"
+
+      - name: Download ${{ inputs.model }} to BH QuietBox 2 local disk
+        run: |
+          set -euo pipefail
+          echo "Destination: ${HF_HUB_CACHE}"
+          echo "Model:       ${MODEL} @ ${REVISION}"
+          echo "Ignoring:    ${IGNORE}"
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "DRY RUN — skipping download"
+            exit 0
+          fi
+          python3 - << 'PYEOF'
+          import os
+          from huggingface_hub import snapshot_download
+
+          dest = snapshot_download(
+              repo_id=os.environ["MODEL"],
+              revision=os.environ["REVISION"],
+              token=os.environ.get("HF_TOKEN") or None,
+              ignore_patterns=[p.strip() for p in os.environ.get("IGNORE", "original/*").split(",") if p.strip()] or None,
+              resume_download=True,
+          )
+          print(f"Downloaded to: {dest}", flush=True)
+          PYEOF
+
+  download-bh-galaxy:
+    needs: resolve-targets
+    if: needs.resolve-targets.outputs.run_bh_galaxy == 'true'
+    runs-on: [arch-blackhole, pipeline-functional, topology-6u, in-service]
+    env:
+      HF_HOME: /localdev/blackhole_demos/huggingface_data
+      HF_HUB_CACHE: /localdev/blackhole_demos/huggingface_data/hub
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      MODEL: ${{ inputs.model }}
+      REVISION: ${{ inputs.revision }}
+      IGNORE: ${{ inputs.ignore_patterns }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    timeout-minutes: 360
+    steps:
+      - name: Install huggingface_hub
+        run: pip3 install --quiet "huggingface_hub>=0.23"
+
+      - name: Download ${{ inputs.model }} to BH Galaxy local disk
+        run: |
+          set -euo pipefail
+          echo "Destination: ${HF_HUB_CACHE}"
+          echo "Model:       ${MODEL} @ ${REVISION}"
+          echo "Ignoring:    ${IGNORE}"
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "DRY RUN — skipping download"
+            exit 0
+          fi
+          python3 - << 'PYEOF'
+          import os
+          from huggingface_hub import snapshot_download
+
+          dest = snapshot_download(
+              repo_id=os.environ["MODEL"],
+              revision=os.environ["REVISION"],
+              token=os.environ.get("HF_TOKEN") or None,
+              ignore_patterns=[p.strip() for p in os.environ.get("IGNORE", "original/*").split(",") if p.strip()] or None,
+              resume_download=True,
+          )
+          print(f"Downloaded to: {dest}", flush=True)
+          PYEOF
