@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@fix/job-owner-representative-note
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
@@ -56,6 +56,7 @@ jobs:
           slack_ts: ${{ inputs.slack_ts }}
           allow-pings: true
           send-slack-message: ${{ inputs.send-slack-message }}
+          slack-test-only: 'true'
           cutoff-commit: ${{ inputs.cutoff_commit }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
