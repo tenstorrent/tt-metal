@@ -96,7 +96,9 @@ def transpose_conv2d(
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if (input_tensor.is_sharded() or upconv_config.force_height_sharded) else None
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if (input_tensor.is_sharded() or upconv_config.force_height_sharded)
+            else None
         ),
         deallocate_activation=True,
         enable_act_double_buffer=False,
@@ -424,4 +426,3 @@ def create_model_from_configs(configs: TtAttentionDenseUNetConfigs, device: ttnn
         TtAttentionDenseUNet instance
     """
     return TtAttentionDenseUNet(configs, device)
-

@@ -122,7 +122,9 @@ def main():
             with torch.no_grad():
                 pt_logits = ref(x).float()
             tt_in = x.reshape(1, 1, 3, args.height * args.width)
-            tt_in = ttnn.from_torch(tt_in, dtype=ttnn.bfloat16, device=device, memory_config=configs.l1_input_memory_config)
+            tt_in = ttnn.from_torch(
+                tt_in, dtype=ttnn.bfloat16, device=device, memory_config=configs.l1_input_memory_config
+            )
             tt_logits = ttnn.to_torch(tt_model(tt_in)).reshape(1, 1, args.height, args.width).float()
             pm = to_bin(pt_logits, args.threshold)
             tm = to_bin(tt_logits, args.threshold)
@@ -170,4 +172,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -23,7 +23,9 @@ except ImportError as e:
 
 def parse_args():
     p = argparse.ArgumentParser(description="COCO val subset → images/ + masks/ for one category")
-    p.add_argument("--coco-root", type=Path, required=True, help="Contains val2017/ and annotations/instances_val2017.json")
+    p.add_argument(
+        "--coco-root", type=Path, required=True, help="Contains val2017/ and annotations/instances_val2017.json"
+    )
     p.add_argument(
         "--out-dir",
         type=Path,

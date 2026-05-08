@@ -170,4 +170,3 @@ pytest -v models/demos/attention_denseunet/demo/demo.py
 - [TTNN model bring-up](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md)
 - [CNN optimization guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/cnn_optimizations.md)
 - [DenseNet](https://arxiv.org/abs/1608.06993) · [Attention U-Net](https://arxiv.org/abs/1804.03999)
-

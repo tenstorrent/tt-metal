@@ -691,4 +691,3 @@ def create_configs_from_parameters(
     )
 
     return builder.build_configs()
-
