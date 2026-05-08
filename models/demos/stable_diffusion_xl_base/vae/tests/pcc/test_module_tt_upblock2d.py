@@ -18,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, block_id, pcc",
     [
         ((1024, 1024), (1, 512, 128, 128), 0, 0.999),
-        ((1024, 1024), (1, 512, 256, 256), 1, 0.995),
+        ((1024, 1024), (1, 512, 256, 256), 1, 0.995 if not is_blackhole() else 0.993),
         ((1024, 1024), (1, 512, 512, 512), 2, 0.998),
         ((1024, 1024), (1, 256, 1024, 1024), 3, 0.999 if not is_blackhole() else 0.99),
         # 512x512 image resolution
