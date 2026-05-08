@@ -28,44 +28,33 @@ inline void reduce_row_perform_transpose()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_override_MASK, ALU_FORMAT_SPEC_REG_SrcA_override_MASK, ALU_FORMAT_SPEC_REG_SrcA_override_ADDR32);
-
-        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_val_MASK, static_cast<std::uint8_t>(DataFormat::Tf32), ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32);
-
-        // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
-
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // note: transpose on src B on works on rows 16 - 31
+        // Transpose lo16 first
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
-        // move row D2B again for cases of reducing across multiple tiles
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move hi16 bits B2D
+        // Move lo16 to SrcA
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+
+        // Transpose hi16
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
+
+        // Write transposed hi16 from SrcB to Dest
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_val_MASK, static_cast<std::uint8_t>(DataFormat::Float16), ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32);
-
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
-        TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_override_MASK, 0, ALU_FORMAT_SPEC_REG_SrcA_override_ADDR32);
-
-        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_val_MASK, static_cast<std::uint8_t>(DataFormat::Float32), ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32);
-
-        // move lo16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        // Write transposed lo16 from SrcA to Dest
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
     }
     else
     {
@@ -187,6 +176,24 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
 
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+
+        if constexpr (enforce_fp32_accumulation)
+        {
+            for (std::uint32_t t = 0; t <= dst_index; t++)
+            {
+                const std::uint32_t base = (get_dest_buffer_base() >> 4) + (t << 3);
+                if (tensor_shape.num_faces_c_dim > 1)
+                {
+                    TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_0, base + 2);
+                    TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_0, base + 3);
+                    if (tensor_shape.num_faces_r_dim > 1)
+                    {
+                        TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_0, base + 6);
+                        TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_0, base + 7);
+                    }
+                }
+            }
+        }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
@@ -315,9 +322,7 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        // MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
-        // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -327,9 +332,5 @@ inline void _llk_math_reduce_init_()
 template <bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_uninit_(const std::uint32_t srca_data_format)
 {
-    if constexpr (enforce_fp32_accumulation)
-    {
-        // Restore SrcA format (init changes it to Float32 for MOVB2D/D2B Hi/Lo16 workaround on WH)
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
-    }
+    (void)srca_data_format;
 }
