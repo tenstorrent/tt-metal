@@ -440,11 +440,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>(a, b, c, rtol, atol)";
     }
 
-    // Track post-activation dtypes so the c_3 / c_4 intermediate CBs can be
-    // sized and formatted to match the data the in-kernel TYPECAST produces.
-    DataType a_post_activation_dtype = a_dtype;
-    DataType b_post_activation_dtype = b_dtype;
-
     {
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -533,9 +528,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             // SFPU kernel should handle 4, but for unknown reason, only 2 works
             // no document and example to show why 4 does not work, need further investigation
             num_tiles_per_cycle = 2;
-            // NOTE: ISCLOSE is an SFPU op that uses TYPECAST(INT32->FLOAT32) activations.
-            // The intermediate CB sizes below (c_3/c_4) are computed from
-            // a_post_activation_data_format * num_tiles_per_cycle.
         }
     }
 
@@ -560,10 +552,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
-        const auto a_post_activation_data_format = datatype_to_dataformat_converter(a_post_activation_dtype);
-        auto a_intermediate_format = is_sfpu_op   ? a_post_activation_data_format
+        auto a_intermediate_format = is_sfpu_op   ? a_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
-                                                  : a_post_activation_data_format;
+                                                  : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
@@ -592,10 +583,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
-        const auto b_post_activation_data_format = datatype_to_dataformat_converter(b_post_activation_dtype);
-        auto b_intermediate_format = is_sfpu_op   ? b_post_activation_data_format
+        auto b_intermediate_format = is_sfpu_op   ? b_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
-                                                  : b_post_activation_data_format;
+                                                  : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
