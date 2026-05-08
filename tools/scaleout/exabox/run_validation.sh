@@ -256,8 +256,14 @@ echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
 echo ""
 
-# Create output directory if it doesn't exist
+# Create output directory if it doesn't exist and resolve to an absolute path so
+# that paths passed into Docker containers refer to the same location on the host.
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+
+# Ensure the output directory is bind-mounted into containers so per-iteration
+# CSVs survive container exit and are visible to the host-side aggregation step.
+EXTRA_VOLUMES+=("$OUTPUT_DIR")
 
 # Main testing loop
 for ((i=1; i<=ITERATIONS; i++)); do
@@ -297,24 +303,21 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
             echo ""
             echo "Running cluster validation..."
-            run_cluster_validation
+            run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
         else
             echo "Skipping validation due to mpirun failure"
         fi
 
-        echo ""
-        echo "Running cluster validation..."
-        run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
 
     if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
-        OUTPUT_DIR_RETRY="${OUTPUT_DIR}_retry"
-
-        mkdir -p "$OUTPUT_DIR_RETRY"
-
-        LOG_FILE_RETRY="$OUTPUT_DIR_RETRY/cluster_validation_iteration_${i}_retry.log"
+        # Keep all retry artifacts (log + per-iteration retrain CSV) under the same base
+        # output directory so the end-of-run aggregation finds everything in one scan.
+        ITER_RETRY_DIR="$OUTPUT_DIR/iteration_${i}_retry"
+        mkdir -p "$ITER_RETRY_DIR"
+        LOG_FILE_RETRY="$ITER_RETRY_DIR/cluster_validation_iteration_${i}_retry.log"
 
         {
             echo "=========================================="
@@ -324,7 +327,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
             echo ""
 
             echo "Re-running cluster validation..."
-            run_cluster_validation "$OUTPUT_DIR/iteration_${i}_retry"
+            run_cluster_validation "$ITER_RETRY_DIR"
             echo "Iteration $i retry completed at $(date)"
             echo "=========================================="
         } 2>&1 | tee "$LOG_FILE_RETRY"
@@ -334,36 +337,63 @@ for ((i=1; i<=ITERATIONS; i++)); do
     echo ""
 done
 
-# Aggregate link retrain reports across all iterations
+# ----------------------------------------------------------------------------
+# End-of-run aggregation: produce a single CSV with one row per retrained link
+# and the total number of retrains observed across the entire run (all
+# iterations + retries). Per-iteration link_retrain_report.csv files are
+# written by the C++ tool inside each iteration's output directory.
+# ----------------------------------------------------------------------------
 RETRAIN_SUMMARY="$OUTPUT_DIR/link_retrain_summary.csv"
+
 retrain_csvs=()
 while IFS= read -r -d '' csv; do
     retrain_csvs+=("$csv")
-done < <(find "$OUTPUT_DIR" -name "link_retrain_report.csv" -print0 2>/dev/null | sort -z)
+done < <(find "$OUTPUT_DIR" -name "link_retrain_report.csv" -print0 2>/dev/null | sort -zV)
 
-if [[ ${#retrain_csvs[@]} -gt 0 ]]; then
-    echo "=========================================="
-    echo "LINK RETRAIN SUMMARY (across all iterations)"
-    echo "=========================================="
-    echo "Iterations with retraining: ${#retrain_csvs[@]}"
-    echo ""
+echo "=========================================="
+echo "LINK RETRAIN SUMMARY (across all iterations)"
+echo "=========================================="
 
-    {
-        echo "Iteration,Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count"
-        for csv in "${retrain_csvs[@]}"; do
-            iter_dir=$(basename "$(dirname "$csv")")
-            tail -n +2 "$csv" | while IFS= read -r line; do
-                echo "${iter_dir},${line}"
-            done
-        done
-    } > "$RETRAIN_SUMMARY"
-
-    column -t -s, "$RETRAIN_SUMMARY"
+if [[ ${#retrain_csvs[@]} -eq 0 ]]; then
+    echo "No link retraining events detected across $ITERATIONS iteration(s)."
     echo ""
-    echo "Full retrain summary written to: $RETRAIN_SUMMARY"
-    echo ""
-else
-    echo "No link retraining events detected across $ITERATIONS iterations."
+    echo "All $ITERATIONS iterations completed!"
+    exit 0
 fi
+
+echo "Iterations (incl. retries) with retraining: ${#retrain_csvs[@]}"
+echo ""
+
+# Sum Retrain_Count per (Host,Tray,ASIC,Channel,Unique_ID) across all CSVs.
+# Each per-iteration CSV has header: Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count
+{
+    echo "Host,Tray,ASIC,Channel,Unique_ID,Total_Retrain_Count"
+    awk -F, '
+        FNR == 1 { next }                       # skip per-file header
+        {
+            key = $1 FS $2 FS $3 FS $4 FS $5
+            counts[key] += $6
+        }
+        END {
+            for (k in counts) print k FS counts[k]
+        }
+    ' "${retrain_csvs[@]}" | sort -t, -k1,1 -k2,2n -k3,3n -k4,4n
+} > "$RETRAIN_SUMMARY"
+
+if command -v column >/dev/null 2>&1; then
+    column -t -s, "$RETRAIN_SUMMARY"
+else
+    cat "$RETRAIN_SUMMARY"
+fi
+
+# Total retrain events across all links (sum of the rightmost column).
+TOTAL_RETRAIN_EVENTS=$(awk -F, 'NR > 1 { s += $6 } END { print s+0 }' "$RETRAIN_SUMMARY")
+UNIQUE_LINKS=$(($(wc -l < "$RETRAIN_SUMMARY") - 1))
+
+echo ""
+echo "Unique links retrained: $UNIQUE_LINKS"
+echo "Total retrain events: $TOTAL_RETRAIN_EVENTS"
+echo "Full retrain summary written to: $RETRAIN_SUMMARY"
+echo ""
 
 echo "All $ITERATIONS iterations completed!"

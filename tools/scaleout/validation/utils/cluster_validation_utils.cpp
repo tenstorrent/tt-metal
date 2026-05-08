@@ -14,6 +14,8 @@
 #include <future>
 #include <chrono>
 #include <exception>
+#include <system_error>
+#include <tuple>
 #include <unordered_set>
 #include <thread>
 
@@ -1335,50 +1337,76 @@ void log_link_retrain_summary(
         return;
     }
 
-    log_output_rank0(
-        "Link Retraining Summary: " + std::to_string(link_retrain_counts.size()) + " link endpoints retrained over " +
-        std::to_string(total_retrain_iterations) + " iteration(s)");
+    // Sort entries by (host, tray, asic_location, channel) for stable, diff-friendly output
+    // across runs. std::unordered_map iteration order is unspecified.
+    std::vector<std::pair<EthChannelIdentifier, uint32_t>> sorted_entries(
+        link_retrain_counts.begin(), link_retrain_counts.end());
+    std::sort(sorted_entries.begin(), sorted_entries.end(), [](const auto& lhs, const auto& rhs) {
+        return std::tie(lhs.first.host, *lhs.first.tray_id, *lhs.first.asic_location, lhs.first.channel) <
+               std::tie(rhs.first.host, *rhs.first.tray_id, *rhs.first.asic_location, rhs.first.channel);
+    });
 
-    std::cout << std::endl;
-    std::cout << "╔═══════════════════════════════════════════════════════════════════════════════╗" << std::endl;
-    std::cout << "║                          LINK RETRAINING REPORT                              ║" << std::endl;
-    std::cout << "╚═══════════════════════════════════════════════════════════════════════════════╝" << std::endl;
-    std::cout << "Total Retrained Link Endpoints: " << link_retrain_counts.size() << std::endl;
-    std::cout << "Total Retrain Iterations: " << total_retrain_iterations << std::endl << std::endl;
+    auto format_unique_id = [](const auto& asic_id) {
+        std::stringstream ss;
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(10) << *asic_id;
+        return ss.str();
+    };
+
+    uint32_t total_retrain_events = 0;
+    for (const auto& entry : sorted_entries) {
+        total_retrain_events += entry.second;
+    }
+
+    log_output_rank0(
+        "Link Retraining Summary: " + std::to_string(sorted_entries.size()) + " link endpoint(s) retrained over " +
+        std::to_string(total_retrain_iterations) + " retrain iteration(s)");
+
+    constexpr int kBannerWidth = 67;
+    const std::string banner_line(kBannerWidth, '=');
+    std::cout << '\n' << banner_line << '\n';
+    std::cout << "                       LINK RETRAINING REPORT" << '\n';
+    std::cout << banner_line << '\n';
+    std::cout << "Unique link endpoints retrained: " << sorted_entries.size() << '\n';
+    std::cout << "Retrain loop iterations:         " << total_retrain_iterations << '\n';
+    std::cout << "Total retrain events:            " << total_retrain_events << "\n\n";
 
     std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
-              << std::setw(5) << "Ch" << std::setw(14) << "Unique ID" << std::setw(16) << "Retrain Count" << std::endl;
+              << std::setw(5) << "Ch" << std::setw(14) << "Unique ID" << std::setw(16) << "Retrain Count" << '\n';
+    std::cout << std::string(kBannerWidth, '-') << '\n';
 
-    std::cout << std::string(67, '-') << std::endl;
-
-    for (const auto& [channel_id, retrain_count] : link_retrain_counts) {
-        std::stringstream uid_stream;
-        uid_stream << "0x" << std::hex << std::setfill('0') << std::setw(10) << *channel_id.asic_id;
-
+    for (const auto& [channel_id, retrain_count] : sorted_entries) {
         std::cout << std::left << std::setw(20) << channel_id.host << std::setw(6) << *channel_id.tray_id
                   << std::setw(6) << *channel_id.asic_location << std::setw(5) << static_cast<int>(channel_id.channel)
-                  << std::setw(14) << uid_stream.str() << std::dec << std::setfill(' ') << std::setw(16)
-                  << retrain_count << std::endl;
+                  << std::setw(14) << format_unique_id(channel_id.asic_id) << std::setw(16) << retrain_count << '\n';
+    }
+    std::cout << std::string(kBannerWidth, '-') << "\n\n";
+
+    // Best-effort CSV emission. Any filesystem failure is logged but must not throw,
+    // because this runs on the link-retrain early-exit path before TT_THROW.
+    std::error_code ec;
+    std::filesystem::create_directories(output_path, ec);
+    if (ec) {
+        log_output_rank0(
+            "[WARN] Could not create output directory for link retrain report: " + output_path.string() + " (" +
+            ec.message() + ")");
+        return;
     }
 
-    std::cout << std::string(67, '-') << std::endl << std::endl;
-
-    std::filesystem::create_directories(output_path);
-    std::filesystem::path csv_path = output_path / "link_retrain_report.csv";
+    const std::filesystem::path csv_path = output_path / "link_retrain_report.csv";
     std::ofstream csv_file(csv_path);
-
-    if (csv_file.is_open()) {
-        csv_file << "Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count" << std::endl;
-        for (const auto& [channel_id, retrain_count] : link_retrain_counts) {
-            csv_file << channel_id.host << "," << *channel_id.tray_id << "," << *channel_id.asic_location << ","
-                     << static_cast<int>(channel_id.channel) << ","
-                     << "0x" << std::hex << *channel_id.asic_id << std::dec << "," << retrain_count << std::endl;
-        }
-        csv_file.close();
-        log_output_rank0("✓ Link retrain report written to: " + csv_path.string());
-    } else {
-        log_output_rank0("✗ Warning: Could not open CSV file for writing: " + csv_path.string());
+    if (!csv_file.is_open()) {
+        log_output_rank0("[WARN] Could not open CSV file for writing: " + csv_path.string());
+        return;
     }
+
+    csv_file << "Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count\n";
+    for (const auto& [channel_id, retrain_count] : sorted_entries) {
+        csv_file << channel_id.host << ',' << *channel_id.tray_id << ',' << *channel_id.asic_location << ','
+                 << static_cast<int>(channel_id.channel) << ',' << format_unique_id(channel_id.asic_id) << ','
+                 << retrain_count << '\n';
+    }
+    csv_file.close();
+    log_output_rank0("Link retrain report written to: " + csv_path.string());
 }
 
 void reset_local_ethernet_links(
