@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
@@ -597,58 +598,41 @@ void gather_rows_to_shard_selected(
         }
     }
 
+    // check_padding is a template arg on gather_rows_to_shard (compile-time elision of the
+    // padding bounds-check + clamp/zero-pad branch in the hot inner loop), so it must be
+    // dispatched as a constant. Generic lambda + bool-constant lifts the runtime
+    // `all_in_bounds` to a compile-time value once and shares the call site.
+    const auto do_gather = [&](auto check_padding_v) {
+        gather_rows_to_shard<
+            C_in_block_bytes,
+            is_padding_zeros,
+            H_shard_max_W_shard_max,
+            W_shard_max,
+            T_in,
+            H_in,
+            W_in,
+            H_in_W_in,
+            in_row_size_bytes,
+            decltype(check_padding_v)::value,
+            GatherTrids>(
+            noc,
+            in_reader,
+            shard_cb,
+            batch_page_base,
+            c_in_offset_bytes,
+            t_shard_start,
+            T_shard_cur,
+            h_shard_start,
+            h_start,
+            h_end,
+            w_shard_start,
+            w_col_start,
+            w_count);
+    };
     if (all_in_bounds) {
-        gather_rows_to_shard<
-            C_in_block_bytes,
-            is_padding_zeros,
-            H_shard_max_W_shard_max,
-            W_shard_max,
-            T_in,
-            H_in,
-            W_in,
-            H_in_W_in,
-            in_row_size_bytes,
-            false,
-            GatherTrids>(
-            noc,
-            in_reader,
-            shard_cb,
-            batch_page_base,
-            c_in_offset_bytes,
-            t_shard_start,
-            T_shard_cur,
-            h_shard_start,
-            h_start,
-            h_end,
-            w_shard_start,
-            w_col_start,
-            w_count);
+        do_gather(std::false_type{});
     } else {
-        gather_rows_to_shard<
-            C_in_block_bytes,
-            is_padding_zeros,
-            H_shard_max_W_shard_max,
-            W_shard_max,
-            T_in,
-            H_in,
-            W_in,
-            H_in_W_in,
-            in_row_size_bytes,
-            true,
-            GatherTrids>(
-            noc,
-            in_reader,
-            shard_cb,
-            batch_page_base,
-            c_in_offset_bytes,
-            t_shard_start,
-            T_shard_cur,
-            h_shard_start,
-            h_start,
-            h_end,
-            w_shard_start,
-            w_col_start,
-            w_count);
+        do_gather(std::true_type{});
     }
 }
 

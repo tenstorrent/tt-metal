@@ -62,8 +62,7 @@ void kernel_main() {
     constexpr bool enable_weight_mcast = weight_share_mode == WeightShareMode::Mcast;
     constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
     constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
-    constexpr uint32_t enable_streaming_output_arg_idx = 25;
-    constexpr bool enable_streaming_output = get_compile_time_arg_val(enable_streaming_output_arg_idx) == 1;
+    constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -120,8 +119,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr uint32_t tensor_accessor_args_offset = enable_streaming_output_arg_idx + 1;
-    constexpr auto out_args = TensorAccessorArgs<tensor_accessor_args_offset>();
+    constexpr auto out_args = TensorAccessorArgs<26>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr);
