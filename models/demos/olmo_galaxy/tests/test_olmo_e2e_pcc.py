@@ -1270,6 +1270,49 @@ class TestOlmoE2EPCC:
                 f"xv_std={ref_xv_std:.4f}  sdpa_out_std={ref_sdpa_std:.4f}  attn_weight_max={ref_attn_max:.4f}"
             )
 
+            # ── Attention-internal element-wise comparison: TT vs ref ──
+            def _ratio_block(label, ref_n, tt_n):
+                """Print elementwise diff + |TT/ref| median ratio for the magnitude-bias hunt."""
+                if ref_n.numel() != tt_n.numel():
+                    n = min(ref_n.numel(), tt_n.numel())
+                    ref_n = ref_n[:n]
+                    tt_n = tt_n[:n]
+                diff = (tt_n - ref_n).abs()
+                mask = ref_n.abs() > 1e-3
+                if mask.any():
+                    ratio = tt_n[mask].abs() / ref_n[mask].abs()
+                    r_med = ratio.median().item()
+                    r_mean = ratio.mean().item()
+                else:
+                    r_med = r_mean = float("nan")
+                logger.info(
+                    f"    ATTN {label:18s}: n={ref_n.numel()}  abs_diff max={diff.max():.4e} "
+                    f"mean={diff.mean():.4e}  |TT/ref| mean={r_mean:.4f} med={r_med:.4f}  "
+                    f"ref_std={ref_n.std():.4f} tt_std={tt_n.std():.4f}"
+                )
+
+            sdpa_tt = attn_caps.get("sdpa_out")
+            ref_sdpa_t = ref_li.get("ref_sdpa_out")
+            if sdpa_tt is not None and ref_sdpa_t is not None:
+                # TT shape [8 rows, 32 batch, 8 heads/dev (5 real + 3 pad), 128 head_dim].
+                # User 0 full = 8 rows × 5 real heads × 128 = 5120
+                tt_sdpa_full = torch.cat([sdpa_tt[r, 0, h, :] for r in range(8) for h in range(5)], dim=0).float()
+                ref_sdpa_full = ref_sdpa_t[0, 0, :].float().flatten()
+                _ratio_block("sdpa_out", ref_sdpa_full, tt_sdpa_full)
+
+            wo_tt = attn_caps.get("wo_input")
+            if wo_tt is not None and ref_sdpa_t is not None:
+                tt_wo_full = torch.cat([wo_tt[r, 0, 0, :] for r in range(8)], dim=0).float()
+                ref_wo_in_full = ref_sdpa_t[0, 0, :].float().flatten()
+                _ratio_block("wo_input", ref_wo_in_full, tt_wo_full)
+
+            attn_final = attn_caps.get("attn_out_final")
+            ref_wo_out = ref_li.get("ref_wo_out")
+            if attn_final is not None and ref_wo_out is not None:
+                tt_af = torch.cat([attn_final[0, c, 0, :] for c in range(4)], dim=0).float()
+                ref_af = ref_wo_out[0].flatten().float()
+                _ratio_block("attn_out_final", ref_af, tt_af)
+
             # ── MLP-internal element-wise comparison: TT vs ref ──
             mlp_caps = getattr(tt_layer.feed_forward, "captured", {}) or {}
             for mlp_name in ("w1_out_reduced", "w3_out_reduced", "ff1ff3", "w2_out_pre_ar"):
