@@ -195,6 +195,62 @@ targets:
               decode_t/s: 13.0
             accuracy: {}
 
+  gemma-4-e2b:
+    aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+
+  gemma-4-e4b:
+    aliases: ["gemma-4-e4b", "google/gemma-4-E4B-it"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+
+  gemma-4-26b-a4b:
+    aliases: ["gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+
+  gemma-4-31b:
+    aliases: ["gemma-4-31b", "google/gemma-4-31B-it"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+
   gpt-oss-20b:
     aliases: ["gpt-oss-20b", "openai/gpt-oss-20b", "T3K_gpt-oss-20b", "GLX_gpt-oss-20b"]
     skus:
