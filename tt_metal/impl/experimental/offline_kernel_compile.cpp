@@ -208,8 +208,7 @@ void CompileKernelOffline(
     validate_output_dir(params.output_dir);
 
     // Mode is presently a single-alternative variant (AllSupportedProducts). std::visit + the
-    // static_assert below let future alternatives (e.g. OneSpecificProduct) be added without
-    // silently bypassing this body.
+    // static_assert below let future alternatives be added without silently bypassing this body.
     std::visit(
         [&](const auto& mode) {
             using ModeT = std::decay_t<decltype(mode)>;
