@@ -120,13 +120,15 @@ def run(
         bias_shape = tuple(bias_kwargs["shape"])
         torch_bias = torch.randn(bias_shape, dtype=torch.float32)
 
-    # Layer norm on last dimension
+    # Layer norm on last dimension — PyTorch expects weight/bias to be 1D
     normalized_shape = shape[-1:]
+    golden_weight = torch_weight.squeeze() if torch_weight is not None else None
+    golden_bias = torch_bias.squeeze() if torch_bias is not None else None
     torch_output_tensor = torch.nn.functional.layer_norm(
         torch_input_tensor_a,
         normalized_shape,
-        weight=torch_weight,
-        bias=torch_bias,
+        weight=golden_weight,
+        bias=golden_bias,
     )
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

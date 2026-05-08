@@ -96,18 +96,21 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Restore memory_config from traced kwargs when master recorded it
+    # Restore memory_config when master recorded it. The function signature
+    # captures memory_config directly (not in **kwargs), so use the local var.
     absent_keys = set(kwargs.get("__absent_keys__") or [])
-    traced_memory_config = kwargs.get("memory_config")
     if (
         "memory_config" not in absent_keys
-        and traced_memory_config is not None
-        and traced_memory_config != "__ABSENT__"
+        and memory_config is not None
+        and memory_config != "__ABSENT__"
         and "memory_config" not in op_kwargs
     ):
-        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
+        if isinstance(memory_config, dict):
+            parsed_mc = parse_dict_value("memory_config", memory_config)
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+        else:
+            op_kwargs["memory_config"] = memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
