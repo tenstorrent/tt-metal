@@ -23,7 +23,20 @@ namespace tt::tt_metal {
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
 private:
-    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+    struct SharedDevices {
+        std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
+        std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
+        tt::ARCH arch;
+        uint32_t max_cbs;
+        bool initialized;
+
+        SharedDevices() : arch(tt::ARCH::Invalid), max_cbs(0), initialized(false) {}
+    };
+
+    static SharedDevices& shared_devices() {
+        static SharedDevices devices;
+        return devices;
+    }
 
 public:
     // A function to run a program, according to which dispatch mode is set.
@@ -68,11 +81,18 @@ protected:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
-    void SetUp() override {
-        this->DetectDispatchMode();
-        // Must set up all available devices
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+    static void SetUpTestSuite() {
+        auto& shared = shared_devices();
+        if (shared.initialized) {
+            return;
+        }
+
+        // Performance: opening MeshDevices is expensive because it can trigger topology discovery, driver/sysmem setup,
+        // fabric setup, and profiler sync. Share the default MeshDispatchFixture devices across tests in a suite so
+        // gtest per-test timings show test-body cost instead of repeating fixture setup. Tests that need different
+        // device sizes/configuration should override SetUp/TearDown rather than relying on this shared default.
+        shared.arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        shared.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
 
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
@@ -80,26 +100,46 @@ protected:
         }
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
-        devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
-            devices_.push_back(device);
+        shared.id_to_device = distributed::MeshDevice::create_unit_meshes(
+            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
+        shared.devices.clear();
+        for (const auto& [device_id, device] : shared.id_to_device) {
+            shared.devices.push_back(device);
         }
+        shared.initialized = true;
+    }
+
+    static void TearDownTestSuite() {
+        auto& shared = shared_devices();
+        if (!shared.initialized) {
+            return;
+        }
+
+        for (auto& [device_id, device] : shared.id_to_device) {
+            device->close();
+            device.reset();
+        }
+        shared.id_to_device.clear();
+        shared.devices.clear();
+        shared.arch = tt::ARCH::Invalid;
+        shared.max_cbs = 0;
+        shared.initialized = false;
+    }
+
+    void SetUp() override {
+        auto& shared = shared_devices();
+        if (!shared.initialized) {
+            SetUpTestSuite();
+        }
+        this->DetectDispatchMode();
+        this->arch_ = shared.arch;
+        this->max_cbs_ = shared.max_cbs;
+        this->devices_ = shared.devices;
     }
 
     void TearDown() override {
-        // Checking if devices are empty because DPrintFixture.TensixTestPrintFinish already
-        // closed all devices
-        if (!id_to_device_.empty()) {
-            for (auto [device_id, device] : id_to_device_) {
-                device->close();
-                device.reset();
-            }
-
-            id_to_device_.clear();
-            devices_.clear();
-        }
+        // Devices are owned by the suite-shared state; per-test instances only hold borrowed shared_ptr copies.
+        devices_.clear();
     }
 
     void RunTestOnDevice(

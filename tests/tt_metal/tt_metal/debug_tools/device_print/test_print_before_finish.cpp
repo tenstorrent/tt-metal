@@ -62,7 +62,7 @@ void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     fixture->RunProgram(mesh_device, workload);
     // Close system instantly after running to attempt to cut off prints.
-    fixture->TearDownTestSuite();
+    fixture->CloseDevicesForTest();
 
     // Check the print log against expected output.
     vector<std::string> expected_output;
