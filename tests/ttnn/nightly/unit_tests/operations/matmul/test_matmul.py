@@ -518,7 +518,9 @@ def test_dram_sharded_weight_mm(device):
     seq_len = 2048
     n = 3200
     tile_w = 32
-    dram_cores = 12
+    dram_cores = (
+        12  # Based on an example for a specific architecture, only used for easier to follow shape calculation.
+    )
 
     # Pad N up to a per-bank-aligned boundary so shards are uniform and only
     # the last bank may be partially padded (matmul rejects fully-padded shards past N).
