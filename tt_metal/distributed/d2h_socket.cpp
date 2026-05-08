@@ -534,4 +534,3 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
 }
 
 }  // namespace tt::tt_metal::distributed
-
