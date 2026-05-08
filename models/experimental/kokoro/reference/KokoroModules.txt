@@ -521,4 +521,4 @@ KokoroFullReference(
     )
   )
 )
-returned: <class 'models.demos.kokoro.reference.kokoro_full_model.KokoroFullReference'>
+returned: <class 'models.experimental.kokoro.reference.kokoro_full_model.KokoroFullReference'>
