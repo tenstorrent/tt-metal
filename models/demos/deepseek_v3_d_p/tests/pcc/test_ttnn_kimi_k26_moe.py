@@ -27,6 +27,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
+from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3MoE as KimiBundledMoE
 from models.demos.deepseek_v3_d_p.reference.kimi_k26_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -72,8 +74,84 @@ def _override_gate_to_kimi_torch(torch_moe):
     g.routed_scaling_factor = KimiK26Config.ROUTE_SCALE
 
 
+def _build_kimi_config() -> DeepseekV3Config:
+    """HF DeepseekV3Config populated with Kimi K2.6 text-config values."""
+    return DeepseekV3Config(
+        vocab_size=KimiK26Config.VOCAB_SIZE,
+        hidden_size=KimiK26Config.EMB_SIZE,
+        intermediate_size=KimiK26Config.INTERMEDIATE_SIZE,
+        moe_intermediate_size=KimiK26Config.MOE_INTERMEDIATE_SIZE,
+        num_hidden_layers=KimiK26Config.NUM_LAYERS,
+        num_attention_heads=KimiK26Config.NUM_ATTENTION_HEADS,
+        num_key_value_heads=KimiK26Config.NUM_KEY_VALUE_HEADS,
+        q_lora_rank=KimiK26Config.Q_LORA_RANK,
+        kv_lora_rank=KimiK26Config.KV_LORA_RANK,
+        qk_nope_head_dim=KimiK26Config.QK_NOPE_HEAD_DIM,
+        qk_rope_head_dim=KimiK26Config.QK_ROPE_HEAD_DIM,
+        v_head_dim=KimiK26Config.V_HEAD_DIM,
+        max_position_embeddings=KimiK26Config.MAX_POSITION_EMBEDDINGS,
+        rope_theta=KimiK26Config.ROPE_THETA,
+        rope_scaling={
+            "type": "yarn",
+            "factor": KimiK26Config.ROPE_SCALING_FACTOR,
+            "original_max_position_embeddings": KimiK26Config.ROPE_SCALING_ORIGINAL_MAX_POSITION_EMBEDDINGS,
+            "beta_fast": KimiK26Config.ROPE_SCALING_BETA_FAST,
+            "beta_slow": KimiK26Config.ROPE_SCALING_BETA_SLOW,
+            "mscale": KimiK26Config.ROPE_SCALING_MSCALE,
+            "mscale_all_dim": KimiK26Config.ROPE_SCALING_MSCALE_ALL_DIM,
+        },
+        rms_norm_eps=KimiK26Config.RMS_NORM_EPS,
+        attention_bias=False,
+        attention_dropout=0.0,
+        first_k_dense_replace=KimiK26Config.NUM_DENSE_LAYERS,
+        n_routed_experts=KimiK26Config.NUM_ROUTED_EXPERTS,
+        n_shared_experts=KimiK26Config.NUM_SHARED_EXPERTS,
+        num_experts_per_tok=KimiK26Config.NUM_EXPERTS_PER_TOKEN,
+        n_group=KimiK26Config.NUM_EXPERT_GROUPS,
+        topk_group=KimiK26Config.NUM_LIMITED_GROUPS,
+        routed_scaling_factor=KimiK26Config.ROUTE_SCALE,
+        scoring_func="sigmoid",
+        topk_method="noaux_tc",
+    )
+
+
+def _run_kimi_vanilla_moe(
+    config: DeepseekV3Config,
+    gate_weights: dict,
+    routed_expert_weights: list[dict],
+    shared_expert_weights: dict,
+    x: torch.Tensor,
+) -> torch.Tensor:
+    """Forward Kimi's bundled (vanilla) DeepseekV3MoE on CPU.
+
+    Reuses the same random gate / routed-expert / shared-expert weight tensors
+    that drive the existing TorchMoe reference, repackaged into Kimi's
+    state_dict layout. Returns shape matching `x`.
+    """
+    moe = KimiBundledMoE(config)
+    state_dict = {
+        "gate.weight": gate_weights["weight"].to(torch.bfloat16),
+        "gate.e_score_correction_bias": gate_weights["e_score_correction_bias"].to(torch.bfloat16),
+        "shared_experts.gate_proj.weight": shared_expert_weights["gate_proj"].to(torch.bfloat16),
+        "shared_experts.up_proj.weight": shared_expert_weights["up_proj"].to(torch.bfloat16),
+        "shared_experts.down_proj.weight": shared_expert_weights["down_proj"].to(torch.bfloat16),
+    }
+    for i, w in enumerate(routed_expert_weights):
+        state_dict[f"experts.{i}.gate_proj.weight"] = w["gate_proj"].to(torch.bfloat16)
+        state_dict[f"experts.{i}.up_proj.weight"] = w["up_proj"].to(torch.bfloat16)
+        state_dict[f"experts.{i}.down_proj.weight"] = w["down_proj"].to(torch.bfloat16)
+
+    moe.load_state_dict(state_dict, strict=False)
+    moe = moe.eval().to(torch.bfloat16)
+
+    with torch.no_grad():
+        out = moe(x.to(torch.bfloat16))
+    return out
+
+
 # Total seq = dispatch_group_size (= 8 on 8x4) * seq_len_per_chip.
 # 8 * 128  = 1024     (~ 1k)
+# 8 * 640  = 5120     (~ 5k)
 # 8 * 3200 = 25600    (~ 25k)
 @pytest.mark.parametrize(
     (
@@ -89,6 +167,16 @@ def _override_gate_to_kimi_torch(torch_moe):
             GateComputeMode.HOST_ALL,
             False,
             id="kimi-1k",
+            marks=pytest.mark.timeout(0),
+        ),
+        pytest.param(
+            640,
+            KimiK26Config.NUM_ROUTED_EXPERTS,
+            KimiK26Config.NUM_EXPERTS_PER_TOKEN,
+            5,
+            GateComputeMode.HOST_ALL,
+            False,
+            id="kimi-5k",
             marks=pytest.mark.timeout(0),
         ),
         pytest.param(
@@ -334,6 +422,33 @@ def test_ttnn_kimi_k26_moe(
         else:
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
+
+    # ---- Validation: TT vs Kimi-bundled vanilla DeepseekV3MoE ----
+    # Catches drift between tt-metal's forked reference (bitonic-sort gate +
+    # rearranged dispatch/combine) and Kimi's canonical upstream MoE. Reuses
+    # the same random gate / routed-expert / shared-expert weight tensors,
+    # repackaged into Kimi's state_dict layout. Memory-heavy (~16 GB bf16
+    # weights for 384 experts) but sequence-length independent.
+    if tt_output is not None:
+        logger.info("Running Kimi-bundled DeepseekV3MoE reference")
+        kimi_out = _run_kimi_vanilla_moe(
+            config=_build_kimi_config(),
+            gate_weights=gate_weights,
+            routed_expert_weights=all_routed_weights,
+            shared_expert_weights=shared_expert_weights,
+            x=x,
+        )
+        tt_final_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
+        kimi_threshold = 0.96
+        _, kimi_pcc = comp_pcc(kimi_out.float(), tt_final_host.float())
+        if kimi_pcc >= kimi_threshold:
+            logger.info(f"[final_output_vs_kimi_vanilla] PASSED - PCC: {kimi_pcc:.6f} (threshold: {kimi_threshold})")
+        else:
+            logger.error(
+                f"[final_output_vs_kimi_vanilla] FAILED - PCC: {kimi_pcc:.6f} below threshold {kimi_threshold}"
+            )
+            all_passed = False
+        del kimi_out
 
     profiler.end("test_ttnn_kimi_k26_moe")
     for key in profiler.times:
