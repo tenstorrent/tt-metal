@@ -27,7 +27,7 @@ import ttnn
 import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolation (native TTNN interpolate not available)
 
 from models.experimental.pi0.common.configs import SigLIPConfig
-from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
+from models.experimental.pi0.tt.ttnn_common import sdpa_prefill_chunk_sizes, tensor_1d_to_2d_ttnn
 
 
 # ============================================================================
@@ -384,11 +384,14 @@ class SigLIPAttentionTTNN:
         )
         ttnn.deallocate(xqkv_fused)
 
+        # Chunk sizes aligned with tt_transformers prefill SDPA (64 vs 2048-boundary heuristic)
+        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, seq_len)
+
         # SDPA configuration - use full device grid for maximum parallelism
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.grid_size,
-            q_chunk_size=min(256, seq_len),
-            k_chunk_size=min(256, seq_len),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
 

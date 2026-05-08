@@ -30,6 +30,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import GemmaConfig
+from models.experimental.pi0.tt.ttnn_common import sdpa_prefill_chunk_sizes
 
 
 # ============================================================================
@@ -326,10 +327,10 @@ class GemmaAttentionTTNN:
 
         new_cache = (k_rope, v) if use_cache else None
 
-        # Use TTNN scaled dot product attention with full device grid
+        # SDPA chunk sizes aligned with models/tt_transformers/tt/model_config.py prefill defaults
         kv_seq_len = k_rope.shape[2]
-        q_chunk = min(256, ((seq_len + 31) // 32) * 32)
-        k_chunk = min(256, ((kv_seq_len + 31) // 32) * 32)
+        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, kv_seq_len)
+
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
