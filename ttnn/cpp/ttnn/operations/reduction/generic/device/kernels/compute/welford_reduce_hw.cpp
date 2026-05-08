@@ -37,17 +37,17 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    experimental::DataflowBuffer cb_in_obj(dfb::input);
-    experimental::DataflowBuffer cb_scalar_obj(dfb::scaler);
-    experimental::DataflowBuffer cb_out_obj(dfb::output);
-    experimental::DataflowBuffer cb_partial_obj(dfb::partial);
-    experimental::DataflowBuffer cb_combined_obj(dfb::combined);
+    experimental::DataflowBuffer dfb_input(dfb::input);
+    experimental::DataflowBuffer dfb_scaler(dfb::scaler);
+    experimental::DataflowBuffer dfb_output(dfb::output);
+    experimental::DataflowBuffer dfb_partial(dfb::partial);
+    experimental::DataflowBuffer dfb_combined(dfb::combined);
 
-    const uint32_t cb_in = cb_in_obj.get_id();
-    const uint32_t cb_scalar = cb_scalar_obj.get_id();
-    const uint32_t cb_out = cb_out_obj.get_id();
-    const uint32_t cb_partial = cb_partial_obj.get_id();
-    const uint32_t cb_combined = cb_combined_obj.get_id();
+    const uint32_t cb_in = dfb_input.get_id();
+    const uint32_t cb_scalar = dfb_scaler.get_id();
+    const uint32_t cb_out = dfb_output.get_id();
+    const uint32_t cb_partial = dfb_partial.get_id();
+    const uint32_t cb_combined = dfb_combined.get_id();
 
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
@@ -63,7 +63,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_partial);
 
     if constexpr (do_scale) {
-        cb_scalar_obj.wait_front(onetile);
+        dfb_scaler.wait_front(onetile);
     }
 
     uint32_t num_outputs = NC_per_core / reduce_batch_size;
@@ -85,16 +85,16 @@ void kernel_main() {
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
                     if constexpr (do_scale) {
-                        cb_in_obj.wait_front(onetile);
+                        dfb_input.wait_front(onetile);
                         tile_regs_acquire();
                         mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                         mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
-                        cb_in_obj.pop_front(1);
+                        dfb_input.pop_front(1);
                         welford_reinit(cb_in);
                     } else {
-                        cb_in_obj.wait_front(onetile);
+                        dfb_input.wait_front(onetile);
                         copy_tile(cb_in, 0, input_dst);
-                        cb_in_obj.pop_front(onetile);
+                        dfb_input.pop_front(onetile);
                     }
 
                     if (ht < (Ht - 1)) {
@@ -116,17 +116,17 @@ void kernel_main() {
                 }
 
                 // Pack mean (DST[1]) and var (DST[2]) tiles to cb_partial.
-                cb_partial_obj.reserve_back(2);
+                dfb_partial.reserve_back(2);
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_partial);
                 pack_tile_block(mean_dst, cb_partial, 2);
                 tile_regs_release();
-                cb_partial_obj.push_back(2);
+                dfb_partial.push_back(2);
             }
         }
 
         // Phase 2: Read combined scalar from writer, apply sqrt if std, repack.
-        cb_combined_obj.wait_front(onetile);
+        dfb_combined.wait_front(onetile);
         // Explicit srca reconfig: unpacker was last configured for cb_in's format
         // (Float16_b) during Phase 1; cb_combined uses Float32, so reconfigure.
         reconfig_data_format_srca(cb_combined);
@@ -138,13 +138,13 @@ void kernel_main() {
             sqrt_tile(input_dst);
         }
         tile_regs_commit();
-        cb_combined_obj.pop_front(onetile);
+        dfb_combined.pop_front(onetile);
 
-        cb_out_obj.reserve_back(onetile);
+        dfb_output.reserve_back(onetile);
         tile_regs_wait();
         pack_reconfig_data_format(cb_out);
         pack_tile(input_dst, cb_out);
         tile_regs_release();
-        cb_out_obj.push_back(onetile);
+        dfb_output.push_back(onetile);
     }
 }

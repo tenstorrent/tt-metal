@@ -37,20 +37,20 @@ void kernel_main() {
 
     // Typed dataflow-buffer wrappers. The compute_kernel_lib::reduce() helper
     // is templated on the buffer type and works uniformly across Gen1/Gen2.
-    experimental::DataflowBuffer input_buf(dfb::input);
-    experimental::DataflowBuffer scaler_buf(dfb::scaler);
-    experimental::DataflowBuffer output_buf(dfb::output);
+    experimental::DataflowBuffer dfb_input(dfb::input);
+    experimental::DataflowBuffer dfb_scaler(dfb::scaler);
+    experimental::DataflowBuffer dfb_output(dfb::output);
 
-    compute_kernel_hw_startup(input_buf.get_id(), scaler_buf.get_id(), output_buf.get_id());
+    compute_kernel_hw_startup(dfb_input.get_id(), dfb_scaler.get_id(), dfb_output.get_id());
 
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        input_buf,
-        scaler_buf,
-        output_buf,
+        dfb_input,
+        dfb_scaler,
+        dfb_output,
         compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},

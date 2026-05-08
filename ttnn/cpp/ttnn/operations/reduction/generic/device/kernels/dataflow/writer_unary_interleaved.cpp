@@ -27,19 +27,19 @@ void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
     const uint32_t start_id = get_arg(args::start_id);
 
-    experimental::DataflowBuffer output_buf(dfb::output);
+    experimental::DataflowBuffer dfb_output(dfb::output);
 
     TensorAccessor output_accessor(ta::output_tensor);
-    const uint32_t tile_bytes = get_tile_size(output_buf.get_id());
+    const uint32_t tile_bytes = get_tile_size(dfb_output.get_id());
 
     experimental::Noc noc;
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        output_buf.wait_front(onetile);
-        noc.async_write(output_buf, output_accessor, tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        dfb_output.wait_front(onetile);
+        noc.async_write(dfb_output, output_accessor, tile_bytes, {.offset_bytes = 0}, {.page_id = i});
         noc.async_writes_flushed();
-        output_buf.pop_front(onetile);
+        dfb_output.pop_front(onetile);
     }
     noc.async_write_barrier();
 }

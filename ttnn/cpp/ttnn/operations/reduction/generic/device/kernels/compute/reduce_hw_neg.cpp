@@ -34,23 +34,23 @@ void kernel_main() {
     constexpr uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
 #endif
 
-    experimental::DataflowBuffer input_buf(dfb::input);
-    experimental::DataflowBuffer scaler_buf(dfb::scaler);
-    experimental::DataflowBuffer output_buf(dfb::output);
-    experimental::DataflowBuffer acc_writer(dfb::acc_w);
-    experimental::DataflowBuffer acc_reader(dfb::acc_r);
-    experimental::DataflowBuffer ineg_writer(dfb::ineg_w);
-    experimental::DataflowBuffer ineg_reader(dfb::ineg_r);
+    experimental::DataflowBuffer dfb_input(dfb::input);
+    experimental::DataflowBuffer dfb_scaler(dfb::scaler);
+    experimental::DataflowBuffer dfb_output(dfb::output);
+    experimental::DataflowBuffer dfb_acc_writer(dfb::acc_w);
+    experimental::DataflowBuffer dfb_acc_reader(dfb::acc_r);
+    experimental::DataflowBuffer dfb_ineg_writer(dfb::ineg_w);
+    experimental::DataflowBuffer dfb_ineg_reader(dfb::ineg_r);
 
     // LLK calls still take raw buffer ids.
-    const uint32_t input_id = input_buf.get_id();
-    const uint32_t scaler_id = scaler_buf.get_id();
-    const uint32_t output_id = output_buf.get_id();
-    const uint32_t acc_id = acc_writer.get_id();    // == acc_reader.get_id()
-    const uint32_t ineg_id = ineg_writer.get_id();  // == ineg_reader.get_id()
+    const uint32_t input_id = dfb_input.get_id();
+    const uint32_t scaler_id = dfb_scaler.get_id();
+    const uint32_t output_id = dfb_output.get_id();
+    const uint32_t acc_id = dfb_acc_writer.get_id();    // == dfb_acc_reader.get_id()
+    const uint32_t ineg_id = dfb_ineg_writer.get_id();  // == dfb_ineg_reader.get_id()
 
     compute_kernel_hw_startup(input_id, scaler_id, output_id);
-    scaler_buf.wait_front(1);  // scaler tile from the reader
+    dfb_scaler.wait_front(1);  // scaler tile from the reader
 
     for (uint32_t nc = 0; nc < NC; nc++) {
         constexpr int onetile = 1;
@@ -61,41 +61,41 @@ void kernel_main() {
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 acquire_dst();
-                input_buf.wait_front(onetile);
+                dfb_input.wait_front(onetile);
                 copy_tile_init(input_id);
                 copy_tile(input_id, 0, reduce_dst_idx);
                 negative_tile_init();
                 negative_tile(reduce_dst_idx);
-                input_buf.pop_front(onetile);
-                ineg_writer.reserve_back(onetile);
+                dfb_input.pop_front(onetile);
+                dfb_ineg_writer.reserve_back(onetile);
                 pack_tile(reduce_dst_idx, ineg_id);
-                ineg_writer.push_back(onetile);
+                dfb_ineg_writer.push_back(onetile);
                 release_dst();
 
                 acquire_dst();
                 if (wt > 0 || ht > 0) {
-                    acc_reader.wait_front(onetile);
+                    dfb_acc_reader.wait_front(onetile);
                     copy_tile_init(acc_id);
                     copy_tile(acc_id, 0, reduce_dst_idx);
                 }
 
-                ineg_reader.wait_front(onetile);
+                dfb_ineg_reader.wait_front(onetile);
                 reduce_init<REDUCE_OP, REDUCE_DIM>(ineg_id, scaler_id, acc_id);
                 reduce_tile<REDUCE_OP, REDUCE_DIM>(ineg_id, scaler_id, 0, 0, reduce_dst_idx);
                 reduce_uninit();
-                ineg_reader.pop_front(onetile);
+                dfb_ineg_reader.pop_front(onetile);
                 if (wt > 0 || ht > 0) {
-                    acc_reader.pop_front(onetile);
+                    dfb_acc_reader.pop_front(onetile);
                 }
-                acc_writer.reserve_back(onetile);
+                dfb_acc_writer.reserve_back(onetile);
                 pack_tile(reduce_dst_idx, acc_id);
-                acc_writer.push_back(onetile);
+                dfb_acc_writer.push_back(onetile);
                 release_dst();
             }  // wt
         }  // ht
 
         acquire_dst();
-        acc_reader.wait_front(onetile);
+        dfb_acc_reader.wait_front(onetile);
         copy_tile_init(acc_id);
         copy_tile(acc_id, 0, reduce_dst_idx);
         negative_tile_init();
@@ -107,10 +107,10 @@ void kernel_main() {
         binop_with_scalar_tile_init();
         mul_unary_tile(reduce_dst_idx, post_mul_scaler_bits);
 #endif
-        acc_reader.pop_front(onetile);
-        output_buf.reserve_back(onetile);
+        dfb_acc_reader.pop_front(onetile);
+        dfb_output.reserve_back(onetile);
         pack_tile(reduce_dst_idx, output_id);
-        output_buf.push_back(onetile);
+        dfb_output.push_back(onetile);
         release_dst();
     }  // nc
 }

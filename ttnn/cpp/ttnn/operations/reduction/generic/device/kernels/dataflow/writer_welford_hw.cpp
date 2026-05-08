@@ -40,11 +40,11 @@ void kernel_main() {
     constexpr bool correction = get_arg(args::correction) != 0;
     constexpr uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
 
-    experimental::DataflowBuffer cb_partial_obj(dfb::partial);
-    experimental::DataflowBuffer cb_combined_obj(dfb::combined);
-    experimental::DataflowBuffer cb_out_obj(dfb::output);
+    experimental::DataflowBuffer dfb_partial(dfb::partial);
+    experimental::DataflowBuffer dfb_combined(dfb::combined);
+    experimental::DataflowBuffer dfb_output(dfb::output);
 
-    const uint32_t cb_partial = cb_partial_obj.get_id();
+    const uint32_t cb_partial = dfb_partial.get_id();
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0. In tile
     // format, row 0 spans Face 0 (cols 0–15) and Face 1 (cols 16–31). Each face
@@ -54,7 +54,7 @@ void kernel_main() {
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
     const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
-    const uint32_t out_tile_size_bytes = get_tile_size(cb_out_obj.get_id());
+    const uint32_t out_tile_size_bytes = get_tile_size(dfb_output.get_id());
 
     TensorAccessor output_accessor(ta::output_tensor);
 
@@ -71,9 +71,9 @@ void kernel_main() {
 
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                cb_partial_obj.wait_front(2);
+                dfb_partial.wait_front(2);
 
-                auto means_addr = cb_partial_obj.get_read_ptr();
+                auto means_addr = dfb_partial.get_read_ptr();
                 auto vars_addr = means_addr + partial_tile_size_bytes;
 
                 auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
@@ -91,7 +91,7 @@ void kernel_main() {
                     running = combine(running, partial);
                 }
 
-                cb_partial_obj.pop_front(2);
+                dfb_partial.pop_front(2);
             }
         }
 
@@ -105,21 +105,21 @@ void kernel_main() {
         // 0 (FACE_W floats) is zeroed; the scalar lives at [0,0]; the remaining
         // FACE_W-1 elements share a BFP exponent group so they must be zero to
         // avoid corrupting the scalar's mantissa precision in BFLOAT8_B output.
-        cb_combined_obj.reserve_back(1);
-        auto* combined_ptr = reinterpret_cast<float*>(cb_combined_obj.get_write_ptr());
+        dfb_combined.reserve_back(1);
+        auto* combined_ptr = reinterpret_cast<float*>(dfb_combined.get_write_ptr());
         for (uint32_t i = 0; i < FACE_W; ++i) {
             combined_ptr[i] = 0.0f;
         }
         combined_ptr[0] = final_var;
-        cb_combined_obj.push_back(1);
+        dfb_combined.push_back(1);
 
         // Phase 2: NOC-write the output tile (packed by compute) to DRAM.
-        cb_out_obj.wait_front(1);
+        dfb_output.wait_front(1);
         const uint32_t out_tile_id = output_tile_start_id + out;
         noc.async_write(
-            cb_out_obj, output_accessor, out_tile_size_bytes, {.offset_bytes = 0}, {.page_id = out_tile_id});
+            dfb_output, output_accessor, out_tile_size_bytes, {.offset_bytes = 0}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
-        cb_out_obj.pop_front(1);
+        dfb_output.pop_front(1);
     }
 
     noc.async_write_barrier();

@@ -34,7 +34,7 @@ void kernel_main() {
     // Compile-time arguments (named).
     constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
 
-    experimental::DataflowBuffer input_buf(dfb::input);
+    experimental::DataflowBuffer dfb_input(dfb::input);
 
     // Fill the scaler tile. The helper is templated on the scaler buffer id (CB id
     // on Gen1, DFB id on Gen2 — both constexpr through dfb::scaler.id) and uses
@@ -47,15 +47,15 @@ void kernel_main() {
     // The host-side TensorParameter / TensorArg pair supplies the underlying buffer
     // address through the kernel's TensorBinding common-runtime-arg slot.
     TensorAccessor input_accessor(ta::input_tensor);
-    const uint32_t tile_bytes = get_tile_size(input_buf.get_id());
+    const uint32_t tile_bytes = get_tile_size(dfb_input.get_id());
 
     experimental::Noc noc;
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; ++i) {
-        input_buf.reserve_back(onetile);
-        noc.async_read(input_accessor, input_buf, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_input.reserve_back(onetile);
+        noc.async_read(input_accessor, dfb_input, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        input_buf.push_back(onetile);
+        dfb_input.push_back(onetile);
     }
 }

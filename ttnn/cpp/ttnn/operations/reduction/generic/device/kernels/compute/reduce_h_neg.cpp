@@ -38,23 +38,23 @@ void kernel_main() {
 #endif
     constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
-    experimental::DataflowBuffer input_buf(dfb::input);
-    experimental::DataflowBuffer scaler_buf(dfb::scaler);
-    experimental::DataflowBuffer output_buf(dfb::output);
-    experimental::DataflowBuffer acc_writer(dfb::acc_w);
-    experimental::DataflowBuffer acc_reader(dfb::acc_r);
-    experimental::DataflowBuffer ineg_writer(dfb::ineg_w);
-    experimental::DataflowBuffer ineg_reader(dfb::ineg_r);
+    experimental::DataflowBuffer dfb_input(dfb::input);
+    experimental::DataflowBuffer dfb_scaler(dfb::scaler);
+    experimental::DataflowBuffer dfb_output(dfb::output);
+    experimental::DataflowBuffer dfb_acc_writer(dfb::acc_w);
+    experimental::DataflowBuffer dfb_acc_reader(dfb::acc_r);
+    experimental::DataflowBuffer dfb_ineg_writer(dfb::ineg_w);
+    experimental::DataflowBuffer dfb_ineg_reader(dfb::ineg_r);
 
     // LLK calls take raw buffer ids.
-    const uint32_t input_id = input_buf.get_id();
-    const uint32_t scaler_id = scaler_buf.get_id();
-    const uint32_t output_id = output_buf.get_id();
-    const uint32_t acc_id = acc_writer.get_id();    // == acc_reader.get_id()
-    const uint32_t ineg_id = ineg_writer.get_id();  // == ineg_reader.get_id()
+    const uint32_t input_id = dfb_input.get_id();
+    const uint32_t scaler_id = dfb_scaler.get_id();
+    const uint32_t output_id = dfb_output.get_id();
+    const uint32_t acc_id = dfb_acc_writer.get_id();    // == dfb_acc_reader.get_id()
+    const uint32_t ineg_id = dfb_ineg_writer.get_id();  // == dfb_ineg_reader.get_id()
 
     compute_kernel_hw_startup(input_id, scaler_id, output_id);
-    scaler_buf.wait_front(1);  // scaler tile from the reader
+    dfb_scaler.wait_front(1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
 
@@ -78,7 +78,7 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 tile_regs_acquire();
-                input_buf.wait_front(ntiles);
+                dfb_input.wait_front(ntiles);
 
                 reconfig_data_format_srca(input_id);
                 copy_tile_init(input_id);
@@ -89,27 +89,27 @@ void kernel_main() {
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     // Read from index 0 and pop_front(1) per tile to keep the CB head in sync and avoid stale data.
                     copy_tile(input_id, 0, i);
-                    input_buf.pop_front(1);
+                    dfb_input.pop_front(1);
                     negative_tile(i);
                 }
 
                 tile_regs_commit();
-                ineg_writer.reserve_back(ntiles);
+                dfb_ineg_writer.reserve_back(ntiles);
                 tile_regs_wait();
                 pack_reconfig_data_format(ineg_id);
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, ineg_id);
                 }
                 tile_regs_release();
-                ineg_writer.push_back(ntiles);
+                dfb_ineg_writer.push_back(ntiles);
 
                 tile_regs_acquire();
 
                 if (ht > 0) {
-                    acc_reader.wait_front(ntiles);
+                    dfb_acc_reader.wait_front(ntiles);
                 }
 
-                ineg_reader.wait_front(ntiles);
+                dfb_ineg_reader.wait_front(ntiles);
 
                 if (ht > 0) {
                     reconfig_data_format_srca(acc_id);
@@ -125,23 +125,23 @@ void kernel_main() {
                 }
                 reduce_uninit(ineg_id);
                 tile_regs_commit();
-                ineg_reader.pop_front(ntiles);
+                dfb_ineg_reader.pop_front(ntiles);
 
                 if (ht > 0) {
-                    acc_reader.pop_front(ntiles);
+                    dfb_acc_reader.pop_front(ntiles);
                 }
-                acc_writer.reserve_back(ntiles);
+                dfb_acc_writer.reserve_back(ntiles);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, acc_id);
                 }
                 tile_regs_release();
-                acc_writer.push_back(ntiles);
+                dfb_acc_writer.push_back(ntiles);
             }
 
             tile_regs_acquire();
 
-            acc_reader.wait_front(ntiles);
+            dfb_acc_reader.wait_front(ntiles);
 
             reconfig_data_format_srca(acc_id);
             copy_tile_init(acc_id);
@@ -164,15 +164,15 @@ void kernel_main() {
 #endif
 
             tile_regs_commit();
-            acc_reader.pop_front(ntiles);
-            output_buf.reserve_back(ntiles);
+            dfb_acc_reader.pop_front(ntiles);
+            dfb_output.reserve_back(ntiles);
             tile_regs_wait();
             pack_reconfig_data_format(output_id);
             for (uint32_t i = 0; i < ntiles; ++i) {
                 pack_tile(i, output_id);
             }
             tile_regs_release();
-            output_buf.push_back(ntiles);
+            dfb_output.push_back(ntiles);
         }
     }
 }

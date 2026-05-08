@@ -30,13 +30,13 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    experimental::DataflowBuffer cb_in_obj(dfb::input);
-    experimental::DataflowBuffer cb_scalar_obj(dfb::scaler);
-    experimental::DataflowBuffer cb_out_obj(dfb::output);
+    experimental::DataflowBuffer dfb_input(dfb::input);
+    experimental::DataflowBuffer dfb_scaler(dfb::scaler);
+    experimental::DataflowBuffer dfb_output(dfb::output);
 
-    const uint32_t cb_in = cb_in_obj.get_id();
-    const uint32_t cb_scalar = cb_scalar_obj.get_id();
-    const uint32_t cb_out = cb_out_obj.get_id();
+    const uint32_t cb_in = dfb_input.get_id();
+    const uint32_t cb_scalar = dfb_scaler.get_id();
+    const uint32_t cb_out = dfb_output.get_id();
 
     // DST register layout: input_dst (0) — scratch for current input tile,
     // mean_dst (1) — running / final mean accumulator,
@@ -54,7 +54,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_out);
 
     if constexpr (do_scale) {
-        cb_scalar_obj.wait_front(onetile);  // scalar tile stays resident across all columns
+        dfb_scaler.wait_front(onetile);  // scalar tile stays resident across all columns
     }
 
     for (uint32_t ncwt = 0; ncwt < NCWt; ncwt++) {
@@ -84,7 +84,7 @@ void kernel_main() {
         }
 
         for (uint32_t ht = 0; ht < Ht; ++ht) {
-            cb_in_obj.wait_front(onetile);
+            dfb_input.wait_front(onetile);
 
             if constexpr (do_scale) {
                 tile_regs_acquire();
@@ -97,7 +97,7 @@ void kernel_main() {
             } else {
                 copy_tile(cb_in, 0, input_dst);
             }
-            cb_in_obj.pop_front(onetile);
+            dfb_input.pop_front(onetile);
 
             if (ht < (Ht - 1)) {
                 welford_update<0>(input_dst, start_N, {});
@@ -129,11 +129,11 @@ void kernel_main() {
         // Pack variance/std directly to output — no transpose needed for H reduction
         // because Welford natively produces results in row orientation which matches
         // the desired output layout (one row of results per column of input).
-        cb_out_obj.reserve_back(onetile);
+        dfb_output.reserve_back(onetile);
         tile_regs_wait();
         pack_reconfig_data_format(cb_out);
         pack_tile(var_dst, cb_out);
         tile_regs_release();
-        cb_out_obj.push_back(onetile);
+        dfb_output.push_back(onetile);
     }
 }

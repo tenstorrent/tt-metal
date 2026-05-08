@@ -43,7 +43,7 @@ void kernel_main() {
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
     constexpr uint32_t row_chunk = use_welford ? 1 : compute_kernel_lib::DEST_AUTO_LIMIT;
 
-    experimental::DataflowBuffer input_buf(dfb::input);
+    experimental::DataflowBuffer dfb_input(dfb::input);
 
     // Fill the scaler tile via the kernel-side helper (templated on the scaler
     // buffer id; on Gen1 the id is the CB id, on Gen2 the DFB id — both compile-
@@ -54,7 +54,7 @@ void kernel_main() {
 
     // TensorAccessor built from the Metal 2.0 tensor binding (ta::input_tensor).
     TensorAccessor input_accessor(ta::input_tensor);
-    const uint32_t tile_bytes = get_tile_size(input_buf.get_id());
+    const uint32_t tile_bytes = get_tile_size(dfb_input.get_id());
 
     experimental::Noc noc;
 
@@ -85,10 +85,10 @@ void kernel_main() {
             w = reset_w;
             col_start_tile_id = reset_col_start;
             for (uint32_t k = i; k < chunk_end; ++k) {
-                input_buf.reserve_back(onetile);
-                noc.async_read(input_accessor, input_buf, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                dfb_input.reserve_back(onetile);
+                noc.async_read(input_accessor, dfb_input, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                input_buf.push_back(onetile);
+                dfb_input.push_back(onetile);
 
                 ++w;
 

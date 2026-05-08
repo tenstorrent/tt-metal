@@ -36,17 +36,23 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    experimental::DataflowBuffer cb_in_obj(dfb::input);
-    experimental::DataflowBuffer cb_scalar_obj(dfb::scaler);
-    experimental::DataflowBuffer cb_out_obj(dfb::output);
-    experimental::DataflowBuffer cb_var_obj(dfb::var);
-    experimental::DataflowBuffer cb_scaled_obj(dfb::scaled);
+    experimental::DataflowBuffer dfb_input(dfb::input);
+    experimental::DataflowBuffer dfb_scaler(dfb::scaler);
+    experimental::DataflowBuffer dfb_output(dfb::output);
+    // The var and scaled DFBs are produced AND consumed by this same kernel; Metal 2.0
+    // requires distinct local_accessor_names for the producer and consumer bindings on
+    // the same kernel, so each has a `_w` (writer/producer) and `_r` (reader/consumer)
+    // wrapper. On Gen1 both ids resolve to the same underlying CB.
+    experimental::DataflowBuffer dfb_var_writer(dfb::var_w);
+    experimental::DataflowBuffer dfb_var_reader(dfb::var_r);
+    experimental::DataflowBuffer dfb_scaled_writer(dfb::scaled_w);
+    experimental::DataflowBuffer dfb_scaled_reader(dfb::scaled_r);
 
-    const uint32_t cb_in = cb_in_obj.get_id();
-    const uint32_t cb_scalar = cb_scalar_obj.get_id();
-    const uint32_t cb_out = cb_out_obj.get_id();
-    const uint32_t cb_var = cb_var_obj.get_id();
-    const uint32_t cb_scaled = cb_scaled_obj.get_id();
+    const uint32_t cb_in = dfb_input.get_id();
+    const uint32_t cb_scalar = dfb_scaler.get_id();
+    const uint32_t cb_out = dfb_output.get_id();
+    const uint32_t cb_var = dfb_var_writer.get_id();        // == dfb_var_reader.get_id()
+    const uint32_t cb_scaled = dfb_scaled_writer.get_id();  // == dfb_scaled_reader.get_id()
 
     // Welford's LLK uses three adjacent DST registers:
     //   input_dst (0) — scratch for the current transposed input tile,
@@ -65,7 +71,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_out);
 
     if constexpr (do_scale) {
-        cb_scalar_obj.wait_front(onetile);  // scalar tile stays resident across all rows
+        dfb_scaler.wait_front(onetile);  // scalar tile stays resident across all rows
     }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -88,7 +94,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             if constexpr (do_scale) {
                 // Scale step: multiply input tile by scalar.
-                cb_in_obj.wait_front(onetile);
+                dfb_input.wait_front(onetile);
                 tile_regs_acquire();
                 // Explicit srca reconfig: pack phase below calls reconfig_data_format_srca(cb_var)
                 // which sets the unpacker to cb_var's format (Float32 when fp32 dest acc enabled).
@@ -99,25 +105,25 @@ void kernel_main() {
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                 tile_regs_commit();
-                cb_in_obj.pop_front(1);
-                cb_scaled_obj.reserve_back(onetile);
+                dfb_input.pop_front(1);
+                dfb_scaled_writer.reserve_back(onetile);
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_scaled);
                 pack_tile(input_dst, cb_scaled);
                 tile_regs_release();
-                cb_scaled_obj.push_back(onetile);
+                dfb_scaled_writer.push_back(onetile);
 
                 // Transpose scaled tile back into DST.
-                cb_scaled_obj.wait_front(onetile);
+                dfb_scaled_reader.wait_front(onetile);
                 tile_regs_acquire();
                 reconfig_data_format_srca(cb_scaled);
                 transpose_wh_init_short(cb_scaled);
                 transpose_wh_tile(cb_scaled, 0, input_dst);
-                cb_scaled_obj.pop_front(onetile);
+                dfb_scaled_reader.pop_front(onetile);
             } else {
-                cb_in_obj.wait_front(onetile);
+                dfb_input.wait_front(onetile);
                 transpose_wh_tile(cb_in, 0, input_dst);
-                cb_in_obj.pop_front(onetile);
+                dfb_input.pop_front(onetile);
             }
 
             if (wt < (Wt - 1)) {
@@ -140,14 +146,14 @@ void kernel_main() {
         }
 
         // Pack variance and transpose back to column format.
-        cb_var_obj.reserve_back(onetile);
+        dfb_var_writer.reserve_back(onetile);
         tile_regs_wait();
         pack_reconfig_data_format(cb_var);
         pack_tile(var_dst, cb_var);
         tile_regs_release();
-        cb_var_obj.push_back(onetile);
+        dfb_var_writer.push_back(onetile);
 
-        cb_var_obj.wait_front(onetile);
+        dfb_var_reader.wait_front(onetile);
         reconfig_data_format_srca(cb_var);
         transpose_wh_init_short(cb_var);
         tile_regs_acquire();
@@ -157,14 +163,14 @@ void kernel_main() {
             sqrt_tile(var_dst);
         }
         tile_regs_commit();
-        cb_var_obj.pop_front(onetile);
+        dfb_var_reader.pop_front(onetile);
 
         // Pack transposed variance to output.
-        cb_out_obj.reserve_back(onetile);
+        dfb_output.reserve_back(onetile);
         tile_regs_wait();
         pack_reconfig_data_format(cb_out);
         pack_tile(var_dst, cb_out);
         tile_regs_release();
-        cb_out_obj.push_back(onetile);
+        dfb_output.push_back(onetile);
     }
 }
