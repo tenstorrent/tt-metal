@@ -213,10 +213,15 @@ TEST_F(JitBuildDependencyTests, RelativePathBecomesAbsoluteRoundTrip) {
     tt::jit_build::write_dependency_hashes(dependencies, out_dir_, obj_file_name, hash_stream);
     ASSERT_FALSE(hash_stream.fail());
 
-    // Verify the stored path is absolute (contains out_dir_ prefix)
-    std::string stored = hash_stream.str();
-    EXPECT_NE(stored.find(out_dir_.string()), std::string::npos)
-        << "Expected absolute path in hash file, got: " << stored;
+    // Verify the stored path is absolute by parsing it the same way the reader
+    // does (operator>> uses std::quoted), rather than doing a raw substring search.
+    std::stringstream verify_stream(hash_stream.str());
+    std::filesystem::path stored_path;
+    verify_stream >> stored_path;
+    ASSERT_FALSE(verify_stream.fail()) << "Failed to parse stored path from hash file";
+    EXPECT_TRUE(stored_path.is_absolute()) << "Expected absolute path, got: " << stored_path;
+    EXPECT_EQ(stored_path, out_dir_ / rel_dep)
+        << "Expected " << (out_dir_ / rel_dep) << ", got: " << stored_path;
 
     // Read back and verify round-trip
     tt::jit_build::clear_file_hash_cache();
