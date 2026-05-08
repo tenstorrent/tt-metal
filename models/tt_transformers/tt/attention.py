@@ -741,15 +741,42 @@ class Attention(LightweightModule):
                 k_heads_pre_rot_1BKD, [rotary_ndims, self.head_dim - rotary_ndims], dim=3
             )
 
-            height_sharded_memory_config_half = ttnn.create_sharded_memory_config(
-                shape=q_heads_pre_rot_1BQD.padded_shape,
-                core_grid=ttnn.CoreGrid(y=1, x=1),
+            # The new rotary_embedding_hf decode kernel expects the split rotary half to use the same
+            # batch-parallel height sharding pattern as decode Q/K and the cos/sin cache. Keeping the
+            # old single-core shard here makes the tensor metadata disagree with the underlying per-core
+            # L1 allocation, which later fails while binding globally allocated circular buffers.
+            q_height_sharded_memory_config_half = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_heads), rotary_ndims),
+                core_grid=batch_core_grid,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=False,
+                use_height_and_width_as_shard_shape=True,
             )
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, height_sharded_memory_config_half)
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, height_sharded_memory_config_half)
+            k_height_sharded_memory_config_half = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_kv_heads), rotary_ndims),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            q_height_sharded_memory_config_tail = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_heads), self.head_dim - rotary_ndims),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            k_height_sharded_memory_config_tail = ttnn.create_sharded_memory_config(
+                shape=(nearest_32(self.n_local_kv_heads), self.head_dim - rotary_ndims),
+                core_grid=batch_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, q_height_sharded_memory_config_half)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, k_height_sharded_memory_config_half)
+            query_pass = ttnn.to_memory_config(query_pass, q_height_sharded_memory_config_tail)
+            key_pass = ttnn.to_memory_config(key_pass, k_height_sharded_memory_config_tail)
 
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = self.rotary_embedding_decode(
@@ -761,16 +788,17 @@ class Attention(LightweightModule):
 
         # Partial rotary embedding
         if self.partial_rotary_factor != 1.0:
-            # q/k come back sharded from _hf_rope_decode; unshard to concat with passthrough,
-            # then reshard to the full-head_dim sharded layout expected by SDPA.
-            q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, ttnn.L1_MEMORY_CONFIG)
-            q_heads_1BQD = ttnn.concat([q_heads_1BQD, query_pass], dim=-1)
-            q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, height_sharded_memory_config)
+            # Keep both halves height-sharded and concat in place to avoid pulling the
+            # rotary output back to interleaved L1 and then resharding it for SDPA.
+            q_heads_rotary_1BQD = q_heads_1BQD
+            k_heads_rotary_1BKD = k_heads_1BKD
+            q_heads_1BQD = ttnn.concat([q_heads_rotary_1BQD, query_pass], dim=-1, memory_config=height_sharded_memory_config)
+            k_heads_1BKD = ttnn.concat(
+                [k_heads_rotary_1BKD, key_pass], dim=-1, memory_config=k_height_sharded_memory_config
+            )
 
-            k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, ttnn.L1_MEMORY_CONFIG)
-            k_heads_1BKD = ttnn.concat([k_heads_1BKD, key_pass], dim=-1)
-            k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, k_height_sharded_memory_config)
-
+            ttnn.deallocate(q_heads_rotary_1BQD)
+            ttnn.deallocate(k_heads_rotary_1BKD)
             ttnn.deallocate(query_pass)
             ttnn.deallocate(key_pass)
 
