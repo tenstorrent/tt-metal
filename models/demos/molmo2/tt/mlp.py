@@ -183,3 +183,54 @@ class TtMolmo2TextMLP(LightweightModule):
                 out, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
             )
         return out
+
+    def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Optimized single-token decode: all projections in L1, ttnn.all_reduce.
+
+        For [1,1,1,dim] decode tensors, L1 eliminates DRAM round-trips between ops.
+        ttnn.all_reduce(cluster_axis=1) is a single TTNN primitive (vs async RS+AG).
+        NOTE: not replayed inside a TTNN trace — called eagerly each decode step.
+        """
+        w1_out = ttnn.linear(
+            x,
+            self.w1,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x)
+
+        w2_in = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+
+        out = ttnn.linear(
+            w2_in,
+            self.w2,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(w2_in)
+
+        if self.num_devices > 1:
+            out = ttnn.all_reduce(
+                out,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return out
