@@ -247,9 +247,13 @@ class TtLlamaAttention(LightweightModule):
         )
         # OLMo: Create unpadded WO for prefill (decode uses padded WO for fused RoPE compatibility)
         if pt_wo_unpadded is not None:
+            import os as _os
+
+            _wo_bf16 = _os.environ.get("OLMO_BF16_WO", "0") == "1"
+            wo_dtype = ttnn.bfloat16 if _wo_bf16 else ttnn.bfloat8_b
             self.wo_interleaved_unpadded = ttnn.as_tensor(
                 pt_wo_unpadded,
-                dtype=ttnn.bfloat8_b,
+                dtype=wo_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -258,9 +262,9 @@ class TtLlamaAttention(LightweightModule):
                     dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                     mesh_shape=configuration.cluster_shape,
                 ),
-                cache_file_name=cache_name("wo_width_sharded_2d_dram_unpadded"),
+                cache_file_name=cache_name(f"wo_width_sharded_2d_dram_unpadded_{wo_dtype.name}"),
             )
-            print(f"OLMo: Created unpadded WO for prefill with K={pt_wo_unpadded.shape[-2]}")
+            print(f"OLMo: Created unpadded WO for prefill with K={pt_wo_unpadded.shape[-2]} dtype={wo_dtype}")
         else:
             self.wo_interleaved_unpadded = None
         if not use_paged_kv_cache:
@@ -1017,6 +1021,7 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)
+            self._capture_attn("wo_matmul_pre_ar", dense_out_ttnn)
             dense_out_sharded = ttnn.to_memory_config(
                 dense_out_ttnn, self.model_config["SHARDED_WO_OUT_RING_MEMCFG_OLMO"]
             )

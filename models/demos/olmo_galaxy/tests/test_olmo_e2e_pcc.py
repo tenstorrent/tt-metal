@@ -1313,6 +1313,20 @@ class TestOlmoE2EPCC:
                 ref_af = ref_wo_out[0].flatten().float()
                 _ratio_block("attn_out_final", ref_af, tt_af)
 
+            # Pre-AR WO matmul output: sum the 8 row-device partials on host and compare.
+            # If host-sum matches ref_wo_out closely, the matmul itself is correct and the
+            # bias is in line_all_reduce. If host-sum is biased, the matmul is the source.
+            wo_pre_ar = attn_caps.get("wo_matmul_pre_ar")
+            if wo_pre_ar is not None and ref_wo_out is not None:
+                # wo_pre_ar capture dims=(0,1) → [8 rows, 4 cols, 32 batch, 1280 dim].
+                # Sum across 8 rows for each col, then concat 4 cols for full 5120.
+                tt_summed = torch.cat(
+                    [sum(wo_pre_ar[r, c, 0, :].float() for r in range(8)) for c in range(4)],
+                    dim=0,
+                ).float()
+                ref_af2 = ref_wo_out[0].flatten().float()
+                _ratio_block("wo_matmul_host_sum", ref_af2, tt_summed)
+
             # ── MLP-internal element-wise comparison: TT vs ref ──
             mlp_caps = getattr(tt_layer.feed_forward, "captured", {}) or {}
             for mlp_name in ("w1_out_reduced", "w3_out_reduced", "ff1ff3", "w2_out_pre_ar"):
