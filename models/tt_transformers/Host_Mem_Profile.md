@@ -74,9 +74,7 @@ The memory is reported in MB.
 
 
 [Performance](#performance) vs. [Accuracy](#accuracy) modes trade memory for precision: accuracy mode uses BF16 attention weights versus bfp8/bfp4
-in performance mode, resulting in consistently higher memory. The gap is most pronounced for mid-size models —
-Llama-3.1-8B rises from 13.7 GB to 20.4 GB (batch-1) and Qwen2.5-32B from 53 GB to 74 GB — while 70B+ models show a
-smaller relative increase since attention weight precision is already reduced in both modes.
+in performance mode, and typically raises peak memory. The increase is clearest at batch-1, where most models grow noticeably Llama-3.1-8B rises from 13.7 GB to 20.4 GB and Qwen2.5-32B from 53 GB to 74 GB — while 70B+ models show a smaller relative increase since attention weight precision is already reduced in both modes. At batch-32 the picture is mixed: KV-cache and activations dominate, and several models (Llama-3.2-1B/3B/11B, Llama-3.3-70B, Qwen2.5-32B) report slightly lower peaks in accuracy mode rather than higher.
 
 Memory scales roughly with model size, ranging from ~3–4 GB for 1B models up to ~147–155 GB for 72–90B models. The
 largest models (Qwen2.5-72B, Llama-3.2-90B) show little difference between batch-1 and batch-32, suggesting KV-cache
