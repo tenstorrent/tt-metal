@@ -46,6 +46,10 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
+// Ring SDPA debug knob: which ring iteration to instrument with WAIT_Q/WAIT_K/WAIT_V zones.
+// Compute waits for Q/K/V are wrapped in DeviceZoneScopedN only when ring_iter == this value.
+constexpr uint32_t PROFILE_RING_ITER_N = 0;
+
 /**
  * Push tiles to make them visible for UNPACK reads, but rewind wr_ptr so
  * subsequent pack_tile<true> offsets remain relative to a stable base.
@@ -696,7 +700,8 @@ static void sdpa_inner_loop_step(
     const uint32_t causal_q_start_tile = 0,
     const uint32_t causal_k_start_tile = 0,
     const uint32_t neginf_idx = 0,
-    const uint32_t causal_diag_idx = 0) {
+    const uint32_t causal_diag_idx = 0,
+    const bool profile_kv_waits = false) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -731,11 +736,21 @@ static void sdpa_inner_loop_step(
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
-    cb_wait_front(cb_kt_in, DHt * KT_stride);
+    if (profile_kv_waits) {
+        DeviceZoneScopedN("WAIT_K");
+        cb_wait_front(cb_kt_in, DHt * KT_stride);
+    } else {
+        cb_wait_front(cb_kt_in, DHt * KT_stride);
+    }
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
-        cb_wait_front(cb_q_in, q_wait_tiles);
+        if (profile_kv_waits) {
+            DeviceZoneScopedN("WAIT_Q");
+            cb_wait_front(cb_q_in, q_wait_tiles);
+        } else {
+            cb_wait_front(cb_q_in, q_wait_tiles);
+        }
         kt_index_offset = 0;
 
         if constexpr (!uniform_pack_format) {
@@ -919,7 +934,12 @@ static void sdpa_inner_loop_step(
                     actual_sbw);
                 if (kt_sub == 0) {
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                    cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+                    if (profile_kv_waits) {
+                        DeviceZoneScopedN("WAIT_V");
+                        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+                    } else {
+                        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+                    }
                 }
                 if (kt_sub > 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1680,7 +1700,8 @@ void sdpa_ring_v2(
                 q_start_tile,
                 k_chunk * Sk_chunk_t,
                 lw_mask.neginf_tile_idx,
-                lw_mask.causal_diag_tile_idx);
+                lw_mask.causal_diag_tile_idx,
+                ring_iter == PROFILE_RING_ITER_N);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
