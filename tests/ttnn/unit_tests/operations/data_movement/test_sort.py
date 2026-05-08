@@ -351,22 +351,233 @@ def test_sort_indices(shape, dim, descending, device):
 
 
 @pytest.mark.parametrize(
-    "shape, dim, descending, input_dtype, prealocated_dtype",
+    "shape, dim, descending, torch_dtype, ttnn_dtype",
     [
-        ([32, 64], -1, False, ttnn.bfloat16, ttnn.uint16),
-        ([32, 64], -1, False, ttnn.uint16, ttnn.uint32),
-        ([32, 64], -1, False, ttnn.uint32, ttnn.uint16),
+        ([64, 64], -1, False, torch.bfloat16, ttnn.bfloat16),
+        ([32, 128], -1, True, torch.bfloat16, ttnn.bfloat16),
+        ([1, 1, 32, 64], -1, False, torch.float32, ttnn.float32),
+        ([1, 55, 43], -1, True, torch.bfloat16, ttnn.bfloat16),
+        ([32, 128], 1, False, torch.bfloat16, ttnn.bfloat16),
+        ([1, 64, 64], 0, True, torch.bfloat16, ttnn.bfloat16),
+        ([1, 64, 64], 1, False, torch.float32, ttnn.float32),
+        ([1, 1, 64, 64], 0, False, torch.float32, ttnn.float32),
+        ([237], 0, False, torch.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_sort_raise_datatype_error(shape, dim, descending, input_dtype, prealocated_dtype, device):
+def test_sort_row_major_layout(shape, dim, descending, torch_dtype, ttnn_dtype, device):
     torch.manual_seed(0)
 
-    input = torch.randn(shape, dtype=torch.bfloat16)
+    input_t = torch.randn(shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(input_t, ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    ttnn_input = ttnn.from_torch(input, input_dtype, layout=ttnn.Layout.TILE, device=device)
+    torch_values, torch_indices = torch.sort(input_t, dim=dim, descending=descending)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
 
-    ttnn_sort_values = ttnn.zeros_like(ttnn_input, dtype=prealocated_dtype)
-    ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+    assert ttnn_values.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "Output layout must be ROW_MAJOR"
+    assert ttnn_indices.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "Index layout must be ROW_MAJOR"
 
-    with pytest.raises(Exception):
-        ttnn.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
+    assert list(ttnn_values.shape) == shape
+    assert list(ttnn_indices.shape) == shape
+
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values, dtype=torch_dtype))
+    ttnn_gathered = torch.gather(input_t, dim, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
+def _make_height_sharded_cfg(device, num_shards, shard_height, shard_width):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_shards - 1))})
+    shard_spec = ttnn.ShardSpec(grid, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending",
+    [
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, False),
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, True),
+        ([8 * TILE_HEIGHT, TILE_WIDTH * 2], -1, False),
+    ],
+)
+def test_sort_sharded_input(shape, dim, descending, device):
+    torch.manual_seed(0)
+
+    num_shards = shape[0] // TILE_HEIGHT
+    shard_height = TILE_HEIGHT
+    shard_width = shape[-1]
+    sharded_cfg = _make_height_sharded_cfg(device, num_shards, shard_height, shard_width)
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        input_t,
+        ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_cfg,
+    )
+
+    torch_values, _ = torch.sort(input_t, dim=dim, descending=descending)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
+
+    assert list(ttnn_values.shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    ttnn_gathered = torch.gather(input_t, dim, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending",
+    [
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, False),
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, True),
+        ([8 * TILE_HEIGHT, TILE_WIDTH * 2], -1, False),
+    ],
+)
+def test_sort_sharded_output(shape, dim, descending, device):
+    torch.manual_seed(0)
+
+    num_shards = shape[0] // TILE_HEIGHT
+    shard_height = TILE_HEIGHT
+    shard_width = shape[-1]
+    sharded_cfg = _make_height_sharded_cfg(device, num_shards, shard_height, shard_width)
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        input_t,
+        ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_values, _ = torch.sort(input_t, dim=dim, descending=descending)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending, memory_config=sharded_cfg)
+
+    assert ttnn_values.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert list(ttnn_values.shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    ttnn_gathered = torch.gather(input_t, dim, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending",
+    [
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, False),
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, True),
+    ],
+)
+def test_sort_row_major_sharded(shape, dim, descending, device):
+    torch.manual_seed(0)
+
+    num_shards = shape[0] // TILE_HEIGHT
+    shard_height = TILE_HEIGHT
+    shard_width = shape[-1]
+    sharded_cfg = _make_height_sharded_cfg(device, num_shards, shard_height, shard_width)
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        input_t,
+        ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=sharded_cfg,
+    )
+
+    torch_values, _ = torch.sort(input_t, dim=dim, descending=descending)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
+
+    assert list(ttnn_values.shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    ttnn_gathered = torch.gather(input_t, dim, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending",
+    [
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, False),
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, True),
+        ([1, 1, 32, 64], -1, False),
+    ],
+)
+def test_sort_preallocated_row_major_outputs(shape, dim, descending, device):
+    torch.manual_seed(0)
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_vals = ttnn.zeros(shape, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    out_idx = ttnn.zeros(shape, dtype=ttnn.uint16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    torch_values, _ = torch.sort(input_t, dim=dim, descending=descending)
+    ttnn.sort(ttnn_input, dim=dim, descending=descending, out=(out_vals, out_idx))
+
+    assert out_vals.get_layout() == ttnn.ROW_MAJOR_LAYOUT
+    assert out_idx.get_layout() == ttnn.ROW_MAJOR_LAYOUT
+    assert list(out_vals.shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(out_vals))
+    ttnn_gathered = torch.gather(input_t, dim, ttnn.to_torch(out_idx).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending",
+    [
+        ([4 * TILE_HEIGHT, TILE_WIDTH], -1, False),
+        ([8 * TILE_HEIGHT, TILE_WIDTH * 2], -1, True),
+    ],
+)
+def test_sort_preallocated_sharded_outputs(shape, dim, descending, device):
+    torch.manual_seed(0)
+
+    num_shards = shape[0] // TILE_HEIGHT
+    sharded_cfg = _make_height_sharded_cfg(device, num_shards, TILE_HEIGHT, shape[-1])
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_vals = ttnn.zeros(shape, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=sharded_cfg)
+    out_idx = ttnn.zeros(shape, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=sharded_cfg)
+
+    torch_values, _ = torch.sort(input_t, dim=dim, descending=descending)
+    ttnn.sort(ttnn_input, dim=dim, descending=descending, out=(out_vals, out_idx))
+
+    assert out_vals.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert list(out_vals.shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(out_vals))
+    ttnn_gathered = torch.gather(input_t, dim, ttnn.to_torch(out_idx).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending",
+    [
+        ([2, 2, 2, 2 * TILE_HEIGHT, TILE_WIDTH], -1, False),
+        ([2, 2, 2, 2 * TILE_HEIGHT, TILE_WIDTH], 0, False),
+        ([2, 2, 2, 2 * TILE_HEIGHT, TILE_WIDTH], 2, True),
+        ([2, 2, 2, 2 * TILE_HEIGHT, TILE_WIDTH], 3, False),
+    ],
+)
+def test_sort_rank5_all_dims(shape, dim, descending, device):
+    """Rank > 4 with sort dim ranging over all logical positions.
+
+    The composite layer permutes the sort dim to the last position, squeezes
+    leading dims into 4D, runs the kernel, then restores the original rank
+    and order.  The rank-restoration reshape targets the *transposed* shape,
+    keeping the last dim unchanged, so it routes through ttnn::reshape's
+    `this_is_view` fast path (metadata-only `view`).  This avoids the device
+    reshape kernel entirely — important because that kernel rejects UINT16.
+    """
+    torch.manual_seed(0)
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_values, _ = torch.sort(input_t, dim=dim, descending=descending)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
+
+    assert list(ttnn_values.shape) == shape
+    assert list(ttnn_indices.shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    ttnn_gathered = torch.gather(input_t, dim, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)

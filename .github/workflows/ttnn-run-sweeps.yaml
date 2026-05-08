@@ -67,6 +67,7 @@ on:
           - data_movement.slice.slice_forge
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
+          - data_movement.sort.sort
           - data_movement.split.split_pytorch2
           - data_movement.squeeze.squeeze_pytorch2
           - data_movement.stack.stack_pytorch2
