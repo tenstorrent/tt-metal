@@ -303,7 +303,14 @@ for (const arr of idx.values()) arr.sort((a, b) => a.t0 - b.t0);
 scrubber.min = 0;
 scrubber.max = META.max_cycles;
 scrubber.step = Math.max(1, Math.floor(META.max_cycles / 100000));
-scrubber.value = 0;
+// Jump scrubber past the dead time at the start: land on the median
+// zone start so the first frame the user sees has activity, not the
+// pre-workload idle window. Pre-workload idle is usually 80% of total
+// recorded cycles for short benchmark runs.
+const allStarts = ZONES.map(z => z.t0).sort((a, b) => a - b);
+const initialCycle = allStarts.length > 0 ? allStarts[Math.floor(allStarts.length / 2)] : 0;
+state.curCycle = initialCycle;
+scrubber.value = initialCycle;
 
 for (const r of META.riscs) {
   const o = document.createElement("option");
