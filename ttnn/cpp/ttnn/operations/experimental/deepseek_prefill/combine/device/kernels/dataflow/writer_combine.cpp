@@ -193,7 +193,10 @@ void kernel_main() {
     // Sentinel-terminated fabric send loop
     while (true) {
         cb_wait_front(cb_route_info_id, 1);
-        volatile uint32_t* route_info = (volatile uint32_t*)(get_read_ptr(cb_route_info_id));
+        // tt_l1_ptr: L1 cache on BH is per-RISC write-through; without this attribute the
+        // compiler emits cached loads, and a CB-slot reuse can return stale data on BRISC.
+        volatile tt_l1_ptr uint32_t* route_info =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
 
         uint32_t route = route_info[0];
         if (route == ROUTE_INFO_SENTINEL) {
