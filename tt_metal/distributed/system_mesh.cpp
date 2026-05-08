@@ -265,6 +265,7 @@ SystemMesh& SystemMesh::instance() { return MetalContext::instance().get_system_
 
 const MeshShape& SystemMesh::shape() const { return pimpl_->coordinate_translator().global_shape(); }
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->coordinate_translator().local_shape(); }
+const MeshCoordinate& SystemMesh::local_offset() const { return pimpl_->coordinate_translator().local_offset(); }
 
 SystemMesh::MappedDevices SystemMesh::get_mapped_devices(
     const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset) const {
