@@ -444,7 +444,10 @@ def prepare_w0_w1_tensor_for_moe_compute(
     max_shard_size = max(shard_map)
     max_shard_size = max_shard_size + (max_shard_size % 2)  # round up to even
     if any(x not in [max_shard_size, max_shard_size - 1, max_shard_size - 2] for x in shard_map):
-        raise RuntimeError(f"W0W1 shard sizes should differ by 1 at most: {shard_map}")
+        raise RuntimeError(
+            f"W0W1 shard sizes must be in [{max_shard_size - 2}, {max_shard_size}] "
+            f"(after rounding max to even), got: {shard_map}"
+        )
 
     # Pick appropriate number of column tiles for each core based on the ring position.
     start_tile = 0

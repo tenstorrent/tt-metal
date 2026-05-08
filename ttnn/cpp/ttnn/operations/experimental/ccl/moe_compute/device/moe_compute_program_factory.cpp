@@ -341,6 +341,13 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
+    TT_FATAL(
+        intermediate_tiles >= matmul_num_cores,
+        "intermediate_size ({}) must yield at least 1 tile per ring core ({} tiles < {} cores)",
+        intermediate_size,
+        intermediate_tiles,
+        matmul_num_cores);
+
     // IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores)
     const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
     const uint32_t a2a_cb_pages = (a2a_cb_pages_raw + 1) & ~1u;
@@ -680,18 +687,21 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Matmul CBs
     //-------------------------------------------------------------------------
 
-    // CBs used in the MOE operation
+    // CBs on matmul (ring) cores.  Tile counts depend on (hidden_size, intermediate_size).
+    // Two reference configs for comparison:
+    //   DeepSeek  — hidden=7168  intermediate=2048  (Ht=224, Nt=64,  a2a_cb_pages=6)
+    //   GPT-OSS   — hidden=2880  intermediate=2880  (Ht=90,  Nt=90,  a2a_cb_pages=8)
     /*
-        ------------------------------------------------------------------------------------
-        |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
-        ------------------------------------------------------------------------------------
-        | cb_s2c_in      | CBIndex::c_0  | Float16_b  | true  |    224*2 |      917504     |
-        | cb_r2c_w0      | CBIndex::c_3  | Bfp4_b     | true  |    14*6  |      48384      |
-        | cb_c2w_rdy     | CBIndex::c_4  | Float32    | false |    1     | see below       |
-        | cb_w2c_rdy     | CBIndex::c_5  | Float32    | false |    1     | see below       |
-        | cb_s2c_in2     | CBIndex::c_6  | Float16_b  | true  |    6*12  |      147456     |
-        | cb_w2c_md      | CBIndex::c_7  | UInt32     | false |    2     | see below       |
-        ------------------------------------------------------------------------------------
+        ------------------------------------------------------------------------------------------------------------------
+        |     Name       |   CB Index   |   Dtype   | Tile? | Tiles/CB  | DS  | GPT | Remarks |
+        ------------------------------------------------------------------------------------------------------------------
+        | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf, sized by shard
+       | | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | 14*6      |  84 |  84 | 3 triple-bufs of W0/W1 blocks |
+        | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute→writer ready signal | |
+       cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer→compute ready signal       |
+        | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation exchange | |
+       cb_w2c_md      | CBIndex::c_7 | UInt32    | false | 2         |   — |   — | Metadata (token counts)           |
+        ------------------------------------------------------------------------------------------------------------------
         Non-tile CBs use page_size >= max(datum_size, l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE)
         so LLK fifo_* fields (16 B words; circular_buffer_constants.h) are non-zero on compute push/pop.
     */
