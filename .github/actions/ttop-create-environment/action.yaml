@@ -37,10 +37,11 @@ runs:
     - name: Generate SSH key
       shell: bash
       run: |
-        if [ ! -f /home/runner/.ssh/id_ed25519 ]; then
-          ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
+        mkdir -p "$HOME/.ssh"
+        if [ ! -f "$HOME/.ssh/id_ed25519" ]; then
+          ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N ""
         fi
-        echo "SSH_PUBLIC_KEY=$(cat /home/runner/.ssh/id_ed25519.pub)" >> $GITHUB_ENV
+        echo "SSH_PUBLIC_KEY=$(cat "$HOME/.ssh/id_ed25519.pub")" >> $GITHUB_ENV
     - name: Construct Environment manifest
       shell: bash
       id: explicit
@@ -95,4 +96,4 @@ runs:
       shell: bash
       run: |
         echo "Connecting to environment..."
-        /home/runner/ttop/ssh-setup.sh "${{ inputs.namespace }}" "${{ inputs.environmentName }}"
+        "$HOME/ttop/ssh-setup.sh" "${{ inputs.namespace }}" "${{ inputs.environmentName }}"

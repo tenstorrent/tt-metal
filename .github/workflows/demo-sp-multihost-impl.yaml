@@ -109,6 +109,7 @@ jobs:
       PYTHON_ENV_DIR: /opt/venv
       PYTHONPATH: /opt/venv/lib/python3.10/site-packages:/home/user/tt-metal
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
+      HOME: /home/user
       TT_METAL_CACHE: /home/user/.cache
     steps:
       - name: Checkout repository
