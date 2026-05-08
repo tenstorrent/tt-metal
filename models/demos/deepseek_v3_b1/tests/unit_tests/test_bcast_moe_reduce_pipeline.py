@@ -25,6 +25,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
     MeshWrapper,
     ParallelSocketInterface,
@@ -148,7 +149,7 @@ def test_bcast_moe_reduce_pipeline(
 
     moe_worker_core_grid = build_worker_grid_excluding_cores(device_grid, [pipeline_core])
 
-    token_size_bytes = 64
+    token_size_bytes = DeepseekMetadata.aligned_size_bytes()
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
     embedding_fifo_factor = 1
     embedding_fifo_size = embedding_size_bytes * embedding_fifo_factor
@@ -951,7 +952,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
 
     moe_worker_core_grid = build_worker_grid_excluding_cores(device_grid, [pipeline_core])
 
-    token_size_bytes = 64
+    token_size_bytes = DeepseekMetadata.aligned_size_bytes()
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
     embedding_fifo_factor = 1
     embedding_fifo_size = embedding_size_bytes * embedding_fifo_factor
