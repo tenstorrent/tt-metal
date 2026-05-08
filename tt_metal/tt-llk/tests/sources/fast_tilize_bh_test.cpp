@@ -62,6 +62,7 @@ inline std::uint32_t decompose_row(const std::uint32_t ct_dim, std::uint32_t uni
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "experimental/llk_unpack_fast_tilize.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
@@ -171,6 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "experimental/llk_math_fast_tilize.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 

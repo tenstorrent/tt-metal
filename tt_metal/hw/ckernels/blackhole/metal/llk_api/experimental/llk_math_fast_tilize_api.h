@@ -5,6 +5,7 @@
 #pragma once
 
 #include "llk_math_unary_datacopy_api.h"
+#include "experimental/llk_math_fast_tilize.h"
 
 /*************************************************************************
  * LLK MATH FAST TILIZE (BH)
