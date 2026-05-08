@@ -141,28 +141,33 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     uint32_t num_cores = effective_num_links;
 
     // ==================== Core layout: senders + idle groups ====================
-    // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
-    uint32_t sender_row_y = subdevice_cores.at(0).y;
-    std::vector<CoreCoord> all_row_cores;
+    // Collect all cores in the last column (max x among subdevice_cores), sorted by y.
+    auto sender_col_x = subdevice_cores.at(0).x;
     for (const auto& core : subdevice_cores) {
-        if (core.y == sender_row_y) {
-            all_row_cores.push_back(core);
+        if (core.x > sender_col_x) {
+            sender_col_x = core.x;
+        }
+    }
+    std::vector<CoreCoord> all_col_cores;
+    for (const auto& core : subdevice_cores) {
+        if (core.x == sender_col_x) {
+            all_col_cores.push_back(core);
         }
     }
     std::sort(
-        all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
+        all_col_cores.begin(), all_col_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.y < b.y; });
 
-    uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
+    uint32_t total_col_cores = static_cast<uint32_t>(all_col_cores.size());
     TT_FATAL(
-        total_row_cores > num_cores,
-        "Same-row has only {} cores for {} senders — need at least one idle core per sender",
-        total_row_cores,
+        total_col_cores > num_cores,
+        "Same-column has only {} cores for {} senders — need at least one idle core per sender",
+        total_col_cores,
         num_cores);
 
-    // Divide total_row_cores into num_cores groups.
+    // Divide total_col_cores into num_cores groups.
     // Within each group: center core = sender, surrounding cores = that sender's idle cores.
-    uint32_t base_group_size = total_row_cores / num_cores;
-    uint32_t extra_groups = total_row_cores % num_cores;
+    uint32_t base_group_size = total_col_cores / num_cores;
+    uint32_t extra_groups = total_col_cores % num_cores;
 
     std::vector<CoreCoord> sender_cores;
     sender_cores.reserve(num_cores);
@@ -177,10 +182,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
             uint32_t sender_offset = group_size / 2;
             for (uint32_t j = 0; j < group_size; j++, pos++) {
                 if (j == sender_offset) {
-                    sender_cores.push_back(all_row_cores[pos]);
+                    sender_cores.push_back(all_col_cores[pos]);
                 } else {
-                    sender_idle_groups[s].push_back(all_row_cores[pos]);
-                    all_idle_cores.push_back(all_row_cores[pos]);
+                    sender_idle_groups[s].push_back(all_col_cores[pos]);
+                    all_idle_cores.push_back(all_col_cores[pos]);
                     idle_sender_map.push_back(s);
                 }
             }
@@ -190,7 +195,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     uint32_t num_idle_cores = static_cast<uint32_t>(all_idle_cores.size());
     TT_FATAL(
         num_idle_cores >= num_cores,
-        "Same-row has only {} idle cores for {} senders — need at least one idle core per sender",
+        "Same-column has only {} idle cores for {} senders — need at least one idle core per sender",
         num_idle_cores,
         num_cores);
 
@@ -908,8 +913,23 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         effective_num_links,
         tokens_per_device,
         num_cores);
+    // Start senders from the top of the last column (max x among subdevice_cores), walking down (column-wise).
+    auto last_col_x = subdevice_cores.at(0).x;
+    for (const auto& core : subdevice_cores) {
+        if (core.x > last_col_x) {
+            last_col_x = core.x;
+        }
+    }
+    CoreCoord last_col_start = subdevice_cores.at(0);
+    bool found_last_col_start = false;
+    for (const auto& core : subdevice_cores) {
+        if (core.x == last_col_x && (!found_last_col_start || core.y < last_col_start.y)) {
+            last_col_start = core;
+            found_last_col_start = true;
+        }
+    }
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
+        last_col_start, num_cores, worker_core_range_set, false);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
     log_debug(
         tt::LogOp,
