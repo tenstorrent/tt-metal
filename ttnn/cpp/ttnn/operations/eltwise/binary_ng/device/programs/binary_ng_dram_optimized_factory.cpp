@@ -362,9 +362,6 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
         // The Blackhole architecture has different hardware characteristics
         // (memory bandwidth, number of DRAM banks, and operation performance),
         // which require additional tuning.
-        //
-        // Equivalent LLK functions for Blackhole are provided to enable
-        // future optimizations.
         return "Only WH architecture is supported for DRAM optimized program";
     }
 
@@ -577,22 +574,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
-
-        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
-            compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
-            if (post_activations[0].type() == unary::UnaryOpType::RELU) {
-                compute_kernel_defines["PACK_RELU"] = "1";
-                unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
-            } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
-                // Zero-point is passed as the 4th run-time kernel argument
-                compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
-                unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
-            } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
-            }
-        } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
-        }
+        add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
 
         /////////////////////   Alocate CB memory for intermediate activations   /////////////////////
         bool op_has_exp =
