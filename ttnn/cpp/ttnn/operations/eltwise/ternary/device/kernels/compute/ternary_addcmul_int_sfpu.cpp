@@ -45,11 +45,9 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_3;
 
     // D5/D8: caller-side BIG init at the top of MAIN().
-    compute_kernel_hw_startup(cb_in0, cb_in0, cb_out);
-
     // out = input_a + scalar * input_b * input_c, integer dtype.
     // Mirrors the original 4-DST-slot layout (D3 reused as scratch).
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
         CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop>{},

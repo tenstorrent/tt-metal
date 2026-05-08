@@ -34,11 +34,9 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
 
     // D5/D8: caller-side BIG init at the top of MAIN().
-    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
-
     // logsigmoid(x):
     //   D0 = x; D1 = x; D1 = -D1; D1 = exp(D1) (fast); logsigmoid(D0, D1) -> D0
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>{},
         CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitPop>{},

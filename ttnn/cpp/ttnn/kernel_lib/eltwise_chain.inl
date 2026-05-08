@@ -1127,4 +1127,122 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     }
 }
 
+// =============================================================================
+// 12. eltwise_chain_with_init — deduced wrapper (U4)
+//
+// Single-stage convenience that derives (cb_a, cb_b, cb_out) at compile time
+// from the chain element pack and emits compute_kernel_hw_startup before the
+// chain. Multi-stage kernels (different PACK output CB per stage) MUST keep the
+// explicit per-stage compute_kernel_hw_startup pattern.
+// =============================================================================
+
+namespace detail {
+
+// `first_*_cb<Es...>()`: pack-fold deducers for the boot's three CBs.
+//
+// CB ID `0` is a legitimate CB index (`tt::CBIndex::c_0`). We can't use 0 as a
+// sentinel for "not found". Instead the deducers walk Es left-to-right and return
+// the CB from the first matching element (CB-reader / CB-binary / CB-pack); the
+// caller's `static_assert` uses a separate "is found" predicate that walks the
+// same predicate set.
+//
+// Implemented as recursive pack peel.
+
+template <class E>
+constexpr uint32_t cb_a_of() {
+    if constexpr (is_cb_reader_op_v<E>) return E::cb_a_id();
+    else                                return 0u;
+}
+
+template <class E>
+constexpr uint32_t cb_b_of() {
+    if constexpr (is_binary_fpu_op_v<E> || is_dest_reuse_binary_op_v<E>) return E::cb_b_id();
+    else                                                                  return 0u;
+}
+
+template <class E>
+constexpr uint32_t pack_cb_of() {
+    if constexpr (is_pack_tile_op_v<E>) return E::pack_cb_id();
+    else                                return 0u;
+}
+
+// Has-any-* predicates so the caller can static_assert presence without false
+// positives on CB index 0.
+template <class... Es>
+inline constexpr bool has_any_cb_reader_v = ((is_cb_reader_op_v<Es>) || ...);
+
+template <class... Es>
+inline constexpr bool has_any_pack_tile_v = ((is_pack_tile_op_v<Es>) || ...);
+
+// First CB on side X, walking Es left-to-right and returning the first element
+// of the matching kind. Returns 0 only if no matching element exists (caller is
+// expected to gate via the has_any_* predicates above).
+
+template <class... Es>
+constexpr uint32_t first_cb_a_impl() {
+    uint32_t result = 0;
+    bool found = false;
+    auto step = [&](bool is_reader, uint32_t cb) {
+        if (!found && is_reader) { result = cb; found = true; }
+    };
+    (step(is_cb_reader_op_v<Es>, cb_a_of<Es>()), ...);
+    return result;
+}
+
+template <class... Es>
+constexpr uint32_t first_cb_b_impl() {
+    uint32_t result = 0;
+    bool found = false;
+    auto step = [&](bool is_bin, uint32_t cb) {
+        if (!found && is_bin) { result = cb; found = true; }
+    };
+    (step(is_binary_fpu_op_v<Es> || is_dest_reuse_binary_op_v<Es>, cb_b_of<Es>()), ...);
+    return result;
+}
+
+template <class... Es>
+constexpr uint32_t first_pack_cb_impl() {
+    uint32_t result = 0;
+    bool found = false;
+    auto step = [&](bool is_pack, uint32_t cb) {
+        if (!found && is_pack) { result = cb; found = true; }
+    };
+    (step(is_pack_tile_op_v<Es>, pack_cb_of<Es>()), ...);
+    return result;
+}
+
+// Detect "has any binary FPU element" — used to decide cb_b vs falling back to cb_a.
+template <class... Es>
+inline constexpr bool has_any_binary_v = ((is_binary_fpu_op_v<Es> || is_dest_reuse_binary_op_v<Es>) || ...);
+
+template <class... Es>
+constexpr uint32_t first_cb_a()    { return first_cb_a_impl<Es...>(); }
+
+template <class... Es>
+constexpr uint32_t first_cb_b()    { return first_cb_b_impl<Es...>(); }
+
+template <class... Es>
+constexpr uint32_t first_pack_cb() { return first_pack_cb_impl<Es...>(); }
+
+}  // namespace detail
+
+template <class... Es>
+ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts) {
+    // Compile-time CB deduction. Note: CB ID 0 is a legitimate index
+    // (tt::CBIndex::c_0), so we gate presence on the has_any_* predicates rather
+    // than on `cb != 0`.
+    static_assert(detail::has_any_pack_tile_v<Es...>,
+                  "eltwise_chain_with_init: chain has no PackTile element. Multi-stage kernels "
+                  "must use explicit per-stage compute_kernel_hw_startup, not this wrapper.");
+
+    constexpr uint32_t cb_out = detail::first_pack_cb<Es...>();
+    // Reader-less chains (fill-only) boot the engine using cb_out for both srca/srcb
+    // — matches the legacy EltwiseChainPipelineInit::run() no-reader fallback.
+    constexpr uint32_t cb_a   = detail::has_any_cb_reader_v<Es...> ? detail::first_cb_a<Es...>() : cb_out;
+    constexpr uint32_t cb_b   = detail::has_any_binary_v<Es...> ? detail::first_cb_b<Es...>() : cb_a;
+
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+    eltwise_chain(n_tiles, elts...);
+}
+
 }  // namespace compute_kernel_lib

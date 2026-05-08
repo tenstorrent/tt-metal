@@ -564,6 +564,23 @@ inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 template <class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 
+/// Run the chain over `n_tiles` iterations, plus emit `compute_kernel_hw_startup`
+/// at chain entry with CBs deduced from the chain element pack.
+///
+/// Single-stage convenience: deduces (cb_a, cb_b, cb_out) by walking `Es...`:
+///   - `cb_a` ← first element with `is_cb_reader_op_v` and `cb_a_id() != 0`
+///   - `cb_b` ← first element with `is_binary_fpu_op_v` and `cb_b_id() != 0`,
+///              else `cb_a` (unary chains)
+///   - `cb_out` ← first element with `is_pack_tile_op_v` and `pack_cb_id() != 0`
+/// then calls `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` and `eltwise_chain(...)`.
+///
+/// **Multi-stage caveat (D5).** Use this only for single-stage kernels. Multi-stage
+/// kernels (different PACK output CB per stage) MUST keep explicit per-stage
+/// `compute_kernel_hw_startup` calls — `eltwise_chain_with_init` would emit it once
+/// with stage-1 CBs and stage 2's PACK would target the wrong CB.
+template <class... Es>
+ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
+
 }  // namespace compute_kernel_lib
 
 // Bring the implementation in.

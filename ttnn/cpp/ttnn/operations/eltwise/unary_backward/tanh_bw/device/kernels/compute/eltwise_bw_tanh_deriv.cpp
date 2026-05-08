@@ -23,10 +23,8 @@ void kernel_main() {
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
     // D5/D8: caller-side BIG init at the top of MAIN().
-    compute_kernel_hw_startup(cb_grad_out, cb_input, cb_grad_in);
-
     // grad_in[i] = grad_out[i] * sech²(input[i])
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_grad_out, Dst::D0, CopyTilePolicy::WaitAndPop>{},
         CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitAndPop>{},

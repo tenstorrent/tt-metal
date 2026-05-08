@@ -29,9 +29,7 @@ void kernel_main() {
     const uint32_t num_tiles = per_core_block_count * per_core_block_dim;
 
     // D5/D8: caller-side BIG init at the top of MAIN().
-    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
-
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
         ELTWISE_OP_BRACED,

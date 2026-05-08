@@ -25,8 +25,6 @@ void kernel_main() {
     // D5/D8: caller-side BIG init at the top of MAIN().
     // Fill-only chain (no CB-reader) — boot the engine using out_cb on both sides
     // (matches the legacy `EltwiseChainPipelineInit::run()` no-reader fallback).
-    compute_kernel_hw_startup(cb_out, cb_out);
-
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles, FillScalar<Dst::D0>{FILL_VALUE}, PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

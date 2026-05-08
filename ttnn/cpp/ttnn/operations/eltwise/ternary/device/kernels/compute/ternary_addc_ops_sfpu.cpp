@@ -54,9 +54,7 @@ void kernel_main() {
 
     // D5/D8: caller-side BIG init at the top of MAIN(). The chain reads from cb_in0
     // first; SFPU ternary op runs in DEST. Boot for the first reader's CB.
-    compute_kernel_hw_startup(cb_in0, cb_in0, cb_out);
-
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
         CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop>{},

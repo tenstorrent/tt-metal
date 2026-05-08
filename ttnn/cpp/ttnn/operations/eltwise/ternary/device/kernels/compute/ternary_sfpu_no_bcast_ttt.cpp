@@ -42,9 +42,7 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_3;
 
     // D5/D8: caller-side BIG init at the top of MAIN().
-    compute_kernel_hw_startup(cb_pre_in1, cb_pre_in2, cb_out);
-
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>{},
         CopyTile<cb_pre_in2, Dst::D1, CopyTilePolicy::WaitAndPop>{},

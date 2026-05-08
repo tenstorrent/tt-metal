@@ -37,10 +37,8 @@ void kernel_main() {
 
     // D5/D8: caller-side BIG init at the top of MAIN(). Two CB-readers (cb_grad_out,
     // cb_input) feed into DEST; SFPU + binary FPU mul pack to cb_grad_in.
-    compute_kernel_hw_startup(cb_grad_out, cb_input, cb_grad_in);
-
     // grad_in[i] = grad_out[i] * GELU'(input[i])
-    eltwise_chain(
+    eltwise_chain_with_init(
         num_tiles,
         CopyTile<cb_grad_out, Dst::D0, CopyTilePolicy::WaitAndPop>{},
         CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitAndPop>{},
