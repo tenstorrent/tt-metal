@@ -197,7 +197,7 @@ void write_dependency_hashes(
         }
         // Always write absolute path to the hash file, so when reading back we don't need to
         // worry about relative paths
-        hash_file << dep_path.string() << '\t' << hash << '\n';
+        hash_file << dep_path << '\t' << hash << '\n';
     }
 }
 
