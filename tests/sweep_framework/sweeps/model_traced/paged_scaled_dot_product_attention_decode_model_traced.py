@@ -497,8 +497,8 @@ def run(
         op_kwargs["attention_sink"] = sink_tensor
 
     # Forward program_config when master had it (use __absent_keys__ guard).
-    has_absent_info = kwargs.get("__absent_keys__") is not None
-    if has_absent_info and "program_config" not in absent_keys and "program_config" not in op_kwargs:
+    # build_op_kwargs strips program_config; parse from raw kwargs
+    if "program_config" not in op_kwargs:
         traced_pc = kwargs.get("program_config")
         if traced_pc is not None and traced_pc != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value as _pdv_pc

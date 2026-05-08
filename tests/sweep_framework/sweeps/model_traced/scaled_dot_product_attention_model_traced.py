@@ -216,6 +216,13 @@ def run(
     # Validate program_config grid fits current device.
     # Only remove if the grid genuinely exceeds the device; keep it (even if None)
     # when the master trace had it, to avoid missing_key diffs.
+    # build_op_kwargs strips program_config; parse from raw kwargs if present
+    if "program_config" not in op_kwargs:
+        raw_pc = kwargs.get("program_config")
+        if raw_pc is not None and raw_pc != "__ABSENT__":
+            parsed_pc = parse_dict_value("program_config", raw_pc) if isinstance(raw_pc, dict) else raw_pc
+            if parsed_pc is not None:
+                op_kwargs["program_config"] = parsed_pc
     pc = op_kwargs.get("program_config")
     if pc is not None:
         try:
