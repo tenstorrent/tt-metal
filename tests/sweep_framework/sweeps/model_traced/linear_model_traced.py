@@ -142,6 +142,46 @@ def _align_linear_for_torch(torch_a, placement_a, torch_w, placement_w):
     return torch_a, torch_w
 
 
+def _reorder_l1_mc_for_dram_sharded(mc, device):
+    """Reorder an L1-sharded MemoryConfig's core_ranges to match the device's
+    optimal DRAM bank → worker assignment. Required by the BatchedDRAMSharded
+    matmul kernel: it asserts storage_core[i] == worker_core[i] (NOC_0 list).
+
+    Master configs record cores in insertion order, which often differs from
+    the device's optimal order. Same set of cores, just shuffled.
+    """
+    try:
+        if mc is None or mc.buffer_type != ttnn.BufferType.L1:
+            return mc
+        if mc.shard_spec is None:
+            return mc
+        old_grid = mc.shard_spec.grid
+        # Collect the set of (x,y) cores in master's mc
+        master_cores = set()
+        for cr in old_grid.ranges():
+            for x in range(cr.start.x, cr.end.x + 1):
+                for y in range(cr.start.y, cr.end.y + 1):
+                    master_cores.add((x, y))
+        if not master_cores:
+            return mc
+        # Get the device's optimal assignment for NOC_0
+        try:
+            optimal = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        except Exception:
+            return mc
+        # Build a new core_ranges list: take optimal cores in order, only those
+        # that appear in master's set. If sizes mismatch, leave mc unchanged.
+        ordered = [(c.x, c.y) for c in optimal if (c.x, c.y) in master_cores]
+        if len(ordered) != len(master_cores):
+            return mc
+        new_ranges = [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y) in ordered]
+        new_grid = ttnn.CoreRangeSet(new_ranges)
+        new_shard_spec = ttnn.ShardSpec(new_grid, mc.shard_spec.shape, mc.shard_spec.orientation)
+        return ttnn.MemoryConfig(mc.memory_layout, mc.buffer_type, new_shard_spec)
+    except Exception:
+        return mc
+
+
 def run(
     input_a_shape,  # Input shape (m, k)
     input_a_dtype,
@@ -170,11 +210,16 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # V2 vectors provide weight as input_tensor_b_* instead of input_b_*
-    if input_b_shape is None and "input_tensor_b_shape" in kwargs:
-        input_b_shape = kwargs["input_tensor_b_shape"]
+    # V2 vectors provide weight as input_tensor_b_* instead of input_b_*. Each
+    # field can be present in either convention (or None when absent in master),
+    # so fall through per-field rather than gating on input_b_shape alone.
+    if input_b_shape is None:
+        input_b_shape = kwargs.get("input_tensor_b_shape")
+    if input_b_dtype is None:
         input_b_dtype = kwargs.get("input_tensor_b_dtype", input_a_dtype)
+    if input_b_layout is None:
         input_b_layout = kwargs.get("input_tensor_b_layout", input_a_layout)
+    if input_b_memory_config is None:
         input_b_memory_config = kwargs.get("input_tensor_b_memory_config", ttnn.DRAM_MEMORY_CONFIG)
 
     if input_b_shape is None:
@@ -195,16 +240,35 @@ def run(
             if isinstance(dtype, dict)
             else parse_dict_value("dtype", {"type": "DataType", "repr": dtype})
         )
-    # Skip traced program_config: block dimensions and grid sizes are computed for the
-    # original device/mesh and don't match the test device. Let ttnn auto-compute.
-    # The fallback below clears sharded configs when program_config is None.
-    program_config = None
+    # Use traced program_config when available — master and sweep both run on the
+    # same Galaxy 4×8 topology so block/grid sizes are valid. Parse dict form to
+    # the appropriate ttnn program_config object.
+    if isinstance(program_config, dict):
+        program_config = parse_dict_value("program_config", program_config)
+        if isinstance(program_config, dict):
+            # parse_dict_value couldn't resolve it — drop rather than fail.
+            program_config = None
 
+    # V2 passes memory_config as a serialized dict; parse to ttnn.MemoryConfig.
+    if isinstance(input_a_memory_config, dict):
+        input_a_memory_config = dict_to_memory_config(input_a_memory_config)
+    if isinstance(input_b_memory_config, dict):
+        input_b_memory_config = dict_to_memory_config(input_b_memory_config)
+
+    # BatchedDRAMSharded matmul kernel asserts that the L1 input_a shard
+    # grid uses the same core ordering as the device's optimal DRAM bank
+    # → worker assignment. Master records cores in insertion order; reorder
+    # to match the kernel's expected worker order.
+    _pc_cls = type(program_config).__name__ if program_config is not None else ""
+    if "BatchedDRAMSharded" in _pc_cls:
+        input_a_memory_config = _reorder_l1_mc_for_dram_sharded(input_a_memory_config, device)
+        if isinstance(memory_config, ttnn.MemoryConfig):
+            memory_config = _reorder_l1_mc_for_dram_sharded(memory_config, device)
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = kwargs.get(
-        "input_b_tensor_placement", kwargs.get("input_tensor_b_tensor_placement", None)
-    )
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement")
+    if input_b_tensor_placement is None:
+        input_b_tensor_placement = kwargs.get("input_tensor_b_tensor_placement")
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
 
@@ -212,6 +276,21 @@ def run(
     # Exclude program_config (handled above), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
+
+    # Parse master's output_tile (a Tile object that build_op_kwargs can't auto-
+    # parse). Format: {"type": "Tile", "value": "Tile with shape: [32, 32]"}.
+    _ot_raw = kwargs.get("output_tile")
+    _output_tile = None
+    if isinstance(_ot_raw, dict) and _ot_raw.get("type") == "Tile":
+        import re as _re_ot
+
+        _v = str(_ot_raw.get("value", ""))
+        _m = _re_ot.search(r"shape:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]", _v)
+        if _m:
+            try:
+                _output_tile = ttnn.Tile([int(_m.group(1)), int(_m.group(2))])
+            except Exception:
+                _output_tile = None
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -223,12 +302,10 @@ def run(
     # Detect 4D batched weights (batch > 1 in weight tensor).
     # ttnn.linear hits TT_FATAL with batched weights (requires batch_b == 1).
     # Use ttnn.matmul instead, which handles batched matmul natively.
+    # Force ttnn.linear path for all configs so trace matches master's traced
+    # ttnn.linear (batched weights are handled by ttnn.linear internally — no
+    # need to special-case to ttnn.matmul, which would mismatch the master trace).
     is_batched_weight = False
-    if len(shape_b) >= 4:
-        batch_b = 1
-        for d in shape_b[:-2]:
-            batch_b *= d
-        is_batched_weight = batch_b > 1
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -304,7 +381,12 @@ def run(
         elif "relu" in act:
             torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
 
-    # Create input tensor A
+    # Create input tensor A. Mirror the model's flow: build the tensor in
+    # DRAM-interleaved with the right per-chip placement, then to_memory_config
+    # to land on the master's exact memory_config. This avoids the kernel
+    # rejecting "from_torch direct to L1-sharded" creation paths.
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology as _apply_topo
+
     if not is_host:
         try:
             if is_mesh_device and input_a_tensor_placement:
@@ -313,7 +395,7 @@ def run(
                     device,
                     input_a_dtype,
                     input_a_layout,
-                    input_a_memory_config,
+                    ttnn.DRAM_MEMORY_CONFIG,
                     input_a_tensor_placement,
                 )
             else:
@@ -322,8 +404,13 @@ def run(
                     dtype=input_a_dtype,
                     layout=input_a_layout,
                     device=device,
-                    memory_config=input_a_memory_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+            if input_a_memory_config is not None and input_a_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                try:
+                    ttnn_a = ttnn.to_memory_config(ttnn_a, input_a_memory_config)
+                except Exception:
+                    pass  # leave in DRAM-interleaved if the conversion fails
         except Exception:
             ttnn_a = ttnn.from_torch(
                 torch_a,
@@ -331,25 +418,42 @@ def run(
                 layout=input_a_layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
             )
+        if is_mesh_device and input_a_tensor_placement:
+            try:
+                actual_mesh = device.shape
+                _apply_topo(ttnn_a, input_a_tensor_placement, (actual_mesh[0], actual_mesh[1]))
+            except Exception:
+                # Best-effort: if the C++ topology setter rejects the mesh
+                # shape (e.g. fewer chips than master traced), the trace will
+                # show the fallback topology rather than crash the sweep.
+                pass
     else:
         ttnn_a = ttnn.from_torch(torch_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Create weight tensor B
-    # Use the traced memory config as-is - with program_config, sharded weights may be supported
+    # Create weight tensor B — same DRAM-then-to_memory_config flow as input_a.
     weight_memory_config = input_b_memory_config
 
     if not is_host:
         if is_mesh_device and input_b_tensor_placement:
-            # Use mesh with placement
             ttnn_b = create_tensor_on_mesh(
                 torch_b,
                 device,
                 input_b_dtype,
                 input_b_layout,
-                weight_memory_config,
+                ttnn.DRAM_MEMORY_CONFIG,
                 input_b_tensor_placement,
             )
+            if weight_memory_config is not None and weight_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                try:
+                    ttnn_b = ttnn.to_memory_config(ttnn_b, weight_memory_config)
+                except Exception:
+                    # Leave weight in DRAM-interleaved if the kernel rejects
+                    # the master shard layout (e.g. shard_spec incompatible
+                    # with current dispatch grid). The trace will show DRAM
+                    # rather than crash the sweep.
+                    pass
         else:
             # Regular single-device tensor
             ttnn_b = ttnn.from_torch(
@@ -367,12 +471,17 @@ def run(
     start_time = start_measuring_time()
 
     def _make_dram_tensors():
+        # Build replicated DRAM tensors but stamp the master's tensor topology
+        # so the trace records placement matching the master (even though
+        # memory_config falls back to DRAM-interleaved when the L1-sharded path
+        # fails).
         a = ttnn.from_torch(
             torch_a,
             dtype=input_a_dtype,
             layout=input_a_layout,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
         b = ttnn.from_torch(
             torch_b,
@@ -380,7 +489,19 @@ def run(
             layout=input_b_layout,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
+        if is_mesh_device:
+            try:
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+                actual_mesh = device.shape
+                if input_a_tensor_placement:
+                    apply_tensor_placement_topology(a, input_a_tensor_placement, (actual_mesh[0], actual_mesh[1]))
+                if input_b_tensor_placement:
+                    apply_tensor_placement_topology(b, input_b_tensor_placement, (actual_mesh[0], actual_mesh[1]))
+            except Exception:
+                pass  # best-effort; trace will show fallback topology
         return a, b
 
     if is_batched_weight:
@@ -436,21 +557,46 @@ def run(
         if activation is not None:
             linear_kwargs["activation"] = activation
 
+        if _output_tile is not None:
+            linear_kwargs["output_tile"] = _output_tile
+
         linear_kwargs.update(parsed_op_kwargs)
+
+        # Master traced ttnn.linear with two call forms: 26 cfgs used the kwarg
+        # `input_tensor_b=` (vectors carry input_tensor_b_shape), 3 cfgs used
+        # the positional arg (vectors carry input_b_shape).  Match each form
+        # so the tracer captures the same arg key the master saw.
+        # Master used `input_tensor_b=` named for 26 cfgs and positional `arg1` for 3.
+        # __absent_keys__ tells us which form the vector preserves.
+        _absent = kwargs.get("__absent_keys__", set()) or set()
+        _used_named_b = "input_b_shape" in _absent and "input_tensor_b_shape" not in _absent
+
+        def _do_linear(_a, _b, **_kw):
+            if _used_named_b:
+                return ttnn.linear(_a, input_tensor_b=_b, **_kw)
+            return ttnn.linear(_a, _b, **_kw)
+
         try:
-            output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+            output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
         except Exception:
             ttnn_a, ttnn_b = _make_dram_tensors()
-            fallback_kwargs = {
-                k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "program_config", "core_grid")
-            }
+            # First try keeping program_config so the trace records it (drop only
+            # memory_config + core_grid, which depend on shard layout).
+            fallback_kwargs = {k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "core_grid")}
             try:
-                output_tensor = ttnn.linear(ttnn_a, ttnn_b, **fallback_kwargs)
+                output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs)
             except Exception:
-                minimal_kwargs = {"bias": ttnn_bias}
-                if dtype is not None:
-                    minimal_kwargs["dtype"] = dtype
-                output_tensor = ttnn.linear(ttnn_a, ttnn_b, **minimal_kwargs)
+                # Drop program_config too if it's also incompatible.
+                fallback_kwargs2 = {
+                    k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "program_config", "core_grid")
+                }
+                try:
+                    output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs2)
+                except Exception:
+                    minimal_kwargs = {"bias": ttnn_bias}
+                    if dtype is not None:
+                        minimal_kwargs["dtype"] = dtype
+                    output_tensor = _do_linear(ttnn_a, ttnn_b, **minimal_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
 

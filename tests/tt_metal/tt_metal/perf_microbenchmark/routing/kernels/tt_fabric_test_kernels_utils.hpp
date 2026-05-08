@@ -19,9 +19,14 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-// Maximum number of fabric connections supported per kernel (1 per direction: N, S, E, W)
-// This is used to size FabricConnectionArray storage without template proliferation
+// Maximum number of fabric connections supported per kernel.
+// This is used to size FabricConnectionArray storage without template proliferation.
+#ifdef ARCH_BLACKHOLE
+// 4 NESW directions + up to 2 Z-link destinations
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 6;
+#else
 static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;
+#endif
 
 struct LocalArgsBuffer {
     uint32_t base_address = 0;
@@ -90,6 +95,26 @@ inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buff
     for (uint32_t i = 0; i < num_words; i++) {
         result_buffer[i] = 0;
     }
+}
+
+// Per-config result entry for per-endpoint progress tracking.
+// Layout must match the host-side definition in tt_fabric_test_memory_map.hpp exactly.
+struct PerConfigResult {
+    uint32_t packets_low;
+    uint32_t packets_high;
+};
+
+// Word index in the result buffer where per-config results begin
+static constexpr uint32_t PER_CONFIG_RESULT_BASE_WORD_INDEX = 32;
+
+inline tt_l1_ptr PerConfigResult* get_per_config_results(uint32_t result_buffer_base) {
+    return reinterpret_cast<tt_l1_ptr PerConfigResult*>(
+        result_buffer_base + PER_CONFIG_RESULT_BASE_WORD_INDEX * sizeof(uint32_t));
+}
+
+inline void write_per_config_result(tt_l1_ptr PerConfigResult* entry, uint64_t packets) {
+    entry->packets_low = static_cast<uint32_t>(packets);
+    entry->packets_high = static_cast<uint32_t>(packets >> 32);
 }
 
 struct SequentialDataPattern {

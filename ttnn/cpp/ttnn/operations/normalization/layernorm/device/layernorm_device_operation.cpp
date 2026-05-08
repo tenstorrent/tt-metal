@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
@@ -171,6 +172,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             bbox_num_cores,
             bbox.end_coord.x - bbox.start_coord.x + 1,
             bbox.end_coord.y - bbox.start_coord.y + 1);
+
+        const auto& sharded_pc = std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+        ttnn::operations::normalization::detail::validate_sharded_input(a, sharded_pc.compute_with_storage_grid_size);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
