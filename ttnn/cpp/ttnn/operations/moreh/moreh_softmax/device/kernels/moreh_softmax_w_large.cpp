@@ -5,6 +5,8 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -59,6 +61,29 @@ ALWI void moreh_copy_chain() {
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
             PackTileReconfig::Output>{});
+}
+
+// Unary SFPU chain: CopyTile(in, FirstTile, WaitAndPop) -> Sfpu(D0) -> PackTile(out).
+template <typename Sfpu, uint32_t CbIn, uint32_t CbOut>
+ALWI void moreh_unary_chain() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        Sfpu{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+// rexp(x) = exp(-x): CopyTile -> Negative -> Exp -> PackTile.
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void moreh_rexp_chain() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        Negative<Dst::D0>{},
+        Exp<>{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
 }  // namespace
@@ -187,7 +212,7 @@ void kernel_main() {
                     /*popA=*/true,
                     /*popB=*/false>();
 
-                exp_tile_to_cb(cb_tmp, cb_exps);
+                moreh_unary_chain<compute_kernel_lib::Exp<>, cb_tmp, cb_exps>();
 #else
                 moreh_bin_chain<
                     compute_kernel_lib::BinaryFpuOp::Sub,
@@ -200,7 +225,7 @@ void kernel_main() {
                     /*popA=*/true,
                     /*popB=*/false>();
 
-                rexp_tile_to_cb(cb_tmp, cb_exps);
+                moreh_rexp_chain<cb_tmp, cb_exps>();
 #endif
             }
 
@@ -294,7 +319,7 @@ void kernel_main() {
                 /*popA=*/true,
                 /*popB=*/false>();
 
-            exp_tile_to_cb(cb_tmp, cb_exps);
+            moreh_unary_chain<compute_kernel_lib::Exp<>, cb_tmp, cb_exps>();
 
             moreh_bin_chain<
                 compute_kernel_lib::BinaryFpuOp::Mul,
@@ -319,7 +344,7 @@ void kernel_main() {
                 /*popA=*/true,
                 /*popB=*/false>();
 
-            rexp_tile_to_cb(cb_tmp, cb_exps);
+            moreh_rexp_chain<cb_tmp, cb_exps>();
 
             moreh_bin_chain<
                 compute_kernel_lib::BinaryFpuOp::Mul,
