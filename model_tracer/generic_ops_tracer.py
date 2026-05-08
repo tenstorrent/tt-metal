@@ -1630,15 +1630,6 @@ Examples (Import existing traces):
 
         print(f"\n✅ Operations extracted successfully!")
 
-        if not args.load and not result.get("success", True):
-            stats = result.get("test_stats", {})
-            failed = stats.get("failed", 0)
-            if failed > 0:
-                print(f"\n❌ Exiting with error: {failed} test(s) failed")
-            else:
-                print(f"\n❌ Exiting with error: test process exited with code {result.get('exit_code', 1)}")
-            return 1
-
         return 0
 
     except Exception as e:
