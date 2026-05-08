@@ -820,7 +820,6 @@ def test_demo(
 
     # Print some of the perf metrics
     logger.info("==")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
     logger.info(f"Vision model prefill time: {round(vision_model_time, 2)}s")
