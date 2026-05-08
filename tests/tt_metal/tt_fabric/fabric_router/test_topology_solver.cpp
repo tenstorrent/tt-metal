@@ -1671,6 +1671,7 @@ AdjacencyGraph<NodeId> create_1d_ring_graph_with_channels(size_t length, size_t 
 
     for (size_t i = 0; i < length; ++i) {
         std::vector<NodeId> neighbors;
+        neighbors.reserve(channels * 2);
         size_t left = (i == 0) ? length - 1 : i - 1;
         size_t right = (i == length - 1) ? 0 : i + 1;
         for (size_t c = 0; c < channels; ++c) {
@@ -1693,6 +1694,8 @@ AdjacencyGraph<NodeId> create_1d_chain_graph_with_channels(size_t length, size_t
 
     for (size_t i = 0; i < length; ++i) {
         std::vector<NodeId> neighbors;
+        const size_t neighbor_capacity = (i > 0 ? channels : 0) + (i < length - 1 ? channels : 0);
+        neighbors.reserve(neighbor_capacity);
         if (i > 0) {
             for (size_t c = 0; c < channels; ++c) {
                 neighbors.push_back(static_cast<NodeId>(i - 1));
