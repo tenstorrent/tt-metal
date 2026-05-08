@@ -44,7 +44,17 @@ class BoundMigrationEndpoint:
         self._remote_id = remote_endpoint_id
 
     def migrate_layer(self, layer: int, pos_start: int, pos_end: int, src_slot: int, dst_slot: int):
+        """Trigger a per-layer migration. Returns a uuid (int) for tracking.
+
+        Non-blocking: the underlying endpoint posts the migration to the
+        sender pipeline and returns immediately. Use wait() with the
+        returned uuid to block on completion.
+        """
         return self._endpoint.migrate_layer(self._remote_id, layer, pos_start, pos_end, src_slot, dst_slot)
+
+    def wait(self, uuid) -> None:
+        """Block until the migration with the given uuid is fully sent + acked."""
+        self._endpoint.wait_migration_send_completion(uuid)
 
 
 import torch
@@ -212,19 +222,18 @@ class TtDeepSeekPrefillPipeline:
         assert self.compiled, "Call compile() before prefill()"
         actual_isl = len(token_ids)
 
+        # remove these? JAKSA
         tt_token_ids = self._prepare_input_tensor(token_ids, actual_isl)
         on_layer_complete = self._build_migration_callback(slot_id, actual_isl)
 
-        _ = self.model.forward(
+        first_token_id, _first_token_prob, _ = self.model.forward(
             tt_token_ids,
             self.kvpe_cache,
             on_layer_complete=on_layer_complete,
             actual_isl=actual_isl,
+            temperature=0.0,  # greedy argmax; expose via prefill kwarg if/when sampling is needed
         )
-
-        # TODO: LM head + sampling not yet implemented upstream.
-        first_token = 128798  # placeholder: <think> token
-        return first_token
+        return int(first_token_id)
 
     # ----------------------------------------------------------------
     # Helpers
@@ -282,6 +291,13 @@ class TtDeepSeekPrefillPipeline:
         MLA invokes this after fill_cache_for_user_(). MLA also handles zeroing
         padding pages before fill (gated on this callback being set).
 
+        Strategy: every layer fires migrate_layer (non-blocking). The LAST layer
+        also waits on its uuid before returning. The transport delivers in order,
+        so waiting on the last layer's uuid guarantees all earlier migrations
+        have also been sent + acked by the decode side. By the time forward()
+        returns and the runner emits the first token over SHM, the entire KV
+        cache has been migrated.
+
         Returns None when no migration_layer is configured — MLA then skips both
         the zero-out and the post-fill callback.
         """
@@ -290,10 +306,13 @@ class TtDeepSeekPrefillPipeline:
 
         mesh_device = self.mesh_device
         migration_layer = self.migration_layer
+        last_layer_idx = self.config.num_layers - 1
 
         def on_layer_complete(layer_idx: int) -> None:
             ttnn.synchronize_device(mesh_device)
-            migration_layer.migrate_layer(layer_idx, 0, actual_isl, slot_id, slot_id)
+            uuid = migration_layer.migrate_layer(layer_idx, 0, actual_isl, slot_id, slot_id)
+            if layer_idx == last_layer_idx:
+                migration_layer.wait(uuid)
 
         return on_layer_complete
 
