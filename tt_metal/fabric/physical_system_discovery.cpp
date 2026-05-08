@@ -524,6 +524,14 @@ bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
     return revision_bits >= 3;
 }
 
+std::unique_ptr<tt::umd::ClusterDescriptor> create_cluster_descriptor_for_discovery(
+    tt::umd::ClusterDescriptor& cluster_desc, tt::TargetDevice target_device_type, bool run_live_discovery) {
+    return (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
+               // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
+               tt::umd::Cluster::create_cluster_descriptor() :
+               std::make_unique<tt::umd::ClusterDescriptor>(cluster_desc);
+}
+
 }  // namespace
 
 namespace discovery_impl {
@@ -534,14 +542,9 @@ PhysicalSystemDescriptor run_local_discovery(
     tt::TargetDevice target_device_type,
     bool run_live_discovery,
     bool all_hostnames_unique) {
-
-    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr =
-        (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
-            // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
-            tt::umd::Cluster::create_cluster_descriptor() :
-            std::make_unique<tt::umd::ClusterDescriptor>(cluster_desc);
-    
-    auto & cluster_desc_ref = *cdptr;
+    auto cluster_desc_ptr =
+        create_cluster_descriptor_for_discovery(cluster_desc, target_device_type, run_live_discovery);
+    auto& cluster_desc_ref = *cluster_desc_ptr;
 
     PhysicalSystemDescriptor psd(target_device_type);
     if (is_bh_galaxy_rev_c(cluster_desc_ref)) {
@@ -652,15 +655,6 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
     bool run_live_discovery) {
-
-    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr =
-        (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
-            // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
-            tt::umd::Cluster::create_cluster_descriptor() :
-            std::make_unique<tt::umd::ClusterDescriptor>(cluster_desc);
-
-    auto & cluster_desc_ref = *cdptr;
-
     // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
     distributed_context->barrier();
 
@@ -668,7 +662,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
     auto psd = discovery_impl::run_local_discovery(
-        cluster_desc_ref, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
+        cluster_desc, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
