@@ -175,7 +175,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // alignment places shared_local_counts on top of the private counts array.
     uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), dram_align_bytes);
     uint32_t kLeidsBufBytes = std::max<uint32_t>(leids_aligned_page_host, 32U);
-    constexpr uint32_t kPlanChunk = 32U;      // plan pre-fill burst size (entries per chunk)
+    constexpr uint32_t kPlanChunk = 32U;  // per-expert phase-3 staging and prefill stamp chunk size
     // Metadata / scores aligned page = round_up(K * sizeof(uint16), DRAM_ALIGNMENT). DRAM alignment
     // is arch-specific (32 B on WH, 64 B on BH) and must match the TensorAccessor's AlignedPageSize
     // computed kernel-side — otherwise cb_scan is undersized and md_block / sc_block writes overflow
