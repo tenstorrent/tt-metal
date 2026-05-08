@@ -131,18 +131,31 @@ def _allowed_stack_trace_source_roots(
     return frozenset(roots)
 
 
-def _resolved_path_allowed_for_stack_trace_read(resolved: str) -> bool:
+def _stack_trace_read_allowlist_roots() -> frozenset[str]:
+    """Resolved directory prefixes under which stack-trace source reads are permitted."""
     venv = os.environ.get("VIRTUAL_ENV")
     if venv:
         venv = _realpath(venv)
-    roots = _allowed_stack_trace_source_roots(
+    return _allowed_stack_trace_source_roots(
         _realpath(os.getcwd()) or os.getcwd(),
         _realpath(sys.prefix) or sys.prefix,
         _realpath(getattr(sys, "base_prefix", sys.prefix)) or getattr(sys, "base_prefix", sys.prefix),
         venv,
         tuple(sys.path),
     )
+
+
+def _resolved_path_allowed_for_stack_trace_read(resolved: str) -> bool:
+    roots = _stack_trace_read_allowlist_roots()
     return any(_path_is_under_root(resolved, r) for r in roots)
+
+
+def _first_allowlist_root_containing(resolved: str, roots: frozenset[str]) -> str | None:
+    """Return one allowlist prefix that strictly contains *resolved*, or None."""
+    for base_directory in roots:
+        if _path_is_under_root(resolved, base_directory):
+            return base_directory
+    return None
 
 
 # Gets the first file path from a stack trace
@@ -196,19 +209,22 @@ def normalize_existing_source_file_path(file_path: str | None) -> str | None:
 
 
 def read_source_file(normalized_path: str) -> str | None:
-    """Read UTF-8 text from disk for a stack-trace source path.
-
-    Uses :func:`_trusted_resolved_stack_trace_path_for_read` (realpath, regular file, prefix
-    allowlist), then :meth:`pathlib.Path.read_text` so reads do not use the ``open`` builtin
-    on a path derived from stack-trace text (SAST path-traversal sinks).
-    """
+    """Read UTF-8 text for a stack-trace path after realpath, regular-file, and allowlist checks."""
     if not normalized_path:
         return None
     resolved = _trusted_resolved_stack_trace_path_for_read(normalized_path)
     if resolved is None:
         return None
+    roots = _stack_trace_read_allowlist_roots()
+    base_directory = _first_allowlist_root_containing(resolved, roots)
+    if base_directory is None:
+        return None
+    # Remediation shape: canonical path must stay under a fixed allowlist prefix (CWE-22).
+    if not _path_is_under_root(resolved, base_directory):
+        return None
     try:
-        return Path(resolved).read_text(encoding="utf-8", errors="replace")
+        with open(resolved, encoding="utf-8", errors="replace") as handle:  # security-reviewed
+            return handle.read()
     except OSError:
         return None
 
