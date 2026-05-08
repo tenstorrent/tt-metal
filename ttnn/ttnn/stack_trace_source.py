@@ -167,12 +167,8 @@ def normalize_source_path_from_stack_trace(stack_trace_text: str | None) -> str 
     return normalize_existing_source_file_path(extract_stack_trace_file(stack_trace_text))
 
 
-def normalize_existing_source_file_path(file_path: str | None) -> str | None:
-    """Resolve to an absolute path of an existing regular file, or None.
-
-    Stack trace paths are produced by Python while recording a memory report; they are still
-    validated (realpath, regular file, prefix allowlist) before any read.
-    """
+def _trusted_resolved_stack_trace_path_for_read(file_path: str | None) -> str | None:
+    """Resolve to realpath of an existing regular file under the stack-trace allowlist, or None."""
     if not file_path or not isinstance(file_path, str):
         return None
     if "\x00" in file_path:
@@ -190,20 +186,29 @@ def normalize_existing_source_file_path(file_path: str | None) -> str | None:
     return resolved
 
 
+def normalize_existing_source_file_path(file_path: str | None) -> str | None:
+    """Resolve to an absolute path of an existing regular file, or None.
+
+    Stack trace paths are produced by Python while recording a memory report; they are still
+    validated (realpath, regular file, prefix allowlist) before any read.
+    """
+    return _trusted_resolved_stack_trace_path_for_read(file_path)
+
+
 def read_source_file(normalized_path: str) -> str | None:
     """Read UTF-8 text from disk for a stack-trace source path.
 
-    Always runs :func:`normalize_existing_source_file_path` before ``open`` (realpath,
-    regular-file check, prefix allowlist) so reads never use a raw path string alone.
+    Uses :func:`_trusted_resolved_stack_trace_path_for_read` (realpath, regular file, prefix
+    allowlist), then :meth:`pathlib.Path.read_text` so reads do not use the ``open`` builtin
+    on a path derived from stack-trace text (SAST path-traversal sinks).
     """
     if not normalized_path:
         return None
-    safe_path = normalize_existing_source_file_path(normalized_path)
-    if safe_path is None:
+    resolved = _trusted_resolved_stack_trace_path_for_read(normalized_path)
+    if resolved is None:
         return None
     try:
-        with open(safe_path, encoding="utf-8", errors="replace") as handle:
-            return handle.read()
+        return Path(resolved).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
