@@ -113,9 +113,11 @@ class TtMolmo2TextAttention(LightweightModule):
         )
 
         # ------------------------------------------------------------------ #
-        # attn_out.weight [4096, 4096] → REPLICATED wo (Phase 1)
-        # After AllGather of attn output to [S, 4096], each device applies the
-        # full wo to get [S, 4096] replicated output. No AllReduce needed.
+        # attn_out.weight [4096, 4096]:
+        #   wo (prefill): REPLICATED — AllGather input is full [S,4096]
+        #   wo_decode: ROW-PARALLEL — each device [512,4096], local matmul +
+        #     ttnn.all_reduce (8x less compute for single-token decode)
+        # Separate weights so prefill keeps its proven accuracy.
         # ------------------------------------------------------------------ #
         pt_wo = state_dict[f"{layer_name}.attn_out.weight"].T.unsqueeze(0).unsqueeze(0)
 
@@ -127,6 +129,15 @@ class TtMolmo2TextAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=cache_name("wo_replicated"),
+        )
+        self.wo_decode = ttnn.as_tensor(
+            pt_wo,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, -2), mesh_shape=configuration.cluster_shape),
+            cache_file_name=cache_name("wo_row_parallel_v2"),
         )
 
         # ------------------------------------------------------------------ #
@@ -169,34 +180,47 @@ class TtMolmo2TextAttention(LightweightModule):
         ]
 
     def _gather_and_project(self, attn_11SH, seq_len):
-        """AllGather local attn output → full hidden, then apply wo.
+        """Attention output projection with mode-specific TP strategy.
 
-        On single device: AllGather is a no-op.
-        On T3K: collects [S, 512] from 8 devices → [S, 4096], then wo.
+        Decode (seq_len==1): row-parallel wo + ttnn.all_reduce — 8x less compute,
+          L1 output, matches ign/Molmo2_8B_new decode path.
+        Prefill (seq_len>1): AllGather → replicated wo — unchanged, preserves
+          prefill accuracy (row-parallel AllReduce changed test 71).
         """
         chunked = seq_len > 1024 and seq_len % 1024 == 0
         if chunked:
             attn_11SH = ttnn.reshape(attn_11SH, [1, seq_len // 1024, 1024, -1])
 
-        if self.is_multichip:
-            attn_gathered = ttnn.all_gather(
+        is_decode = seq_len == 1
+
+        if is_decode:
+            # Row-parallel wo_decode: [S, 512] × [512, 4096] → [S, 4096] partial, then AllReduce
+            out = ttnn.linear(
                 attn_11SH,
-                dim=3,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                self.wo_decode,
+                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
             ttnn.deallocate(attn_11SH)
+            if self.is_multichip:
+                out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+                out = ttnn.all_reduce(out, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
-            attn_gathered = attn_11SH
-
-        out = ttnn.linear(
-            attn_gathered,
-            self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(attn_gathered)
+            # Prefill: AllGather → replicated wo (original path, preserves accuracy)
+            if self.is_multichip:
+                attn_gathered = ttnn.all_gather(attn_11SH, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(attn_11SH)
+            else:
+                attn_gathered = attn_11SH
+            out = ttnn.linear(
+                attn_gathered,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(attn_gathered)
 
         if chunked:
             out = ttnn.reshape(out, [1, 1, seq_len, -1])
