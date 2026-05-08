@@ -10,7 +10,7 @@ Things to remember:
  - Not all planned improvements are available yet.
 
 
-> **Prerequisite**: Before attempting Metal 2.0 migration, complete the [Device 2.0 Data Movement migration](../kernel_apis/data_movement/device_api_migration_guide.md). All kernel code migration examples in this guide assume Device 2.0 migration is already done.
+> **Prerequisite**: Before attempting Metal 2.0 migration, complete the [Device 2.0 Data Movement migration](../../kernel_apis/data_movement/device_api_migration_guide.md). All kernel code migration examples in this guide assume Device 2.0 migration is already done.
 
 ## Table of Contents
 
