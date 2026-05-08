@@ -98,6 +98,8 @@ jobs:
             echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
             echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
             echo "AWS_DEFAULT_REGION=us-east-1"
+            echo "NO_PROXY=garage.garage.svc.cluster.local"
+            echo "no_proxy=garage.garage.svc.cluster.local"
           } >> "$GITHUB_ENV"
           echo "ctcache S3 folder: ct${CT_VERSION}"
 
@@ -113,6 +115,8 @@ jobs:
           AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
           AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
           AWS_DEFAULT_REGION="us-east-1" \
+          NO_PROXY="garage.garage.svc.cluster.local" \
+          no_proxy="garage.garage.svc.cluster.local" \
           python3 - << 'PYEOF'
           import boto3, botocore, os, sys
           key_id = os.environ.get("AWS_ACCESS_KEY_ID", "")
