@@ -704,8 +704,10 @@ all_gather_minimal_matmul_async_factory_helper(
         true,  // is_injector_core
         ring_size,
         ring_index,
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        N_chunks,                         // N_chunks
+        N_tiles_per_chunk,                // N_tiles_per_chunk
+        num_targets_forward,              // num_targets_forward_direction
+        static_cast<uint32_t>(topology),  // topology
     };
     append_accessors(
         in1_sender_compile_time_args,
@@ -743,8 +745,10 @@ all_gather_minimal_matmul_async_factory_helper(
         false,  // is_injector_core
         ring_size,
         ring_index,
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        N_chunks,                         // N_chunks
+        N_tiles_per_chunk,                // N_tiles_per_chunk
+        num_targets_forward,              // num_targets_forward_direction
+        static_cast<uint32_t>(topology),  // topology
     };
     append_accessors(
         in1_receiver_compile_time_args,
@@ -774,6 +778,9 @@ all_gather_minimal_matmul_async_factory_helper(
         subblock_w};
 
     auto compute_defines = defines;
+    if (topology == ttnn::ccl::Topology::Linear) {
+        compute_defines["IS_LINEAR"] = "1";
+    }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {
         compute_activation_defines = ttnn::operations::unary::utils::get_defines(

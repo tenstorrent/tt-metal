@@ -72,6 +72,7 @@ using namespace tt::tt_fabric::linear::experimental;
 #endif
 
 #ifdef IS_IN0
+template <bool HasForwardTargets, bool HasBackwardTargets, bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
@@ -87,10 +88,12 @@ void compute_actual_k_block(
     uint32_t& sem_target_backward,
     bool is_injector_core,
     uint32_t in0_core_order_size,
+    uint32_t num_targets_fwd_rt,
     uint32_t k_left_tiles,
     uint32_t& k_left_start_tile,
     uint32_t& k_right_start_tile) {
 #else
+template <bool HasForwardTargets, bool HasBackwardTargets, bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
@@ -99,13 +102,15 @@ void compute_actual_k_block(
     uint32_t k_tiles_per_block,
     uint32_t num_devices,
     bool is_forward,
+    uint32_t num_targets_fwd_rt,
     uint32_t k_left_tiles,
     uint32_t& k_left_start_tile,
     uint32_t& k_right_start_tile) {
 #endif
     // Start with self
-    // Then for each device_iter, you are reading k_blocks_per_device half blocks from each direction
-    // Left block coming from your forward device, and right block coming from your backward device
+    // Then for each device_iter, read k_blocks_per_device blocks from each direction.
+    // Ring: left half from forward device, right half from backward device (bidirectional half-block).
+    // Linear: full block from one direction (k_left=K_block_tiles, k_right=0), relayed hop-by-hop.
     uint32_t actual_k_block_iter = is_forward ? k_block_iter : (total_k_block_count - 1 - k_block_iter);
     uint32_t device_iter = actual_k_block_iter / k_blocks_per_device;
     uint32_t device_k_block_iter = actual_k_block_iter % k_blocks_per_device;
@@ -114,30 +119,65 @@ void compute_actual_k_block(
         k_left_start_tile = (my_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
         k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
-        // Remote
-        // Forward rank (origin of left half)
-        int32_t actual_device_rank = my_rank + device_iter;
-        if ((uint32_t)actual_device_rank >= num_devices) {
-            actual_device_rank = actual_device_rank - num_devices;
-        }
-        k_left_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+        if constexpr (IsLinear) {
+            // Linear: no ring wrap-around.
+            // device_iter 1..num_targets_fwd => forward device (rank + device_iter).
+            // device_iter > num_targets_fwd => backward device (rank - offset), no wrap.
+            uint32_t actual_device_rank;
+            if (device_iter <= num_targets_fwd_rt) {
+                actual_device_rank = my_rank + device_iter;  // guaranteed < num_devices
+            } else {
+                actual_device_rank = my_rank - (device_iter - num_targets_fwd_rt);  // guaranteed >= 0
+            }
+            k_left_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+            k_right_start_tile = k_left_start_tile;  // unused: k_right_tiles == 0 for Linear
+        } else {
+            // Ring: use modular arithmetic for wrap-around.
+            // Forward rank (origin of left half)
+            int32_t actual_device_rank = my_rank + device_iter;
+            if ((uint32_t)actual_device_rank >= num_devices) {
+                actual_device_rank = actual_device_rank - num_devices;
+            }
+            k_left_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
 
-        // Backward rank
-        actual_device_rank = my_rank - device_iter;
-        if (actual_device_rank < 0) {
-            actual_device_rank = num_devices + actual_device_rank;
+            // Backward rank (origin of right half)
+            actual_device_rank = my_rank - device_iter;
+            if (actual_device_rank < 0) {
+                actual_device_rank = num_devices + actual_device_rank;
+            }
+            k_right_start_tile =
+                (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block + k_left_tiles;
         }
-        k_right_start_tile =
-            (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block + k_left_tiles;
     }
 #ifdef IS_IN0
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
-            noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
-            sem_target_forward += in0_core_order_size;
-            noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
-            sem_target_backward += in0_core_order_size;
+            if constexpr (IsLinear) {
+                // Linear: each device_iter delivers from exactly one direction.
+                //   device_iter <= num_targets_fwd: source is forward of me; data arrives via
+                //     backward relay chain, increments out_ready_semaphore_forward.
+                //   device_iter > num_targets_fwd: source is backward of me; data arrives via
+                //     forward relay chain, increments out_ready_semaphore_backward.
+                // Per chain per iter, exactly 1 sem inc arrives at this chain's injector.
+                if (device_iter <= num_targets_fwd_rt) {
+                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+                    sem_target_forward += 1;
+                } else {
+                    noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + 1);
+                    sem_target_backward += 1;
+                }
+            } else {
+                // Ring: both halves arrive simultaneously from both directions.
+                if constexpr (HasForwardTargets) {
+                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
+                    sem_target_forward += in0_core_order_size;
+                }
+                if constexpr (HasBackwardTargets) {
+                    noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
+                    sem_target_backward += in0_core_order_size;
+                }
+            }
         }
     }
 #endif

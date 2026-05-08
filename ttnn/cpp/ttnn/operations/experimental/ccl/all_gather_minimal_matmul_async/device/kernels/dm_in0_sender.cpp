@@ -39,6 +39,7 @@ constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(19);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(20);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(21);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(22));
+constexpr bool is_linear = (topology == Topology::Linear);
 constexpr uint32_t N_chunks = get_compile_time_arg_val(23);
 constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(24);
 
@@ -325,9 +326,18 @@ void kernel_main() {
                 uint32_t k_block_right_tile = 0;
                 uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
                 bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
-                uint32_t k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
-                uint32_t k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
-                compute_actual_k_block(
+                uint32_t k_left_tiles, k_right_tiles;
+                if constexpr (is_linear) {
+                    k_left_tiles = K_block_tiles;
+                    k_right_tiles = 0;
+                } else {
+                    k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                    k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+                }
+                compute_actual_k_block<
+                    (num_targets_forward_direction > 0),
+                    (num_targets_backward_direction > 0),
+                    is_linear>(
                     k_block_iter,
                     K_num_blocks,
                     my_rank,
@@ -342,6 +352,7 @@ void kernel_main() {
                     sem_target_backward,
                     is_injector_core,
                     1,
+                    num_targets_forward_direction,
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
@@ -397,48 +408,78 @@ void kernel_main() {
                 if (n_block_iter == 0) {
                     DeviceZoneScopedN("send");
                     bool forward_slice = false;
-                    if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
+                    if constexpr (is_linear) {
+                        // Linear: always relay — every device must propagate each K-block
+                        // hop-by-hop to the end of the chain. Endpoint guards (num_targets_*
+                        // compile-time guards) prevent sends beyond the chain boundaries.
                         forward_slice = true;
+                    } else {
+                        // Ring: skip the last K_blocks_per_device iterations — those K-blocks
+                        // have already reached all devices via wrap-around relay.
+                        if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
+                            forward_slice = true;
+                        }
                     }
                     if (forward_slice) {
-                        if (in0_core_order_index >= forward_in0_core_order_index) {
-                            // If forward, send backward
-                            forward_half_block_to_fabric_neighbor(
-                                m_tile,
-                                k_block_left_tile,
-                                current_M_block_tiles,
-                                k_left_tiles,
-                                k_right_tiles,
-                                num_tiles_to_write_per_packet,
-                                in0_start_address,
-                                padded_K_tiles,
-                                in0_reader,
-                                mux_connection_handle_forward,
-                                pkt_hdrs_backward,
-                                in0_tile_size,
-                                out_ready_sem_injector_noc_addr_forward_in_pkt,
-                                true,
-                                M_tiles,
-                                true);
-                        } else if (in0_core_order_index >= backward_in0_core_order_index) {
-                            // If backward, send forward
-                            forward_half_block_to_fabric_neighbor(
-                                m_tile,
-                                k_block_right_tile,
-                                current_M_block_tiles,
-                                k_left_tiles,
-                                k_right_tiles,
-                                num_tiles_to_write_per_packet,
-                                in0_start_address,
-                                padded_K_tiles,
-                                in0_reader,
-                                mux_connection_handle_backward,
-                                pkt_hdrs_forward,
-                                in0_tile_size,
-                                out_ready_sem_injector_noc_addr_backward_in_pkt,
-                                false,
-                                M_tiles,
-                                true);
+                        // Linear: gate relay direction by source device.
+                        //   dev_iter == 0 (local): both directions (initial dispatch).
+                        //   dev_iter <= num_targets_fwd: source forward of me; relay backward only.
+                        //   dev_iter > num_targets_fwd: source backward of me; relay forward only.
+                        // Ring: relay both directions every iter.
+                        bool send_via_mux_forward = true;   // sends to dev-1 (backward neighbor)
+                        bool send_via_mux_backward = true;  // sends to dev+1 (forward neighbor)
+                        if constexpr (is_linear) {
+                            uint32_t device_iter = k_block_iter / K_blocks_per_device;
+                            if (device_iter > 0) {
+                                if (device_iter <= num_targets_forward_direction) {
+                                    send_via_mux_backward = false;
+                                } else {
+                                    send_via_mux_forward = false;
+                                }
+                            }
+                        }
+                        if constexpr (num_targets_backward_direction > 0) {
+                            if (send_via_mux_forward && in0_core_order_index >= forward_in0_core_order_index) {
+                                forward_half_block_to_fabric_neighbor(
+                                    m_tile,
+                                    k_block_left_tile,
+                                    current_M_block_tiles,
+                                    k_left_tiles,
+                                    k_right_tiles,
+                                    num_tiles_to_write_per_packet,
+                                    in0_start_address,
+                                    padded_K_tiles,
+                                    in0_reader,
+                                    mux_connection_handle_forward,
+                                    pkt_hdrs_backward,
+                                    in0_tile_size,
+                                    out_ready_sem_injector_noc_addr_forward_in_pkt,
+                                    true,
+                                    M_tiles,
+                                    true);
+                            }
+                        }
+                        if constexpr (num_targets_forward_direction > 0) {
+                            if (send_via_mux_backward && in0_core_order_index >= backward_in0_core_order_index &&
+                                in0_core_order_index < forward_in0_core_order_index) {
+                                forward_half_block_to_fabric_neighbor(
+                                    m_tile,
+                                    is_linear ? k_block_left_tile : k_block_right_tile,
+                                    current_M_block_tiles,
+                                    k_left_tiles,
+                                    k_right_tiles,
+                                    num_tiles_to_write_per_packet,
+                                    in0_start_address,
+                                    padded_K_tiles,
+                                    in0_reader,
+                                    mux_connection_handle_backward,
+                                    pkt_hdrs_forward,
+                                    in0_tile_size,
+                                    out_ready_sem_injector_noc_addr_backward_in_pkt,
+                                    is_linear,
+                                    M_tiles,
+                                    true);
+                            }
                         }
                     }
                 }
@@ -477,9 +518,15 @@ void kernel_main() {
             }
 #endif
 
-            k_forward = !k_forward;
-            // We get reuse on in0 when striding N block
-            reuse_block = true;
+            if constexpr (!is_linear) {
+                k_forward = !k_forward;
+            }
+            // Ring reuses in0_cb across N strides because k_forward toggles, so n=X's last
+            // actual_k_block equals n=(X+1)'s first. Linear keeps k_forward=true: reusing would
+            // feed n=X's K-block (K_num_blocks-1) as if it were K-block 0 — fresh read required.
+            if constexpr (!is_linear) {
+                reuse_block = true;
+            }
 
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;

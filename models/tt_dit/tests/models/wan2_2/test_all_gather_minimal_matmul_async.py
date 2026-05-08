@@ -527,6 +527,22 @@ def run_test_linear(
         [
             (4, 8),
             {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+            4,
+            2,
+            1,
+            0,
+            8,
+            8,
+            0,
+        ],
+        [
+            (4, 8),
+            {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
@@ -545,7 +561,8 @@ def run_test_linear(
         "2x4links1",
         "wh4x8links1",
         "wh4x8links2",
-        "wh4x8links4",
+        "wh4x8links4_ring",
+        "wh4x8links4_linear",
         "bh4x8links2",
     ],
     indirect=["mesh_device", "device_params"],

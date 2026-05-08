@@ -99,7 +99,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             A vector of 2 GlobalSemaphores used to synchronize communication between multiple devices during the all
             gather phase of the operation.
 
-        topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring.
+        topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring and Linear.
 
         memory_config : Optional[ttnn.MemoryConfig], default: None
             Memory configuration for the output tensor. If not provided, the output inherits the memory configuration

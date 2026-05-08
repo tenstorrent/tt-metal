@@ -6,6 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+
+using ttnn::ccl::Topology;
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -28,6 +31,9 @@ void kernel_main() {
     constexpr uint32_t my_rank = get_compile_time_arg_val(17);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);
+    constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(20);
+    constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(21));
+    constexpr bool is_linear = (topology == Topology::Linear);
 
     // Load common runtime args (same for all cores, updated in override_runtime_arguments)
     uint32_t cargidx = 0;
@@ -60,7 +66,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<20>();
+    constexpr auto in1_args = TensorAccessorArgs<22>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
 
     // Always create tuple of output accessors (size = N_chunks) - addresses from common args
@@ -187,9 +193,15 @@ void kernel_main() {
                     uint32_t k_block_right_tile = 0;
                     uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
                     bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
-                    uint32_t k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
-                    uint32_t k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
-                    compute_actual_k_block(
+                    uint32_t k_left_tiles, k_right_tiles;
+                    if constexpr (is_linear) {
+                        k_left_tiles = K_block_tiles;
+                        k_right_tiles = 0;
+                    } else {
+                        k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                        k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+                    }
+                    compute_actual_k_block<(num_targets_forward_direction > 0), true, is_linear>(
                         k_block_iter,
                         K_num_blocks,
                         my_rank,
@@ -197,6 +209,7 @@ void kernel_main() {
                         K_block_tiles,
                         num_devices,
                         k_forward,
+                        num_targets_forward_direction,
                         k_left_tiles,
                         k_block_left_tile,
                         k_block_right_tile);
@@ -276,7 +289,9 @@ void kernel_main() {
             }
 #endif  // FUSE_TERNARY
 
-            k_forward = !k_forward;
+            if constexpr (!is_linear) {
+                k_forward = !k_forward;
+            }
             // We have an output block to write out
 
             defer_write_m_tile = m_tile;
