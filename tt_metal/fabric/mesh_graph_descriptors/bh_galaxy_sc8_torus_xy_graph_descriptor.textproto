@@ -1,0 +1,37 @@
+# bh_galaxy SC8: 2 pods x 4 galaxies = 8 galaxies (BH).
+# Per-pod mesh template matches
+# tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+# (32x4 chips per pod with 2D torus, 4 hosts in a 4x1 line). Each of the 2 pods is one of these.
+# Inter-pod connectivity: all C(2,2)=1 pod-pairs uniformly cabled per the cutsheet.
+# Inter-pod channels count + policy match
+# tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+# (using explicit connections{} blocks rather than graph_topology shorthand to mirror the
+#  existing real-multi-pod MGD's structure exactly).
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 32, 4 ] }
+  host_topology   { dims: [ 4, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graph ----------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+# --- Instantiation --------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

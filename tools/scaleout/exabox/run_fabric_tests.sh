@@ -5,19 +5,26 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x8, 4x32, or 8x16 cluster configuration.
+Run fabric tests on 4x8, 4x32, 8x16, or multi-pod (sc8/sc12/sc16/sc20/sc36) cluster configurations.
 
 Required Options:
-    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8)
+    --hosts <host-list>                 Comma-separated list of hosts. Host count must match --config:
+                                        4x8: 1 host
+                                        4x32 / 8x16: 4 hosts (single pod)
+                                        sc8: 8 hosts (2 pods)    sc12: 12 hosts (3 pods)
+                                        sc16: 16 hosts (4 pods)  sc20: 20 hosts (5 pods)
+                                        sc36: 36 hosts (9 pods)
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x32|8x16>           Mesh configuration (default: 4x32)
+    --config <4x8|4x32|8x16|sc8|sc12|sc16|sc20|sc36>
+                                        Mesh configuration (default: 4x32)
     --output <directory>                Output directory for log files (default: fabric_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file (overrides --config)
                                         4x8 default:  tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         4x32 default: tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         8x16 default: tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+                                        sc<N> default: tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sc<N>_torus_xy_graph_descriptor.textproto
     --test-binary <path>                Path to test binary
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
@@ -41,6 +48,11 @@ OUTPUT_DIR="fabric_test_logs"
 MESH_GRAPH_DESC_PATH_4x8="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32="tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x16="tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_sc8="tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sc8_torus_xy_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_sc12="tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sc12_torus_xy_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_sc16="tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sc16_torus_xy_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_sc20="tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sc20_torus_xy_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_sc36="tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sc36_torus_xy_graph_descriptor.textproto"
 CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
@@ -74,12 +86,15 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CONFIG="$2"
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" ]]; then
-                echo "Error: --config must be one of '4x8', '4x32', or '8x16'"
-                echo ""
-                show_help
-                exit 1
-            fi
+            case "$CONFIG" in
+                4x8|4x32|8x16|sc8|sc12|sc16|sc20|sc36) ;;
+                *)
+                    echo "Error: --config must be one of '4x8', '4x32', '8x16', 'sc8', 'sc12', 'sc16', 'sc20', or 'sc36'"
+                    echo ""
+                    show_help
+                    exit 1
+                    ;;
+            esac
             shift 2
             ;;
         --output)
@@ -176,8 +191,41 @@ if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32"
     elif [[ "$CONFIG" == "8x16" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_8x16"
+    elif [[ "$CONFIG" == "sc8" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_sc8"
+    elif [[ "$CONFIG" == "sc12" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_sc12"
+    elif [[ "$CONFIG" == "sc16" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_sc16"
+    elif [[ "$CONFIG" == "sc20" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_sc20"
+    elif [[ "$CONFIG" == "sc36" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_sc36"
     fi
 fi
+
+run_mpi() {
+    local hosts="$1"
+    shift
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        mpirun-ulfm --host "$hosts" \
+            --tag-output \
+            --prtemca oob_tcp_if_include "$MPI_IF" \
+            --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --bind-to none \
+            "$@"
+    else
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --mpi-interface "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --bind-to none \
+            --host "$hosts" \
+            "$@"
+    fi
+}
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
@@ -206,7 +254,7 @@ echo ""
 
 EXTRA_BINARY_ARGS=""
 if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
-    EXTRA_BINARY_ARGS="--show-progress-detail --show-workers --progress-interval 1"
+    EXTRA_BINARY_ARGS="--show-progress --show-workers --progress-interval 1"
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
@@ -217,77 +265,606 @@ fi
 RUN_START_MARKER="$(mktemp)"
 trap 'rm -f "$RUN_START_MARKER"' EXIT
 
-if [[ "$DOCKER_IMAGE" == "none" ]]; then
-    # No-docker path: invoke mpirun-ulfm directly against the local build.
-    if [[ "$CONFIG" == "4x8" ]]; then
-        SINGLE_HOST="${HOSTS%%,*}"
-        echo "Running single-host 4x8 on: $SINGLE_HOST (no docker)"
-        echo ""
-
-        mpirun-ulfm \
-            --tag-output \
-            --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            --mca btl_tcp_if_include "$MPI_IF" \
-            "${MPI_EXTRA_ARGS[@]}" \
-            --bind-to none \
-            --host "$SINGLE_HOST" \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
-    else
-        mpirun-ulfm \
-            --tag-output \
-            --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            --mca btl_tcp_if_include "$MPI_IF" \
-            "${MPI_EXTRA_ARGS[@]}" \
-            --bind-to none \
-            --host "$HOSTS" \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
-    fi
-elif [[ "$CONFIG" == "4x8" ]]; then
+if [[ "$CONFIG" == "4x8" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
     echo "Running single-host 4x8 on: $SINGLE_HOST"
     echo ""
 
-    ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-        --empty-entrypoint \
-        --mpi-interface "$MPI_IF" \
-        "${MPI_EXTRA_ARGS[@]}" \
-        --bind-to none \
-        --host "$SINGLE_HOST" \
+    run_mpi "$SINGLE_HOST" \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
         "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+elif [[ "$CONFIG" == "sc8" ]]; then
+    # sc8: 2 pods x 4 hosts = 8 ranks across 8 hosts.
+    # rank r -> (TT_MESH_ID = r/4, TT_MESH_HOST_RANK = r%4)
+    echo "Running multi-pod sc8 on 8 hosts: $HOSTS"
+    echo ""
+
+    run_mpi "$HOSTS" \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+elif [[ "$CONFIG" == "sc12" ]]; then
+    # sc12: 3 pods x 4 hosts = 12 ranks across 12 hosts.
+    # rank r -> (TT_MESH_ID = r/4, TT_MESH_HOST_RANK = r%4)
+    echo "Running multi-pod sc12 on 12 hosts: $HOSTS"
+    echo ""
+
+    run_mpi "$HOSTS" \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+elif [[ "$CONFIG" == "sc16" ]]; then
+    # sc16: 4 pods x 4 hosts = 16 ranks across 16 hosts.
+    # rank r -> (TT_MESH_ID = r/4, TT_MESH_HOST_RANK = r%4)
+    echo "Running multi-pod sc16 on 16 hosts: $HOSTS"
+    echo ""
+
+    run_mpi "$HOSTS" \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+elif [[ "$CONFIG" == "sc20" ]]; then
+    # sc20: 5 pods x 4 hosts = 20 ranks across 20 hosts.
+    # rank r -> (TT_MESH_ID = r/4, TT_MESH_HOST_RANK = r%4)
+    echo "Running multi-pod sc20 on 20 hosts: $HOSTS"
+    echo ""
+
+    run_mpi "$HOSTS" \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+elif [[ "$CONFIG" == "sc36" ]]; then
+    # sc36: 9 pods x 4 hosts = 36 ranks across 36 hosts.
+    # rank r -> (TT_MESH_ID = r/4, TT_MESH_HOST_RANK = r%4)
+    echo "Running multi-pod sc36 on 36 hosts: $HOSTS"
+    echo ""
+
+    run_mpi "$HOSTS" \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=1 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=2 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=3 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=4 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=5 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=5 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=5 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=5 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=6 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=6 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=6 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=6 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=7 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=7 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=7 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=7 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=8 \
+        -x TT_MESH_HOST_RANK=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=8 \
+        -x TT_MESH_HOST_RANK=1 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=8 \
+        -x TT_MESH_HOST_RANK=2 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=8 \
+        -x TT_MESH_HOST_RANK=3 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 else
-    ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-        --empty-entrypoint \
-        --mpi-interface "$MPI_IF" \
-        "${MPI_EXTRA_ARGS[@]}" \
-        --bind-to none \
-        --host "$HOSTS" \
+    run_mpi "$HOSTS" \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
