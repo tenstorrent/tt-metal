@@ -53,7 +53,7 @@ targets:
         - llama-3.2-1b
         - whisper_2
         - whisper_3
-      trace: [7, 8, 17, 18, 19, 20]
+      trace: [7, 25, 17, 18, 19, 20]
 
 registry:
   - trace_id: 1
@@ -249,3 +249,14 @@ registry:
     config_count: 162
     loaded_at: '2026-05-04'
     notes: ''
+
+  - trace_id: 25
+    status: draft
+    models: [llama-3.2-1b]
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: bfda9b4c-cee6-467c-a407-99b6760f406e
+    tt_metal_sha: 7d7db1eae9db5af28d16ac7a7e0584888a26e585
+    config_count: 609
+    loaded_at: '2026-05-08'
+    notes: ''
+    pytest_args: null
