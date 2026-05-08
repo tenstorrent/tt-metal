@@ -7,7 +7,8 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_quality
+from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])

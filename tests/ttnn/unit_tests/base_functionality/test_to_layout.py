@@ -13,9 +13,9 @@ import ttnn
 from tests.ttnn.utils_for_testing import (
     assert_with_pcc,
     assert_equal,
-    assert_quality,
     check_with_pcc_without_tensor_printout,
 )
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 from models.common.utility_functions import torch_random
 
 

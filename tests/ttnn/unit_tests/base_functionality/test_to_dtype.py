@@ -9,7 +9,8 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_quality, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 bfloat4_pcc = 0.960
 torch.manual_seed(0)
