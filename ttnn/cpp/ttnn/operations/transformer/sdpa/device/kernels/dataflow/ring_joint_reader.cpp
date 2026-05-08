@@ -439,6 +439,9 @@ void kernel_main() {
                 cb_push_back(cb_v_in, v_chunk_tiles);
             }
         }
+        while (true) {
+            KV_chunks_processed_in_iter++;
+        }
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_reserve_back(cb_v_in, v_chunk_tiles);
