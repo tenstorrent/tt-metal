@@ -315,20 +315,28 @@ def add_shared_expert_weights(
 
 
 ####################################################################################################
-# model specific and global constants
-# must be consistent with moe_ring_common.h
+# Global constants — must be consistent with moe_ring_common.h
 BLOCK_TILES_W = 4
 BLOCK_TILES_H = 7
 
-# Deprecated: model-specific constants below are superseded by shard_tiles() /
-# w2_shard_tiles() formulas. Will be removed after all callers migrate.
-DS_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
-DS_W0_W1_SHARD_VALS = [6, 5]
-DS_W2_SHARD_VALS = {False: (2, 2), True: (3, 1)}  # mapped to pad core assignment
-
-GPT_PAD_CORES = {2, 3, 6, 7, 10, 11}
-GPT_W0_W1_SHARD_VALS = [8, 7]
-GPT_W2_SHARD_VALS = {False: (4, 0), True: (3, 1)}
+# Historical model-specific shard constants — superseded by the generalized
+# shard_tiles() / w2_shard_tiles() formulas below.  Kept as commented-out
+# reference so reviewers can compare old vs new distributions.
+#
+# DeepSeek (hidden=7168, intermediate=2048): the generalized formulas produce
+# the SAME distribution as the old hardcoded config.
+#   DS_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
+#   DS_W0_W1_SHARD_VALS = [6, 5]                       # -> [6,5,5,6,5,5,6,5,5,6,5,5]
+#   DS_W2_SHARD_VALS = {False: (2, 2), True: (3, 1)}
+#
+# GPT-OSS (hidden=2880, intermediate=2880): the generalized formulas produce a
+# DIFFERENT per-core assignment (same totals — 6×8 + 6×7 = 90 — but the
+# Bresenham pattern interleaves big/small cores differently).
+#   Old:  [8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7]   pad_cores = {2,3,6,7,10,11}
+#   New:  [8, 7, 8, 7, 8, 7, 8, 7, 8, 7, 8, 7]   (Euclidean rhythm)
+#   GPT_PAD_CORES = {2, 3, 6, 7, 10, 11}
+#   GPT_W0_W1_SHARD_VALS = [8, 7]
+#   GPT_W2_SHARD_VALS = {False: (4, 0), True: (3, 1)}
 ####################################################################################################
 
 

@@ -224,7 +224,6 @@ void kernel_main() {
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
-            // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
             for (uint32_t i = 0; i < num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                     // Wait for current data to be ready in cb_s2c_in2
