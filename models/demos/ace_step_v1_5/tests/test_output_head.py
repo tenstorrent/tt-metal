@@ -11,6 +11,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.demos.ace_step_v1_5.torch_ref.output_head import OutputHeadConfig, TorchAceStepDiTOutputHead
 from models.demos.ace_step_v1_5.ttnn_impl.output_head import TtAceStepDiTOutputHead
 from models.demos.ace_step_v1_5.ttnn_impl.patchify import PatchifyMetadata
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -25,47 +26,9 @@ class AceStepLikeConfig:
     rms_norm_eps: float = 1e-6
 
 
-def _torch_rmsnorm_qwen3(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
-    """Match ``transformers.models.qwen3.modeling_qwen3.Qwen3RMSNorm`` / ttnn RMS golden."""
-    x_f = x.float()
-    x_f = x_f * torch.rsqrt(x_f.pow(2).mean(-1, keepdim=True) + eps)
-    return (x_f * weight.float()).to(x.dtype)
-
-
-class TorchProjOut(nn.Module):
-    def __init__(self, config: AceStepLikeConfig, convt: nn.ConvTranspose1d):
-        super().__init__()
-        self.patch_size = config.patch_size
-        self.convt = convt
-
-    def forward(self, x: torch.Tensor, *, original_seq_len: int) -> torch.Tensor:
-        x = x.transpose(1, 2)
-        x = self.convt(x)
-        x = x.transpose(1, 2)
-        return x[:, :original_seq_len, :]
-
-
-def _torch_output_head(
-    x: torch.Tensor,
-    temb: torch.Tensor,
-    *,
-    norm_w: torch.Tensor,
-    scale_shift_table: torch.Tensor,
-    proj_out: TorchProjOut,
-    eps: float,
-    original_seq_len: int,
-) -> torch.Tensor:
-    """HF ``AceStepDiTModel`` tail: norm_out → scale/shift → proj_out → length crop."""
-    normed = _torch_rmsnorm_qwen3(x, norm_w, eps)
-    shift = scale_shift_table[:, 0:1, :] + temb.unsqueeze(1)
-    scale = scale_shift_table[:, 1:2, :] + temb.unsqueeze(1)
-    modulated = (normed * (1 + scale) + shift).type_as(x)
-    return proj_out(modulated, original_seq_len=original_seq_len)
-
-
 def _make_state_and_torch(
     config: AceStepLikeConfig,
-) -> tuple[dict, torch.Tensor, torch.Tensor, TorchProjOut, PatchifyMetadata]:
+) -> tuple[dict, torch.Tensor, torch.Tensor, TorchAceStepDiTOutputHead, PatchifyMetadata]:
     torch.manual_seed(0)
     norm_w = torch.randn(config.hidden_size, dtype=torch.bfloat16)
     sst = torch.randn(1, 2, config.hidden_size, dtype=torch.bfloat16)
@@ -77,7 +40,6 @@ def _make_state_and_torch(
         padding=0,
         bias=True,
     ).to(torch.bfloat16)
-    proj = TorchProjOut(config, convt).eval()
 
     state_dict = {
         "decoder.norm_out.weight": norm_w.detach().clone(),
@@ -86,6 +48,18 @@ def _make_state_and_torch(
         "decoder.proj_out.1.bias": convt.bias.detach().clone(),
     }
 
+    torch_head = TorchAceStepDiTOutputHead(
+        config=OutputHeadConfig(
+            hidden_size=config.hidden_size,
+            audio_acoustic_hidden_dim=config.audio_acoustic_hidden_dim,
+            patch_size=config.patch_size,
+            rms_norm_eps=config.rms_norm_eps,
+        ),
+        state_dict=state_dict,
+        base_address="decoder",
+        dtype=torch.bfloat16,
+    ).eval()
+
     original_seq_len = 257
     pad_length = config.patch_size - (original_seq_len % config.patch_size)
     t_p = (original_seq_len + pad_length) // config.patch_size
@@ -93,23 +67,15 @@ def _make_state_and_torch(
 
     x = torch.randn((2, t_p, config.hidden_size), dtype=torch.bfloat16)
     temb = torch.randn((2, config.hidden_size), dtype=torch.bfloat16)
-    return state_dict, x, temb, proj, meta
+    return state_dict, x, temb, torch_head, meta
 
 
 def test_output_head_matches_torch(device, torch_seed):
     _ = torch_seed
     config = AceStepLikeConfig()
-    state_dict, x, temb, torch_proj, meta = _make_state_and_torch(config)
+    state_dict, x, temb, torch_head, meta = _make_state_and_torch(config)
 
-    y_ref = _torch_output_head(
-        x,
-        temb,
-        norm_w=state_dict["decoder.norm_out.weight"],
-        scale_shift_table=state_dict["decoder.scale_shift_table"],
-        proj_out=torch_proj,
-        eps=config.rms_norm_eps,
-        original_seq_len=meta.original_seq_len,
-    )
+    y_ref = torch_head(x, temb, meta)
 
     tt_head = TtAceStepDiTOutputHead(
         config=config,

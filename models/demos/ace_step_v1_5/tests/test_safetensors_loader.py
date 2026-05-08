@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from models.demos.ace_step_v1_5.ttnn_impl.safetensors_loader import load_safetensors_state_dict
+from models.demos.ace_step_v1_5.torch_ref.safetensors_loader import load_safetensors_state_dict
 
 
 def test_load_safetensors_state_dict_prefix_stripping(tmp_path):
