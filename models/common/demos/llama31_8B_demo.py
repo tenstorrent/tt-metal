@@ -42,6 +42,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
+from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -56,21 +57,19 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 # Constants and Expected Metrics
 # =============================================================================
 
-# Expected accuracy metrics from PERF.md for Llama-3.1-8B (top1, top5 only)
-# Performance metrics (tok_s_u, ttft_ms) are collected dynamically by running
-# simple_text_demo.py with the corresponding test case to get real baseline values.
-# Higher is better for tok_s_u, top1, top5
-# Lower is better for ttft_ms
-EXPECTED_METRICS = {
+# Deprecated fallback for token-accuracy only.
+# Source of truth is models/model_targets.yaml; keep this table temporarily
+# until all active device/config entries are covered by centralized targets.
+DEPRECATED_PERF_MD_ACCURACY_FALLBACK = {
     "performance": {
-        "N150": {"top1": 90, "top5": 97, "tok_s_u": 28.3, "ttft_ms": 104},
-        "N300": {"top1": 90, "top5": 97, "tok_s_u": 44.2, "ttft_ms": 67},
-        "T3K": {"top1": 90, "top5": 98, "tok_s_u": 64.3, "ttft_ms": 53},
+        "N150": {"top1": 90, "top5": 97},
+        "N300": {"top1": 90, "top5": 97},
+        "T3K": {"top1": 90, "top5": 98},
     },
     "accuracy": {
-        "N150": {"top1": 96, "top5": 100, "tok_s_u": 25.2, "ttft_ms": 138},
-        "N300": {"top1": 96, "top5": 100, "tok_s_u": 38.8, "ttft_ms": 79},
-        "T3K": {"top1": 97, "top5": 100, "tok_s_u": 60.8, "ttft_ms": 81},
+        "N150": {"top1": 96, "top5": 100},
+        "N300": {"top1": 96, "top5": 100},
+        "T3K": {"top1": 97, "top5": 100},
     },
 }
 
@@ -93,7 +92,7 @@ def collect_baseline_from_simple_text_demo(
 
     This provides an accurate comparison by measuring TTTv1 MLP performance
     on the same hardware under the same conditions, rather than relying on
-    potentially outdated PERF.md values.
+    dynamically collected baseline values.
 
     Args:
         device_name: Device name (N150, N300, T3K)
@@ -290,7 +289,7 @@ def validate_metrics(measured: dict, expected: dict, tolerance: float = PERF_TOL
     Validate measured metrics against expected values with tolerance.
 
     For performance tests: expected comes from simple_text_demo.py baseline (tok_s_u, ttft_ms).
-    For accuracy tests: expected comes from PERF.md (top1, top5).
+    For accuracy tests: expected comes from centralized YAML targets.
 
     Returns:
         (passed, message) tuple
@@ -329,6 +328,34 @@ def get_device_name_from_mesh_shape(mesh_shape: tuple[int, int]) -> str:
         (1, 8): "T3K",
     }
     return mapping.get(mesh_shape, f"Unknown({mesh_shape})")
+
+
+def resolve_accuracy_baseline(opt_mode: str, device_name: str, batch_size: int) -> tuple[dict, str]:
+    """Resolve accuracy targets from centralized YAML with deprecated PERF fallback."""
+    yaml_accuracy = resolve_accuracy_targets(
+        model_name="Llama-3.1-8B",
+        sku=device_name,
+        batch_size=batch_size,
+        seq_len=1024,
+    )
+    if yaml_accuracy and "top1" in yaml_accuracy and "top5" in yaml_accuracy:
+        return {"top1": float(yaml_accuracy["top1"]), "top5": float(yaml_accuracy["top5"])}, "models/model_targets.yaml"
+
+    yaml_accuracy = resolve_accuracy_targets(
+        model_name="Llama-3.1-8B",
+        sku=device_name,
+        batch_size=batch_size,
+        seq_len=None,
+    )
+    if yaml_accuracy and "top1" in yaml_accuracy and "top5" in yaml_accuracy:
+        return {"top1": float(yaml_accuracy["top1"]), "top5": float(yaml_accuracy["top5"])}, "models/model_targets.yaml"
+
+    # Deprecated compatibility path for configurations not yet represented in YAML.
+    fallback = DEPRECATED_PERF_MD_ACCURACY_FALLBACK.get(opt_mode, {}).get(device_name)
+    if fallback:
+        return fallback, "PERF.md (deprecated fallback)"
+
+    return {}, "no accuracy baseline found"
 
 
 # =============================================================================
@@ -482,7 +509,7 @@ def test_mlp1d_llama_demo(
     1. Creates the TT model with MLP layers replaced by MLP1D
     2. Runs prefill and decode inference
     3. Measures performance (TTFT, tok/s/u) and/or accuracy (Top-1, Top-5)
-    4. Validates results against PERF.md targets
+    4. Validates results against centralized targets
     """
     test_id = request.node.callspec.id
 
@@ -778,16 +805,18 @@ def test_mlp1d_llama_demo(
 
     # --- Validate Against Baseline ---
     # Performance metrics (tok_s_u, ttft_ms): MUST come from simple_text_demo.py baseline.
-    # Accuracy metrics (top1, top5): ONLY from PERF.md (for token-accuracy tests).
+    # Accuracy metrics (top1, top5): from centralized YAML, with deprecated PERF.md fallback.
     # Baselines are collected at module load time, before any test opens mesh_device.
     baseline_metrics = _get_cached_baseline(device_name, batch_size, opt_mode)
 
     if measure_accuracy:
-        # Token-accuracy tests: use PERF.md for top1/top5 only
-        baseline_source = "PERF.md"
-        perf_md_metrics = EXPECTED_METRICS.get(opt_mode, {}).get(device_name, {})
-        expected_for_validation = {k: v for k, v in perf_md_metrics.items() if k in ("top1", "top5")}
-        logger.info("Token-accuracy test runs without trace - validating top1/top5 from PERF.md only")
+        expected_for_validation, baseline_source = resolve_accuracy_baseline(opt_mode, device_name, batch_size)
+        if baseline_source == "PERF.md (deprecated fallback)":
+            logger.warning(
+                "Using deprecated PERF.md-derived fallback for token-accuracy thresholds; "
+                "please migrate this config to models/model_targets.yaml."
+            )
+        logger.info(f"Token-accuracy test runs without trace - validating top1/top5 from {baseline_source}")
     else:
         # Performance tests: MUST use baseline from simple_text_demo.py
         assert baseline_metrics is not None, (

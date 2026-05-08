@@ -75,7 +75,7 @@ class TokenAccuracy:
 
 
 def get_accuracy_thresholds(model_args, batch_size=None, seq_len=None):
-    """Resolve token-accuracy thresholds from centralized YAML, then PERF.md fallback."""
+    """Resolve token-accuracy thresholds from centralized YAML targets."""
     centralized_targets = resolve_accuracy_targets(
         model_name=model_args.base_model_name,
         sku=model_args.device_name,
@@ -91,46 +91,11 @@ def get_accuracy_thresholds(model_args, batch_size=None, seq_len=None):
         )
     if centralized_targets and "top1" in centralized_targets and "top5" in centralized_targets:
         return float(centralized_targets["top1"]), float(centralized_targets["top5"]), "models/model_targets.yaml"
-
-    # Read PERF.md
-    perf_file = "models/tt_transformers/PERF.md"
-    with open(perf_file, "r") as f:
-        content = f.read()
-
-    # Split into sections based on optimization mode
-    sections = content.split("## ")
-    optimizations = model_args.optimizations
-    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
-
-    # Parse the table and find the row for our model and device
-    # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
-    base_model_name = model_args.base_model_name
-    device_name = model_args.device_name
-    correct_line = (
-        lambda line: "|" in line
-        and base_model_name.lower() in line.split("|")[1].strip().lower()
-        and device_name.lower() in line.split("|")[2].strip().lower()
-        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
+    raise ValueError(
+        "Could not find centralized accuracy targets in models/model_targets.yaml "
+        f"for model={model_args.base_model_name}, sku={model_args.device_name}, "
+        f"batch_size={batch_size}, seq_len={seq_len}"
     )
-    rows = [
-        line.split("|")[1:]  # Each row starts with a separator
-        for line in target_section.split("\n")
-        if correct_line(line)
-    ]
-    if not rows:
-        raise ValueError(
-            f"Could not find accuracy data for {base_model_name} on {device_name} in {optimizations.__name__} mode"
-        )
-
-    assert (
-        len(rows) == 1
-    ), f"Found multiple rows for {base_model_name} on {device_name} in {optimizations.__name__} mode in PERF.md"
-    row = rows[0]
-    top1_acc = float(row[2].strip())
-    top5_acc = float(row[3].strip())
-
-    # Allow for rounding
-    return top1_acc - 0.5, top5_acc - 0.5, "models/tt_transformers/PERF.md (deprecated fallback)"
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
