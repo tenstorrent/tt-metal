@@ -524,20 +524,6 @@ bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
     return revision_bits >= 3;
 }
 
-bool should_refresh_cluster_descriptor(tt::TargetDevice target_device_type, bool run_live_discovery) {
-    return run_live_discovery || target_device_type == TargetDevice::Silicon;
-}
-
-std::unique_ptr<tt::umd::ClusterDescriptor> create_cluster_descriptor_for_discovery(
-    const tt::umd::ClusterDescriptor& cluster_desc, tt::TargetDevice target_device_type, bool run_live_discovery) {
-    // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
-    // the caller-provided descriptor.
-    return should_refresh_cluster_descriptor(target_device_type, run_live_discovery) ?
-               // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
-               tt::umd::Cluster::create_cluster_descriptor() :
-               std::make_unique<tt::umd::ClusterDescriptor>(cluster_desc);
-}
-
 }  // namespace
 
 namespace discovery_impl {
@@ -548,8 +534,15 @@ PhysicalSystemDescriptor run_local_discovery(
     tt::TargetDevice target_device_type,
     bool run_live_discovery,
     bool all_hostnames_unique) {
-    auto cluster_desc_ptr =
-        create_cluster_descriptor_for_discovery(cluster_desc, target_device_type, run_live_discovery);
+
+    // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
+    // the caller-provided descriptor.
+    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr =
+        (run_live_discovery || target_device_type == TargetDevice::Silicon) ?
+            // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
+            tt::umd::Cluster::create_cluster_descriptor() :
+            std::make_unique<tt::umd::ClusterDescriptor>(cluster_desc);
+
     auto& cluster_desc_ref = *cluster_desc_ptr;
 
     PhysicalSystemDescriptor psd(target_device_type);
