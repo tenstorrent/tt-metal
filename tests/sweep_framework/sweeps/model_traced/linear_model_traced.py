@@ -531,6 +531,7 @@ def run(
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
+        absent_keys = set(kwargs.get("__absent_keys__") or [])
         if "memory_config" not in absent_keys:
             if memory_config is not None:
                 linear_kwargs["memory_config"] = memory_config
@@ -555,7 +556,6 @@ def run(
         # when the model explicitly passed it (including None). Use __absent_keys__
         # (injected by execute_test) to distinguish "master had ckc=None" from
         # "master never passed ckc". Falls back to value-based check for older callers.
-        absent_keys = kwargs.get("__absent_keys__", set())
         if "compute_kernel_config" not in absent_keys:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
         elif compute_kernel_config is not None:
