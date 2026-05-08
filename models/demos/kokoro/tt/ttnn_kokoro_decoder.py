@@ -104,7 +104,12 @@ class TtKokoroDecoderFront:
         )
 
     def __call__(
-        self, *, asr_bct: ttnn.Tensor, f0_pred: torch.Tensor, n_pred: torch.Tensor, style_s: torch.Tensor
+        self,
+        *,
+        asr_bct: ttnn.Tensor,
+        f0_pred: torch.Tensor | ttnn.Tensor,
+        n_pred: torch.Tensor | ttnn.Tensor,
+        style_s: torch.Tensor | ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
         Returns the feature tensor that would be fed into `Generator` in the torch reference.
@@ -116,17 +121,26 @@ class TtKokoroDecoderFront:
         """
         B, C, T = asr_bct.shape
 
-        style = ttnn.from_torch(
-            style_s.detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        if isinstance(style_s, ttnn.Tensor):
+            style = style_s
+        else:
+            style = ttnn.from_torch(
+                style_s.detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
 
         # F0_conv / N_conv expect [B,1,L] in torch; use NLC conv wrapper
-        f0 = ttnn.from_torch(
-            f0_pred.unsqueeze(1).detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        n = ttnn.from_torch(
-            n_pred.unsqueeze(1).detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        if isinstance(f0_pred, ttnn.Tensor):
+            f0 = f0_pred
+        else:
+            f0 = ttnn.from_torch(
+                f0_pred.unsqueeze(1).detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        if isinstance(n_pred, ttnn.Tensor):
+            n = n_pred
+        else:
+            n = ttnn.from_torch(
+                n_pred.unsqueeze(1).detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
 
         f0_nlc = ttnn.permute(f0, (0, 2, 1))
         n_nlc = ttnn.permute(n, (0, 2, 1))

@@ -102,13 +102,21 @@ def _build_har_per_stage_ttnn(
     Device build:
       - device: f0 upsample, hn-nsf source, STFT transform, har_per_stage slicing/padding
     """
-    f0_tt = ttnn.from_torch(
-        f0_curve_bt.detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
-    f0_nhwc = ttnn.reshape(f0_tt, (f0_tt.shape[0], f0_tt.shape[1], 1, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    f0_up_nhwc = ttnn.upsample(f0_nhwc, scale_factor=(torch_generator.f0_upsamp.scale_factor, 1), mode="bilinear")
-    f0_up_btl = ttnn.reshape(
-        f0_up_nhwc, (f0_tt.shape[0], f0_up_nhwc.shape[1], 1), memory_config=ttnn.DRAM_MEMORY_CONFIG
+    # NOTE: device `ttnn.upsample` can OOM for large scale factors (e.g. 300x),
+    # so we upsample f0 on host and only then move to device.
+    up_scale = int(torch_generator.f0_upsamp.scale_factor)
+    f0_up_bt = (
+        torch.nn.functional.interpolate(
+            f0_curve_bt.unsqueeze(1).to(torch.float32),
+            scale_factor=up_scale,
+            mode="linear",
+            align_corners=False,
+        )
+        .squeeze(1)
+        .contiguous()
+    )  # [B, T_up]
+    f0_up_btl = ttnn.from_torch(
+        f0_up_bt.unsqueeze(-1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
 
     sine_merge_btl, _uv = hnnsf_source(f0_btl=f0_up_btl, params=source_params, device=device)
@@ -200,27 +208,50 @@ class TtKokoroIstftNetVocoder:
 
     @torch.no_grad()
     def __call__(
-        self, *, asr: torch.Tensor, f0_pred: torch.Tensor, n_pred: torch.Tensor, ref_s: torch.Tensor
+        self,
+        *,
+        asr: torch.Tensor | ttnn.Tensor,
+        f0_pred: torch.Tensor | ttnn.Tensor,
+        n_pred: torch.Tensor | ttnn.Tensor,
+        ref_s: torch.Tensor | ttnn.Tensor,
     ) -> torch.Tensor:
         """
         Inputs are PyTorch (CPU) tensors matching reference `Decoder.forward`.
         Returns waveform audio on CPU.
         """
         # Decoder front wants asr on device; keep bfloat16 on device
-        asr_tt = ttnn.from_torch(asr, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        x_feat_bct = self.tt_decoder_front(asr_bct=asr_tt, f0_pred=f0_pred, n_pred=n_pred, style_s=ref_s[:, :128])
+        if isinstance(asr, ttnn.Tensor):
+            asr_tt = asr
+        else:
+            asr_tt = ttnn.from_torch(asr, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        if isinstance(ref_s, ttnn.Tensor):
+            style_128 = ttnn.slice(ref_s, (0, 0), (ref_s.shape[0], 128), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            style_128 = ref_s[:, :128]
+
+        x_feat_bct = self.tt_decoder_front(asr_bct=asr_tt, f0_pred=f0_pred, n_pred=n_pred, style_s=style_128)
 
         # host: build harmonic features (temporary)
+        # For now har build needs f0 curve on host for shape; accept either.
+        f0_curve_bt = (
+            ttnn.to_torch(f0_pred).squeeze(1).to(torch.float32) if isinstance(f0_pred, ttnn.Tensor) else f0_pred
+        )
         har_per_stage = _build_har_per_stage_ttnn(
             device=self.device,
             stft_params=self.params.stft,
             source_params=self.params.source,
             torch_generator=self._torch_generator,
-            f0_curve_bt=f0_pred,
+            f0_curve_bt=f0_curve_bt,
             x_len=int(x_feat_bct.shape[-1]),
         )
 
-        x_logits_bct = self.tt_generator_core(x_bct=x_feat_bct, style_s=ref_s[:, :128], har_per_stage=har_per_stage)
+        if isinstance(ref_s, ttnn.Tensor):
+            style_s = ttnn.slice(ref_s, (0, 0), (ref_s.shape[0], 128), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            style_torch = ttnn.to_torch(style_s).to(torch.float32)
+        else:
+            style_torch = ref_s[:, :128]
+        x_logits_bct = self.tt_generator_core(x_bct=x_feat_bct, style_s=style_torch, har_per_stage=har_per_stage)
         # device: final spec/phase + iSTFT inverse
         freq_bins = self.params.post_n_fft // 2 + 1
         spec = ttnn.exp(

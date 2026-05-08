@@ -419,11 +419,10 @@ class TtKokoroPredictorDuration:
         if speed != 1.0:
             dur = ttnn.multiply(dur, 1.0 / speed)
 
-        # Host discrete ops for pred_dur and alignment
+        # Host discrete ops for pred_dur and alignment (fallback).
         dur_host = ttnn.to_torch(dur).to(torch.float32)
         pred_dur = torch.round(dur_host).clamp(min=1).long().squeeze()
 
-        # build pred_aln_trg on host
         indices = torch.repeat_interleave(torch.arange(input_ids.shape[1]), pred_dur)
         pred_aln_trg = torch.zeros((input_ids.shape[1], indices.shape[0]), dtype=torch.float32)
         pred_aln_trg[indices, torch.arange(indices.shape[0])] = 1.0
@@ -571,15 +570,14 @@ class TtKokoroPredictor:
         t_en_bct = self.text_encoder(input_ids, input_lengths, text_mask)  # [B,C,T]
         asr = t_en_bct @ pred_aln_tt  # [B,C,sumdur]
 
-        # return torch tensors (decoder expects torch)
         return dict(
-            d=ttnn.to_torch(d).to(torch.float32),
-            duration=ttnn.to_torch(dur).to(torch.float32),
+            d=d,
+            duration=dur,
             pred_dur=pred_dur,
-            pred_aln_trg=ttnn.to_torch(pred_aln_tt).to(torch.float32),
-            en=ttnn.to_torch(en).to(torch.float32),
-            F0_pred=ttnn.to_torch(f0_1).to(torch.float32).squeeze(1),
-            N_pred=ttnn.to_torch(n_1).to(torch.float32).squeeze(1),
-            t_en=ttnn.to_torch(t_en_bct).to(torch.float32),
-            asr=ttnn.to_torch(asr).to(torch.float32),
+            pred_aln_trg=pred_aln_tt,
+            en=en,
+            F0_pred=f0_1,  # [B,1,L] TTNN
+            N_pred=n_1,  # [B,1,L] TTNN
+            t_en=t_en_bct,
+            asr=asr,  # [B,C,sumdur] TTNN
         )

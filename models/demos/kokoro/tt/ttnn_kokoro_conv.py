@@ -68,6 +68,13 @@ def conv1d_nlc(
         # Keep conv config tensors in DRAM to avoid small-L1 allocations on some setups.
         conv_config.config_tensors_in_dram = True
         conv_config.deallocate_activation = True
+        # Reduce L1 circular buffer pressure for large 1D convs (generator stack).
+        # Keep this conditional to avoid destabilizing small convs.
+        if params.out_channels >= 256 or params.kernel_size >= 7:
+            try:
+                conv_config.force_split_reader = True
+            except Exception:
+                pass
     if compute_config is None:
         compute_config = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4)
 

@@ -84,7 +84,10 @@ def hnnsf_source(
     # phase = cumsum((fn/sr)%1, dim=1) * 2pi
     rad = ttnn.multiply(fn, 1.0 / params.sampling_rate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     rad = ttnn.remainder(rad, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    phase = ttnn.cumsum(rad, dim=1)
+    # cumsum currently requires tile layout on some builds
+    rad_t = ttnn.to_layout(rad, ttnn.TILE_LAYOUT)
+    phase = ttnn.cumsum(rad_t, dim=1)
+    phase = ttnn.to_layout(phase, ttnn.ROW_MAJOR_LAYOUT)
     phase = ttnn.multiply(phase, 2.0 * 3.141592653589793, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     sines = ttnn.sin(phase)
 
