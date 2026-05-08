@@ -268,24 +268,6 @@ bool tile_pack_row_major_kblock_reload_safe(
     return !(fuse_bias && !packer_l1_acc && num_k_blocks_gt_1);
 }
 
-// Delegates to the auto-tuner with fast-path preference and no layout constraints —
-// callers here are auto-config sites that emit tile_pack_row_major=true on mcast configs
-// or non-mcast configs whose factory always emits TILE_PACK_ROW_MAJOR=1. DST capacity is
-// derived from the full compute_kernel_config (dst_full_sync_en + fp32_dest_acc_en +
-// tile shape) via ttnn::get_dest_reg_count rather than the legacy hardcoded
-// fp32 ? 4 : 8 ceiling.
-std::tuple<uint32_t, uint32_t> get_subblock_sizes(
-    uint32_t m_tiles_per_core,
-    uint32_t n_tiles_per_core,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
-    auto_tune::SubblockTuneInputs inputs{.compute_kernel_config = compute_kernel_config};
-    inputs.per_core_M = m_tiles_per_core;
-    inputs.per_core_N = n_tiles_per_core;
-    inputs.prefer_fast_path = true;
-    auto choice = auto_tune::determine_largest_subblock(inputs);
-    return {choice.out_subblock_h, choice.out_subblock_w};
-}
-
 bool can_cbs_fit_in_l1(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -695,10 +677,18 @@ MatmulProgramConfig create_matmul_program_config(
         // the height axis). The kernel iterates per batch instance, and the downstream
         // validator enforces M % out_subblock_h == 0, so cap subblock selection by M.
         const uint32_t m_tiles_for_subblock = std::min<uint32_t>(m_tiles_per_core, div_up(m_size, ttnn::TILE_SIZE));
-        auto matmul_params = get_subblock_sizes(
-            m_tiles_for_subblock, n_tiles_per_core, deref_compute_kernel_config_or_default(compute_kernel_config));
-        uint32_t out_subblock_h = std::get<0>(matmul_params);
-        uint32_t out_subblock_w = std::get<1>(matmul_params);
+        // Auto-config emits tile_pack_row_major=true here (mcast configs, or non-mcast configs whose
+        // factory always emits TILE_PACK_ROW_MAJOR=1), so we ask for the fast-path subblock with no
+        // layout constraints. DST capacity is derived from the full compute_kernel_config
+        // (dst_full_sync_en + fp32_dest_acc_en + tile shape) via ttnn::get_dest_reg_count.
+        auto_tune::SubblockTuneInputs subblock_inputs{
+            .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
+        subblock_inputs.per_core_M = m_tiles_for_subblock;
+        subblock_inputs.per_core_N = n_tiles_per_core;
+        subblock_inputs.prefer_fast_path = true;
+        auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
+        uint32_t out_subblock_h = subblock_choice.out_subblock_h;
+        uint32_t out_subblock_w = subblock_choice.out_subblock_w;
 
         return MatmulMultiCoreReuseProgramConfig{
             .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
