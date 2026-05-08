@@ -48,7 +48,7 @@ def test_i0(device, h, w, layout):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_lgamma(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.lgamma, layout=layout, pcc=0.99)
+    run_math_unary_test(device, h, w, ttnn.lgamma, layout=layout, pcc=10)
 
 
 @pytest.mark.parametrize("h", [32])
