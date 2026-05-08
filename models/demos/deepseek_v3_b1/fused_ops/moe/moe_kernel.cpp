@@ -58,6 +58,7 @@
 #include "../../unified_kernels/gated_reduce.hpp"
 #include "../../unified_kernels/residual_add.hpp"
 #include "../../unified_kernels/eltwise_add_or_copy.hpp"
+#include "sram_helpers.hpp"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
@@ -390,24 +391,28 @@ void kernel_main() {
             using SramDownMergeCTArgs = deepseek_b1_ops::EltwiseAddOrCopy::ReaderCTArgs;
             deepseek_b1_ops::EltwiseAddOrCopy::ReaderArgs sram_down_merge_args{};
 
-            // SRAM gate gather (A) receiver (NCRISC) — sender_core only.
-            // dst_num_pages init=0; set at runtime to n_sram_active * total_cores.
+            // SRAM gate/up gather receivers (NCRISC) — sender_core only.
+            // dst_num_pages = num_active × pages_per_expert is a compile-time
+            // constant: receivers always advance by full capacity to match
+            // GR's padded out_cb push count downstream. Sender (BRISC) only
+            // NOCs n_sram_active experts via sram_invoke_moe_gather.
             deepseek_b1_ops::MoeGather::ReceiverArgs sram_ag_args{
                 get_named_compile_time_arg_val("sram_ag_noc0_num_senders"),
                 0,  // noc1_num_senders
                 get_named_compile_time_arg_val("sram_ag_noc0_receiver_semaphore_addr"),
                 0,  // noc1_receiver_semaphore_addr
                 get_named_compile_time_arg_val("sram_ag_dst_cb"),
-                0,  // dst_num_pages — runtime
+                get_named_compile_time_arg_val("sram_gather_num_active_experts") *
+                    get_named_compile_time_arg_val("sram_gather_pages_per_expert"),
             };
-            // SRAM up gather (B) receiver (NCRISC).
             deepseek_b1_ops::MoeGather::ReceiverArgs sram_bg_args{
                 get_named_compile_time_arg_val("sram_bg_noc0_num_senders"),
                 0,
                 get_named_compile_time_arg_val("sram_bg_noc0_receiver_semaphore_addr"),
                 0,
                 get_named_compile_time_arg_val("sram_bg_dst_cb"),
-                0,  // dst_num_pages — runtime
+                get_named_compile_time_arg_val("sram_gather_num_active_experts") *
+                    get_named_compile_time_arg_val("sram_gather_pages_per_expert"),
             };
 
             // Eltwise Add (reader — no-op)
@@ -548,16 +553,23 @@ void kernel_main() {
         }
         // SRAM gate_proj weights are L1-resident on the 64 shared gate cores.
         // Push 1 page once; kernel never pops cb_in1 (pop_in1=false), so the
-        // page persists across iterations.
-        if constexpr (Core::Shared::is_gate_compute_core) {
+        // page persists across iterations. Skipped when SRAM is disabled
+        // (num_active_experts==0) — the cb_in1 has no host-side descriptor in
+        // that case, so cb_reserve_back would hang.
+        if constexpr (
+            Core::Shared::is_gate_compute_core &&
+            get_named_compile_time_arg_val("sram_gate_proj_num_active_experts") > 0) {
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_gate_proj_cb_in1"), 1);
         }
         // SRAM up_proj weights are L1-resident on the 64 shared up cores.
-        if constexpr (Core::Shared::is_up_compute_core) {
+        if constexpr (
+            Core::Shared::is_up_compute_core && get_named_compile_time_arg_val("sram_up_proj_num_active_experts") > 0) {
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_up_proj_cb_in1"), 1);
         }
         // SRAM down_proj weights are L1-resident on the 112 shared mcast receiver cores.
-        if constexpr (Core::Shared::is_mcast_receiver_core) {
+        if constexpr (
+            Core::Shared::is_mcast_receiver_core &&
+            get_named_compile_time_arg_val("sram_down_proj_num_active_experts") > 0) {
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_down_proj_cb_in1"), 1);
         }
     };
@@ -1685,151 +1697,127 @@ void kernel_main() {
             expert_scale_mcast(moe.routed.expert_scale_mcast_args);
         }
 
-        // 5c. SRAM Routed Expert pipeline (matmul → gather → GatedReduce → mcast).
-        //     The whole block is gated on `n_sram_active > 0`: when no TopK
-        //     winners are SRAM-flagged, every micro-op is skipped uniformly on
-        //     all participating cores (sender_core via pre-mcast scan, a/b cores
-        //     and shared mcast receivers via post-mcast scan). With nothing
-        //     called, no CB pushes happen — no padding to drain, no NOC writes,
-        //     no sem incs. Cleaner than internal early-returns in each kernel.
-        if (n_sram_active > 0) {
-            // SRAM gate_proj on 64 shared gate compute cores. Iterates 8 TopK
-            // entries, processes SRAM-flagged, skips DRAM-flagged.
-            // pop_in0: TRUE on non-streamer gate_compute cores (no DRAM up_proj
-            //   to drain cb_in0; without pop here, rmsnorm-mcast cb fills
-            //   across iters → multi-iter hang).
-            //   FALSE on streamer cores — DRAM up_proj pops cb_in0 there;
-            //   double-popping would underflow.
-            // pop_out=false: drained later by SRAM gate gather sender.
-            constexpr bool sram_gp_pop_in0 =
-                Core::Shared::is_gate_compute_core && !Core::Routed::is_gate_proj_streamer_core;
-            {
-                DeviceZoneScopedN("SRAM_GATE_PROJ");
-                deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
-                    Moe::Routed::SramGateProjCTArgs,
-                    Core::Shared::is_gate_compute_core,
-                    /*pop_in0=*/sram_gp_pop_in0,
-                    /*pop_in1=*/false,
-                    /*pop_index=*/false,
-                    /*pop_out=*/false>
-                    sram_gate_proj;
-                sram_gate_proj();
-            }
+        // 5c. SRAM Routed Expert pipeline (matmul → gather → GatedReduce → mcast → matmul).
+        //     Each helper early-returns when n_sram_active == 0, so all
+        //     participating cores skip uniformly with no CB pushes / NOC writes /
+        //     sem incs (sender_core via pre-mcast scan, a/b cores and shared
+        //     mcast receivers via post-mcast scan all see the same n_sram_active).
+        //
+        // SRAM gate_proj on 64 shared gate compute cores. Iterates 8 TopK
+        // entries, processes SRAM-flagged, skips DRAM-flagged.
+        // pop_in0: TRUE on non-streamer gate_compute cores (no DRAM up_proj
+        //   to drain cb_in0; without pop here, rmsnorm-mcast cb fills
+        //   across iters → multi-iter hang).
+        //   FALSE on streamer cores — DRAM up_proj pops cb_in0 there;
+        //   double-popping would underflow.
+        // pop_out=false: drained later by SRAM gate gather sender.
+        constexpr bool sram_gp_pop_in0 =
+            Core::Shared::is_gate_compute_core && !Core::Routed::is_gate_proj_streamer_core;
+        {
+            DeviceZoneScopedN("SRAM_GATE_PROJ");
+            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                Moe::Routed::SramGateProjCTArgs,
+                Core::Shared::is_gate_compute_core,
+                /*pop_in0=*/sram_gp_pop_in0,
+                /*pop_in1=*/false,
+                /*pop_index=*/false,
+                /*pop_out=*/false>
+                sram_gate_proj;
+            deepseek_b1_ops::sram_invoke_matmul(sram_gate_proj, n_sram_active);
+        }
 
-            // SRAM up_proj on 64 shared up compute cores (mirror of gate_proj).
-            // pop_in0: TRUE on non-streamer up_compute cores (drain cb_in0 here
-            //   since neither shared_gu_matmul nor SRAM up_proj otherwise pops).
-            //   FALSE on streamer cores — DRAM up_proj pops there.
-            constexpr bool sram_up_pop_in0 =
-                Core::Shared::is_up_compute_core && !Core::Routed::is_gate_proj_streamer_core;
-            {
-                DeviceZoneScopedN("SRAM_UP_PROJ");
-                deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
-                    Moe::Routed::SramUpProjCTArgs,
-                    Core::Shared::is_up_compute_core,
-                    /*pop_in0=*/sram_up_pop_in0,
-                    /*pop_in1=*/false,
-                    /*pop_index=*/false,
-                    /*pop_out=*/false>
-                    sram_up_proj;
-                sram_up_proj();
-            }
+        // SRAM up_proj on 64 shared up compute cores (mirror of gate_proj).
+        // pop_in0: TRUE on non-streamer up_compute cores (drain cb_in0 here
+        //   since neither shared_gu_matmul nor SRAM up_proj otherwise pops).
+        //   FALSE on streamer cores — DRAM up_proj pops there.
+        constexpr bool sram_up_pop_in0 = Core::Shared::is_up_compute_core && !Core::Routed::is_gate_proj_streamer_core;
+        {
+            DeviceZoneScopedN("SRAM_UP_PROJ");
+            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                Moe::Routed::SramUpProjCTArgs,
+                Core::Shared::is_up_compute_core,
+                /*pop_in0=*/sram_up_pop_in0,
+                /*pop_in1=*/false,
+                /*pop_index=*/false,
+                /*pop_out=*/false>
+                sram_up_proj;
+            deepseek_b1_ops::sram_invoke_matmul(sram_up_proj, n_sram_active);
+        }
 
-            // SRAM gather: receiver-side metadata advances by full capacity
-            // (num_active × pages_per_expert) every iter to match GR's
-            // (out_cb_total_pushes-padded) push count downstream. Sender's
-            // num_experts stays at n_sram_active so we only NOC real data.
-            constexpr uint32_t _sram_gather_pages_per_expert =
-                get_named_compile_time_arg_val("sram_gather_pages_per_expert");
-            constexpr uint32_t _sram_gather_num_active =
-                get_named_compile_time_arg_val("sram_gather_num_active_experts");
-            constexpr uint32_t _sram_gather_total_dst_pages = _sram_gather_num_active * _sram_gather_pages_per_expert;
-#if defined(COMPILE_FOR_BRISC)
-            moe.routed.sram_ag_args.num_experts = n_sram_active;
-            moe.routed.sram_bg_args.num_experts = n_sram_active;
-#elif defined(COMPILE_FOR_NCRISC)
-            moe.routed.sram_ag_args.dst_num_pages = _sram_gather_total_dst_pages;
-            moe.routed.sram_bg_args.dst_num_pages = _sram_gather_total_dst_pages;
-#endif
-            {
-                DeviceZoneScopedN("SRAM_GATE_GATHER");
-                deepseek_b1_ops::MoeGather::Op<
-                    Core::Shared::is_gate_compute_core,
-                    Core::Shared::is_gated_reduce_core,
-                    /*pop_src=*/true,
-                    /*UsePerCoreSenderIdx=*/true>
-                    sram_ag;
-                sram_ag(moe.routed.sram_ag_args);
-            }
-            {
-                DeviceZoneScopedN("SRAM_UP_GATHER");
-                deepseek_b1_ops::MoeGather::Op<
-                    Core::Shared::is_up_compute_core,
-                    Core::Shared::is_gated_reduce_core,
-                    /*pop_src=*/true,
-                    /*UsePerCoreSenderIdx=*/true>
-                    sram_bg;
-                sram_bg(moe.routed.sram_bg_args);
-            }
+        // SRAM gather: BRISC's per-core write count = n_sram_active.
+        // NCRISC dst_num_pages is set in the args initializer (compile-time
+        // const = num_active × pages_per_expert) — receiver always advances
+        // by full capacity to match GR's padded push count downstream.
+        {
+            DeviceZoneScopedN("SRAM_GATE_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_gate_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true>
+                sram_ag;
+            deepseek_b1_ops::sram_invoke_moe_gather(sram_ag, moe.routed.sram_ag_args, n_sram_active);
+        }
+        {
+            DeviceZoneScopedN("SRAM_UP_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_up_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true>
+                sram_bg;
+            deepseek_b1_ops::sram_invoke_moe_gather(sram_bg, moe.routed.sram_bg_args, n_sram_active);
+        }
 
-            // SRAM extended GatedReduce on sender_core: silu(sum_K(gate)) * scale * sum_K(up)
-            // per active SRAM expert. BRISC handles the per-expert scalar copy.
-#if defined(COMPILE_FOR_TRISC)
-            moe.routed.sram_gated_reduce_args.k_num_tiles = n_sram_active;
-#endif
-            {
-                DeviceZoneScopedN("SRAM_GATED_REDUCE");
-                deepseek_b1_ops::GatedReduce::Op<Moe::Routed::SramGatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
-                    sram_gated_reduce;
-                sram_gated_reduce(moe.routed.sram_gated_reduce_args);
-            }
+        // SRAM extended GatedReduce on sender_core: silu(sum_K(gate)) * scale * sum_K(up)
+        // per active SRAM expert. TRISC k_num_tiles = n_sram_active. BRISC
+        // handles the per-expert scalar copy (independent of n_sram_active).
+        {
+            DeviceZoneScopedN("SRAM_GATED_REDUCE");
+            deepseek_b1_ops::GatedReduce::Op<Moe::Routed::SramGatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
+                sram_gated_reduce;
+            deepseek_b1_ops::sram_invoke_gated_reduce(
+                sram_gated_reduce, moe.routed.sram_gated_reduce_args, n_sram_active);
+        }
 
-            // SRAM down Mcast: sender_core's GatedReduce output → 112 shared
-            // mcast receivers. CT defaults: src/dst num_pages = num_active.
-            // data_size_bytes overridden at runtime to NOC only n_sram bytes;
-            // num_pages stays full so receivers + matmul see consistent advance.
-#if defined(COMPILE_FOR_BRISC)
-            {
-                constexpr uint32_t _per_expert_bytes =
-                    get_named_compile_time_arg_val("down_proj_mcast_per_expert_bytes");
-                moe.routed.sram_down_mcast_args.sender.data_size_bytes = n_sram_active * _per_expert_bytes;
-            }
-#endif
-            {
-                DeviceZoneScopedN("SRAM_DOWN_MCAST");
-                deepseek_b1_ops::Mcast::Op<
-                    Moe::Routed::McastCTArgs,
-                    Core::is_sender_core,
-                    Core::is_mcast_grid_core,
-                    Core::Shared::is_mcast_receiver_core,
-                    /*pop_src=*/true,
-                    /*ReceiverOnBrisc=*/true>
-                    sram_down_mcast;
-                sram_down_mcast(moe.routed.sram_down_mcast_args);
-            }
+        // SRAM down Mcast: sender_core's GatedReduce output → 112 shared
+        // mcast receivers. BRISC sender's data_size_bytes = n_sram_active ×
+        // per-expert bytes (CT). num_pages stays full so receivers + matmul
+        // see consistent advance.
+        {
+            DeviceZoneScopedN("SRAM_DOWN_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Moe::Routed::McastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::Shared::is_mcast_receiver_core,
+                /*pop_src=*/true,
+                /*ReceiverOnBrisc=*/true>
+                sram_down_mcast;
+            deepseek_b1_ops::sram_invoke_down_mcast(sram_down_mcast, moe.routed.sram_down_mcast_args, n_sram_active);
+        }
 
-            // SRAM down_proj on the 112 shared mcast receiver cores.
-            //   in0 = sram_down_mcast_dst_cb (n_sram_active face tiles compact).
-            //   in1 = per-core SRAM weight slab (T expert (K=8 × N=2 bfp4 tiles)).
-            //   out = sram_down_proj_out_cb (1×32 bf16, out_w=2 tiles per core).
-            // accum_experts=1 + compact_in0=1: kernel sums across SRAM-flagged
-            // TopK winners, indexing cb_in0 by sram_idx (compact) instead of
-            // exp_i (expanded — would skip past nonexistent DRAM slots).
-            // pop_in0=true: drain mcast dst CB so multi-iter starts clean.
-            // pop_index=false: index reused later by DRAM down_proj.
-            // pop_in1=false: cb_in1 is overlay-backed (per-core L1 slabs) — never popped.
-            {
-                DeviceZoneScopedN("SRAM_DOWN_PROJ");
-                deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
-                    Moe::Routed::SramDownProjCTArgs,
-                    Core::Shared::is_mcast_receiver_core,
-                    /*pop_in0=*/true,
-                    /*pop_in1=*/false,
-                    /*pop_index=*/false,
-                    /*pop_out=*/false>
-                    sram_down_proj;
-                sram_down_proj();
-            }
+        // SRAM down_proj on the 112 shared mcast receiver cores.
+        //   in0 = sram_down_mcast_dst_cb (n_sram_active face tiles compact).
+        //   in1 = per-core SRAM weight slab (T expert (K=8 × N=2 bfp4 tiles)).
+        //   out = sram_down_proj_out_cb (1×32 bf16, out_w=2 tiles per core).
+        // accum_experts=1 + compact_in0=1: kernel sums across SRAM-flagged
+        // TopK winners, indexing cb_in0 by sram_idx (compact) instead of
+        // exp_i (expanded — would skip past nonexistent DRAM slots).
+        // pop_in0=true: drain mcast dst CB so multi-iter starts clean.
+        // pop_index=false: index reused later by DRAM down_proj.
+        // pop_in1=false: cb_in1 is overlay-backed (per-core L1 slabs) — never popped.
+        {
+            DeviceZoneScopedN("SRAM_DOWN_PROJ");
+            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                Moe::Routed::SramDownProjCTArgs,
+                Core::Shared::is_mcast_receiver_core,
+                /*pop_in0=*/true,
+                /*pop_in1=*/false,
+                /*pop_index=*/false,
+                /*pop_out=*/false>
+                sram_down_proj;
+            deepseek_b1_ops::sram_invoke_matmul(sram_down_proj, n_sram_active);
         }
 #endif  // ENABLE_ROUTING
 
@@ -1952,13 +1940,11 @@ void kernel_main() {
         // uniform for dense MLP / no-routing.
         {
             DeviceZoneScopedN("SRAM_DOWN_MERGE");
-#if defined(COMPILE_FOR_TRISC)
-            moe.routed.sram_down_merge_args.do_add = (n_sram_active > 0) ? 1u : 0u;
-#endif
             deepseek_b1_ops::EltwiseAddOrCopy::
                 Op<Moe::Routed::SramDownMergeCTArgs, Core::Shared::is_mcast_receiver_core>
                     sram_down_merge;
-            sram_down_merge(moe.routed.sram_down_merge_args);
+            deepseek_b1_ops::sram_invoke_eltwise_add_or_copy(
+                sram_down_merge, moe.routed.sram_down_merge_args, n_sram_active);
         }
 
         // 9c. Shared: Residual Add — matmul_out + shard(residual) on 112 cores

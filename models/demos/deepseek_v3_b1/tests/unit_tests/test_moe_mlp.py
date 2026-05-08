@@ -998,9 +998,12 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize("enable_sram", [True, False], ids=["sram", "no_sram"])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
-def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, enable_sram, get_reference_model_state_dict
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -1044,12 +1047,11 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     # ── Create MoE tensors (routed weights TP8-sharded; other tensors replicated) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
-    # T=1: place expert 1 in L1 (separate-pipeline plan, Steps 0.1+1.1+1.2).
-    # Empty list = DRAM-only (Phase 1B baseline). With T=1, anchor PCC drops
-    # because the placed expert's contribution is missing (DRAM kernel skips
-    # it via bit-15 filter; SRAM kernel runs but output drained locally —
-    # full gather/reduce/mcast pipeline lands in Steps 3-5).
-    sram_expert_ids = [1]
+    # enable_sram=True  → place expert 1 in L1 (SRAM pipeline exercised).
+    # enable_sram=False → empty list = DRAM-only path (regression coverage:
+    #   r.sram_*_weights become None, MoeOp setup skips SRAM params, kernel's
+    #   per-iter scan_n_sram_active stays 0 → SRAM ops early-return uniformly).
+    sram_expert_ids = [1] if enable_sram else []
     r = create_routed_expert_tensors(
         submesh,
         mesh_mapper=mesh_mapper,
