@@ -70,7 +70,7 @@ def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
 @pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 def test_deepseek_device_sampling_argmax_path(mesh_device, ccl, hf_config, device_params, sampling_params):
     vocab_size = int(hf_config.vocab_size)
-    args = make_deepseek_sampling_args(mesh_device, vocab_size=vocab_size)
+    args = make_deepseek_sampling_args(mesh_device, vocab_size=vocab_size, pad_logits_to_power_of_2=True)
     batch_size = USERS_PER_ROW * int(mesh_device.shape[0])
     seed = int(sampling_params.get("seed", 0))
     torch.manual_seed(seed)

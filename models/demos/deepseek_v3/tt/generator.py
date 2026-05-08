@@ -461,7 +461,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                 # create new sampling generator
                 enable_internal_trace_sampling = enable_trace
                 self.sampling_args = make_deepseek_sampling_args(
-                    self.mesh_device, self.hf_config.vocab_size, max_batch_size=self.batch_size_per_row
+                    self.mesh_device,
+                    self.hf_config.vocab_size,
+                    max_batch_size=self.batch_size_per_row,
+                    pad_logits_to_power_of_2=True,
                 )
                 self.sampling_generator = SamplingGenerator(
                     args=self.sampling_args,
