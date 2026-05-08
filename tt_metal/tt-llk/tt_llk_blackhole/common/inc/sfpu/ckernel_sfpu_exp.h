@@ -463,9 +463,11 @@ inline void _calculate_exponential_tti_bf16_(const std::uint16_t exp_base_scale_
 
         // Materialize 0.0 in LREG3 (LCONST_0 cannot be used directly with SFPSWAP).
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
 
         // Upper clamp: LREG0 = min(LREG0, 255). After SFPSWAP (mode VEC_MIN_MAX,
         // "max into lreg_dest"): LREG2 = max(255, xlog2), LREG0 = min(255, xlog2).
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
         // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
@@ -516,6 +518,7 @@ inline void _calculate_exponential_tti_bf16_(const std::uint16_t exp_base_scale_
         // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
         // (ADDR_MOD_6 increments dest by 2 on store.)
         TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_6, 0);
+        // sfpi::dst_reg++;
     }
 }
 
