@@ -35,6 +35,7 @@ private:
     void rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results);
     void rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results);
     void rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results);
+    void rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
     static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
