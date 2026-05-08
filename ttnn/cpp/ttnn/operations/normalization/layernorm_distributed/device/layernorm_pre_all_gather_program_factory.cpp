@@ -85,7 +85,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     const uint32_t in0_tiles = Wt * double_buffer_constant;
     const uint32_t in1_tiles = 1;  // reduce scalar
     const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt * double_buffer_constant;  // a + b
+    const uint32_t fused_tiles = Wt;                           // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -350,7 +350,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     const uint32_t in0_tiles = Wt * double_buffer_constant;
     const uint32_t in1_tiles = 1;  // reduce scalar
     const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt * double_buffer_constant;  // a + b
+    const uint32_t fused_tiles = Wt;                           // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;

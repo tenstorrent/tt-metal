@@ -81,7 +81,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     const uint32_t res_tiles = 2;
     // cb_fused must hold all Wt tiles produced by the pre-add loop before the welford loop
     // begins consuming them; the welford pass cannot run interleaved with the add pass.
-    const uint32_t fused_tiles = Wt * 2;
+    const uint32_t fused_tiles = Wt;
 
     uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
