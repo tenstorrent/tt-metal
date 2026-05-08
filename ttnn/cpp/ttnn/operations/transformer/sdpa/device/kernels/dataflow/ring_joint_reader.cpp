@@ -452,7 +452,7 @@ void kernel_main() {
             cb_push_back(cb_v_in, v_chunk_tiles);
         }
     }
-    while (true) {
-        half_sequence++;
-    }
+    // while (true) {
+    //     half_sequence++;
+    // }
 }
