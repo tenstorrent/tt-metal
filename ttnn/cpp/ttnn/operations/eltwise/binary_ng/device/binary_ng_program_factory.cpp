@@ -1115,8 +1115,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         compute_tiles,
                         freq,
                         counter,
-                        std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.rtol)),
-                        std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.atol))};
+                        // rtol and atol are float variables
+                        std::bit_cast<uint32_t>(operation_attributes.rtol),
+                        std::bit_cast<uint32_t>(operation_attributes.atol)};
                     compute_desc.runtime_args.emplace_back(
                         core,
                         KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
