@@ -14,6 +14,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "erisc_datamover_builder.hpp"
+#include <cstdlib>
 #include <set>
 #include <vector>
 #include <algorithm>
@@ -40,9 +41,16 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
         // If you want to use 1D Ring on t3k please use 1x8 MGD.
         case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE:
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            if (is_ubb_galaxy) {
+            printf("Detected 1D ring fabric config");
+            bool force_galaxy_mode = std::getenv("FORCE_GALAXY_FABRIC_MODE") != nullptr;
+            printf("FORCE_GALAXY_FABRIC_MODE is %s\n", force_galaxy_mode ? "set" : "not set");
+            if (is_ubb_galaxy || force_galaxy_mode) {
+                printf(
+                    "Using TORUS_XY fabric type for 1D fabric config due to UBB Galaxy mode or "
+                    "FORCE_GALAXY_FABRIC_MODE\n");
                 return FabricType::TORUS_XY;
             }
+            printf("Using MESH fabric type for 1D fabric config\n");
             return FabricType::MESH;
         }
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;

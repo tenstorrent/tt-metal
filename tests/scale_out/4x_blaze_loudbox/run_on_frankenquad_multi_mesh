@@ -1,0 +1,84 @@
+#!/bin/bash
+
+# Script to run tests on frankenquad with 4x2 multi-mesh configuration
+# (4 separate 4x2 meshes, one per host)
+# Usage: ./run_4x2_multi_mesh <test_path> [additional_pytest_args]
+
+set -e
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <test_path> [pytest_args]"
+    echo ""
+    echo "Example:"
+    echo "  $0 tests/ttnn/unit_tests/operations/ccl/test_ccl_common.py"
+    echo ""
+    echo "With additional pytest args:"
+    echo "  $0 tests/path/to/test.py -k test_specific_function"
+    exit 1
+fi
+
+# Collect environment variable assignments (VAR=value) from the beginning
+ENV_VARS=()
+while [[ $# -gt 0 && "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+    ENV_VARS+=("$1")
+    shift
+done
+
+if [ $# -eq 0 ]; then
+    echo "Error: No command provided after environment variables"
+    exit 1
+fi
+
+TEST_PATH="$1"
+shift
+# Keep remaining args in array to preserve quoting
+
+# Configuration for 4x2 multi-mesh (4 separate 4x2 meshes)
+TCP_INTERFACE="enp194s0f1np1"
+HOSTS="bh-lb-39,bh-lb-37,bh-lb-40,bh-lb-38"
+RANKFILE="tests/scale_out/4x_blaze_loudbox/rankfile/4x2_multi_mesh.txt"
+RANK_BINDING="tests/scale_out/4x_blaze_loudbox/rank_bindings/4x2_multi_mesh.yaml"
+LOG_FILE="/tmp/lbx4_4x2_multi_mesh_debug.log"
+
+echo "========================================"
+echo "Running test on frankenquad (4x2 multi-mesh)"
+echo "========================================"
+if [ ${#ENV_VARS[@]} -gt 0 ]; then
+    echo "Warning: Environment variables passed on command line are ignored."
+    echo "         Add them to rank_bindings/4x2_multi_mesh.yaml global_env section."
+fi
+echo "Command: $TEST_PATH"
+echo "Hosts: $HOSTS"
+echo "Config: 4 separate 4x2 meshes (one per host)"
+echo "Output log: $LOG_FILE"
+if [ $# -gt 0 ]; then
+    echo "Additional args: $*"
+fi
+echo "========================================"
+echo ""
+
+# Build command with proper quoting
+CMD="source ~/tt-metal/python_env/bin/activate && $TEST_PATH"
+for arg in "$@"; do
+  CMD="$CMD $(printf '%q' "$arg")"
+done
+
+tt-run \
+  --tcp-interface $TCP_INTERFACE \
+  --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE" \
+  --rank-binding $RANK_BINDING \
+  bash -c "$CMD" 2>&1 | tee $LOG_FILE
+
+EXIT_CODE=${PIPESTATUS[0]}
+
+echo ""
+echo "========================================"
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "Test completed successfully!"
+else
+    echo "Test failed with exit code: $EXIT_CODE"
+fi
+echo "Full output saved to: $LOG_FILE"
+echo "========================================"
+
+exit $EXIT_CODE
