@@ -128,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
 
-    _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, false /* untilize */, false /* wormhole_is_fp32_dest_acc_en */>();
+    _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, false /* untilize */>();
 
     for (std::uint32_t block = 0; block < num_blocks; ++block)
     {

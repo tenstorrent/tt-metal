@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
 
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */, false /* wormhole_is_fp32_dest_acc_en */>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>();
 
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;

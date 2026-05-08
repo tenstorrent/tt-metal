@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats_array[run].pack_dst);
 
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */, false /* wormhole_is_fp32_dest_acc_en */>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>();
 
     _llk_packer_wait_for_math_done_();
     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(params.buffer_Res[0]));

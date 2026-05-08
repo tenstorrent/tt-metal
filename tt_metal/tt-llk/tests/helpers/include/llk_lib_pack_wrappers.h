@@ -88,10 +88,10 @@ inline void _llk_pack_init_with_src_wrapper_(
     _llk_pack_init_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false, bool wormhole_is_fp32_dest_acc_en = is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_dest_init_wrapper_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
 {
-    _llk_pack_dest_init_<Dst, wormhole_is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
 }
 
 template <
@@ -136,7 +136,7 @@ inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_form
     _llk_pack_untilize_uninit_(face_r_dim);
 }
 
-#else // ARCH_BLACKHOLE version of the wrappers
+#elif defined(ARCH_BLACKHOLE) // ARCH_BLACKHOLE version of the wrappers
 
 inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
 {
@@ -211,12 +211,11 @@ inline void _llk_pack_init_with_src_wrapper_(
     _llk_pack_init_<untilize, zero_output, tilize>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false, bool wormhole_is_fp32_dest_acc_en = is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_dest_init_wrapper_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
 {
     (void)face_r_dim;
     (void)narrow_tile;
-    (void)wormhole_is_fp32_dest_acc_en;
     _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en>();
 }
 
@@ -263,4 +262,6 @@ inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_form
     _llk_pack_untilize_uninit_(pack_src_format);
 }
 
+#else
+#error "Unsupported architecture"
 #endif

@@ -8,7 +8,7 @@
 
 #include "llk_unpack_tilize.h"
 
-#ifdef ARCH_WORMHOLE
+#ifdef ARCH_WORMHOLE // ARCH_WORMHOLE version of the wrappers
 
 inline void _llk_unpack_tilize_init_wrapper_(
     const std::uint32_t unpack_src_format = 0,
@@ -24,16 +24,19 @@ inline void _llk_unpack_tilize_init_wrapper_(
 
 inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_(const std::uint32_t block_ct_dim)
 {
+    // Wormhole uses block_ct_dim to compute tilize source offsets.
     return block_ct_dim;
 }
 
 inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_(const std::uint32_t num_faces)
 {
+    // Wormhole uses num_faces to select the tilize loop count.
     return num_faces;
 }
 
 inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t tile_count, const std::uint32_t tile_num_faces)
 {
+    // Wormhole tracks dvalids per tile face.
     return tile_count * tile_num_faces;
 }
 
@@ -43,7 +46,7 @@ inline void _llk_unpack_tilize_wrapper_(
     const std::uint32_t unpack_src_format = 0,
     const std::uint32_t unpack_dst_format = 0,
     const std::uint32_t block_ct_dim      = 0,
-    const std::uint32_t face_r_dim        = ckernel::FACE_R_DIM,
+    const std::uint32_t face_r_dim        = FACE_R_DIM,
     const std::uint32_t num_faces         = 4,
     const bool narrow_tile                = false)
 {
@@ -51,13 +54,13 @@ inline void _llk_unpack_tilize_wrapper_(
 }
 
 inline void _llk_unpack_tilize_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = ckernel::FACE_R_DIM)
+    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     (void)num_faces;
     _llk_unpack_tilize_uninit_(unpack_dst_format, face_r_dim);
 }
 
-#elif defined(ARCH_BLACKHOLE)
+#elif defined(ARCH_BLACKHOLE) // ARCH_BLACKHOLE version of the wrappers
 
 inline void _llk_unpack_tilize_init_wrapper_(
     const std::uint32_t unpack_src_format = 0,
@@ -72,18 +75,21 @@ inline void _llk_unpack_tilize_init_wrapper_(
 
 inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_(const std::uint32_t block_ct_dim)
 {
+    // Blackhole unpack_tilize does not use block_ct_dim and expects zero.
     (void)block_ct_dim;
     return 0;
 }
 
 inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_(const std::uint32_t num_faces)
 {
+    // Blackhole tests keep unpack_tilize on the default 4-face path.
     (void)num_faces;
     return 4;
 }
 
 inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t tile_count, const std::uint32_t tile_num_faces)
 {
+    // Blackhole tracks one dvalid per tile for unpack_tilize.
     (void)tile_num_faces;
     return tile_count;
 }

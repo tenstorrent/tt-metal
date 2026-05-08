@@ -397,7 +397,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // We pack the result with index tiles right after value tiles.
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
 
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, false /* untilize */, false /* wormhole_is_fp32_dest_acc_en */>();
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>();
 
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, ckernel::to_underlying(DataFormat::UInt16)};
     const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, ckernel::to_underlying(DataFormat::UInt16)};
