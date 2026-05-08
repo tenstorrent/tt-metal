@@ -36,7 +36,9 @@ def pack_fp32(torch_tensor):
     return torch_tensor.cpu().numpy().astype(np.float32).tobytes()
 
 
-def pack_int32(torch_tensor):
+def pack_int32(torch_tensor, twos_complement=False):
+    if twos_complement:
+        return torch_tensor.cpu().numpy().astype(np.int32).tobytes()
     # INT32 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 31 = sign, bits 30:0 = magnitude
     # Sign-magnitude INT32 cannot represent -2147483648, so clip to [min+1, max]
@@ -52,7 +54,9 @@ def pack_uint32(torch_tensor):
     return torch_tensor.cpu().numpy().astype(np.uint32).tobytes()
 
 
-def pack_int16(torch_tensor):
+def pack_int16(torch_tensor, twos_complement=False):
+    if twos_complement:
+        return torch_tensor.cpu().numpy().astype(np.int16).tobytes()
     # INT16 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 15 = sign, bits 14:0 = magnitude
     # Sign-magnitude INT16 cannot represent -32768, so clip to [min+1, max]
@@ -73,7 +77,9 @@ def pack_fp8_e4m3(torch_tensor):
     return fp32_array.astype(ml_dtypes.float8_e4m3fn).tobytes()
 
 
-def pack_int8(torch_tensor):
+def pack_int8(torch_tensor, twos_complement=False):
+    if twos_complement:
+        return torch_tensor.cpu().numpy().astype(np.int8).tobytes()
     # INT8 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 7 = sign, bits 6:0 = magnitude
     # Sign-magnitude INT8 cannot represent -128, so clip to [min+1, max]

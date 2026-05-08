@@ -16,12 +16,12 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     const ttnn::Tensor& grad_output;               // Gradient w.r.t. output
-    const ttnn::Tensor& attn_output;               // sdap forward output (needed for gradients)
     const ttnn::Tensor& query;                     // Input Q (needed for gradients)
     const ttnn::Tensor& key;                       // Input K (needed for gradients)
     const ttnn::Tensor& value;                     // Input V (needed for gradients)
     const std::optional<ttnn::Tensor>& attn_mask;  // attention mask
-    const ttnn::Tensor& intermediates;             // From forward pass (max_val,1/sum_exp values)
+    const ttnn::Tensor& intermediates;             // From forward pass (FP32 logsumexp per row)
+    const ttnn::Tensor& u_scaler;                  // Precomputed rowsum(dO * O) from Q kernel
 
     // Preallocated gradient tensors (optional)
     std::optional<ttnn::Tensor> preallocated_grad_key;

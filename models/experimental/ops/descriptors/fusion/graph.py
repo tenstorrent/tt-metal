@@ -33,6 +33,7 @@ from models.experimental.ops.descriptors.fusion.common import (
     MultiBarrierSpec,
     _BuildResult,
     _NOOP_OP,
+    _SemaphoreSpec,
     _core_range_set_to_coords,
     _core_ranges_key,
     _coords_to_core_range_set,
@@ -252,6 +253,10 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     # Union semaphore refs
     all_semaphores = tuple(ref for r in results for ref in r.semaphores)
 
+    # Concatenate semaphore specs and addresses
+    all_sem_specs = tuple(spec for r in results for spec in r.sem_specs)
+    all_sem_addrs = tuple(addr for r in results for addr in r.sem_addrs)
+
     # Concatenate kernel labels
     all_labels = tuple(label for r in results for label in r.kernel_labels)
 
@@ -286,6 +291,8 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
         rebind_source_map=all_rebind_src,
         global_cb_source_map=all_gcb_src,
         output_source_map=all_output_src,
+        sem_specs=all_sem_specs,
+        sem_addrs=all_sem_addrs,
     )
 
 
@@ -352,6 +359,7 @@ class OpGraphBuilder:
         return FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
             semaphores=r.semaphores,
+            sem_specs=r.sem_specs,
         )
 
     def _build_internal(self, device: Any = None) -> _BuildResult:
@@ -392,10 +400,38 @@ class OpGraphBuilder:
         sem_compute_done = ttnn.create_global_semaphore(device, union_range, 0)
         sem_writer_done = ttnn.create_global_semaphore(device, union_range, 0)
         sem_reset_done = ttnn.create_global_semaphore(device, union_range, 0)
+        sem_pack_drained = ttnn.create_global_semaphore(device, union_range, 0)
+        sem_math_drained = ttnn.create_global_semaphore(device, union_range, 0)
         compute_done_addr = ttnn.get_global_semaphore_address(sem_compute_done)
         writer_done_addr = ttnn.get_global_semaphore_address(sem_writer_done)
         reset_done_addr = ttnn.get_global_semaphore_address(sem_reset_done)
-        all_sem_refs = [sem_compute_done, sem_writer_done, sem_reset_done]
+        pack_drained_addr = ttnn.get_global_semaphore_address(sem_pack_drained)
+        math_drained_addr = ttnn.get_global_semaphore_address(sem_math_drained)
+        all_sem_refs = [
+            sem_compute_done,
+            sem_writer_done,
+            sem_reset_done,
+            sem_pack_drained,
+            sem_math_drained,
+        ]
+
+        # Collect semaphore specs (allocation blueprints) and current
+        # addresses in matching order.  Used post-build to compute
+        # semaphore address slots for ephemeral patching at dispatch time.
+        sem_specs = [
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+        ]
+        sem_addrs = [
+            compute_done_addr,
+            writer_done_addr,
+            reset_done_addr,
+            pack_drained_addr,
+            math_drained_addr,
+        ]
 
         # Pre-allocate barrier configs for each unique (release, arrive) scope
         # pair across all groups.  Groups sharing a release scope MUST use the
@@ -414,6 +450,9 @@ class OpGraphBuilder:
                         device, release_scope, arrive_ranges=arrive_scope
                     )
                     all_sem_refs.extend(segment_cache[cache_key]._sem_refs)
+                    for sem_ref in segment_cache[cache_key]._sem_refs:
+                        sem_specs.append(_SemaphoreSpec(core_ranges=release_scope, initial_value=0))
+                        sem_addrs.append(ttnn.get_global_semaphore_address(sem_ref))
 
         # When there are multiple groups (branching tree), phases may have
         # different native core ranges than the group's range (e.g. stem
@@ -458,6 +497,8 @@ class OpGraphBuilder:
                 compute_done_addr,
                 writer_done_addr,
                 reset_done_addr,
+                pack_drained_addr,
+                math_drained_addr,
                 all_sem_refs,
                 segment_cache,
                 needs_target_core_range=multi_group,
@@ -469,7 +510,13 @@ class OpGraphBuilder:
         _restore_cb_state(saved_all_cb_state)
         _verify_cb_restore(saved_all_cb_state)
 
-        return _merge_build_results(results)
+        merged = _merge_build_results(results)
+        # Attach semaphore specs and addresses collected at this level
+        # (the group-level _BuildResults have duplicated sem refs via
+        # shared_sem_refs — specs/addrs are authoritative here).
+        merged.sem_specs = tuple(sem_specs)
+        merged.sem_addrs = tuple(sem_addrs)
+        return merged
 
     @staticmethod
     def _kernel_variant_key(op: OpDescriptor, coord: Tuple[int, int]) -> tuple:
@@ -604,6 +651,8 @@ class OpGraphBuilder:
         compute_done_addr: int,
         writer_done_addr: int,
         reset_done_addr: int,
+        pack_drained_addr: int,
+        math_drained_addr: int,
         shared_sem_refs: List[Any],
         segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig],
         needs_target_core_range: bool = False,
@@ -638,6 +687,8 @@ class OpGraphBuilder:
             compute_done_addr=compute_done_addr,
             writer_done_addr=writer_done_addr,
             reset_done_addr=reset_done_addr,
+            pack_drained_addr=pack_drained_addr,
+            math_drained_addr=math_drained_addr,
             transition_map=transition_map,
             _sem_refs=list(shared_sem_refs),
         )

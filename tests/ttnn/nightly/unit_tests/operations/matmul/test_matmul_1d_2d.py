@@ -81,6 +81,7 @@ def test_llama2_matmul(
     grid_size,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -395,6 +396,7 @@ def test_multi_core_matmul_2d_wh(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -706,6 +708,7 @@ def test_multi_core_matmul_1d_wh(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]

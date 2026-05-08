@@ -42,13 +42,14 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         region_->total_cb_allocated.store(cb_allocated, std::memory_order_relaxed);
 
         // Update timestamp
-        region_->last_update_timestamp = current_timestamp_ns();
+        region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
         // Update per-chip CB stats for this device
         uint32_t chip_id = static_cast<uint32_t>(device->id());
         for (auto & chip_stat : region_->chip_stats) {
-            if (chip_stat.chip_id == chip_id || chip_stat.chip_id == CHIP_STATS_UNUSED) {
-                chip_stat.chip_id = chip_id;
+            uint32_t slot_id = chip_stat.chip_id.load(std::memory_order_relaxed);
+            if (slot_id == chip_id || slot_id == CHIP_STATS_UNUSED) {
+                chip_stat.chip_id.store(chip_id, std::memory_order_relaxed);
                 chip_stat.cb_allocated.store(cb_allocated, std::memory_order_relaxed);
                 break;
             }

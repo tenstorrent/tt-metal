@@ -100,11 +100,6 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
             "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
-        TT_FATAL(
-            input_tensor.padded_shape()[-1] % 32 == 0,
-            "Typecast operation requires Row-Major input tensor's padded shape to be multiple of 32. "
-            "Padded shape: {}",
-            input_tensor.padded_shape());
     }
 
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();

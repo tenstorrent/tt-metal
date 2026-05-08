@@ -25,8 +25,8 @@ void kernel_main() {
     const auto routing_weights_addrgen = TensorAccessor(routing_weights_args, routing_weights_base_address);
 
     cb_reserve_back(routing_weights_cb_id, 1);
-    const uint32_t routing_weights_l1_addr = get_read_ptr(routing_weights_cb_id);
-    const uint64_t routing_weights_noc_addr = get_noc_addr(0, routing_weights_addrgen);
+    const uint32_t routing_weights_l1_addr = get_write_ptr(routing_weights_cb_id);
+    const uint64_t routing_weights_noc_addr = routing_weights_addrgen.get_noc_addr(0);
     noc_async_read(routing_weights_noc_addr, routing_weights_l1_addr, routing_weights_page_size_bytes);
 
     cb_reserve_back(local_weights_idxs_cb_id, 1);

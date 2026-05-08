@@ -113,6 +113,7 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         operation_attributes.compute_kernel_config,
+        operation_attributes.use_l1_small_for_semaphores,
         subdevice_core_range_set,
         tensor_args);
 }
@@ -133,7 +134,8 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool use_l1_small_for_semaphores) {
     using OperationType = ttnn::operations::ccl::ReduceScatterDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -147,7 +149,8 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
             .chunks_per_sync = chunks_per_sync,
             .num_workers_per_link = num_workers_per_link,
             .num_buffers_per_channel = num_buffers_per_channel,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
 }  // namespace ttnn::prim

@@ -11,6 +11,7 @@ import ttnn
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 TEST_PADDING_VALUE = -42
 
@@ -464,8 +465,6 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
 )
 def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
     """layer_norm_post_all_gather with gamma and no bias; PCC vs torch reference."""
-    if use_pre_all_gather:
-        pytest.skip("Skipping test with use_pre_all_gather=True due to implicit padding issue #42135")
     run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather)
 
 
@@ -475,6 +474,40 @@ def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
 )
 def test_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch reference."""
-    if inp_shape == (1, 1, 24, 38):
-        pytest.skip("Skipping shape (1,1,24,38) due to implicit padding issue #42148")
     run_layernorm_pre_all_gather_residual_pcc(device, inp_shape)
+
+
+@pytest.mark.parametrize(
+    "inp_shape",
+    [(1, 1, 37, 72)],
+)
+def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
+    """layer_norm_pre_all_gather stats match for ttnn.ones vs torch2tt_tensor."""
+
+    tt_from_torch = torch2tt_tensor(
+        torch.ones(inp_shape, dtype=torch.bfloat16),
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+    )
+    tt_ones = ttnn.ones(
+        shape=inp_shape,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    stats_from_torch = ttnn.layer_norm_pre_all_gather(
+        tt_from_torch,
+        dtype=ttnn.bfloat16,
+    )
+    stats_from_ones = ttnn.layer_norm_pre_all_gather(
+        tt_ones,
+        dtype=ttnn.bfloat16,
+    )
+
+    out_from_torch = tt2torch_tensor(stats_from_torch)
+    out_from_ones = tt2torch_tensor(stats_from_ones)
+
+    # test for equivalance
+    assert_equal(out_from_torch, out_from_ones)

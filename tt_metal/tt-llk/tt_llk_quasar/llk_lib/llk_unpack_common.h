@@ -75,3 +75,11 @@ inline void _llk_unpack_dest_dvalid_section_done_()
         TTI_CLEARDVALID(0, 0, 0, p_cleardvalid::UNPACK_TO_DEST, p_cleardvalid::UNPACK_TO_DEST, 0);
     }
 }
+
+/**
+ * @brief Sets dummy SrcB dvalid
+ */
+inline void _llk_unpack_set_srcB_dummy_valid_()
+{
+    TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0, 0, 0, p_unpacr::UNP_NOP);
+}

@@ -1,8 +1,17 @@
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
 
 add_library(test_common_utils STATIC)
-target_sources(test_common_utils PUBLIC common_test_utils.cpp)
-target_link_libraries(test_common_utils PRIVATE TTNN::CPP)
+# PRIVATE so consumers that link `test_common_utils` do not also recompile this
+# source file into their own OBJECT library (which would produce duplicate
+# symbols when the final executable links both the OBJECT library and this
+# static lib).
+target_sources(test_common_utils PRIVATE common_test_utils.cpp)
+target_link_libraries(
+    test_common_utils
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
 tt_reuse_precompile_headers(test_common_utils TTNN::PCH)
 
 function(setup_ttnn_test_target target_name)
@@ -30,7 +39,12 @@ add_library(unit_tests_ttnn_smoke OBJECT)
 add_library(TTNN::Test::Smoke ALIAS unit_tests_ttnn_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(unit_tests_ttnn_smoke PRIVATE ${UNIT_TESTS_TTNN_SMOKE_SOURCES})
-target_include_directories(unit_tests_ttnn_smoke PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_include_directories(
+    unit_tests_ttnn_smoke
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
 target_link_libraries(
     unit_tests_ttnn_smoke
     PRIVATE
@@ -49,6 +63,7 @@ target_link_libraries(
     unit_tests_ttnn_basic
     PRIVATE
         test_common_libs
+        test_common_utils
         TTNN::CPP
 )
 tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::PCH)
@@ -143,6 +158,10 @@ target_link_libraries(
 add_executable(unit_tests_ttnn_emitc)
 target_sources(unit_tests_ttnn_emitc PRIVATE ${UNIT_TESTS_TTNN_EMITC_SOURCES})
 setup_ttnn_test_target(unit_tests_ttnn_emitc)
+
+if(TT_METAL_USE_EMULE)
+    target_link_options(unit_tests_ttnn PRIVATE -rdynamic)
+endif()
 
 add_subdirectory(multiprocess)
 add_subdirectory(udm)

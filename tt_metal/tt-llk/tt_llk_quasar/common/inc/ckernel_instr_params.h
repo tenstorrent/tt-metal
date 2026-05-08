@@ -126,6 +126,12 @@ struct p_ind
     constexpr static std::uint32_t LD_8bit  = 3;
 };
 
+struct p_mov
+{
+    constexpr static std::uint32_t DEST_NORM    = 0x0;
+    constexpr static std::uint32_t DEST_32B_LOW = 0x1;
+};
+
 struct p_movd2a
 {
     constexpr static std::uint32_t MOV_1_ROW  = 0x0;
@@ -141,6 +147,9 @@ struct p_movd2b
 
     constexpr static std::uint32_t SRC_ROW16_OFFSET = 0x10;
     constexpr static std::uint32_t SRC_ROW32_OFFSET = 0x20;
+
+    constexpr static std::uint32_t TRANSPOSE_OFF = 0x0;
+    constexpr static std::uint32_t TRANSPOSE_ON  = 0x1;
 };
 
 struct p_movb2a
@@ -153,6 +162,12 @@ struct p_movb2a
     constexpr static std::uint32_t SRCA_ZERO_OFFSET  = 0x0;
     constexpr static std::uint32_t SRCB_ROW16_OFFSET = 0x10;
     constexpr static std::uint32_t SRCB_ROW32_OFFSET = 0x20;
+};
+
+struct p_movb2d
+{
+    constexpr static std::uint32_t BCAST_OFF = 0x0;
+    constexpr static std::uint32_t BCAST_ON  = 0x1;
 };
 
 struct p_mov_src_to_dest
@@ -351,6 +366,17 @@ struct p_sfpu
         constexpr static std::uint32_t CLR_CC    = 0x1;
         constexpr static std::uint32_t SET_CC_EN = 0x1;
         constexpr static std::uint32_t CLR_CC_EN = 0x0;
+    };
+
+    struct sfp_sfpcast_mod
+    {
+        constexpr static std::uint32_t SM32_TO_2SC  = 0x3; // sign+magnitude int32 -> 2's complement
+        constexpr static std::uint32_t TWO_SC_TO_SM = 0x2; // 2's complement -> sign+magnitude int32
+    };
+
+    struct sfp_binary_mod
+    {
+        constexpr static std::uint32_t SFPIADD_DISABLE_CC = 0b0100;
     };
 
     struct sfp_stochrnd_mod

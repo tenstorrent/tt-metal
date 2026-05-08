@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize(

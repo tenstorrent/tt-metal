@@ -407,6 +407,15 @@ class CompressedTensor:
             ]
             return [desc]
 
+    def buffer_address(self) -> int:
+        """Return the DRAM buffer address of the packed data tensor (lockstep mode only)."""
+        assert (
+            not self._per_core_allocation
+        ), "buffer_address() not available in per_core_allocation mode; use get_data_l1_address_per_core()"
+        assert self.data is not None, "Data tensor not created"
+        assert ttnn.is_tensor_storage_on_device(self.data), "Data tensor not on device"
+        return self.data.buffer_address()
+
     def get_data_l1_address(self) -> int:
         assert (
             not self._per_core_allocation
@@ -521,7 +530,7 @@ class CompressedTensor:
         self._per_device_tile_formats[coord0] = tile_formats
 
         alignment = _get_alignment(memory_config.buffer_type)
-        self.max_shard_size = _align(max(shard_data_sizes), alignment)
+        self.max_shard_size = max(_align(max(shard_data_sizes), alignment), alignment)
 
         logical_shape = ttnn.Shape(list(tensor.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)

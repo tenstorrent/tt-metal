@@ -56,7 +56,7 @@ class DeepseekSamplingArgs:
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
-ConfigWeight = ttnn.Tensor | FromWeightConfig
+ConfigWeight = ttnn.Tensor | SavedWeight | FromWeightConfig
 
 
 @dataclass
@@ -86,6 +86,7 @@ class LinearConfig(OpConfigBase):
     """Common parameters for a ttnn.linear op, weights are in input_tensor_b"""
 
     input_tensor_b: ConfigWeight
+    transpose_b: bool = False
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig | None = None
