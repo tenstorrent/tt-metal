@@ -217,9 +217,7 @@ def _resolve_workspace_path(path: str, workspace_root: Path) -> Path:
     try:
         resolved.relative_to(workspace_root)
     except ValueError as err:
-        raise ValueError(
-            f"Path must stay within workspace root '{workspace_root}': {path}"
-        ) from err
+        raise ValueError(f"Path must stay within workspace root '{workspace_root}': {path}") from err
 
     return resolved
 

@@ -98,10 +98,14 @@ def _choose_group_norm_virtual_cols(num_channels: int, device) -> int:
     return 1
 
 
-def _prepare_group_norm_params(weight: torch.Tensor, bias: torch.Tensor, num_channels: int, device) -> Dict[str, object]:
+def _prepare_group_norm_params(
+    weight: torch.Tensor, bias: torch.Tensor, num_channels: int, device
+) -> Dict[str, object]:
     num_cores_across_channel = _choose_group_norm_virtual_cols(num_channels, device)
     try:
-        input_mask = ttnn.create_group_norm_input_mask(num_channels, num_channels, num_cores_across_channel, ttnn.bfloat16)
+        input_mask = ttnn.create_group_norm_input_mask(
+            num_channels, num_channels, num_cores_across_channel, ttnn.bfloat16
+        )
     except TypeError:
         input_mask = ttnn.create_group_norm_input_mask(num_channels, num_channels, num_cores_across_channel)
     input_mask = ttnn.to_device(input_mask, device)
@@ -427,7 +431,12 @@ class TTNNSpeechEncoderPrenet:
             conv_output = ttnn.slice(
                 conv_output,
                 [0, 0, 0, 0],
-                [conv_output.shape[0], conv_output.shape[1], out_length - pos_conv_params["num_pad_remove"], conv_output.shape[3]],
+                [
+                    conv_output.shape[0],
+                    conv_output.shape[1],
+                    out_length - pos_conv_params["num_pad_remove"],
+                    conv_output.shape[3],
+                ],
             )
             out_length = out_length - pos_conv_params["num_pad_remove"]
 
@@ -456,7 +465,9 @@ class TTNNSpeechEncoderPrenet:
         incremental_indices = torch.cumsum(mask, dim=1).type_as(mask) * mask
         return incremental_indices.long() + pad_idx
 
-    def _sinusoidal_embedding(self, batch_size: int, seq_len: int, reduced_attention_mask: Optional[torch.Tensor]) -> ttnn.Tensor:
+    def _sinusoidal_embedding(
+        self, batch_size: int, seq_len: int, reduced_attention_mask: Optional[torch.Tensor]
+    ) -> ttnn.Tensor:
         if reduced_attention_mask is None:
             cache_key = (batch_size, seq_len)
             if cache_key not in self._sinusoidal_cache:
