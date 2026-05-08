@@ -99,7 +99,6 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
           copyToWorkers: false
           ranksData: ${{ needs.create-allocation.outputs.ranksData }}
 
@@ -167,7 +166,6 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
           copyToWorkers: false
           ranksData: ${{ needs.create-allocation.outputs.ranksData }}
 
