@@ -316,11 +316,18 @@ void kernel_main() {
             using namespace compute_kernel_lib;
             constexpr BroadcastDim BCAST_DIM = is_lastdim_layernorm ? BroadcastDim::Col : BroadcastDim::Scalar;
             using MulBcast = BinaryFpu<
-                cb_n_recip_n, cb_rstd, BinaryFpuOp::Mul, BCAST_DIM,
-                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::NoWaitNoPop,
-                CbIndexMode::Pinned, CbIndexMode::FirstTile, Dst::D0,
-                0, 0, 0, cb_recip_nrstd>;
+                cb_n_recip_n,
+                cb_rstd,
+                BinaryFpuOp::Mul,
+                BCAST_DIM,
+                BinaryFpuOutputPolicy::PerTile,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::NoWaitNoPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::Pinned,
+                CbIndexMode::FirstTile,
+                Dst::D0,
+                cb_recip_nrstd>;
             MulBcast elt{};
             elt.a_tile_idx = 1;
             eltwise_chain(

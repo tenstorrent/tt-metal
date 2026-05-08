@@ -44,9 +44,6 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0,
-        0,
-        0,
-        0,
         cb_out>;
 
     eltwise_chain(

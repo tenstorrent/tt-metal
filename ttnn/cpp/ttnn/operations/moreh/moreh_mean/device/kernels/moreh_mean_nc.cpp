@@ -65,11 +65,18 @@ void kernel_main() {
         {
             using namespace compute_kernel_lib;
             using MulScalar = BinaryFpu<
-                cb_intermed0, cb_scalar, BinaryFpuOp::Mul, BroadcastDim::Scalar,
-                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-                CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0,
-                0, 0, 0, cb_out0>;
+                cb_intermed0,
+                cb_scalar,
+                BinaryFpuOp::Mul,
+                BroadcastDim::Scalar,
+                BinaryFpuOutputPolicy::PerTile,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                CbIndexMode::FirstTile,
+                Dst::D0,
+                cb_out0>;
             eltwise_chain(
                 onetile,
                 MulScalar{},

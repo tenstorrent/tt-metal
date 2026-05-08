@@ -45,9 +45,6 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0,
-        0,
-        0,
-        0,
         cb_out>;
 
     cb_wait_front(cb_b, 1);
@@ -70,9 +67,6 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0,
-        0,
-        0,
-        0,
         cb_out>;
 
     eltwise_chain(

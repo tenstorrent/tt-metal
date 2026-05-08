@@ -14,6 +14,22 @@
 
 namespace compute_kernel_lib {
 
+// =============================================================================
+// Compile-time prev-CB / prev-fp32-dest-acc tracking (D2 + D6 fold infrastructure)
+// =============================================================================
+//
+// Each chain element exposes static accessors describing which CB it routes to
+// each side of the math/pack pipeline. Streaming and block elements use the same
+// uniform accessors so the chain pipeline can compute, at compile time, the most
+// recent CB seen on each Side (SrcA / SrcB / Pack) before any given element index.
+//
+// NO_PREV_CB is the sentinel used by elements that don't touch a side; the fold
+// walks Es[0..I-1] backwards and returns the most recent non-NO_PREV_CB.
+
+inline constexpr uint32_t NO_PREV_CB = 0xFFFFFFFFu;
+
+enum class Side : uint8_t { SrcA, SrcB, Pack };
+
 namespace detail {
 
 // =============================================================================
@@ -64,6 +80,127 @@ template <class T> struct has_cb_a<T, std::void_t<decltype(T::cb_a_id())>> : std
 template <class T, class = void> struct has_cb_b    : std::false_type {};
 template <class T> struct has_cb_b<T, std::void_t<decltype(T::cb_b_id())>> : std::true_type {};
 
+// =============================================================================
+// Per-Side prev-CB SFINAE probe (D2)
+//
+// `cb_for_side<Side, E>` reads `E::reconfig_srca_cb` / `_srcb_cb` / `_pack_cb`
+// when present, returns `NO_PREV_CB` otherwise. Block elements that haven't yet
+// adopted the accessors (commit 3 / D7) still participate in the fold transparently.
+// =============================================================================
+
+template <class E, class = void>
+struct has_reconfig_srca : std::false_type {};
+template <class E>
+struct has_reconfig_srca<E, std::void_t<decltype(E::reconfig_srca_cb)>> : std::true_type {};
+
+template <class E, class = void>
+struct has_reconfig_srcb : std::false_type {};
+template <class E>
+struct has_reconfig_srcb<E, std::void_t<decltype(E::reconfig_srcb_cb)>> : std::true_type {};
+
+template <class E, class = void>
+struct has_reconfig_pack : std::false_type {};
+template <class E>
+struct has_reconfig_pack<E, std::void_t<decltype(E::reconfig_pack_cb)>> : std::true_type {};
+
+template <Side S, class E>
+constexpr uint32_t cb_for_side() {
+    if constexpr (S == Side::SrcA) {
+        if constexpr (has_reconfig_srca<E>::value) return E::reconfig_srca_cb;
+        else                                       return NO_PREV_CB;
+    } else if constexpr (S == Side::SrcB) {
+        if constexpr (has_reconfig_srcb<E>::value) return E::reconfig_srcb_cb;
+        else                                       return NO_PREV_CB;
+    } else {  // Pack
+        if constexpr (has_reconfig_pack<E>::value) return E::reconfig_pack_cb;
+        else                                       return NO_PREV_CB;
+    }
+}
+
+// =============================================================================
+// prev_cb_for_idx<Side, I, Es...>()
+//
+// Walks Es[0..I-1] backwards, returning the most recent non-NO_PREV_CB on `Side`.
+// Implemented as a constexpr fold using std::index_sequence.
+// =============================================================================
+
+template <Side S, std::size_t I, class... Es>
+constexpr uint32_t prev_cb_for_idx() {
+    // Pack into an array; walk indices [0..I) backwards and pick the first non-sentinel.
+    if constexpr (I == 0) {
+        return NO_PREV_CB;
+    } else {
+        constexpr uint32_t cbs[] = { cb_for_side<S, Es>()... };
+        for (std::size_t k = I; k-- > 0; ) {
+            if (cbs[k] != NO_PREV_CB) return cbs[k];
+        }
+        return NO_PREV_CB;
+    }
+}
+
+// =============================================================================
+// fp32_or_default<E, Default> — SFINAE probe for D6 EnableFp32DestAcc member.
+//
+// Returns `E::EnableFp32DestAcc` when E (a CARRY-list element) carries the flag;
+// returns `Default` (the running prev) when E does not (SKIP-list elements).
+// Used by the fp32-dest-acc fold to pass the running value through SKIP elements
+// transparently.
+// =============================================================================
+
+template <class E, bool Default, class = void>
+struct fp32_or_default {
+    static constexpr bool value = Default;
+};
+template <class E, bool Default>
+struct fp32_or_default<E, Default, std::void_t<decltype(E::EnableFp32DestAcc)>> {
+    static constexpr bool value = E::EnableFp32DestAcc;
+};
+
+// has_fp32_dest_acc_v<E> — true when E::EnableFp32DestAcc is a member.
+// Resolved by the same SFINAE machinery as `fp32_or_default`.
+template <class E, class = void>
+struct has_fp32_dest_acc : std::false_type {};
+template <class E>
+struct has_fp32_dest_acc<E, std::void_t<decltype(E::EnableFp32DestAcc)>> : std::true_type {};
+
+// =============================================================================
+// prev_fp32_dest_acc_for_idx<I, Es...>()
+//
+// Walks Es[0..I-1] forwards (recursive pack-peel), threading the running fp32 flag
+// through each element. SKIP elements keep the prior value (no member); CARRY
+// elements anchor it (`E::EnableFp32DestAcc`). Default (no prior element) is `false`
+// per Q6 — chain inherits no fp32 state from the kernel.
+//
+// `prev_fp32_walk` is the recursion: K = current index, I = stop index, running =
+// the value seen so far.
+// =============================================================================
+
+template <std::size_t K, std::size_t I, bool Running, class First, class... Rest>
+constexpr bool prev_fp32_walk_step() {
+    if constexpr (K == I) {
+        return Running;
+    } else {
+        constexpr bool next = has_fp32_dest_acc<First>::value
+                                  ? fp32_or_default<First, Running>::value
+                                  : Running;
+        if constexpr (sizeof...(Rest) == 0) {
+            // Walked the whole pack but K < I — should not happen for well-formed I; guard.
+            return next;
+        } else {
+            return prev_fp32_walk_step<K + 1, I, next, Rest...>();
+        }
+    }
+}
+
+template <std::size_t I, class... Es>
+constexpr bool prev_fp32_dest_acc_for_idx() {
+    if constexpr (I == 0 || sizeof...(Es) == 0) {
+        return false;
+    } else {
+        return prev_fp32_walk_step<0, I, false, Es...>();
+    }
+}
+
 }  // namespace detail
 
 // =============================================================================
@@ -74,8 +211,7 @@ template <uint32_t Cb,
           Dst DstSlot,
           CopyTilePolicy Policy,
           CbIndexMode IndexMode,
-          CopyTileReconfig Reconfig,
-          uint32_t OldCb>
+          CopyTileReconfig Reconfig>
 struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
@@ -101,6 +237,11 @@ struct CopyTile : CopyTileTag {
     static constexpr CopyTilePolicy b_policy()      { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr bool           is_upfront      = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd);
     static constexpr bool           clashes_with_fpu= true;   // copy_tile uses unpacker MOP
+
+    // Prev-CB fold (D2): CopyTile loads CbA only.
+    static constexpr uint32_t       reconfig_srca_cb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_CB;
+    static constexpr uint32_t       reconfig_srcb_cb = NO_PREV_CB;
+    static constexpr uint32_t       reconfig_pack_cb = NO_PREV_CB;
 
     /// Runtime tile index — set by user only when IndexMode == Pinned / Absolute.
     uint32_t cb_tile_idx = 0;
@@ -163,8 +304,7 @@ template <uint32_t Cb,
           Dst DstSlot,
           PackTilePolicy Policy,
           PackTileIndexMode IndexMode,
-          PackTileReconfig Reconfig,
-          uint32_t OldCb>
+          PackTileReconfig Reconfig>
 struct PackTile : PackTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -183,16 +323,22 @@ struct PackTile : PackTileTag {
     static constexpr bool              is_upfront          = (Policy == PackTilePolicy::UpfrontReservePushAtEnd);
     static constexpr PackTileIndexMode index_mode          = IndexMode;
 
+    // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
+    // the user opted into pack reconfig (Output / OutputConditional). Otherwise no
+    // pack reconfig is emitted — fold keeps prior pack target.
+    static constexpr uint32_t          reconfig_srca_cb    = NO_PREV_CB;
+    static constexpr uint32_t          reconfig_srcb_cb    = NO_PREV_CB;
+    static constexpr uint32_t          reconfig_pack_cb    =
+        (Reconfig == PackTileReconfig::Output || Reconfig == PackTileReconfig::OutputConditional) ? Cb : NO_PREV_CB;
+
     /// Runtime output-tile index for Pinned / Absolute modes.
     uint32_t output_tile_idx = 0;
 
     static ALWI void init() {
-        // Single-arg pack reconfig — no previous-CB tracking. (`OutputConditional` retained
-        // for source compatibility but emits the same single-arg call.)
-        if constexpr (Reconfig == PackTileReconfig::Output ||
-                      Reconfig == PackTileReconfig::OutputConditional) {
-            pack_reconfig_data_format(Cb);
-        }
+        // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
+        // The chain emits the reconfig in `emit_pre_element_transitions()` before this
+        // element runs; init() here is a no-op for reconfig.
+        // Retained empty so trait-dispatch stays uniform.
     }
 
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
@@ -239,8 +385,7 @@ template <uint32_t Cb,
           Dst FirstSlot,
           uint32_t NTiles,
           PackTilePolicy Policy,
-          PackTileReconfig Reconfig,
-          uint32_t OldCb>
+          PackTileReconfig Reconfig>
 struct PackTileBlock : PackTileTag {
     static_assert(NTiles >= 1 && NTiles <= DEST_AUTO_LIMIT,
                   "PackTileBlock: NTiles must be in [1, DEST_AUTO_LIMIT]");
@@ -253,12 +398,14 @@ struct PackTileBlock : PackTileTag {
     static constexpr uint32_t n_tiles      = NTiles;
     static constexpr bool     is_upfront   = (Policy == PackTilePolicy::UpfrontReservePushAtEnd);
 
+    // Prev-CB fold (D2): PackTileBlock writes pack-side.
+    static constexpr uint32_t reconfig_srca_cb = NO_PREV_CB;
+    static constexpr uint32_t reconfig_srcb_cb = NO_PREV_CB;
+    static constexpr uint32_t reconfig_pack_cb =
+        (Reconfig == PackTileReconfig::Output || Reconfig == PackTileReconfig::OutputConditional) ? Cb : NO_PREV_CB;
+
     static ALWI void init() {
-        // Single-arg pack reconfig — no previous-CB tracking.
-        if constexpr (Reconfig == PackTileReconfig::Output ||
-                      Reconfig == PackTileReconfig::OutputConditional) {
-            pack_reconfig_data_format(Cb);
-        }
+        // Pack reconfig is fold-driven; init() is a no-op.
     }
 
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
@@ -303,9 +450,6 @@ template <uint32_t CbA,
           CbIndexMode AIndex,
           CbIndexMode BIndex,
           Dst DstSlot,
-          uint32_t OldCbA,
-          uint32_t OldCbB,
-          uint32_t OldCbOut,
           uint32_t CbOut>
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
@@ -326,23 +470,28 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
 
+    // Prev-CB fold (D2): BinaryFpu touches both srca (CbA), srcb (CbB), and pack (CbOut)
+    // when the corresponding reconfig is opted in. F-PERF-3 strips the per-element pack
+    // reconfig from init(); the chain's compile-time-elided fold drives both input-side
+    // and output-side reconfig before this element runs.
+    static constexpr uint32_t      reconfig_srca_cb =
+        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
+            ? CbA : NO_PREV_CB;
+    static constexpr uint32_t      reconfig_srcb_cb =
+        (DfReconfig == BinaryDataFormatReconfig::Input || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
+            ? CbB : NO_PREV_CB;
+    static constexpr uint32_t      reconfig_pack_cb =
+        ((DfReconfig == BinaryDataFormatReconfig::Output || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
+         && CbOut != 0) ? CbOut : NO_PREV_CB;
+
     /// Runtime indices for Pinned / Absolute modes.
     uint32_t a_tile_idx = 0;
     uint32_t b_tile_idx = 0;
 
     // ---- init / reconfig ----
+    // F-PERF-3: srca / srcb / pack reconfig are now fold-driven (compile-time-elided
+    // when prev_*_cb == cur_*_cb). init() programs only the per-op LLK shape.
     static ALWI void init() {
-        // Input-side reconfig (single-arg — no previous-CB tracking).
-        if constexpr (DfReconfig == BinaryDataFormatReconfig::Input ||
-                      DfReconfig == BinaryDataFormatReconfig::InputAndOutput) {
-            reconfig_data_format_srca(CbA);
-            reconfig_data_format_srcb(CbB);
-        }
-        // Output-side reconfig (pack, single-arg).
-        if constexpr ((DfReconfig == BinaryDataFormatReconfig::Output ||
-                       DfReconfig == BinaryDataFormatReconfig::InputAndOutput) && CbOut != 0) {
-            pack_reconfig_data_format(CbOut);
-        }
         // Op-specific init.
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles_init(CbA, CbB);
@@ -426,8 +575,7 @@ template <uint32_t Cb,
           Dst DstOut,
           DestReuseReconfig Reconfig,
           CopyTilePolicy Policy,
-          CbIndexMode IndexMode,
-          uint32_t OldCb>
+          CbIndexMode IndexMode>
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -442,8 +590,18 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
+    // Prev-CB fold (D2): DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
+    // (when DEST → srca). Reconfig only fires when opted in.
+    static constexpr uint32_t       reconfig_srca_cb  =
+        (Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : NO_PREV_CB;
+    static constexpr uint32_t       reconfig_srcb_cb  =
+        (Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : NO_PREV_CB;
+    static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
+
     uint32_t cb_tile_idx = 0;
 
+    // F-PERF-3: srca / srcb reconfig is fold-driven; init() programs only the per-op
+    // LLK shape.
     static ALWI void init() {
         constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
                             (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
@@ -451,11 +609,6 @@ struct DestReuseBinary : DestReuseBinaryTag {
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        if constexpr (Reconfig == DestReuseReconfig::Input) {
-            // Single-arg reconfig — no previous-CB tracking.
-            if constexpr (ReuseType == DestReuseType::DEST_TO_SRCB) reconfig_data_format_srca(Cb);
-            else                                                     reconfig_data_format_srcb(Cb);
-        }
         binary_dest_reuse_tiles_init<et, reuse>(Cb);
     }
 
@@ -500,9 +653,7 @@ template <BroadcastDim Dim,
           uint32_t CbOut,
           Dst DstSlot,
           CopyTilePolicy Policy,
-          UnaryBcastReconfig Reconfig,
-          uint32_t OldCb,
-          uint32_t OldCbOut>
+          UnaryBcastReconfig Reconfig>
 struct UnaryBcast : UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -514,6 +665,13 @@ struct UnaryBcast : UnaryBcastTag {
     static constexpr Dst            dst_slot          = DstSlot;
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
+
+    // Prev-CB fold (D2): UnaryBcast loads Cb to srca; ocb (CbOut or Cb) on pack-side.
+    // Reconfig is currently bundled into `unary_bcast_init` so no separate fold-driven
+    // reconfig fires here; sentinels remain NO_PREV_CB to keep the fold transparent.
+    static constexpr uint32_t       reconfig_srca_cb  = NO_PREV_CB;
+    static constexpr uint32_t       reconfig_srcb_cb  = NO_PREV_CB;
+    static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
     static ALWI void init() {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
@@ -712,13 +870,70 @@ struct has_member_exec<T, std::void_t<decltype(std::declval<const T>().exec(uint
     : std::true_type {};
 template <class T> inline constexpr bool has_member_exec_v = has_member_exec<T>::value;
 
+// =============================================================================
+// emit_pre_element_transitions<E, I, Es...>() (D2 + D6)
+//
+// For element at position I in pack Es..., emit:
+//   1. fp32-dest-acc transition (if curr_fp32 != prev_fp32)
+//   2. srca / srcb / pack reconfig (each compile-time-elided when prev_*_cb == curr_*_cb)
+//
+// Compile-time elision means a chain whose elements all share a CB on a side emits
+// the reconfig once (at element 0, where prev == NO_PREV_CB) and never again on that
+// side. Run-time cost: zero — `if constexpr` resolves at compile time.
+//
+// D6 transition fold: the fp32 fold walks Es[0..I-1] threading SKIP elements through
+// transparently and anchoring on CARRY-list elements. CARRY elements that don't
+// declare `EnableFp32DestAcc` (yet — D6 lands in commit 5) are treated as SKIP via
+// the SFINAE probe, so this commit's fold is a structural no-op for fp32 transitions
+// until D6 elements ship.
+// =============================================================================
+
+template <class E, std::size_t I, class... Es>
+ALWI void emit_pre_element_transitions() {
+    // ---- D6 fp32 transition ----
+    constexpr bool prev_fp32 = prev_fp32_dest_acc_for_idx<I, Es...>();
+    constexpr bool curr_fp32 = fp32_or_default<E, prev_fp32>::value;
+    if constexpr (curr_fp32 != prev_fp32) {
+        if constexpr (curr_fp32) { enable_fp32_dest_acc(); }
+        else                     { disable_fp32_dest_acc(); }
+    }
+
+    // ---- D2 prev-CB elision ----
+    constexpr uint32_t curr_a = cb_for_side<Side::SrcA, E>();
+    if constexpr (curr_a != NO_PREV_CB) {
+        constexpr uint32_t prev_a = prev_cb_for_idx<Side::SrcA, I, Es...>();
+        if constexpr (curr_a != prev_a) {
+            reconfig_data_format_srca(curr_a);
+        }
+    }
+
+    constexpr uint32_t curr_b = cb_for_side<Side::SrcB, E>();
+    if constexpr (curr_b != NO_PREV_CB) {
+        constexpr uint32_t prev_b = prev_cb_for_idx<Side::SrcB, I, Es...>();
+        if constexpr (curr_b != prev_b) {
+            reconfig_data_format_srcb(curr_b);
+        }
+    }
+
+    constexpr uint32_t curr_p = cb_for_side<Side::Pack, E>();
+    if constexpr (curr_p != NO_PREV_CB) {
+        constexpr uint32_t prev_p = prev_cb_for_idx<Side::Pack, I, Es...>();
+        if constexpr (curr_p != prev_p) {
+            pack_reconfig_data_format(curr_p);
+        }
+    }
+}
+
 // Compute-phase exec (everything except Pack*).
 // Runs between `tile_regs_acquire()` and `tile_regs_commit()`.
 // For FPU-clash patterns each element's init() runs immediately before its exec —
 // this matches production kernels (`copy_tile_init; copy_tile; sfpu_init; sfpu_tile;
 // binary_dest_reuse_init; binary_dest_reuse_tiles`) and avoids state-clobbering when
 // multiple chain elements reconfigure the unpacker.
-template <class E>
+//
+// `EmitInit`: when true, the per-tile path re-fires `E::init()` before exec (clash
+// chains). When false, the chain hoisted init() to boot — per-tile path skips it.
+template <bool EmitInit, class E>
 ALWI void elem_compute_exec(const E& e, uint32_t i) {
     if constexpr (is_pack_tile_op_v<E>) {
         // Pack runs in the pack phase, not compute. Skip here.
@@ -726,15 +941,15 @@ ALWI void elem_compute_exec(const E& e, uint32_t i) {
     } else if constexpr (has_member_exec_v<E>) {
         // CB-bound element, Fill/Rand, OR runtime-param SFPU op (UnaryNe etc.) —
         // dispatch via member exec(i) so runtime payload (param0, value, idx, ...) is captured.
-        E::init();
+        if constexpr (EmitInit) E::init();
         e.exec(i);
     } else if constexpr (is_dest_only_op_v<E>) {
         // Pure SFPU op via CRTP base — static init() + static exec().
-        E::init();
+        if constexpr (EmitInit) E::init();
         E::exec();
     } else {
         // Fallback (shouldn't reach for well-formed chain elements).
-        E::init();
+        if constexpr (EmitInit) E::init();
         (void)e; (void)i;
     }
 }
@@ -746,10 +961,54 @@ ALWI void elem_pack_exec(const E& e, uint32_t i) {
     if constexpr (is_pack_tile_op_v<E>) e.exec(i);
 }
 
-// Pack-phase init (Pack* only — pack_reconfig_data_format if Reconfig != None).
+// Pack-phase init (Pack* only — F-PERF-4: hoisted to boot, not per-tile).
+// Note: post-commit-2 the pack reconfig is fold-driven via `emit_pre_element_transitions`,
+// so this is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
+// in case a pack element gains per-op LLK programming in a future commit.
 template <class E>
 ALWI void elem_pack_init() {
     if constexpr (is_pack_tile_op_v<E>) E::init();
+}
+
+// Index-list expander: runs `emit_pre_element_transitions<E_I, I, Es...>()` then
+// `elem_compute_exec<EmitInit>(elts[I], i)` for each I in [0, sizeof...(Es)).
+//
+// `EmitInit` and `EmitTransitions` are independent gates:
+//   - EmitTransitions=true: per-tile pre-element reconfig + fp32 transitions
+//     (used by FPU-clash chains where the FPU op overwrites unpacker state)
+//   - EmitTransitions=false: transitions already hoisted to boot — skip
+//   - EmitInit=true: per-tile init() (FPU-clash chains)
+//   - EmitInit=false: init() already hoisted to boot — skip
+template <bool EmitInit, bool EmitTransitions, std::size_t... Is, class... Es>
+ALWI void compute_phase_for_each(std::index_sequence<Is...>, uint32_t i, Es&... elts) {
+    auto run_one = [&](auto idx, auto& elem) {
+        constexpr std::size_t II = decltype(idx)::value;
+        using ElemT = std::remove_reference_t<decltype(elem)>;
+        if constexpr (EmitTransitions) {
+            emit_pre_element_transitions<ElemT, II, Es...>();
+        }
+        elem_compute_exec<EmitInit>(elem, i);
+    };
+    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+}
+
+// Hoisted init+transitions for non-clash chains (F-PERF-1).
+// Boot-time emission: per-element pre-element transitions + per-element static init().
+template <std::size_t... Is, class... Es>
+ALWI void hoisted_init_for_each(std::index_sequence<Is...>, Es&... elts) {
+    auto run_one = [&](auto idx, auto& elem) {
+        constexpr std::size_t II = decltype(idx)::value;
+        using ElemT = std::remove_reference_t<decltype(elem)>;
+        // Skip Pack elements (their reconfig is fold-driven and pack init() is
+        // already a no-op post-commit-2; pack-side transitions are handled by the
+        // boot pack_init pass and the per-element fold below covers any non-pack
+        // pack-side reconfig ordering).
+        if constexpr (!is_pack_tile_op_v<ElemT>) {
+            emit_pre_element_transitions<ElemT, II, Es...>();
+            ElemT::init();
+        }
+    };
+    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
 
 }  // namespace detail
@@ -790,20 +1049,38 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     static_assert(!any_upfront || block_path,
                   "eltwise_chain: upfront policy used but EltwiseChainOptions.upfront_block_size == 0");
 
+    // ---- F-PERF-1: per-tile init gate on FPU clash ----
+    //
+    // Chains without FPU clash (pure CopyTile + SFPU + PackTile) only need init()
+    // emitted once at boot — subsequent tiles re-use the programmed state. Chains
+    // with FPU clash (BinaryFpu, DestReuseBinary, UnaryBcast) need per-tile re-init
+    // because the FPU op overwrites unpacker state that copy_tile / SFPU programs.
+    constexpr bool has_clash = chain_has_non_copy_tile_fpu_clash_v<Chain>;
+    constexpr bool emit_init_per_tile = has_clash;
+
+    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
+
+    // ---- F-PERF-4: hoist pack init out of per-tile loop ----
+    // Pack reconfig is fold-driven (D2) and idempotent — emit once at chain entry.
+    (detail::elem_pack_init<Es>(), ...);
+
+    if constexpr (!emit_init_per_tile) {
+        // Non-clash chain: hoist all per-element transitions + init() to boot.
+        // The per-tile loop emits only the lifecycle + exec.
+        detail::hoisted_init_for_each(IdxSeq{}, elts...);
+    }
+
     if constexpr (block_path) {
         (detail::elem_wait_upfront(elts, block_n), ...);
         (detail::elem_reserve_upfront(elts, block_n), ...);
 
         for (uint32_t i = 0; i < n_tiles; ++i) {
             tile_regs_acquire();
-            // Per-element init+exec: each element's init runs immediately before its
-            // exec, mirroring production kernels and avoiding state clobber across the
-            // FPU-clash chain.
-            (detail::elem_compute_exec(elts, i), ...);
+            // Compute-phase: emit pre-element transitions (when init is per-tile)
+            // and per-element exec.
+            detail::compute_phase_for_each<emit_init_per_tile, emit_init_per_tile>(IdxSeq{}, i, elts...);
             tile_regs_commit();
             tile_regs_wait();
-            // Pack-side init runs once per pack element (idempotent reconfig).
-            (detail::elem_pack_init<Es>(), ...);
             (detail::elem_pack_exec(elts, i), ...);
             tile_regs_release();
         }
@@ -817,10 +1094,9 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
             (detail::elem_reserve_per_tile(elts, i), ...);
 
             tile_regs_acquire();
-            (detail::elem_compute_exec(elts, i), ...);
+            detail::compute_phase_for_each<emit_init_per_tile, emit_init_per_tile>(IdxSeq{}, i, elts...);
             tile_regs_commit();
             tile_regs_wait();
-            (detail::elem_pack_init<Es>(), ...);
             (detail::elem_pack_exec(elts, i), ...);
             tile_regs_release();
 

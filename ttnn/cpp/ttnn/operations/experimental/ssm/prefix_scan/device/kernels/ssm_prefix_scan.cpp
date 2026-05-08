@@ -59,12 +59,19 @@ FORCE_INLINE void mul() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         1u,
-        BinaryFpu<cb_a, cb_b, BinaryFpuOp::Mul, BroadcastDim::None,
-                  BinaryFpuOutputPolicy::PerTile,
-                  BinaryDataFormatReconfig::InputAndOutput,
-                  CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
-                  CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                  Dst::D0, /*OldCbA*/0, /*OldCbB*/0, /*OldCbOut*/0, /*CbOut*/cb_out>{},
+        BinaryFpu<
+            cb_a,
+            cb_b,
+            BinaryFpuOp::Mul,
+            BroadcastDim::None,
+            BinaryFpuOutputPolicy::PerTile,
+            BinaryDataFormatReconfig::InputAndOutput,
+            CopyTilePolicy::WaitAndPop,
+            CopyTilePolicy::WaitAndPop,
+            CbIndexMode::FirstTile,
+            CbIndexMode::FirstTile,
+            Dst::D0,
+            cb_out>{},
         PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
@@ -73,12 +80,19 @@ FORCE_INLINE void sum() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         1u,
-        BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add, BroadcastDim::None,
-                  BinaryFpuOutputPolicy::PerTile,
-                  BinaryDataFormatReconfig::InputAndOutput,
-                  CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
-                  CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                  Dst::D0, /*OldCbA*/0, /*OldCbB*/0, /*OldCbOut*/0, /*CbOut*/cb_out>{},
+        BinaryFpu<
+            cb_a,
+            cb_b,
+            BinaryFpuOp::Add,
+            BroadcastDim::None,
+            BinaryFpuOutputPolicy::PerTile,
+            BinaryDataFormatReconfig::InputAndOutput,
+            CopyTilePolicy::WaitAndPop,
+            CopyTilePolicy::WaitAndPop,
+            CbIndexMode::FirstTile,
+            CbIndexMode::FirstTile,
+            Dst::D0,
+            cb_out>{},
         PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 

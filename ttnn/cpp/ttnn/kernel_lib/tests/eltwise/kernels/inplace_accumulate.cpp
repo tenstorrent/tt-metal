@@ -46,9 +46,6 @@ void kernel_main() {
         CbIndexMode::FirstTile,
         CbIndexMode::FirstTile,
         Dst::D0,
-        0,
-        0,
-        0,
         cb_acc>;
 
     if (num_iters > 1) {

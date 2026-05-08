@@ -25,11 +25,18 @@ void kernel_main() {
     {
         using namespace compute_kernel_lib;
         using MulBcast = BinaryFpu<
-            cb_x, cb_clip_coef_clamped, BinaryFpuOp::Mul, BroadcastDim::Scalar,
-            BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-            CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-            CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0,
-            0, 0, 0, cb_y>;
+            cb_x,
+            cb_clip_coef_clamped,
+            BinaryFpuOp::Mul,
+            BroadcastDim::Scalar,
+            BinaryFpuOutputPolicy::PerTile,
+            BinaryDataFormatReconfig::None,
+            CopyTilePolicy::WaitAndPop,
+            CopyTilePolicy::NoWaitNoPop,
+            CbIndexMode::FirstTile,
+            CbIndexMode::FirstTile,
+            Dst::D0,
+            cb_y>;
         eltwise_chain(
             num_tiles,
             MulBcast{},

@@ -32,13 +32,19 @@ void kernel_main() {
     // D5/D8: caller-side BIG init at the top of MAIN().
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
-    using BinElt = BinaryFpu<cb_a, cb_b, op, dim,
-                             BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                             CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitNoPop,
-                             CbIndexMode::FirstTile, CbIndexMode::FirstTile,
-                             Dst::D0,
-                             /*OldCbA=*/0, /*OldCbB=*/0, /*OldCbOut=*/0,
-                             /*CbOut=*/cb_out>;
+    using BinElt = BinaryFpu<
+        cb_a,
+        cb_b,
+        op,
+        dim,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::None,
+        CopyTilePolicy::WaitAndPop,
+        CopyTilePolicy::WaitNoPop,
+        CbIndexMode::FirstTile,
+        CbIndexMode::FirstTile,
+        Dst::D0,
+        cb_out>;
 
     eltwise_chain(
         num_tiles,

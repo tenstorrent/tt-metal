@@ -435,8 +435,7 @@ template <
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
     CbIndexMode IndexMode = CbIndexMode::FirstTile,
-    CopyTileReconfig Reconfig = CopyTileReconfig::None,
-    uint32_t OldCb = 0>
+    CopyTileReconfig Reconfig = CopyTileReconfig::None>
 struct CopyTile;
 
 template <
@@ -451,9 +450,6 @@ template <
     CbIndexMode AIndex = CbIndexMode::FirstTile,
     CbIndexMode BIndex = CbIndexMode::FirstTile,
     Dst DstSlot = Dst::D0,
-    uint32_t OldCbA = 0,
-    uint32_t OldCbB = 0,
-    uint32_t OldCbOut = 0,
     uint32_t CbOut = 0>
 struct BinaryFpu;
 
@@ -465,8 +461,7 @@ template <
     Dst DstOut = Dst::D0,
     DestReuseReconfig Reconfig = DestReuseReconfig::None,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    CbIndexMode IndexMode = CbIndexMode::FirstTile,
-    uint32_t OldCb = 0>
+    CbIndexMode IndexMode = CbIndexMode::FirstTile>
 struct DestReuseBinary;
 
 template <
@@ -475,9 +470,7 @@ template <
     uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None,
-    uint32_t OldCb = 0,
-    uint32_t OldCbOut = 0>
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None>
 struct UnaryBcast;
 
 template <
@@ -485,8 +478,7 @@ template <
     Dst DstSlot = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
     PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
-    PackTileReconfig Reconfig = PackTileReconfig::None,
-    uint32_t OldCb = 0>
+    PackTileReconfig Reconfig = PackTileReconfig::None>
 struct PackTile;
 
 template <
@@ -494,8 +486,7 @@ template <
     Dst FirstSlot,
     uint32_t NTiles,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None,
-    uint32_t OldCb = 0>
+    PackTileReconfig Reconfig = PackTileReconfig::None>
 struct PackTileBlock;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.

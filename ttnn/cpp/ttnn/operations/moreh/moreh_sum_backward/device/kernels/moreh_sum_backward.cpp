@@ -30,11 +30,18 @@ void kernel_main() {
                 ht_need_bcast                    ? BroadcastDim::Row :
                                                    BroadcastDim::Col;
             using AddBcast = BinaryFpu<
-                cb_in1, cb_in0, BinaryFpuOp::Add, BCAST_DIM,
-                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
-                CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::WaitAndPop,
-                CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0,
-                0, 0, 0, cb_out0>;
+                cb_in1,
+                cb_in0,
+                BinaryFpuOp::Add,
+                BCAST_DIM,
+                BinaryFpuOutputPolicy::PerTile,
+                BinaryDataFormatReconfig::None,
+                CopyTilePolicy::NoWaitNoPop,
+                CopyTilePolicy::WaitAndPop,
+                CbIndexMode::FirstTile,
+                CbIndexMode::FirstTile,
+                Dst::D0,
+                cb_out0>;
             eltwise_chain(
                 num_output_tiles,
                 AddBcast{},

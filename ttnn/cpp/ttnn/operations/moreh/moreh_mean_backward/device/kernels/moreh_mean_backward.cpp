@@ -42,11 +42,18 @@ void kernel_main() {
                     ht_need_bcast                    ? BroadcastDim::Row :
                                                        BroadcastDim::Col;
                 using AddBcast = BinaryFpu<
-                    cb_in1, cb_in0, BinaryFpuOp::Add, BCAST_DIM,
-                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                    CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::WaitAndPop,
-                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0,
-                    0, 0, 0, cb_intermed0>;
+                    cb_in1,
+                    cb_in0,
+                    BinaryFpuOp::Add,
+                    BCAST_DIM,
+                    BinaryFpuOutputPolicy::PerTile,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    CbIndexMode::FirstTile,
+                    Dst::D0,
+                    cb_intermed0>;
                 eltwise_chain(
                     onetile,
                     AddBcast{},
@@ -63,11 +70,18 @@ void kernel_main() {
 
             // Stage 2 — output * (1 / number_of_elements).
             using MulScalar = BinaryFpu<
-                cb_intermed0, cb_scalar, BinaryFpuOp::Mul, BroadcastDim::Scalar,
-                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
-                CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
-                CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0,
-                0, 0, 0, cb_out0>;
+                cb_intermed0,
+                cb_scalar,
+                BinaryFpuOp::Mul,
+                BroadcastDim::Scalar,
+                BinaryFpuOutputPolicy::PerTile,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                CbIndexMode::FirstTile,
+                Dst::D0,
+                cb_out0>;
             eltwise_chain(
                 onetile,
                 MulScalar{},

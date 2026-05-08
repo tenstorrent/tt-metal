@@ -44,9 +44,6 @@ ALWI void moreh_bin_chain() {
         IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
         IdxB == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
         Dst::D0,
-        0,
-        0,
-        0,
         CbOut>;
     BinElt elt{};
     elt.a_tile_idx = IdxA;
