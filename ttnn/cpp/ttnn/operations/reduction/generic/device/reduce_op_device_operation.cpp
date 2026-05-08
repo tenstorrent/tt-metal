@@ -87,8 +87,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        const auto& output_nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-        const auto& output_shard_grid = output_nd_shard_spec.grid;
+        const auto output_nd_shard_spec = compute_output_specs(operation_attributes, tensor_args);
+        const auto& emitted_nd_shard_spec = output_nd_shard_spec.memory_config().nd_shard_spec();
+        TT_FATAL(
+            emitted_nd_shard_spec.has_value(),
+            "ND sharded output config did not produce an ND sharded output tensor spec");
+        const auto& output_shard_grid = emitted_nd_shard_spec->grid;
         TT_FATAL(
             program_grid.contains(output_shard_grid),
             "Output shard grid {} must be contained in program core grid {}",
@@ -100,16 +104,10 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             output_shard_grid,
             device_grid);
 
-        const auto out_spec = compute_output_specs(operation_attributes, tensor_args);
-        const auto& emitted_nd_shard_spec = out_spec.memory_config().nd_shard_spec();
-        TT_FATAL(
-            emitted_nd_shard_spec.has_value(),
-            "ND sharded output config did not produce an ND sharded output tensor spec");
-
         const auto& emitted_shard_shape = emitted_nd_shard_spec->shard_shape;
         if (emitted_shard_shape.rank() >= 2) {
-            const uint32_t output_tile_height = out_spec.tile().get_height();
-            const uint32_t output_tile_width = out_spec.tile().get_width();
+            const uint32_t output_tile_height = output_nd_shard_spec.tile().get_height();
+            const uint32_t output_tile_width = output_nd_shard_spec.tile().get_width();
             TT_FATAL(
                 emitted_shard_shape[-2] > 0 && emitted_shard_shape[-1] > 0,
                 "ND sharded output: last-2 shard dims must be positive, got [..., {}, {}] (height/width in "
