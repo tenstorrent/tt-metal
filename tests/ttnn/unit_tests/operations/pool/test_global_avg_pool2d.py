@@ -48,25 +48,38 @@ def test_run_average_pool2d(
 # models/experimental/efficientnetb0/tt/efficientnetb0.py:483, where the input
 # is [1, 1, 49, 1280] ROW_MAJOR with an ND shard spec whose shard_shape[-2] = 49
 # (= 7*7, the spatial-flattened H of the EfficientNet-B0 feature map).
+#
+# The TT_FATAL is host-side (validate_on_program_cache_miss) and topology-
+# independent, so each of these parameter sets reproduces on any single-chip
+# WH (N150) as well as on N300. The single_core_min variant is included so
+# the repro survives the most aggressive harvesting configs (only core (0,0)
+# is required) and so it never depends on enough cores existing in row 0.
 @pytest.mark.parametrize(
-    "h_w, channels, w_split",
+    "h_w, channels, grid_end",
     [
-        (49, 1280, 8),  # EfficientNet-B0 final feature map
-        (25, 320, 4),  # 5x5, also non-tile-aligned
+        (49, 1280, (7, 0)),  # EfficientNet-B0 final feature map: matches the failing call
+        (25, 320, (3, 0)),  # 5x5 spatial, modest 4-core grid
+        (49, 64, (0, 0)),  # single-core minimum-hardware variant
     ],
-    ids=["efficientnetb0_7x7_1280", "5x5_320"],
+    ids=["efficientnetb0_7x7_1280", "5x5_320_4core", "single_core_min"],
 )
-def test_global_avg_pool2d_nd_sharded_row_major_non_tile_aligned_h(device, h_w, channels, w_split):
+def test_global_avg_pool2d_nd_sharded_row_major_non_tile_aligned_h(device, h_w, channels, grid_end):
     torch.manual_seed(0)
 
-    assert channels % w_split == 0, "channels must split evenly across cores"
+    end_x, end_y = grid_end
+    grid_size = device.compute_with_storage_grid_size()
+    if end_x >= grid_size.x or end_y >= grid_size.y:
+        pytest.skip(f"Device grid {grid_size.x}x{grid_size.y} is smaller than required {end_x + 1}x{end_y + 1}")
+
+    num_cores = (end_x + 1) * (end_y + 1)
+    assert channels % num_cores == 0, "channels must split evenly across cores"
     assert h_w % 32 != 0, "test targets non-tile-aligned H*W"
 
     torch_input = torch.randn(1, 1, h_w, channels, dtype=torch.bfloat16)
     torch_output = torch_input.mean(dim=2, keepdim=True)
 
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(w_split - 1, 0))])
-    shard_shape = ttnn.Shape([1, 1, h_w, channels // w_split])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))])
+    shard_shape = ttnn.Shape([1, 1, h_w, channels // num_cores])
     memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(shard_shape, grid))
 
     input_tensor = ttnn.from_torch(
