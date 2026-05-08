@@ -167,6 +167,11 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
 }
 
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
+    // Ensure pointer size is correct
+    if (offset % 4 != 0) {
+        fprintf(stderr, "[ASAN ERROR] Local L1 Alignment: Offset 0x%x must be 4-byte aligned for scalar access\n", offset);
+        abort();
+    }
     return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
 }
 

@@ -10,6 +10,7 @@ target_sources(unit_tests_api_lib PRIVATE
     ${UNIT_TESTS_API_SOURCES}
     test_alignment_writes.cpp
     test_cb_pages.cpp
+    test_pointer_size.cpp
 )
 
 target_include_directories(

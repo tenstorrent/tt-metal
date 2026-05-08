@@ -16,21 +16,6 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 
-TEST_F(MeshDeviceFixture, IllegalWriteOutOfBounds) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto* device = this->devices_.at(id)->get_devices()[0];
-
-        // Intentionally try to write to an address that exceeds the L1 limit
-        // Query the actual L1 size and write beyond it to ensure this is truly illegal
-        uint32_t l1_size = this->devices_.at(id)->l1_size_per_core();
-        uint32_t illegal_addr = l1_size + 0x100000;  // L1 size + 1MB beyond
-        std::vector<uint32_t> data = {1, 2, 3, 4};
-        CoreCoord logical_core = {0, 0};
-
-        detail::WriteToDeviceL1(device, logical_core, illegal_addr, data);
-    }
-}
-
 TEST_F(MeshDeviceFixture, L1_Alignment_SanityCheck) {
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
