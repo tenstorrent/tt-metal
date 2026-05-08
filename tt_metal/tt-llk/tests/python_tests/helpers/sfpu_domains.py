@@ -55,7 +55,10 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     else:
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-80.0, high=80.0)
+        # the lower bound is intentionally pushed to -100.0 so we cross the SFPU's negative-side
+        # sanitization boundary near x ≈ -88.5 (where InputClamping::ClampToNegative saturates inputs
+        # in the fast/approx exp path).
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=80.0)
     return OperandSpecs(spec_A=spec)
 
 
