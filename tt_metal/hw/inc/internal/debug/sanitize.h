@@ -150,9 +150,19 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
 }
 
 // TODO(PGK): remove soft reset when fw is downloaded at init
-inline bool debug_valid_reg_addr(uint64_t addr, uint64_t len) {
+inline bool debug_valid_reg_addr(
+    uint64_t addr, uint64_t len, AddressableCoreType core_type = AddressableCoreType::TENSIX) {
+    uint32_t num_streams;
+    switch (core_type) {
+        case AddressableCoreType::ETH: num_streams = ETH_NOC_NUM_STREAMS; break;
+#if defined(ARCH_BLACKHOLE)
+        // DRISCs are an addressable core only on BH
+        case AddressableCoreType::DRAM: num_streams = DRAM_NOC_NUM_STREAMS; break;
+#endif
+        default: num_streams = NOC_NUM_STREAMS; break;
+    }
     return (((addr >= NOC_OVERLAY_START_ADDR) &&
-             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
+             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * num_streams)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0)) &&
            (len == 4);
 }
@@ -468,19 +478,23 @@ uint32_t debug_sanitize_noc_addr(
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_pcie_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::DRAM) {
-        alignment_mask =
-            (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
-        debug_sanitize_post_addr_and_hang(
-            noc_id,
-            noc_addr,
-            l1_addr,
-            noc_len,
-            multicast,
-            dir,
-            DEBUG_SANITIZE_NOC_TARGET,
-            debug_valid_dram_addr(noc_local_addr, noc_len));
+        if (!debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
+            alignment_mask =
+                (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
+            debug_sanitize_post_addr_and_hang(
+                noc_id,
+                noc_addr,
+                l1_addr,
+                noc_len,
+                multicast,
+                dir,
+                DEBUG_SANITIZE_NOC_TARGET,
+                debug_valid_dram_addr(noc_local_addr, noc_len));
+        } else {
+            alignment_mask = 3;  // register access: 4-byte aligned
+        }
     } else if (core_type == AddressableCoreType::ETH) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
+        if (!debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
             debug_sanitize_post_addr_and_hang(
                 noc_id,
                 noc_addr,
@@ -490,9 +504,11 @@ uint32_t debug_sanitize_noc_addr(
                 dir,
                 DEBUG_SANITIZE_NOC_TARGET,
                 debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
+        } else {
+            alignment_mask = 3;  // register access: 4-byte aligned
         }
     } else if (core_type == AddressableCoreType::TENSIX) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
+        if (!debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
             debug_sanitize_post_addr_and_hang(
                 noc_id,
                 noc_addr,
@@ -502,6 +518,8 @@ uint32_t debug_sanitize_noc_addr(
                 dir,
                 DEBUG_SANITIZE_NOC_TARGET,
                 debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
+        } else {
+            alignment_mask = 3;  // register access: 4-byte aligned
         }
     } else {
         // Bad XY
@@ -577,6 +595,11 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
     bool is_virtual_coord = true;
     AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
     if (core_type == AddressableCoreType::DRAM) {
+        // Inline writes to DRISC Overlay registers are supported
+        uint64_t noc_local_addr = NOC_LOCAL_ADDR(addr);
+        if (debug_valid_reg_addr(noc_local_addr, len, core_type)) {
+            return;
+        }
         debug_sanitize_post_addr_and_hang(
             noc_id,
             addr,

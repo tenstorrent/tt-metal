@@ -702,10 +702,9 @@ TEST_F(BlackholeSingleCardFixture, DramKernelStreamRegInc) {
     run_local_noc_stream_reg_inc(this, mesh_device, CoreCoord{0, 0}, HalProgrammableCoreType::DRAM);
 }
 
-// Tensix to DRISC stream register rount trip DRISC test:
-// writes a value to a DRISC stream register and reads it back.
-// DRISC enters stream mode so its stream registers are reachable over NOC;
-// the readback lands in Tensix L1 for host validation.
+// Tensix to DRISC stream register round trip DRISC test:
+// writes a value to a DRISC stream register and read it back into Tensix L1
+// Host validates from Tensix L1
 TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
     const auto& hal = MetalContext::instance().hal();
     if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
@@ -713,8 +712,8 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
     }
 
     constexpr uint32_t kTestValue = 0x1234;
-    constexpr uint32_t kStreamId = 4;
-    constexpr uint32_t kStreamReg = 4;  // STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX
+    constexpr uint32_t kStreamId = 15;
+    constexpr uint32_t kStreamReg = 10;
 
     auto mesh_device = this->devices_[0];
     auto* device = mesh_device->get_devices()[0];
@@ -722,23 +721,10 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
 
     CoreCoord logical_core_drisc{0, 0};
     CoreCoord logical_core_tensix{0, 0};
-    CoreCoord tensix_virtual = device->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
     CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
     uint32_t tensix_l1_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     Program program = CreateProgram();
-    uint32_t stream_ready_sem_id = CreateSemaphore(program, logical_core_tensix, 0, CoreType::WORKER);
-    uint32_t tensix_done_sem_id = CreateSemaphore(program, logical_core_drisc, 0, CoreType::DRAM);
-
-    auto drisc_kid = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_transfer.cpp",
-        logical_core_drisc,
-        DramConfig{
-            .noc = NOC::NOC_0,
-            .compile_args = {0, tensix_virtual.x, tensix_virtual.y},
-            .defines = {{"MODE_DRISC_STREAM_TARGET", "1"}}});
-    SetRuntimeArgs(program, drisc_kid, logical_core_drisc, {stream_ready_sem_id, tensix_done_sem_id});
 
     CreateKernel(
         program,
@@ -747,15 +733,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
-            .compile_args =
-                {tensix_l1_addr,
-                 kStreamId,
-                 drisc_virtual.x,
-                 drisc_virtual.y,
-                 stream_ready_sem_id,
-                 tensix_done_sem_id,
-                 kStreamReg,
-                 kTestValue},
+            .compile_args = {tensix_l1_addr, kStreamId, drisc_virtual.x, drisc_virtual.y, kStreamReg, kTestValue},
             .defines = {{"MODE_TENSIX_STREAM_REG_TO_DRISC", "1"}}});
 
     distributed::MeshWorkload workload;
@@ -779,8 +757,8 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
     }
 
     constexpr uint32_t kTestValue = 0x1234;
-    constexpr uint32_t kStreamId = 32;
-    constexpr uint32_t kStreamReg = 4;
+    constexpr uint32_t kStreamId = 63;
+    constexpr uint32_t kStreamReg = 10;
 
     auto mesh_device = this->devices_[0];
     auto* device = mesh_device->get_devices()[0];
