@@ -35,6 +35,7 @@ KV Cache:
 - Drops O(n²) → O(n) for generation.
 """
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -2859,6 +2860,19 @@ def run_inference(
         acc_code_embed = torch.zeros(1, 1, _th, dtype=torch.float32)
 
         t_decode_start = time.time()
+        # Phase timers (gated by env): accumulate per-step phase timings to
+        # quantify the host gap. Set TT_QWEN3_PHASE_TIMERS=1 to enable.
+        _phase_dbg = bool(int(os.environ.get("TT_QWEN3_PHASE_TIMERS", "0")))
+        _phase_acc = {
+            "past_h": 0.0,
+            "cp_restore": 0.0,
+            "cp_prefill": 0.0,
+            "cp_decode": 0.0,
+            "build_emb": 0.0,
+            "talker": 0.0,
+        }
+        _phase_n = 0
+
         for step in range(config.max_new_tokens):
             if use_2cq:
                 ttnn.wait_for_event(1, trace_cq0_idle)
@@ -2872,6 +2886,7 @@ def run_inference(
             code0_embed = F.embedding(token_id_buf, ctx.codec_embed_torch).unsqueeze(1)
             cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
             code_row = [token_0]
+            _t_after_pasthidden = time.time()
 
             # Restore CP constants (may be corrupted by paged_update_cache)
             ttnn.copy_host_to_device_tensor(ctx.cp_trace_prefill_mask_host, ctx.cp_trace_prefill_mask_tt, cq_id=h2d_cq)
@@ -2880,6 +2895,7 @@ def run_inference(
             for (k_zero, v_zero), (k_cache, v_cache) in zip(ctx.cp_kv_zero_hosts, ctx.cp_kv_caches_persistent):
                 ttnn.copy_host_to_device_tensor(k_zero, k_cache, cq_id=h2d_cq)
                 ttnn.copy_host_to_device_tensor(v_zero, v_cache, cq_id=h2d_cq)
+            _t_after_restore = time.time()
 
             # CP prefill trace
             cp_prefill_embed_cpu.copy_(cp_input.bfloat16())
@@ -2900,6 +2916,7 @@ def run_inference(
             ttnn.deallocate(last_prefill_logits)
             token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
             code_row.append(token)
+            _t_after_cp_prefill = time.time()
 
             # CP decode traces x14
             for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
@@ -2935,6 +2952,7 @@ def run_inference(
             if not use_2cq:
                 ttnn.synchronize_device(device)
             t_cp_end = time.time()
+            _t_after_cp_decode = t_cp_end
 
             # --- Build next Talker input embedding ---
             acc_code_embed.zero_()
@@ -2956,6 +2974,8 @@ def run_inference(
             else:
                 next_embed = next_embed + tts_pad_embed
             next_embed = next_embed.unsqueeze(1)
+
+            _t_after_build_emb = time.time()
 
             # --- Talker decode trace ---
             _talker_h2d_i = talker_pos - real_seq_len
@@ -3008,8 +3028,20 @@ def run_inference(
             step_ms = (t_step_end - t_step_start) * 1000
             decode_step_times.append(step_ms)
 
+            if _phase_dbg and step >= 1:  # skip first step
+                _phase_acc["past_h"] += (_t_after_pasthidden - t_step_start) * 1000
+                _phase_acc["cp_restore"] += (_t_after_restore - _t_after_pasthidden) * 1000
+                _phase_acc["cp_prefill"] += (_t_after_cp_prefill - _t_after_restore) * 1000
+                _phase_acc["cp_decode"] += (_t_after_cp_decode - _t_after_cp_prefill) * 1000
+                _phase_acc["build_emb"] += (_t_after_build_emb - _t_after_cp_decode) * 1000
+                _phase_acc["talker"] += (t_step_end - _t_after_build_emb) * 1000
+                _phase_n += 1
+
             if (step + 1) % 20 == 0:
                 print(f"  Generated {step + 1} frames...")
+                if _phase_dbg and _phase_n > 0:
+                    parts = " ".join(f"{k}={_phase_acc[k]/_phase_n:.2f}" for k in _phase_acc)
+                    print(f"  [PHASE_MS, n={_phase_n}, mean per step] {parts}")
 
         t_decode_end = time.time()
         timings["decode_loop"] = t_decode_end - t_decode_start
