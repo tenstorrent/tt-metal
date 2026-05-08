@@ -52,11 +52,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     uint32_t W_logical = logical_shape[3];
     uint32_t W_padded = padded_shape[3];
     uint32_t H = logical_shape[2], NC = logical_shape[1] * logical_shape[0];
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
-
     // Tilize must cover the full row-major page width (padded last dim).
     uint32_t Wt = (W_padded + tile_width - 1) / tile_width;
     const uint32_t wt_tiles_per_chunk = std::min<uint32_t>(8, Wt);
+
+    // Keep NC fixed to 1 for dense RM W path (same convention as tiled multi_core_w factory).
+    const uint32_t nc_per_reduce = 1;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
@@ -76,7 +79,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     uint32_t src_datum_size = tt::datum_size(src0_cb_data_format);
     const uint32_t logical_row_bytes = W_logical * src_datum_size;
     const uint32_t chunk_row_bytes = wt_tiles_per_chunk * tile_width * src_datum_size;
-    const uint32_t rm_staging_page_size = chunk_row_bytes;
+    const uint32_t rm_rows_per_tile = tile_height;
+    const uint32_t rm_staging_page_size = rm_rows_per_tile * chunk_row_bytes;
     TT_FATAL(
         logical_row_bytes <= src_rm_page_size,
         "Dense RM reduce: logical row size {} bytes exceeds RM page size {} (W_logical={}, dtype)",
@@ -129,7 +133,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
         }}},
     });
 
-    uint32_t num_input_tiles = std::max(2U, Wt);
+    const uint32_t ht_per_core_group_1 = (num_rows_per_core_group_1 + rm_rows_per_tile - 1) / rm_rows_per_tile;
+    const uint32_t ht_per_core_group_2 = (num_rows_per_core_group_2 + rm_rows_per_tile - 1) / rm_rows_per_tile;
+    const uint32_t max_ht_per_core = std::max(ht_per_core_group_1, ht_per_core_group_2);
+    // Chunk packed tile-rows (same cap as W tile chunking); at least 1 slab per iteration.
+    const uint32_t ht_tiles_per_chunk = std::min<uint32_t>(8, std::max(1U, max_ht_per_core));
+    // Staging for tilize: ht_in_chunk × wt_in_chunk tiles before each ReduceInputBlockShape reduce.
+    uint32_t num_input_tiles = std::max(2U, wt_tiles_per_chunk * ht_tiles_per_chunk * nc_per_reduce);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * src0_single_tile_size,
         .core_ranges = all_cores,
@@ -150,12 +160,24 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
         }}},
     });
 
-    uint32_t num_output_tiles = 2;
+    uint32_t num_output_tiles = std::max(2U, ht_tiles_per_chunk);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * dst_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_3),
+            .data_format = dst_cb_data_format,
+            .page_size = dst_single_tile_size,
+        }}},
+    });
+
+    // Partial per logical row across W chunks (one tile per row in the H chunk).
+    constexpr uint32_t cb_acc = tt::CBIndex::c_5;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = ht_tiles_per_chunk * dst_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_acc),
             .data_format = dst_cb_data_format,
             .page_size = dst_single_tile_size,
         }}},
@@ -174,6 +196,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
         padding_identity_bits,
         Wt,
         wt_tiles_per_chunk,
+        rm_rows_per_tile,
+        ht_tiles_per_chunk,
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
@@ -205,9 +229,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_args_g1 = {
-        num_rows_per_core_group_1,
+        ht_per_core_group_1,  // Ht
         Wt,
+        nc_per_reduce,
         wt_tiles_per_chunk,
+        ht_tiles_per_chunk,
         post_mul_scaler_bits,
     };
 
@@ -228,9 +254,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     std::optional<KernelDescriptor> compute_desc_g2;
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_args_g2 = {
-            num_rows_per_core_group_2,
+            ht_per_core_group_2,  // Ht
             Wt,
+            nc_per_reduce,
             wt_tiles_per_chunk,
+            ht_tiles_per_chunk,
             post_mul_scaler_bits,
         };
         KernelDescriptor d;

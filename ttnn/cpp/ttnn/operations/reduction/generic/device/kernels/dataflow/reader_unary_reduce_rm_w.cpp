@@ -13,7 +13,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
-// Row-major W chunks: one cb_rm page per (logical row, W-chunk). Matches compute tilize_block(..., wt_in_chunk, ...).
+// Packs rm_rows_per_tile logical rows per staged page per W chunk. Per Ht chunk block: push order is
+// (W chunk × slab) to match reduce_rm_w tilize order before ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC).
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_pages = get_arg_val<uint32_t>(1);
@@ -24,7 +25,9 @@ void kernel_main() {
     constexpr uint32_t padding_identity_bits = get_compile_time_arg_val(3);
     constexpr uint32_t Wt = get_compile_time_arg_val(4);
     constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(5);
-    constexpr auto tensor_args = TensorAccessorArgs<6>();
+    constexpr uint32_t rm_rows_per_tile = get_compile_time_arg_val(6);
+    constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(7);
+    constexpr auto tensor_args = TensorAccessorArgs<8>();
 
     constexpr uint32_t cb_id_scaler = tt::CBIndex::c_2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
@@ -56,8 +59,29 @@ void kernel_main() {
     experimental::UnicastEndpoint self_ep;
     const auto clear_template_src = experimental::local_addr(cb_clear_value.get_read_ptr(), noc.get_noc_id());
 
-    uint32_t end_page = start_page + num_pages;
-    for (uint32_t page_id = start_page; page_id < end_page; page_id++) {
+    const uint32_t Ht_reader = (num_pages + rm_rows_per_tile - 1) / rm_rows_per_tile;
+    uint32_t rows_remaining = num_pages;
+    uint32_t packed_row_base = start_page;
+
+    for (uint32_t ht_base = 0; ht_base < Ht_reader; ht_base += ht_tiles_per_chunk) {
+        const uint32_t ht_in_chunk =
+            (ht_base + ht_tiles_per_chunk < Ht_reader) ? ht_tiles_per_chunk : (Ht_reader - ht_base);
+
+        uint32_t slab_first_page[8];
+        uint32_t slab_rows_in_pack[8];
+        uint32_t rows_left_for_slabs = rows_remaining;
+        uint32_t page_cursor = packed_row_base;
+        uint32_t total_rows_this_block = 0;
+
+        for (uint32_t hti = 0; hti < ht_in_chunk; ++hti) {
+            const uint32_t rip = rows_left_for_slabs < rm_rows_per_tile ? rows_left_for_slabs : rm_rows_per_tile;
+            slab_first_page[hti] = page_cursor;
+            slab_rows_in_pack[hti] = rip;
+            page_cursor += rip;
+            rows_left_for_slabs -= rip;
+            total_rows_this_block += rip;
+        }
+
         for (uint32_t wt_base = 0; wt_base < Wt; wt_base += wt_tiles_per_chunk) {
             const uint32_t wt_in_chunk = (wt_base + wt_tiles_per_chunk < Wt) ? wt_tiles_per_chunk : (Wt - wt_base);
             const uint32_t chunk_bytes = wt_in_chunk * tt::constants::TILE_WIDTH * elem_bytes;
@@ -68,26 +92,36 @@ void kernel_main() {
                                                                ? (valid_row_bytes - row_chunk_start_bytes)
                                                                : chunk_bytes);
 
-            cb_rm.reserve_back(onepage);
-            if (valid_bytes_this_chunk > 0) {
-                noc.async_read(
-                    tensor_accessor,
-                    cb_rm,
-                    valid_bytes_this_chunk,
-                    {.page_id = page_id, .offset_bytes = row_chunk_start_bytes},
-                    {.offset_bytes = 0});
+            for (uint32_t hti = 0; hti < ht_in_chunk; ++hti) {
+                const uint32_t rows_in_pack = slab_rows_in_pack[hti];
+                const uint32_t slab_page0 = slab_first_page[hti];
+
+                cb_rm.reserve_back(onepage);
+                uint32_t pad_offset = 0;
+                while (pad_offset < page_bytes) {
+                    const uint32_t copy_bytes = (page_bytes - pad_offset) < clear_template_bytes
+                                                    ? (page_bytes - pad_offset)
+                                                    : clear_template_bytes;
+                    noc.async_read(self_ep, cb_rm, copy_bytes, clear_template_src, {.offset_bytes = pad_offset});
+                    pad_offset += copy_bytes;
+                }
+
+                for (uint32_t r = 0; r < rows_in_pack; ++r) {
+                    if (valid_bytes_this_chunk > 0) {
+                        noc.async_read(
+                            tensor_accessor,
+                            cb_rm,
+                            valid_bytes_this_chunk,
+                            {.page_id = slab_page0 + r, .offset_bytes = row_chunk_start_bytes},
+                            {.offset_bytes = r * chunk_bytes});
+                    }
+                }
+                noc.async_read_barrier();
+                cb_rm.push_back(onepage);
             }
-            uint32_t tail_bytes_remaining = page_bytes - valid_bytes_this_chunk;
-            uint32_t dst_offset_bytes = valid_bytes_this_chunk;
-            while (tail_bytes_remaining > 0) {
-                const uint32_t copy_bytes =
-                    tail_bytes_remaining < clear_template_bytes ? tail_bytes_remaining : clear_template_bytes;
-                noc.async_read(self_ep, cb_rm, copy_bytes, clear_template_src, {.offset_bytes = dst_offset_bytes});
-                dst_offset_bytes += copy_bytes;
-                tail_bytes_remaining -= copy_bytes;
-            }
-            noc.async_read_barrier();
-            cb_rm.push_back(onepage);
         }
+
+        packed_row_base += total_rows_this_block;
+        rows_remaining -= total_rows_this_block;
     }
 }
