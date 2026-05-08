@@ -157,6 +157,17 @@ def _extract_tt_software_versions(tt_smi_snapshot):
     return versions or None
 
 
+def _has_required_machine_fields(machine_info):
+    """Return True when machine_info contains required hardware identity fields."""
+    if not isinstance(machine_info, dict):
+        return False
+    return bool(
+        machine_info.get("board_type")
+        and machine_info.get("device_series")
+        and machine_info.get("card_count") is not None
+    )
+
+
 def get_machine_info(tt_smi_snapshot=None):
     """Get machine info (board type, device series, card count, and device count).
 
@@ -993,15 +1004,13 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     tt_smi_snapshot = _get_tt_smi_snapshot_json()
     software_versions = _extract_tt_software_versions(tt_smi_snapshot)
 
-    captured_machine_info = get_machine_info(tt_smi_snapshot=tt_smi_snapshot) or {}
-    if software_versions:
-        captured_machine_info.update(software_versions)
+    captured_machine_info = get_machine_info(tt_smi_snapshot=tt_smi_snapshot)
 
     metadata = {
         "test_source": test_path,
         "timestamp": datetime.now().isoformat(),
         "trace_uid": str(uuid.uuid4()),
-        "machine_info": captured_machine_info if captured_machine_info else None,
+        "machine_info": captured_machine_info,
         "trace_count": len(json_files),
         # Capture the pytest CLI args (everything after `--`) so the loader
         # can persist them on trace_run.pytest_args. This is what lets users
@@ -1445,15 +1454,13 @@ Examples (Import existing traces):
                         # versions instead of local host values.
                         metadata_machine_info = metadata.get("machine_info")
                         metadata_software_versions = metadata.get("software_versions")
-                        if metadata_machine_info:
+                        if _has_required_machine_fields(metadata_machine_info):
                             machine_info = metadata_machine_info
                         if metadata_software_versions:
                             if isinstance(machine_info, dict):
                                 machine_info.update(metadata_software_versions)
-                            elif not machine_info:
-                                machine_info = dict(metadata_software_versions)
 
-                        if metadata_machine_info or metadata_software_versions:
+                        if _has_required_machine_fields(metadata_machine_info) or metadata_software_versions:
                             trace_uid = metadata.get("trace_uid", trace_uid)
                             pytest_args = metadata.get("pytest_args", pytest_args)
                             print(f"📋 Loaded metadata from trace directory")

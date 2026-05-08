@@ -860,17 +860,22 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                 # Link this execution canonically via trace + config + model
                 if model_id is not None:
                     if hardware_id:
+                        trace_run_kwargs = {"pytest_args": pytest_args, "schema": schema}
+                        if tt_kmd is not None or tt_smi is not None or tt_firmware is not None:
+                            trace_run_kwargs.update(
+                                {
+                                    "tt_kmd": tt_kmd,
+                                    "tt_smi": tt_smi,
+                                    "tt_firmware": tt_firmware,
+                                }
+                            )
                         trace_run_id = get_or_create_trace_run(
                             cur,
                             trace_run_cache,
                             trace_uid,
                             hardware_id,
                             tt_metal_sha,
-                            pytest_args=pytest_args,
-                            tt_kmd=tt_kmd,
-                            tt_smi=tt_smi,
-                            tt_firmware=tt_firmware,
-                            schema=schema,
+                            **trace_run_kwargs,
                         )
                         trace_run_ids_touched.add(trace_run_id)
                         trace_config_pairs.add((trace_run_id, config_id))
