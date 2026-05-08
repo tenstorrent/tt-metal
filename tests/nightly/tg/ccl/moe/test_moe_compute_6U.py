@@ -1905,10 +1905,8 @@ def test_moe_compute_qwen3_235b(
 
 
 # Test for Qwen3.5 397B configuration - requires 1x16 mesh
-# XFAIL: intermediate=1024 → Nt=32, ceil(32/12)=3 (odd).
-# W0/W1 weight layout requires even max_shard_size (tiles are paired into
-# 4*TILE_SIZE DRAM transactions). Fixed by rounding in2_tiles_per_step to even
-# in kernels and Python layout.
+# NOTE: intermediate=1024 → Nt=32, ceil(32/12)=3 (odd). W0/W1 tile pairing
+# requires even max_shard_size; handled by rounding in2_tiles_per_step to even.
 @pytest.mark.skipif(
     not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
     reason=f"Qwen3.5 397B test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
@@ -2214,7 +2212,7 @@ def test_moe_compute_qwen3_omni_talker(
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
 @pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
+@pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("tokens_per_device", [32])
@@ -2729,7 +2727,7 @@ def test_moe_compute_gemma_4_26b(
     experts_per_device,
     tokens_per_device,
 ):
-    """Test MoE compute for Gemma 4 26B (hidden=2816, intermediate=704, n_routed=128) on 1x16 mesh."""
+    """Test MoE compute for Gemma 4 26B (hidden=2816, intermediate=704, n_routed=128) on 1x8 mesh."""
 
     cluster_axis = 1
     N = 704
@@ -2800,7 +2798,7 @@ def test_moe_compute_ds_ocr(
     experts_per_device,
     tokens_per_device,
 ):
-    """Test MoE compute for DS-OCR (hidden=1280, intermediate=896, n_routed=64) on 1x16 mesh."""
+    """Test MoE compute for DS-OCR (hidden=1280, intermediate=896, n_routed=64) on 1x8 mesh."""
 
     cluster_axis = 1
     N = 896

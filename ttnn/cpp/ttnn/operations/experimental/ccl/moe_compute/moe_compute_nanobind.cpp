@@ -52,10 +52,12 @@ void bind_moe_compute(nb::module_& mod) {
 
         **Key parameters**
 
-        - ``intermediate_size``: The MoE intermediate (expert FFN) dimension. Together
-          with ``hidden_size`` (inferred from the input tensor), this determines the
-          per-core tile shard counts via ``shard_tiles()`` / ``w2_shard_tiles()`` and
-          the number of data-parallel cores (``num_data_parallel_cores``).
+        - ``intermediate_size`` (**required**, added in this version): The MoE
+          intermediate (expert FFN) dimension. Together with ``hidden_size`` (inferred
+          from the input tensor), this determines the per-core tile shard counts via
+          ``shard_tiles()`` / ``w2_shard_tiles()`` and the number of data-parallel
+          cores (``num_data_parallel_cores``). Previously, tile distributions were
+          selected by a model-specific enum; this parameter replaces that mechanism.
 
         - ``output_height_shard_dim``: Number of tile columns per output shard. Use
           ``auto_output_width_shard_dim(hidden_size)`` from ``moe_compute_utils`` to
