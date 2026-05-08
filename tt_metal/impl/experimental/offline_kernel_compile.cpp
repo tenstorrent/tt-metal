@@ -184,8 +184,6 @@ std::vector<OfflineKernelCompileParams::CBCompileConfig> CBCompileConfigsFromPro
                     .data_format = circular_buffer->data_format(buffer_index),
                     .tile = circular_buffer->tile(buffer_index),
                 };
-                // Mirror runtime behavior: last write wins if multiple CBs overlap
-                // on the same index for this kernel placement.
                 compile_config_by_cb_index.insert_or_assign(cb_index, candidate_config);
             }
         }
