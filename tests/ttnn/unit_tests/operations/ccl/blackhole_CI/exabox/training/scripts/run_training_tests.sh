@@ -6,9 +6,7 @@
 #
 # These exercise the host-MPI primitive directly via Python bindings on
 # ttml.core.distributed.DistributedContext (see
-# tt-train/sources/ttml/nanobind/nb_core.cpp). For the SocketManager-FABRIC
-# tensor-wrapper variant of these same training patterns, see
-# run_socket_manager_fabric_tests.sh.
+# tt-train/sources/ttml/nanobind/nb_core.cpp).
 #
 # Run with --help for full usage.
 
@@ -36,7 +34,8 @@ Required environment:
   TT_METAL_HOME    Repo root. Must be set; build must include --build-tt-train.
 
 Optional environment:
-  HOSTS            Comma-separated host list (4 ranks). Default:
+  HOSTS            Host list (4 ranks); comma- or space-separated (mixed
+                   also accepted, e.g. "h1,h2 h3 h4"). Default:
                      ${DEFAULT_HOSTS}
                    *** OVERRIDE THIS for a different cluster. ***
                    The default targets the bh-glx-b06/b07 4-host BH Galaxy.
@@ -54,11 +53,11 @@ Examples:
   # Run two specific tests
   bash $0 test_round_robin_send_recv_32x4 test_remote_optimizer_grad_exchange_32x4
 
-  # Different cluster
+  # Different cluster — commas, spaces, or a mix all work
   HOSTS="my-host-01,my-host-02,my-host-03,my-host-04" bash $0
+  HOSTS="my-host-01 my-host-02 my-host-03 my-host-04" bash $0
 
 See also:
-  run_socket_manager_fabric_tests.sh — the FABRIC variant of these tests.
   RUNBOOK.md (sibling file) — full prerequisites and troubleshooting.
 EOF
 }
@@ -93,6 +92,22 @@ done
 : "${TT_METAL_HOME:?set TT_METAL_HOME first (run with --help for usage)}"
 
 HOSTS="${HOSTS:-${DEFAULT_HOSTS}}"
+
+# Normalize HOSTS to comma-separated for mpirun's --host flag.
+# Accept commas, spaces, tabs, or any mix; collapse runs and trim edges.
+HOSTS="${HOSTS//$'\t'/ }"
+HOSTS="${HOSTS// /,}"
+while [[ "${HOSTS}" == *,,* ]]; do HOSTS="${HOSTS//,,/,}"; done
+HOSTS="${HOSTS#,}"
+HOSTS="${HOSTS%,}"
+
+NUM_HOSTS="$(awk -F, '{print NF}' <<< "${HOSTS}")"
+if [ "${NUM_HOSTS}" -ne 4 ]; then
+    echo "[error] HOSTS must contain exactly 4 hosts (got ${NUM_HOSTS}): ${HOSTS}" >&2
+    echo "Run with --help for usage." >&2
+    exit 2
+fi
+
 RANK_BINDING="${TT_METAL_HOME}/tests/tt_metal/distributed/config/32x4_quad_bh_galaxy_rank_bindings.yaml"
 TEST_FILE="tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/training/test_send_recv_training.py"
 

@@ -12,15 +12,8 @@ Background:
   and by MPISocket::send/recv (ttnn/core/distributed/mpi_socket.cpp:51,62).
 - We exercise it directly through Python bindings on
   ttml.core.distributed.DistributedContext (added in nb_core.cpp). This
-  bypasses MeshSocket entirely.
-
-Why not the SocketManager wrapper? The tt-train SocketManager.send/recv
-constructs a MeshSocket which TT_FATALs on sender_mesh_id == receiver_mesh_id
-(mesh_socket.cpp:187-190). The QUAD_BH Galaxy cluster has all 4 MPI ranks
-on a single mesh_id (32x4_quad_bh_galaxy_rank_bindings.yaml), so MeshSocket
-cannot be used for inter-rank send/recv on this hardware. The byte-level
-primitive has no such constraint — it is what underpins both the FABRIC
-and MPI socket handshakes regardless of cluster topology.
+  bypasses MeshSocket entirely, so the test is independent of mesh
+  layout: a single-mesh rank-binding suffices.
 
 Build prerequisite:
 - $TT_METAL_HOME built with --build-tt-train (creates _ttml*.so).
@@ -52,7 +45,9 @@ def _bootstrap_ttml_extension() -> None:
     if "_ttml" in sys.modules:
         return
 
-    tt_metal_home = os.environ.get("TT_METAL_HOME") or "/data/llong/tt-metal"
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    if not tt_metal_home:
+        raise RuntimeError("TT_METAL_HOME must be set to the root of the tt-metal checkout.")
     build_dir = os.path.join(tt_metal_home, "build_Release", "ttml")
     lib_dir = os.path.join(tt_metal_home, "build_Release", "lib")
     src_pkg = os.path.join(tt_metal_home, "tt-train", "sources", "ttml", "ttml")
@@ -93,26 +88,11 @@ _bootstrap_ttml_extension()
 
 # QUAD_BH topology: 4 hosts × 1 MPI rank/host.
 #
-# Two rank-bindings are exercised by this folder:
-#
-#   - 32x4_quad_bh_galaxy_rank_bindings.yaml — single mesh_id=0 across all
-#     ranks. Used for byte-level tests (test_send_recv_training.py) which
-#     don't construct a MeshSocket and don't care about mesh layout.
-#
-#   - quad_bh_galaxy_split_4x2_multi_mesh_rank_bindings.yaml — one mesh_id
-#     per rank (0..3), backed by bh_galaxy_split_4x2_multi_mesh.textproto
-#     which declares a ring of inter-mesh fabric connections (0-1, 1-2,
-#     2-3, 0-3). Used for SocketManager-FABRIC tests
-#     (test_socket_manager_fabric_training.py) — MeshSocket requires
-#     sender_mesh_id != receiver_mesh_id.
+# Rank-binding used:
+#   tests/tt_metal/distributed/config/32x4_quad_bh_galaxy_rank_bindings.yaml
+# (stock — all 4 ranks share mesh_id: 0). The byte-level primitive doesn't
+# construct a MeshSocket and doesn't care about mesh layout.
 QUAD_BH_NUM_RANKS = 4
-
-# Per-rank mesh shape for the multi-mesh binding (4 meshes × (8,4) = 32
-# devices per host — the full Galaxy-per-host layout). Mirrors
-# device_topology in quad_bh_galaxy_4mesh_ring_8ch.textproto, which uses
-# the same (8,4) RING-RING torus that single_bh_galaxy_torus_xy uses.
-QUAD_BH_SPLIT_MESH_SHAPE = (8, 4)
-QUAD_BH_SPLIT_NUM_DEVICES = QUAD_BH_SPLIT_MESH_SHAPE[0] * QUAD_BH_SPLIT_MESH_SHAPE[1]
 
 
 @pytest.fixture(scope="session")
@@ -157,62 +137,3 @@ def distributed_runtime():
     yield rt
 
     distributed_ctx.barrier()
-
-
-@pytest.fixture(scope="session")
-def socket_manager_runtime():
-    """Initialize tt-train AutoContext + DistributedContext + device + SocketManager.
-
-    For SocketManager-FABRIC tests, which exercise the C++ tensor-level
-    wrapper around DistributedContext (SocketManager → MeshSocket →
-    BidirectionalFabricSocket → fabric).
-
-    Requires the multi-mesh rank-binding
-    quad_bh_galaxy_split_4x2_multi_mesh_rank_bindings.yaml so that
-    sender_mesh_id != receiver_mesh_id (MeshSocket precondition,
-    mesh_socket.cpp:187-190).
-
-    Yields a namespace exposing:
-      - distributed_ctx, socket_manager, autograd_ctx
-      - rank, world_size : ints
-      - ttml, ttnn       : the imported modules
-    """
-    try:
-        import ttml
-        import ttnn
-    except ImportError as e:
-        pytest.skip(f"tt-train Python module unavailable: {e}. Build with --build-tt-train.")
-
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    autograd_ctx.initialize_distributed_context(*sys.argv)
-    distributed_ctx = autograd_ctx.get_distributed_context()
-    rank = distributed_ctx.rank()
-    world_size = distributed_ctx.size()
-
-    if world_size <= 1:
-        pytest.skip(f"send/recv tests require multi-process launch (world_size={world_size}); use tt-run.")
-    if world_size != QUAD_BH_NUM_RANKS:
-        pytest.skip(f"This test is parametrized for QUAD_BH ({QUAD_BH_NUM_RANKS} ranks); got world_size={world_size}.")
-
-    # SocketManager-FABRIC needs a fabric-enabled device.
-    ttml.core.distributed.enable_fabric(QUAD_BH_SPLIT_NUM_DEVICES)
-    autograd_ctx.open_device(QUAD_BH_SPLIT_MESH_SHAPE)
-    autograd_ctx.initialize_socket_manager(ttml.core.distributed.SocketType.FABRIC)
-    socket_manager = autograd_ctx.get_socket_manager()
-
-    class _Runtime:
-        pass
-
-    rt = _Runtime()
-    rt.autograd_ctx = autograd_ctx
-    rt.distributed_ctx = distributed_ctx
-    rt.socket_manager = socket_manager
-    rt.rank = rank
-    rt.world_size = world_size
-    rt.ttml = ttml
-    rt.ttnn = ttnn
-
-    yield rt
-
-    distributed_ctx.barrier()
-    autograd_ctx.close_device()
