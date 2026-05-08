@@ -321,6 +321,14 @@ class TtOlmoModelArgs(TtModelArgs):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # HiFi3 + fp32 dest acc — recommended on Wormhole over HiFi4+fp32
+        # (HiFi4+fp32 has a hardware bug that can give worse output accuracy).
+        self.compute_kernel_config_hifi3 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         # CCL configs
         self.num_reduce_scatter_links = 1
@@ -1205,11 +1213,11 @@ class TtOlmoModelArgs(TtModelArgs):
         )
 
         # SDPA compute kernel config.
-        # OLMo3-32B: HiFi4 + fp32 dest accumulation to reduce logit drift on long-decode runs.
-        # Bf8 weights + bf8 KV cache + lossy compute caused thinking-loops / symbol garble
-        # after ~600-1000 tokens. Higher-precision compute slows the drift.
+        # OLMo3-32B: HiFi3 + fp32 dest accumulation. (HiFi4+fp32 has a Wormhole hardware
+        # bug where output accuracy can be worse than HiFi3+fp32 — TT runtime warns about
+        # this. HiFi3+fp32 is the recommended config on WH.)
         self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,

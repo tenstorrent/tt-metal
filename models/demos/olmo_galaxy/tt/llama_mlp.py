@@ -206,7 +206,7 @@ class TtLlamaMLP(LightweightModule):
                     self.w1,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi4,
+                    else self.args.compute_kernel_config_hifi3,
                     dtype=ff_out_dtype,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -231,7 +231,7 @@ class TtLlamaMLP(LightweightModule):
                     self.w3,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi4,
+                    else self.args.compute_kernel_config_hifi3,
                     dtype=ff_out_dtype,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -257,7 +257,7 @@ class TtLlamaMLP(LightweightModule):
                     self.w1,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi4,
+                    else self.args.compute_kernel_config_hifi3,
                     dtype=ttnn.bfloat8_b,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -278,7 +278,7 @@ class TtLlamaMLP(LightweightModule):
                     self.w3,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi4,
+                    else self.args.compute_kernel_config_hifi3,
                     dtype=ttnn.bfloat8_b,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -307,7 +307,7 @@ class TtLlamaMLP(LightweightModule):
                 RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
                 compute_kernel_config=self.args.compute_kernel_config_lofi
                 if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi4,
+                else self.args.compute_kernel_config_hifi3,
                 dtype=ff_out_dtype,
                 program_config=pc_1_3,
                 memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -359,7 +359,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out_sharded = self.tt_ccl.olmo_ff2_all_gather_matmul(
                 ff1ff3,
                 self.w2_interleaved,  # DRAM-interleaved; moved to L1 inside AGMM call
-                compute_kernel_config=self.args.compute_kernel_config_hifi4,
+                compute_kernel_config=self.args.compute_kernel_config_hifi3,
                 sub_device_id=self.tt_ccl.worker_sub_device_id,
             )
             ttnn.deallocate(ff1ff3)
@@ -418,7 +418,7 @@ class TtLlamaMLP(LightweightModule):
                 w2_out = ttnn.linear(
                     w2_in,
                     self.w2_interleaved,
-                    compute_kernel_config=self.args.compute_kernel_config_hifi4,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi3,
                     dtype=ttnn.bfloat16,
                     program_config=self.model_config["FF2_DRAM_SHARDED_PROGCFG_OLMO"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -428,7 +428,7 @@ class TtLlamaMLP(LightweightModule):
                 w2_out = ttnn.linear(
                     w2_in,
                     self.w2_interleaved,
-                    compute_kernel_config=self.args.compute_kernel_config_hifi4,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi3,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
@@ -449,7 +449,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in,
                 self.w2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi4,
+                compute_kernel_config=self.args.compute_kernel_config_hifi3,
                 dtype=ttnn.bfloat8_b,
                 program_config=pc_2,
                 memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
@@ -526,7 +526,10 @@ class TtLlamaMLP(LightweightModule):
                     self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
                     else (
-                        self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
+                        # OLMo: HiFi3+fp32 dest acc (WH-recommended, avoids HiFi4 HW bug); else hifi2_fp16
+                        self.args.compute_kernel_config_hifi3
+                        if is_olmo
+                        else self.args.compute_kernel_config_hifi2_fp16
                     )
                 ),
                 dtype=ff_out_dtype,
@@ -571,7 +574,10 @@ class TtLlamaMLP(LightweightModule):
                     self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
                     else (
-                        self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
+                        # OLMo: HiFi3+fp32 dest acc (WH-recommended, avoids HiFi4 HW bug); else hifi2_fp16
+                        self.args.compute_kernel_config_hifi3
+                        if is_olmo
+                        else self.args.compute_kernel_config_hifi2_fp16
                     )
                 ),
                 dtype=ff_out_dtype,
@@ -647,7 +653,10 @@ class TtLlamaMLP(LightweightModule):
                 w2_in_gathered,
                 self.w2_interleaved,
                 compute_kernel_config=(
-                    self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
+                    # OLMo: HiFi3+fp32 dest acc (WH-recommended, avoids HiFi4 HW bug); else hifi2_fp16
+                    self.args.compute_kernel_config_hifi3
+                    if is_olmo
+                    else self.args.compute_kernel_config_hifi2_fp16
                 ),
                 dtype=ff_out_dtype,
                 program_config=short_lens_pc_2,
@@ -655,14 +664,15 @@ class TtLlamaMLP(LightweightModule):
             )
         else:
             w2_minimal_dtype = _rs_buf_dtype if seq_len in _rs_buf_seqlens else None
+            # minimal_matmul requires fp32_dest_acc_en=False (its subblock product=8
+            # exceeds the max_dest_volume=4 limit when fp32 dest acc is on). Stay on
+            # hifi2_fp16 for this path even on OLMo.
             w2_out = ttnn.experimental.minimal_matmul(
                 input_tensor=w2_in_gathered,
                 weight_tensor=self.w2_interleaved,
                 config=minimal_pc_2,
                 dtype=w2_minimal_dtype,
-                compute_kernel_config=(
-                    self.args.compute_kernel_config_hifi4 if is_olmo else self.args.compute_kernel_config_hifi2_fp16
-                ),
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 

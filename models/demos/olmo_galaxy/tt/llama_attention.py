@@ -98,6 +98,7 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi2_fp16 = configuration.compute_kernel_config_hifi2_fp16
 
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+        self.compute_kernel_config_hifi3 = configuration.compute_kernel_config_hifi3
 
         self.transformation_mats = transformation_mats
 
@@ -638,7 +639,7 @@ class TtLlamaAttention(LightweightModule):
             self.wqkv,
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config_hifi3,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if self.prefetcher_setup is not None else None,
@@ -1017,7 +1018,7 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 program_config=wo_progcfg,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.compute_kernel_config_hifi3,
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)
@@ -1441,7 +1442,7 @@ class TtLlamaAttention(LightweightModule):
                 v_sdpa,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.compute_kernel_config_hifi3,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
                 sliding_window_size=self.sliding_window_size,  # OLMo: 4096 or None for full attention
             )
@@ -1454,7 +1455,7 @@ class TtLlamaAttention(LightweightModule):
                 v_sdpa,
                 is_causal=True,
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.compute_kernel_config_hifi3,
                 program_config=self.model_config["SDPA_PROGCFG"](
                     seq_len // batch_size if seq_len // batch_size == 128 else seq_len
                 ),
