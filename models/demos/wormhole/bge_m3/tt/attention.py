@@ -10,199 +10,15 @@ from ttnn.device import is_blackhole as ttnn_is_blackhole
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.demos.wormhole.bge_m3.tt.device_kernels import (
-    bge_m3_attention_output_compute_kernel_config,
-    bge_m3_attention_qkv_compute_kernel_config,
-    bge_m3_linear_activation_memory_config,
-    bge_m3_matmul_core_grid,
-    bge_m3_sdpa_compute_kernel_config,
-    bge_m3_weight_dram_memory_config,
-    max_qkv_mm_chunk_seq_len,
-    max_wo_mm_chunk_seq_len,
-)
 
-# SDPA tiling (``main``-compatible path): fixed **Q chunk = 128** and largest **K** in (256, 128) that
-# divides ``seq_len``; ``exp_approx_mode=True`` on **Wormhole** for 128-aligned lengths (S8192 PCC).
-# Picking **Q=256** + ``exp_approx_mode=False`` on Wormhole regresses S8192 PCC.
-# **Blackhole** uses ``exp_approx_mode=False`` for 128-aligned lengths: approx softmax hurts S4096+ PCC
-# (~0.91 vs 0.94) on P150 while N150 Wormhole still uses the approx path above.
-#
-# For S32/S64 (not divisible by 128), use flexible Q/K from (256..32) so tiles divide the runtime length.
+# SDPA chunk selection constants
 _SDPA_Q_CHUNK_MAIN = 128
 _SDPA_K_CANDIDATES_MAIN = (256, 128)
 _SDPA_Q_CHUNKS_FLEX = (256, 128, 64, 32)
 _SDPA_K_CHUNKS_FLEX = (256, 128, 64, 32)
 _SDPA_B1S512_K_CHUNK = 128
-
-
-def _sdpa_chunks_for_seq_len(seq_len: int, batch_size: int | None = None) -> tuple[int, int]:
-    """Q/K chunk sizes for SDPA. ``main`` uses fixed Q=128 for all 128-token-aligned lengths."""
-    if seq_len % 128 == 0:
-        if seq_len == 512 and batch_size == 32:
-            return 256, 512
-        if seq_len == 512 and batch_size == 1:
-            return _SDPA_Q_CHUNK_MAIN, _SDPA_B1S512_K_CHUNK
-        for k_chunk in _SDPA_K_CANDIDATES_MAIN:
-            if k_chunk <= seq_len and seq_len % k_chunk == 0:
-                return _SDPA_Q_CHUNK_MAIN, k_chunk
-        raise ValueError(f"Unable to pick k_chunk_size for seq_len={seq_len} (expected a multiple of 128)")
-    if seq_len % 32 != 0:
-        raise ValueError(f"seq_len {seq_len} must be divisible by 32 (tile height)")
-    if seq_len > 128 and seq_len % 128 != 0:
-        raise ValueError(f"seq_len {seq_len} must be divisible by 128 when seq_len > 128")
-    q_chunk = next(q for q in _SDPA_Q_CHUNKS_FLEX if q <= seq_len and seq_len % q == 0)
-    k_chunk = next(k for k in _SDPA_K_CHUNKS_FLEX if k <= seq_len and seq_len % k == 0)
-    return q_chunk, k_chunk
-
-
-def _sdpa_exp_approx_for_seq_len(
-    seq_len: int,
-    mesh_device: ttnn.MeshDevice | None = None,
-) -> bool:
-    """Wormhole: ``exp_approx_mode=True`` when ``seq_len`` is 128-aligned (incl. S8192). Short S32/S64: False.
-
-    Blackhole: always False (exact softmax path) so S4096+ PCC stays above 0.94 on P150.
-    """
-    if mesh_device is not None and ttnn_is_blackhole(mesh_device):
-        return False
-    return seq_len % 128 == 0
-
-
-def _sdpa_storage_grid(mesh_device: ttnn.MeshDevice | None):
-    """Use the device's CoreCoord for SDPA (matches unit tests; avoids tuple/grid mismatches)."""
-    if mesh_device is None:
-        return (8, 8)
-    try:
-        return mesh_device.compute_with_storage_grid_size()
-    except Exception:
-        return (8, 8)
-
-
-def _sdpa_compute_grid_for_seq_len(_seq_len: int, mesh_device: ttnn.MeshDevice | None):
-    """``compute_with_storage_grid_size`` for ``SDPAProgramConfig``.
-
-    Use the full device compute grid for every sequence length. An older **S512-only** cap
-    (smaller worker grid) hurt 512-token throughput; chunk sizes and ``exp_approx_mode`` still
-    follow ``_sdpa_chunks_for_seq_len`` / ``_sdpa_exp_approx_for_seq_len``; Wormhole S8192 policy unchanged.
-    """
-    return _sdpa_storage_grid(mesh_device)
-
-
-def _sdpa_program_config_for_seq_len(
-    seq_len: int,
-    mesh_device: ttnn.MeshDevice | None,
-    batch_size: int | None = None,
-) -> ttnn.SDPAProgramConfig:
-    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
-    kwargs = {
-        "compute_with_storage_grid_size": _sdpa_compute_grid_for_seq_len(seq_len, mesh_device),
-        "q_chunk_size": q_chunk,
-        "k_chunk_size": k_chunk,
-        "exp_approx_mode": _sdpa_exp_approx_for_seq_len(seq_len, mesh_device),
-    }
-    if seq_len == 512 and batch_size == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
-        kwargs["max_cores_per_head_batch"] = 8
-    return ttnn.SDPAProgramConfig(**kwargs)
-
-
-def _attention_output_memory_config(
-    max_seq_len: int | None,
-    max_batch_size: int | None,
-    mesh_device: ttnn.MeshDevice | None,
-) -> ttnn.MemoryConfig:
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
-        return ttnn.L1_MEMORY_CONFIG
-    return bge_m3_linear_activation_memory_config(max_seq_len, max_batch)
-
-
-def _create_heads_output_memory_config(
-    max_seq_len: int | None,
-    max_batch_size: int | None,
-    mesh_device: ttnn.MeshDevice | None,
-) -> ttnn.MemoryConfig:
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
-        return ttnn.L1_MEMORY_CONFIG
-    return bge_m3_linear_activation_memory_config(max_seq_len, max_batch)
-
-
-def _qkv_program_config(
-    max_seq_len: int | None,
-    max_batch_size: int | None,
-    hidden_size: int,
-    qkv_out_dim: int,
-    mesh_device: ttnn.MeshDevice | None,
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
-    """QKV program config from the B32/S512 subblock sweep."""
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if (
-        max_seq_len != 512
-        or max_batch != 32
-        or hidden_size != 1024
-        or qkv_out_dim != 3072
-        or mesh_device is None
-        or not ttnn_is_blackhole(mesh_device)
-    ):
-        return None
-
-    try:
-        device_grid = mesh_device.compute_with_storage_grid_size()
-        if device_grid.x < 11 or device_grid.y < 10:
-            return None
-    except Exception:
-        return None
-
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(11, 10),
-        in0_block_w=8,
-        out_subblock_h=1,
-        out_subblock_w=3,
-        out_block_h=13,
-        out_block_w=9,
-        per_core_M=52,
-        per_core_N=9,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=True,
-    )
-
-
-def _attention_output_program_config(
-    max_seq_len: int | None,
-    max_batch_size: int | None,
-    hidden_size: int,
-    mesh_device: ttnn.MeshDevice | None,
-) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
-    """Attention output projection config from the B32/S512 sweep."""
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if (
-        max_seq_len != 512
-        or max_batch != 32
-        or hidden_size != 1024
-        or mesh_device is None
-        or not ttnn_is_blackhole(mesh_device)
-    ):
-        return None
-
-    try:
-        device_grid = mesh_device.compute_with_storage_grid_size()
-        if device_grid.x < 11 or device_grid.y < 10:
-            return None
-    except Exception:
-        return None
-
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(11, 10),
-        in0_block_w=2,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        per_core_M=5,
-        per_core_N=32,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=False,
-    )
+_MAX_QKV_MM_CHUNK_SEQ_LEN = 8192
+_MAX_WO_MM_CHUNK_SEQ_LEN = 8192
 
 
 @dataclass
@@ -233,14 +49,14 @@ class BgeM3AttentionConfig:
     score_memcfg: ttnn.MemoryConfig | None = None
     output_memcfg: ttnn.MemoryConfig | None = None
 
-    # Optional runtime program and compute knobs
+    # Program and compute knobs
     qkv_prg_config: object | None = None
-    score_prg_config: object | None = None
     output_prg_config: object | None = None
     qkv_compute_kernel_cfg: object | None = None
     score_compute_kernel_cfg: object | None = None
     output_compute_kernel_cfg: object | None = None
-    # Compile-time max sequence length (selects Wormhole HiFi4 at S8192 for PCC).
+    core_grid: ttnn.CoreGrid | None = None
+
     max_seq_len: int | None = None
     max_batch_size: int | None = None
 
@@ -250,22 +66,6 @@ class BgeM3AttentionConfig:
 
 
 class BgeM3Attention(LightweightModule):
-    """
-    BGE-M3 encoder self-attention module.
-
-    Public API is intentionally minimal and encoder-only:
-      - __init__
-      - from_config
-      - load_device_weights
-      - forward
-
-    Explicitly out of scope:
-      - decode/prefill split
-      - KV cache / paged attention
-      - rotary embedding
-      - collectives
-    """
-
     def __init__(
         self,
         wqkv: LazyWeight,
@@ -305,44 +105,11 @@ class BgeM3Attention(LightweightModule):
     def load_device_weights(self) -> None:
         if self._device_weights_loaded:
             return
-
         self.wqkv = self.config.wqkv.get_device_weight()
         self.bqkv = self.config.bqkv.get_device_weight() if self.config.bqkv is not None else None
         self.wo_weight = self.config.wo_weight.get_device_weight()
         self.wo_bias = self.config.wo_bias.get_device_weight() if self.config.wo_bias is not None else None
         self._device_weights_loaded = True
-
-    def _masked_fill_scores(
-        self,
-        attention_scores: ttnn.Tensor,
-        pad_mask: ttnn.Tensor | None,
-        masked_value: float = -1e9,
-    ) -> ttnn.Tensor:
-        """
-        TT equivalent of:
-            attention_scores.masked_fill_(pad_mask, masked_value)
-
-        where:
-          - attention_scores has shape [B, N, S_q, S_k]
-          - pad_mask has shape [B, 1, 1, S_k]
-        """
-        if pad_mask is None:
-            return attention_scores
-
-        num_heads = attention_scores.shape[1]
-        query_seq_len = attention_scores.shape[2]
-        expanded_mask = ttnn.expand(pad_mask, [-1, num_heads, query_seq_len, -1])
-
-        target_memcfg = attention_scores.memory_config()
-
-        if expanded_mask.memory_config() != target_memcfg:
-            expanded_mask = ttnn.to_memory_config(expanded_mask, target_memcfg)
-
-        masked_positions = ttnn.gt(expanded_mask, 0)
-        if masked_positions.memory_config() != target_memcfg:
-            masked_positions = ttnn.to_memory_config(masked_positions, target_memcfg)
-
-        return ttnn.where(masked_positions, masked_value, attention_scores)
 
     def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
         self.load_device_weights()
@@ -350,77 +117,61 @@ class BgeM3Attention(LightweightModule):
         batch_size, _, seq_len, _ = hidden_states.shape
 
         assert seq_len > 0, "seq_len must be positive"
-        assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height) for TILE_LAYOUT"
+        assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height)"
         if seq_len > 128:
             assert seq_len % 128 == 0, "seq_len must be divisible by 128 when seq_len > 128"
 
-        cfg = self.config
-        core_grid = bge_m3_matmul_core_grid(cfg.mesh_device, seq_len, batch_size)
-        qkv_core_grid = None if cfg.qkv_prg_config is not None else core_grid
-        output_core_grid = None if cfg.output_prg_config is not None else core_grid
-        qkv_compute_kernel_cfg = bge_m3_attention_qkv_compute_kernel_config(
-            cfg.mesh_device,
-            max_seq_len=int(seq_len),
-            max_batch_size=int(batch_size),
-        )
-        output_compute_kernel_cfg = bge_m3_attention_output_compute_kernel_config(
-            cfg.mesh_device,
-            max_seq_len=int(seq_len),
-            max_batch_size=int(batch_size),
-        )
-        score_compute_kernel_cfg = bge_m3_sdpa_compute_kernel_config(
-            cfg.mesh_device,
-            max_seq_len=int(seq_len),
-            max_batch_size=int(batch_size),
-        )
+        qkv_core_grid = None if self.config.qkv_prg_config is not None else self.config.core_grid
+        output_core_grid = None if self.config.output_prg_config is not None else self.config.core_grid
 
-        max_qkv = max_qkv_mm_chunk_seq_len(cfg.mesh_device)
-        if seq_len > max_qkv:
-            if seq_len % max_qkv != 0:
-                raise ValueError(f"seq_len {seq_len} must be divisible by {max_qkv}")
+        # QKV chunking for very long sequences
+        if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
+            if seq_len % _MAX_QKV_MM_CHUNK_SEQ_LEN != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {_MAX_QKV_MM_CHUNK_SEQ_LEN}")
             hidden_states = ttnn.reshape(
                 hidden_states,
-                [batch_size, seq_len // max_qkv, max_qkv, -1],
+                [batch_size, seq_len // _MAX_QKV_MM_CHUNK_SEQ_LEN, _MAX_QKV_MM_CHUNK_SEQ_LEN, -1],
             )
 
-        # Stage 1: fused QKV projection.
+        # Stage 1: fused QKV projection
         qkv_fused = ttnn.linear(
             hidden_states,
             self.wqkv,
-            memory_config=cfg.qkv_memcfg,
-            dtype=cfg.qkv_dtype,
+            memory_config=self.config.qkv_memcfg,
+            dtype=self.config.qkv_dtype,
             bias=self.bqkv,
-            program_config=cfg.qkv_prg_config,
-            compute_kernel_config=qkv_compute_kernel_cfg,
+            program_config=self.config.qkv_prg_config,
+            compute_kernel_config=self.config.qkv_compute_kernel_cfg,
             core_grid=qkv_core_grid,
         )
-        if seq_len > max_qkv:
+        if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
 
-        # Stage 2: split Q/K/V heads.
+        # Stage 2: split Q/K/V heads
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv_fused,
-            num_heads=cfg.num_heads,
-            num_kv_heads=cfg.num_heads,
+            num_heads=self.config.num_heads,
+            num_kv_heads=self.config.num_heads,
             transpose_k_heads=False,
-            memory_config=cfg.create_heads_memcfg,
+            memory_config=self.config.create_heads_memcfg,
         )
         ttnn.deallocate(qkv_fused)
 
-        # Stage 3: optional deterministic cast to score dtype.
-        if cfg.score_dtype is not None and q.dtype != cfg.score_dtype:
-            q_cast = ttnn.typecast(q, dtype=cfg.score_dtype)
+        # Stage 3: optional cast to score dtype
+        if self.config.score_dtype is not None and q.dtype != self.config.score_dtype:
+            q_cast = ttnn.typecast(q, dtype=self.config.score_dtype)
             ttnn.deallocate(q)
             q = q_cast
-        if cfg.score_dtype is not None and k.dtype != cfg.score_dtype:
-            k_cast = ttnn.typecast(k, dtype=cfg.score_dtype)
+        if self.config.score_dtype is not None and k.dtype != self.config.score_dtype:
+            k_cast = ttnn.typecast(k, dtype=self.config.score_dtype)
             ttnn.deallocate(k)
             k = k_cast
-        if cfg.score_dtype is not None and v.dtype != cfg.score_dtype:
-            v_cast = ttnn.typecast(v, dtype=cfg.score_dtype)
+        if self.config.score_dtype is not None and v.dtype != self.config.score_dtype:
+            v_cast = ttnn.typecast(v, dtype=self.config.score_dtype)
             ttnn.deallocate(v)
             v = v_cast
 
+        # Stage 3b: mask preparation
         sdpa_mask = attention_mask
         if sdpa_mask is not None:
             if len(sdpa_mask.shape) != 4:
@@ -432,79 +183,129 @@ class BgeM3Attention(LightweightModule):
                 or sdpa_mask.shape[3] != seq_len
             ):
                 raise ValueError(
-                    f"attention_mask must have shape [B, 1, S, S]=[{batch_size}, 1, {seq_len}, {seq_len}], "
-                    f"got shape={sdpa_mask.shape}"
+                    f"attention_mask shape must be [{batch_size}, 1, {seq_len}, {seq_len}], got {sdpa_mask.shape}"
                 )
-
-            if cfg.score_dtype is not None and sdpa_mask.dtype != cfg.score_dtype:
-                sdpa_mask = ttnn.typecast(sdpa_mask, dtype=cfg.score_dtype)
-
-            # SDPA requires attn_mask in DRAM (ttnn sdpa_device_operation); L1 score_memcfg must not apply here.
+            if self.config.score_dtype is not None and sdpa_mask.dtype != self.config.score_dtype:
+                sdpa_mask = ttnn.typecast(sdpa_mask, dtype=self.config.score_dtype)
             if sdpa_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Stage 4: encoder SDPA (chunk sizes must divide the actual sequence length, including S<128).
-        sdpa_program_config = _sdpa_program_config_for_seq_len(seq_len, cfg.mesh_device, batch_size=batch_size)
+        # Stage 4: encoder SDPA (chunk sizes depend on runtime seq_len)
+        sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=False,
             attn_mask=sdpa_mask,
-            scale=cfg.attention_scale,
+            scale=self.config.attention_scale,
             program_config=sdpa_program_config,
-            compute_kernel_config=score_compute_kernel_cfg,
-            memory_config=cfg.score_memcfg,
+            compute_kernel_config=self.config.score_compute_kernel_cfg,
+            memory_config=self.config.score_memcfg,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Stage 5: concat heads back to [B, 1, S, D].
-        context = ttnn.experimental.nlp_concat_heads(context, memory_config=cfg.output_memcfg)
+        # Stage 5: concat heads
+        context = ttnn.experimental.nlp_concat_heads(context, memory_config=self.config.output_memcfg)
 
-        max_wo = max_wo_mm_chunk_seq_len(cfg.mesh_device)
-        if seq_len > max_wo:
-            if seq_len % max_wo != 0:
-                raise ValueError(f"seq_len {seq_len} must be divisible by {max_wo}")
-            context = ttnn.reshape(context, [batch_size, seq_len // max_wo, max_wo, -1])
+        # WO chunking for very long sequences
+        if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
+            if seq_len % _MAX_WO_MM_CHUNK_SEQ_LEN != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {_MAX_WO_MM_CHUNK_SEQ_LEN}")
+            context = ttnn.reshape(
+                context, [batch_size, seq_len // _MAX_WO_MM_CHUNK_SEQ_LEN, _MAX_WO_MM_CHUNK_SEQ_LEN, -1]
+            )
 
-        # Stage 6: output projection.
+        # Stage 6: output projection
         output = ttnn.linear(
             context,
             self.wo_weight,
-            memory_config=cfg.output_memcfg,
-            dtype=cfg.output_dtype,
+            memory_config=self.config.output_memcfg,
+            dtype=self.config.output_dtype,
             bias=self.wo_bias,
-            program_config=cfg.output_prg_config,
-            compute_kernel_config=output_compute_kernel_cfg,
+            program_config=self.config.output_prg_config,
+            compute_kernel_config=self.config.output_compute_kernel_cfg,
             core_grid=output_core_grid,
         )
         ttnn.deallocate(context)
 
-        if seq_len > max_wo:
+        if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
             output = ttnn.reshape(output, [batch_size, 1, seq_len, -1])
 
         return output
 
 
-def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionConfig:
-    """
-    Resolve attention defaults and materialize LazyWeight metadata.
-    """
+# ──────────────────────────────────────────────────────────────────────────────
+# SDPA runtime helpers (must stay here — chunk sizes depend on actual seq_len)
+# ──────────────────────────────────────────────────────────────────────────────
 
-    # Phase A: fail-fast shape and required-weight validation.
+
+def _sdpa_chunks_for_seq_len(seq_len, batch_size=None):
+    if seq_len % 128 == 0:
+        if seq_len == 512 and batch_size == 32:
+            return 256, 512
+        if seq_len == 512 and batch_size == 1:
+            return _SDPA_Q_CHUNK_MAIN, _SDPA_B1S512_K_CHUNK
+        for k_chunk in _SDPA_K_CANDIDATES_MAIN:
+            if k_chunk <= seq_len and seq_len % k_chunk == 0:
+                return _SDPA_Q_CHUNK_MAIN, k_chunk
+        raise ValueError(f"Unable to pick k_chunk_size for seq_len={seq_len}")
+    if seq_len % 32 != 0:
+        raise ValueError(f"seq_len {seq_len} must be divisible by 32")
+    if seq_len > 128 and seq_len % 128 != 0:
+        raise ValueError(f"seq_len {seq_len} must be divisible by 128 when > 128")
+    q_chunk = next(q for q in _SDPA_Q_CHUNKS_FLEX if q <= seq_len and seq_len % q == 0)
+    k_chunk = next(k for k in _SDPA_K_CHUNKS_FLEX if k <= seq_len and seq_len % k == 0)
+    return q_chunk, k_chunk
+
+
+def _sdpa_exp_approx(seq_len, mesh_device=None):
+    if mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return False
+    return seq_len % 128 == 0
+
+
+def _sdpa_compute_grid(mesh_device):
+    if mesh_device is None:
+        return (8, 8)
+    try:
+        return mesh_device.compute_with_storage_grid_size()
+    except Exception:
+        return (8, 8)
+
+
+def _sdpa_program_config(seq_len, mesh_device, batch_size=None):
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
+    kwargs = {
+        "compute_with_storage_grid_size": _sdpa_compute_grid(mesh_device),
+        "q_chunk_size": q_chunk,
+        "k_chunk_size": k_chunk,
+        "exp_approx_mode": _sdpa_exp_approx(seq_len, mesh_device),
+    }
+    if seq_len == 512 and batch_size == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        kwargs["max_cores_per_head_batch"] = 8
+    return ttnn.SDPAProgramConfig(**kwargs)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Config resolver
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionConfig:
     if config.hidden_size != config.num_heads * config.head_dim:
         raise ValueError(
-            "Invalid head geometry: hidden_size must equal num_heads * head_dim "
-            f"(got hidden_size={config.hidden_size}, num_heads={config.num_heads}, head_dim={config.head_dim})"
+            f"hidden_size must equal num_heads * head_dim "
+            f"(got {config.hidden_size}, {config.num_heads}, {config.head_dim})"
         )
     if config.wqkv is None or config.wo_weight is None:
-        raise ValueError("Both wqkv and wo_weight must be provided for BgeM3Attention")
+        raise ValueError("Both wqkv and wo_weight must be provided")
 
     to_set: dict[str, object] = {}
 
-    # Phase B: numerics defaults.
+    # Numerics defaults
     if config.attention_scale is None:
         to_set["attention_scale"] = config.head_dim**-0.5
     if config.qkv_dtype is None:
@@ -514,84 +315,50 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     if config.output_dtype is None:
         to_set["output_dtype"] = ttnn.bfloat16
 
-    max_seq = config.max_seq_len
-    max_batch = config.max_batch_size if config.max_batch_size is not None else 1
-
-    # Phase C: resolve single target device.
+    # Resolve device
     param_devices = [
-        param.device
-        for param in (config.wqkv, config.bqkv, config.wo_weight, config.wo_bias)
-        if param is not None and param.device is not None
+        p.device
+        for p in (config.wqkv, config.bqkv, config.wo_weight, config.wo_bias)
+        if p is not None and p.device is not None
     ]
-    if param_devices and any(device != param_devices[0] for device in param_devices):
+    if param_devices and any(d != param_devices[0] for d in param_devices):
         raise ValueError("All attention parameters must target the same device")
-    if config.mesh_device is not None and param_devices and param_devices[0] != config.mesh_device:
-        raise ValueError("All attention parameters must target the configured mesh_device")
 
-    mesh_device = (
-        config.mesh_device
-        if config.mesh_device is not None
-        else (param_devices[0] if param_devices else ttnn.GetDefaultDevice())
-    )
+    mesh_device = config.mesh_device or (param_devices[0] if param_devices else ttnn.GetDefaultDevice())
     if mesh_device is None:
         raise ValueError("Unable to resolve target device for BgeM3Attention")
-
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
 
-    # Phase D: activation memory (single envelope: batch×seq + seq cap — device_kernels).
-    act_mem = bge_m3_linear_activation_memory_config(max_seq, max_batch)
+    # Defaults: DRAM for everything, basic compute kernel
     if config.qkv_memcfg is None:
-        to_set["qkv_memcfg"] = act_mem
+        to_set["qkv_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
     if config.create_heads_memcfg is None:
-        to_set["create_heads_memcfg"] = _create_heads_output_memory_config(max_seq, max_batch, mesh_device)
+        to_set["create_heads_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
     if config.score_memcfg is None:
-        to_set["score_memcfg"] = act_mem
+        to_set["score_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
     if config.output_memcfg is None:
-        to_set["output_memcfg"] = _attention_output_memory_config(max_seq, max_batch, mesh_device)
-
-    if config.qkv_prg_config is None:
-        qkv_prg_config = _qkv_program_config(max_seq, max_batch, config.hidden_size, config.qkv_out_dim, mesh_device)
-        if qkv_prg_config is not None:
-            to_set["qkv_prg_config"] = qkv_prg_config
-    if config.output_prg_config is None:
-        output_prg_config = _attention_output_program_config(max_seq, max_batch, config.hidden_size, mesh_device)
-        if output_prg_config is not None:
-            to_set["output_prg_config"] = output_prg_config
-
-    if config.score_prg_config is None:
-        q0, k0 = _sdpa_chunks_for_seq_len(128)
-        to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(128, mesh_device),
-            q_chunk_size=q0,
-            k_chunk_size=k0,
-            exp_approx_mode=_sdpa_exp_approx_for_seq_len(128, mesh_device),
-        )
-
+        to_set["output_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
     if config.qkv_compute_kernel_cfg is None:
-        to_set["qkv_compute_kernel_cfg"] = bge_m3_attention_qkv_compute_kernel_config(
-            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
-        )
+        to_set["qkv_compute_kernel_cfg"] = _default_compute_kernel(mesh_device)
     if config.output_compute_kernel_cfg is None:
-        to_set["output_compute_kernel_cfg"] = bge_m3_attention_output_compute_kernel_config(
-            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
-        )
+        to_set["output_compute_kernel_cfg"] = _default_compute_kernel(mesh_device)
     if config.score_compute_kernel_cfg is None:
-        to_set["score_compute_kernel_cfg"] = bge_m3_sdpa_compute_kernel_config(
-            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
-        )
+        to_set["score_compute_kernel_cfg"] = _default_compute_kernel(mesh_device)
+    if config.core_grid is None:
+        to_set["core_grid"] = _default_core_grid(mesh_device)
 
-    # Phase E: resolve LazyWeights with resolved dtype + memory config.
+    # Resolve weights
     qkv_dtype = to_set.get("qkv_dtype", config.qkv_dtype)
     output_dtype = to_set.get("output_dtype", config.output_dtype)
-    weight_dram = bge_m3_weight_dram_memory_config()
+    weight_mem = ttnn.DRAM_MEMORY_CONFIG
 
     to_set["wqkv"] = resolve_lazy_weight(
         config.wqkv,
         device=mesh_device,
         dtype=qkv_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=weight_dram,
+        memory_config=weight_mem,
         mesh_mapper_config=None,
     )
     to_set["wo_weight"] = resolve_lazy_weight(
@@ -599,7 +366,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         device=mesh_device,
         dtype=output_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=weight_dram,
+        memory_config=weight_mem,
         mesh_mapper_config=None,
     )
     if config.bqkv is not None:
@@ -608,7 +375,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             device=mesh_device,
             dtype=qkv_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=weight_dram,
+            memory_config=weight_mem,
             mesh_mapper_config=None,
         )
     if config.wo_bias is not None:
@@ -617,8 +384,26 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             device=mesh_device,
             dtype=output_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=weight_dram,
+            memory_config=weight_mem,
             mesh_mapper_config=None,
         )
 
     return replace(config, **to_set)
+
+
+def _default_compute_kernel(mesh_device):
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def _default_core_grid(mesh_device):
+    try:
+        g = mesh_device.compute_with_storage_grid_size()
+        return ttnn.CoreGrid(y=int(g.y), x=int(g.x))
+    except Exception:
+        return ttnn.CoreGrid(y=8, x=8)

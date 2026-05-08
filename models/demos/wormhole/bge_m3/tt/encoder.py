@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.bge_m3.tt.attention import BgeM3Attention, BgeM3AttentionConfig
@@ -14,7 +16,7 @@ class BgeM3TransformerBlock(LightweightModule):
     Layer-only transformer block that transforms hidden states in-place.
     """
 
-    def __init__(self, args, mesh_device, dtype, state_dict, layer_num):
+    def __init__(self, args, mesh_device, dtype, state_dict, layer_num, optimizations=None):
         super().__init__()
         self.args = args
         self.mesh_device = mesh_device
@@ -27,21 +29,8 @@ class BgeM3TransformerBlock(LightweightModule):
         max_batch_size = getattr(args, "max_batch_size", None)
 
         self.attention = BgeM3Attention.from_config(
-            BgeM3AttentionConfig(
-                wqkv=attention_weights.wqkv,
-                bqkv=attention_weights.bqkv,
-                wo_weight=attention_weights.wo_weight,
-                wo_bias=attention_weights.wo_bias,
-                hidden_size=args.dim,
-                num_heads=args.n_heads,
-                head_dim=args.head_dim,
-                mesh_device=mesh_device,
-                qkv_dtype=dtype,
-                score_dtype=_attention_score_dtype(dtype, max_seq_len, max_batch_size),
-                output_dtype=dtype,
-                score_prg_config=None,
-                max_seq_len=max_seq_len,
-                max_batch_size=max_batch_size,
+            _build_attention_config(
+                args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations
             )
         )
         self.attention_norm = _build_optional_layer_norm(
@@ -50,23 +39,11 @@ class BgeM3TransformerBlock(LightweightModule):
             mesh_device=mesh_device,
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
+            optimizations=optimizations,
         )
 
         self.feed_forward = BgeM3MLP.from_config(
-            BgeM3MLPConfig(
-                wi_weight=mlp_weights.wi_weight,
-                wi_bias=mlp_weights.wi_bias,
-                wo_weight=mlp_weights.wo_weight,
-                wo_bias=mlp_weights.wo_bias,
-                hidden_size=args.dim,
-                intermediate_size=args.intermediate_size,
-                mesh_device=mesh_device,
-                wi_dtype=dtype,
-                wo_dtype=dtype,
-                activation_dtype=ttnn.bfloat16,
-                max_seq_len=max_seq_len,
-                max_batch_size=max_batch_size,
-            )
+            _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations)
         )
         self.feed_forward_norm = _build_optional_layer_norm(
             mlp_weights.layer_norm,
@@ -74,6 +51,7 @@ class BgeM3TransformerBlock(LightweightModule):
             mesh_device=mesh_device,
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
+            optimizations=optimizations,
         )
 
     def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
@@ -109,23 +87,99 @@ def _attention_score_dtype(
     return ttnn.bfloat16
 
 
+def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations):
+    """Build BgeM3AttentionConfig, overlaying Optimizations.attention fields when provided."""
+    config = BgeM3AttentionConfig(
+        wqkv=attention_weights.wqkv,
+        bqkv=attention_weights.bqkv,
+        wo_weight=attention_weights.wo_weight,
+        wo_bias=attention_weights.wo_bias,
+        hidden_size=args.dim,
+        num_heads=args.n_heads,
+        head_dim=args.head_dim,
+        mesh_device=mesh_device,
+        qkv_dtype=dtype,
+        score_dtype=_attention_score_dtype(dtype, max_seq_len, max_batch_size),
+        output_dtype=dtype,
+        max_seq_len=max_seq_len,
+        max_batch_size=max_batch_size,
+    )
+    if optimizations is not None and optimizations.attention is not None:
+        attn_opts = optimizations.attention
+        config = replace(
+            config,
+            qkv_compute_kernel_cfg=attn_opts.qkv_compute_kernel_cfg,
+            output_compute_kernel_cfg=attn_opts.output_compute_kernel_cfg,
+            score_compute_kernel_cfg=attn_opts.score_compute_kernel_cfg,
+            qkv_memcfg=attn_opts.qkv_memcfg,
+            create_heads_memcfg=attn_opts.create_heads_memcfg,
+            score_memcfg=attn_opts.score_memcfg,
+            output_memcfg=attn_opts.output_memcfg,
+            core_grid=attn_opts.core_grid,
+            qkv_prg_config=attn_opts.qkv_prg_config,
+            output_prg_config=attn_opts.output_prg_config,
+        )
+    return config
+
+
+def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations):
+    """Build BgeM3MLPConfig, overlaying Optimizations.mlp fields when provided."""
+    config = BgeM3MLPConfig(
+        wi_weight=mlp_weights.wi_weight,
+        wi_bias=mlp_weights.wi_bias,
+        wo_weight=mlp_weights.wo_weight,
+        wo_bias=mlp_weights.wo_bias,
+        hidden_size=args.dim,
+        intermediate_size=args.intermediate_size,
+        mesh_device=mesh_device,
+        wi_dtype=dtype,
+        wo_dtype=dtype,
+        activation_dtype=ttnn.bfloat16,
+        max_seq_len=max_seq_len,
+        max_batch_size=max_batch_size,
+    )
+    if optimizations is not None and optimizations.mlp is not None:
+        mlp_opts = optimizations.mlp
+        config = replace(
+            config,
+            wi_compute_kernel_cfg=mlp_opts.wi_compute_kernel_cfg,
+            wo_compute_kernel_cfg=mlp_opts.wo_compute_kernel_cfg,
+            wi_memcfg=mlp_opts.wi_memcfg,
+            wo_memcfg=mlp_opts.wo_memcfg,
+            activation_memcfg=mlp_opts.activation_memcfg,
+            core_grid=mlp_opts.core_grid,
+            wi_prg_config=mlp_opts.wi_prg_config,
+            wi_minimal_config=mlp_opts.wi_minimal_config,
+        )
+    return config
+
+
 def _build_optional_layer_norm(
     layer_norm_weights: LayerNormWeights | None,
     eps: float,
     mesh_device,
     max_seq_len: int | None = None,
     max_batch_size: int | None = None,
+    optimizations=None,
 ) -> LayerNorm1D | None:
     if layer_norm_weights is None:
         return None
 
-    return LayerNorm1D.from_config(
-        LayerNorm1DConfig(
-            weight=layer_norm_weights.weight,
-            bias=layer_norm_weights.bias,
-            eps=eps,
-            mesh_device=mesh_device,
-            max_seq_len=max_seq_len,
-            max_batch_size=max_batch_size,
-        )
+    config = LayerNorm1DConfig(
+        weight=layer_norm_weights.weight,
+        bias=layer_norm_weights.bias,
+        eps=eps,
+        mesh_device=mesh_device,
+        max_seq_len=max_seq_len,
+        max_batch_size=max_batch_size,
     )
+    if optimizations is not None and optimizations.norm is not None:
+        norm_opts = optimizations.norm
+        config = replace(
+            config,
+            compute_kernel_config=norm_opts.compute_kernel_config,
+            output_memcfg=norm_opts.output_memcfg,
+            program_config=norm_opts.program_config,
+            sharded_memcfg=norm_opts.sharded_memcfg,
+        )
+    return LayerNorm1D.from_config(config)
