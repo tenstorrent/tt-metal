@@ -3193,10 +3193,15 @@ class MoeOp:
             topk_weight = topk_weight * scaling_factor
             return topk_weight, topk_idx
 
-        # RMSNorm(h) with gamma for MoE input.
+        # RMSNorm(h). When rmsnorm_gamma is None the caller has folded ffn_norm into the
+        # downstream weights (e.g. dense MLP gate_proj/up_proj) and we must skip the gamma
+        # multiplication here to avoid double-applying it.
         x = _as_2d(input_tensor)
         variance = x.pow(2).mean(-1, keepdim=True)
-        norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon) * rmsnorm_gamma).to(x.dtype)
+        if rmsnorm_gamma is None:
+            norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon)).to(x.dtype)
+        else:
+            norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon) * rmsnorm_gamma).to(x.dtype)
 
         # Shared expert branch: (SiLU(hWg) * (hWu))Wd + residual.
         sh_gate = _reshape_weight(shared_gate_weights, norm_x.shape[-1])

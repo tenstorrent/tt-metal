@@ -195,9 +195,11 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
+        # Pipeline semaphores: mcast (4) + rms_inv_mcast_receiver (1) + gather (2) + rope (1) + MLA (6)
+        #                      + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) + risc_sync (1) = 29
         # Post-SDPA fused (10): gather2 noc0/noc1 (2) + mcast3 receiver (1) + gather3 noc0/noc1 (2)
         #                       + scatter_arrival (1) + sdpa fwd r1/r2 (2) + sdpa bwd r1/r2 (2)
-        pipeline_num_semaphores = 28
+        pipeline_num_semaphores = 29
         allreduce_num_semaphores = DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links_allreduce)
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links_bcast)
         allgather_num_semaphores = 2  # handoff_sem + recv_sem

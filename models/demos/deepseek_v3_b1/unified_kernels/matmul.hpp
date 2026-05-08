@@ -222,7 +222,7 @@ struct Matmul {
 
                     // Run activation on PACK thread
                     PACK(TTI_SEMWAIT(
-                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                        p_stall::STALL_TDMA | p_stall::STALL_CFG | p_stall::STALL_SFPU,
                         semaphore::t6_sem(semaphore::MATH_PACK),
                         p_stall::STALL_ON_ZERO));
                     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
