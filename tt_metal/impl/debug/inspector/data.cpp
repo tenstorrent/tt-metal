@@ -150,7 +150,8 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
 
         mesh_device.setParentMeshId(mesh_device_data.parent_mesh_id.value_or(-1));
         mesh_device.setInitialized(mesh_device_data.initialized);
-        mesh_device.setProgramCacheEnabled(mesh_device_data.mesh_device->get_program_cache().is_enabled());
+        mesh_device.setProgramCacheEnabled(
+            const_cast<distributed::MeshDeviceImpl*>(mesh_device_data.mesh_device)->get_program_cache().is_enabled());
     }
 }
 
