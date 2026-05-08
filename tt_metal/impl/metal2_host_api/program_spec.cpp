@@ -13,8 +13,15 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -50,6 +57,11 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
+    std::unordered_map<TensorParameterName, const TensorParameter*> tensor_parameter_by_name;
+
+    // Tensor parameter usage (derived from kernel tensor bindings).
+    // Tracks which kernels bind a given tensor parameter.
+    std::unordered_map<TensorParameterName, std::vector<const KernelSpec*>> tensor_parameter_users;
 
     // DFB endpoint info (derived from kernel bindings).
     // Populated for both local and remote DFBs.
@@ -346,6 +358,47 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 kernel.unique_id,
                 binding.semaphore_spec_name);
         }
+    }
+
+    // Collect TensorParameters
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        auto [it, inserted] =
+            collected.tensor_parameter_by_name.try_emplace(tensor_parameter.unique_id, &tensor_parameter);
+        TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
+    }
+
+    // Validate kernel tensor bindings
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.tensor_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate tensor accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
+                "Kernel '{}' references unknown TensorParameter '{}'",
+                kernel.unique_id,
+                binding.tensor_parameter_name);
+
+            collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
+        }
+    }
+
+    // Referential integrity: every declared TensorParameter must be referenced by some kernel.
+    // (Same usage requirement as DFBs; an unused tensor parameter is a user error.)
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        TT_FATAL(
+            collected.tensor_parameter_users.contains(tensor_parameter.unique_id),
+            "TensorParameter '{}' is defined but not bound by any kernel",
+            tensor_parameter.unique_id);
     }
 
     // Check for duplicate WorkUnitSpec unique_ids
@@ -775,6 +828,63 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Validate KernelSpec::dfb_compute_self_loop_scopes entries.
+    // This is a niche advanced option that only applies to compute kernels that self-loop a DFB
+    // (bind it as both producer and consumer).
+    // All misapplications fail loudly here for the benefit of users (especially AI users).
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.dfb_compute_self_loop_scopes.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            kernel.is_compute_kernel(),
+            "KernelSpec '{}' specifies dfb_compute_self_loop_scopes, but is not a compute kernel. "
+            "This option applies only to compute kernels.",
+            kernel.unique_id);
+
+        std::unordered_set<DFBSpecName> seen_dfb_names;
+        for (const auto& entry : kernel.dfb_compute_self_loop_scopes) {
+            TT_FATAL(
+                seen_dfb_names.insert(entry.dfb_spec_name).second,
+                "KernelSpec '{}' has duplicate dfb_compute_self_loop_scopes entries for DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                collected.dfb_by_name.contains(entry.dfb_spec_name),
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry referencing unknown DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            bool has_producer_binding = false;
+            bool has_consumer_binding = false;
+            for (const auto& binding : kernel.dfb_bindings) {
+                if (binding.dfb_spec_name != entry.dfb_spec_name) {
+                    continue;
+                }
+                if (binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
+                    has_producer_binding = true;
+                } else if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                    has_consumer_binding = true;
+                }
+            }
+            TT_FATAL(
+                has_producer_binding && has_consumer_binding,
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry for DFB '{}', but the "
+                "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
+                "consumer). This option applies only to self-looped DFBs.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                entry.scope != KernelSpec::DFBComputeSelfLoopScope::Scope::INTER,
+                "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
+                "not yet supported by the runtime.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+        }
+    }
+
     // Data format must be valid for the architecture
     const tt::ARCH arch = get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
@@ -1187,6 +1297,152 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 // Step 3: Program Building Helpers
 // ============================================================================
 
+// Resolve a TensorParameter's static layout into a positional CTA payload.
+// This mirrors what TensorAccessorArgs does for static (CTA) parameters.
+// The input values are extracted from TensorSpec + MeshDevice instead of from a Buffer.
+//
+// Returns: A vector representing the kernel-side CTA layout
+//  - word 0 is the args_config raw byte
+//  - word 1 is aligned_page_size
+// For sharded tensors only:
+//  - word 2 is rank
+//  - word 3 is num_banks
+//  - remaining words: per-dim tensor and shard shapes in pages, and the bank coordinates
+//    (packed two-per-uint32)
+//
+// All the TensorAccessorArgs data are static (CTAs) for now.
+// The tensor base address is specified per-enqueue, via TensorArg on ProgramRunParams.
+// (See also ResolveTensorBindingsForKernel below).
+std::vector<uint32_t> ResolveTensorParameterStaticCTAs(
+    const TensorParameter& tensor_parameter, const distributed::MeshDevice& mesh_device) {
+    const TensorSpec& spec = tensor_parameter.spec;
+    const MemoryConfig& memory_config = spec.memory_config();
+    const BufferType buffer_type = memory_config.buffer_type();
+    const bool is_dram = (buffer_type == BufferType::DRAM);
+    const bool is_sharded = memory_config.is_sharded();
+
+    tensor_accessor::ArgsConfig args_config;
+    if (is_sharded) {
+        args_config.set(tensor_accessor::ArgConfig::Sharded);
+    }
+    if (is_dram) {
+        args_config.set(tensor_accessor::ArgConfig::IsDram);
+    }
+    // No Runtime* flags in the static port.
+
+    // aligned_page_size: align the unaligned page size up to the buffer-type alignment.
+    const size_t unaligned_page_size = spec.compute_page_size_bytes();
+    const uint32_t alignment = mesh_device.allocator()->get_alignment(buffer_type);
+    const size_t aligned_page_size = align(unaligned_page_size, static_cast<size_t>(alignment));
+    TT_FATAL(
+        aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+        "TensorParameter '{}' aligned page size {} exceeds uint32_t max {}",
+        tensor_parameter.unique_id,
+        aligned_page_size,
+        std::numeric_limits<uint32_t>::max());
+
+    std::vector<uint32_t> cta_payload;
+
+    // Common header (always emitted, sharded or not):
+    cta_payload.push_back(args_config.raw());
+    cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
+
+    if (!is_sharded) {
+        // Interleaved tensors don't carry shape / bank-coord data: the device-side accessor
+        // computes addresses from page id + num_banks alone.
+        return cta_payload;
+    }
+
+    // Sharded: emit rank, num_banks, tensor_shape_in_pages, shard_shape_in_pages, bank_coords.
+    const BufferShardingArgs sharding_args = spec.compute_buffer_sharding_args();
+    const std::optional<BufferDistributionSpec>& bds_opt = sharding_args.buffer_distribution_spec();
+    TT_FATAL(
+        bds_opt.has_value(),
+        "TensorParameter '{}' is sharded but TensorSpec produced no BufferDistributionSpec",
+        tensor_parameter.unique_id);
+    const BufferDistributionSpec& bds = *bds_opt;
+
+    const Shape& tensor_shape = bds.tensor_shape_in_pages();
+    const Shape& shard_shape = bds.shard_shape_in_pages();
+    const std::vector<CoreCoord>& bank_coords = bds.cores();
+    const size_t rank = tensor_shape.rank();
+    const size_t n_banks = bank_coords.size();
+
+    cta_payload.push_back(static_cast<uint32_t>(rank));
+    cta_payload.push_back(static_cast<uint32_t>(n_banks));
+
+    for (size_t i = 0; i < rank; ++i) {
+        cta_payload.push_back(static_cast<uint32_t>(tensor_shape[i]));
+    }
+    for (size_t i = 0; i < rank; ++i) {
+        cta_payload.push_back(static_cast<uint32_t>(shard_shape[i]));
+    }
+
+    // Bank coords packed two-per-uint32.
+    // Non-DRAM coords are virtualized; DRAM coords are kept logical (DRAM bank id == logical x).
+    const CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
+    auto resolve_coord = [&](const CoreCoord& logical) -> CoreCoord {
+        if (is_dram) {
+            return logical;
+        }
+        return mesh_device.virtual_core_from_logical_core(logical, core_type);
+    };
+    for (size_t i = 0; i < n_banks; i += 2) {
+        const CoreCoord c1 = resolve_coord(bank_coords[i]);
+        if (i + 1 < n_banks) {
+            const CoreCoord c2 = resolve_coord(bank_coords[i + 1]);
+            cta_payload.push_back(((c2.x & 0xFF) << 24) | ((c2.y & 0xFF) << 16) | ((c1.x & 0xFF) << 8) | (c1.y & 0xFF));
+        } else {
+            cta_payload.push_back(((c1.x & 0xFF) << 8) | (c1.y & 0xFF));
+        }
+    }
+
+    return cta_payload;
+}
+
+// Per-kernel resolved tensor binding data:
+//  - All the kernel's TensorBindingHandle (type is defined in kernel.hpp)
+//  - The positional CTAs to append to the kernel's (unnamed) CTAs
+struct TensorBindingsForKernel {
+    std::vector<TensorBindingHandle> handles;
+    std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
+                                      // (currently, this is the only Metal 2.0 use of positional CTAs)
+};
+
+// Resolve the tensor bindings for a single kernel:
+//  1. Walk the kernel's tensor_bindings in declaration order
+//  2. Pack each binding's CTA payload into a contiguous positional buffer
+//  3. Assign each binding a slot in the kernel's TensorBinding address section
+//     (a structurally separate region of the CRTA buffer, immediately following the user-named CRTAs)
+//
+// (SetProgramRunParameters will fill in the CRTA slots at enqueue time, extracting info from the TensorArgs.)
+TensorBindingsForKernel ResolveTensorBindingsForKernel(
+    const KernelSpec& kernel,
+    const std::unordered_map<TensorParameterName, std::vector<uint32_t>>& resolved_binding_ctas,
+    size_t base_named_crta_count) {
+    TensorBindingsForKernel out;
+    out.handles.reserve(kernel.tensor_bindings.size());
+
+    uint32_t cta_word_offset = 0;
+    size_t crta_word_index = base_named_crta_count;
+    for (const auto& binding : kernel.tensor_bindings) {
+        const auto& binding_ctas = resolved_binding_ctas.at(binding.tensor_parameter_name);
+
+        TensorBindingHandle handle;
+        handle.accessor_name = binding.accessor_name;
+        handle.tensor_parameter_name = binding.tensor_parameter_name;
+        handle.cta_offset = cta_word_offset;
+        handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+
+        out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
+        cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
+        crta_word_index += 1;
+
+        out.handles.push_back(std::move(handle));
+    }
+    return out;
+}
+
 // Create map of local accessor name -> logical DFB id
 tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
@@ -1247,6 +1503,26 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto producer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.producer_binding->access_pattern);
     auto consumer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.consumer_binding->access_pattern);
 
+    // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
+    // lower-layer DFB API requires an explicit scope.
+    // The user can declare it via KernelSpec::dfb_compute_self_loop_scopes:
+    //  - absence of an entry means we infer INTRA (the common case)
+    //  - user-specified INTRA is also fine
+    //  - user-specified INTER is not currently supported. This will have already failed validation.
+    std::optional<experimental::dfb::TensixScope> tensix_scope;
+    if (producer == consumer && producer->is_compute_kernel()) {
+        auto user_scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
+        for (const auto& entry : producer->dfb_compute_self_loop_scopes) {
+            if (entry.dfb_spec_name == dfb_spec->unique_id) {
+                user_scope = entry.scope;
+                break;
+            }
+        }
+        tensix_scope = (user_scope == KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA)
+                           ? experimental::dfb::TensixScope::INTRA
+                           : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
+    }
+
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
@@ -1258,7 +1534,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .cap = consumer_access_pattern,
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
-        .tile = dfb_spec->tile_format_metadata};
+        .tile = dfb_spec->tile_format_metadata,
+        .tensix_scope = tensix_scope};
 }
 
 // ----------------------------------------------------------------------------
@@ -1472,8 +1749,6 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // ============================================================================
 
 Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
-    // The mesh_device argument is required for forthcoming work but is not yet consumed.
-    (void)mesh_device;
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
@@ -1484,14 +1759,34 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         ValidateProgramSpec(spec, collected);
     }
 
-    // Step 2: Build kernel risc masks (arch-specific)
+    // Step 2a: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically
     //  - Gen1: processor is user-specified in Gen1DataMovementConfig
     KernelRiscMaskMap kernel_to_risc_mask =
         is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
+    // Step 2b: Resolve TensorParameters against the MeshDevice into static CTA payloads.
+    //
+    // TensorBindings ride two existing kernel-arg channels:
+    //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
+    //     CTA buffer. (Empty in Metal 2.0 today; the binding payload is its first user.)
+    //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
+    //     the kernel's user-named CRTAs and filled by SetProgramRunParameters from the
+    //     corresponding TensorArg entry.
+    std::unordered_map<TensorParameterName, std::vector<uint32_t>> resolved_binding_ctas;
+    resolved_binding_ctas.reserve(spec.tensor_parameters.size());
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        resolved_binding_ctas.emplace(
+            tensor_parameter.unique_id, ResolveTensorParameterStaticCTAs(tensor_parameter, mesh_device));
+    }
+
     // Step 3: Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
+
+    // Register TensorParameters with the program for ValidateProgramRunParams to consult at enqueue.
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        program_impl->register_tensor_parameter(tensor_parameter.unique_id, tensor_parameter.spec);
+    }
 
     // Create DataflowBuffers and build name -> ID map.
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
@@ -1532,10 +1827,21 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         const tt::tt_metal::SemaphoreLocalAccessorHandleMap semaphore_handles =
             MakeSemaphoreLocalAccessorHandles(kernel_spec, semaphore_name_to_id);
 
-        // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time
-        // to emit kernel_args_generated.h and factor into the kernel cache key.
+        // Resolve TensorBindings for this kernel:
+        //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
+        //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
+        const auto& user_named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
+        TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
+            kernel_spec, resolved_binding_ctas, /*base_named_crta_count=*/user_named_crtas.size());
+
+        // Create TensorBindingHandles for this kernel
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
+
+        // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
+        // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
+        // address section is tracked separately (via tensor_binding_handles), so we pass the user
+        // CRTA list through unchanged.
         const auto& named_rtas = kernel_spec.runtime_arguments_schema.named_runtime_args;
-        const auto& named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
 
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
@@ -1547,6 +1853,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
+                config.compile_args = ta_bindings.cta_words;  // populate positional CTAs from tensor bindings
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
                     kernel_src,
@@ -1557,9 +1864,11 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     dfb_handles,
                     semaphore_handles,
                     named_rtas,
-                    named_crtas);
+                    user_named_crtas,
+                    tensor_binding_handles);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
+                config.compile_args = ta_bindings.cta_words;
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
                     kernel_src,
@@ -1570,11 +1879,13 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     dfb_handles,
                     semaphore_handles,
                     named_rtas,
-                    named_crtas);
+                    user_named_crtas,
+                    tensor_binding_handles);
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
+                config.compile_args = ta_bindings.cta_words;
                 kernel = std::make_shared<DataMovementKernel>(
                     kernel_src,
                     node_ranges,
@@ -1583,9 +1894,11 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     dfb_handles,
                     semaphore_handles,
                     named_rtas,
-                    named_crtas);
+                    user_named_crtas,
+                    tensor_binding_handles);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
+                config.compile_args = ta_bindings.cta_words;
                 kernel = std::make_shared<ComputeKernel>(
                     kernel_src,
                     node_ranges,
@@ -1594,7 +1907,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     dfb_handles,
                     semaphore_handles,
                     named_rtas,
-                    named_crtas);
+                    user_named_crtas,
+                    tensor_binding_handles);
             }
         }
 
@@ -1618,7 +1932,12 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         const auto& user_schema = kernel_spec.runtime_arguments_schema;
         detail::ProgramImpl::KernelRTASchema runtime_schema;
         runtime_schema.named_runtime_args = user_schema.named_runtime_args;
-        runtime_schema.named_common_runtime_args = user_schema.named_common_runtime_args;
+
+        // Pass the user CRTA list through.
+        // NOTE: The TensorBinding address section is tracked separately on the Kernel
+        // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
+        // addr_crta_offset; SetProgramRunParameters uses BOTH to assemble the per-enqueue CRTA buffer.
+        runtime_schema.named_common_runtime_args = user_named_crtas;
         if (user_schema.num_runtime_varargs > 0) {
             for (const NodeRange& range : node_ranges.ranges()) {
                 for (const NodeCoord& node : range) {
