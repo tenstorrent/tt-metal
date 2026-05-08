@@ -1991,7 +1991,10 @@ class TestOlmoE2EPCC:
             pytest.skip("HF_MODEL not set")
 
         n_layers = int(os.environ.get("N_LAYERS_E2E", "1"))
-        max_seq_len = 256
+        # PADDED_LEN_E2E: prefill seq_len. Default 128 (ttnn.linear path); set to e.g. 4096
+        # to exercise the minimal_matmul prefill path that AIME demos hit.
+        padded_len_override = int(os.environ.get("PADDED_LEN_E2E", "128"))
+        max_seq_len = max(256, padded_len_override * 2)
         batch_size = 1
         n_decode_tokens = 10
         dtype = ttnn.bfloat8_b
@@ -2014,7 +2017,7 @@ class TestOlmoE2EPCC:
         prompt = "The capital of France is"
         input_ids = tokenizer.encode(prompt, add_special_tokens=True)
         seq_len = len(input_ids)
-        padded_len = 128
+        padded_len = padded_len_override
         input_ids_padded = input_ids + [tokenizer.eos_token_id or 50256] * (padded_len - seq_len)
         tokens_pt = torch.tensor(input_ids_padded, dtype=torch.long).unsqueeze(0)
 
@@ -2043,9 +2046,14 @@ class TestOlmoE2EPCC:
         state_dict = model_args.load_state_dict()
 
         # Use paged attention (required for prefill) with a proper page table for decode too.
-        # Shrink max_num_blocks for deep stacks to fit DRAM (4096 × 64L OOMs).
-        _max_blocks = 128 if n_layers >= 32 else 4096
-        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=_max_blocks)
+        # Shrink max_num_blocks for deep stacks to fit DRAM (4096 × 64L OOMs); but ensure
+        # enough blocks for the prefill: ceil(padded_len / block_size) * batch_per_dg.
+        block_size_cfg_pre = 64
+        batch_per_dg_for_blocks = max(model_args.max_batch_size // 4, 1)
+        min_blocks_for_prefill = math.ceil(padded_len / block_size_cfg_pre) * batch_per_dg_for_blocks
+        _default_blocks = 128 if n_layers >= 32 else 4096
+        _max_blocks = max(_default_blocks, min_blocks_for_prefill)
+        paged_attention_config = PagedAttentionConfig(block_size=block_size_cfg_pre, max_num_blocks=_max_blocks)
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
