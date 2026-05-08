@@ -88,6 +88,52 @@ ttnn.close_device(device)
 
 See `demo/demo_v2.py` for a complete runnable example.
 
+## Performance benchmarks
+
+Two benchmark scripts live in `models/demos/wormhole/bge_m3/tests/perf/`.
+
+### `perf.py` — Latency and throughput
+
+Measures trace-replay latency for B1 and B32 at S512. Each iteration copies fresh random inputs to device before replaying the trace, timing only the device execution.
+
+```bash
+# Batch 1
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "batch1" -s
+
+# Batch 32
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "batch32" -s
+
+# Both
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -s
+```
+
+### `tracy_perf.py` — Kernel-level profiling
+
+Runs a single forward pass inside Tracy signposts for device-level op reports. Requires `TT_METAL_DEVICE_PROFILER=1` — the test will error if it's not set.
+
+```bash
+# Batch 1
+TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py -k "batch1" -sv
+
+# Batch 32
+TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py -k "batch32" -sv
+```
+
+Reports are saved to `generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv` with per-kernel device timing, core utilization, and memory layout.
+
+To generate a human-readable summary from the CSV report, first install `tt-perf-report` if you haven't already:
+
+```bash
+source python_env/bin/activate
+uv pip install tt-perf-report
+```
+
+Then run:
+
+```bash
+tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_tracy_report.log
+```
+
 ## Embedding API
 
 For dense, sparse, and ColBERT-style embeddings, use `BgeM3ForEmbedding`.
