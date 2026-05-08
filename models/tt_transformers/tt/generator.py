@@ -125,6 +125,19 @@ class Generator(WarmupForwardMixin):
             return
         self.already_warmed_up_prefill = True
 
+        # Full HF Mistral4 hybrid prefill (MoE + device matmuls) compiles a very large graph per seq length.
+        # The default multi-length sweep + vision-only warmup can look "stuck" for tens of minutes per step
+        # on first silicon bring-up. Skip it; first real prefill/decode compiles kernels instead.
+        if getattr(self.model[0], "_mistral4_hybrid_generator", False) and os.environ.get(
+            "TT_METAL_MISTRAL4_HYBRID_FORCE_WARMUP", ""
+        ).strip().lower() not in ("1", "true", "yes"):
+            logger.info(
+                "Skipping Generator prefill warmup for Mistral4 hybrid multimodal "
+                "(set TT_METAL_MISTRAL4_HYBRID_FORCE_WARMUP=1 to restore). "
+                "Expect a long silent compile on the first real prefill."
+            )
+            return
+
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
         warmup_batch_sizes = (1,)
 
@@ -512,7 +525,25 @@ class Generator(WarmupForwardMixin):
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
 
-        prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        if getattr(self.model[0], "_mistral4_hybrid_generator", False):
+            # Default ``get_padded_prefill_len`` maps (128, 1024] -> 1024. For Mistral4 hybrid MoE prefill,
+            # cost scales with padded length; padding ~400 tokens to 1024 makes first compile disproportionately slow.
+            def _mistral4_hybrid_prefill_pad(seq_len: int) -> int:
+                s = int(seq_len)
+                if s <= 128:
+                    return 128
+                return max(128, 1 << (s - 1).bit_length())
+
+            prefill_seq_lens = [_mistral4_hybrid_prefill_pad(s) for s in prompt_lens]
+            default_lens = [get_padded_prefill_len(s) for s in prompt_lens]
+            if prefill_seq_lens != default_lens:
+                logger.info(
+                    "Mistral4 hybrid: prefill pad lengths {} (not default {}); shorter pad speeds first compile.",
+                    prefill_seq_lens,
+                    default_lens,
+                )
+        else:
+            prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # Only used when device sampling is active (sampling_params is not None)
         # and the prompt uses the harmony chat template (first token is <|start|>=200006).
@@ -831,6 +862,10 @@ class Generator(WarmupForwardMixin):
 
             # Non-batched prefill path
             if enable_trace_current_prompt:
+                if isinstance(logits, torch.Tensor) and getattr(
+                    self.model[model_id], "_mistral4_hybrid_generator", False
+                ):
+                    raise NotImplementedError("Mistral4 hybrid multimodal prefill does not support trace")
                 if return_hidden_states:
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx
@@ -868,16 +903,29 @@ class Generator(WarmupForwardMixin):
                     }
                 )
             else:
-                logits = ttnn.untilize(logits, use_multicore=True)
-                prefill_results.append(
-                    {
-                        "idx": idx,
-                        "model_id": model_id,
-                        "last_token_idx": last_token_idx,
-                        "logits": logits.cpu(blocking=False),
-                        "sampling": sampling_enabled,
-                    }
-                )
+                if isinstance(logits, torch.Tensor) and getattr(
+                    self.model[model_id], "_mistral4_hybrid_generator", False
+                ):
+                    prefill_results.append(
+                        {
+                            "idx": idx,
+                            "model_id": model_id,
+                            "last_token_idx": last_token_idx,
+                            "logits_torch": logits,
+                            "sampling": sampling_enabled,
+                        }
+                    )
+                else:
+                    logits = ttnn.untilize(logits, use_multicore=True)
+                    prefill_results.append(
+                        {
+                            "idx": idx,
+                            "model_id": model_id,
+                            "last_token_idx": last_token_idx,
+                            "logits": logits.cpu(blocking=False),
+                            "sampling": sampling_enabled,
+                        }
+                    )
 
         if len(prefill_results) > 0:
             for elem_idx, res in enumerate(prefill_results):
@@ -911,6 +959,14 @@ class Generator(WarmupForwardMixin):
                     output_tokens[idx] = tokens_host
                     if log_probs_host is not None:
                         output_log_probs[idx] = log_probs_host
+                elif "logits_torch" in res:
+                    lt = int(last_token_idx_relative)
+                    vo = res["logits_torch"]
+                    if vo.dim() == 3:
+                        row = vo[0, lt, : self.model_args[model_id].vocab_size].float()
+                    else:
+                        row = vo[lt, : self.model_args[model_id].vocab_size].float()
+                    output_tensor[idx, 0, :] = row
                 else:
                     output_tensor[idx] = self.model[model_id].process_output_prefill(
                         res["logits"], last_token_idx=(last_token_idx_relative % 32)
@@ -1178,31 +1234,26 @@ class Generator(WarmupForwardMixin):
         Returns tt_logits on device
         """
         tt_output = []
-        tt_tokens = []
-        tt_current_pos = []
-        tt_rot_mat_idxs = []
-        tt_page_table = []
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
+            if getattr(model_i, "_mistral4_hybrid_generator", False):
+                tt_logits_i, tt_log_probs_i = model_i.mistral4_hybrid_decode_forward(tokens[i], current_pos[i])
+                tt_output.append((tt_logits_i, tt_log_probs_i))
+                continue
+
             (
                 tt_tokens_i,
                 tt_current_pos_i,
                 tt_rot_mat_idxs_i,
                 tt_page_table_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
-            tt_tokens.append(tt_tokens_i)
-            tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
-            tt_page_table.append(tt_page_table_i)
-
-        for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
-                tt_tokens[i],
-                tt_current_pos[i],
-                rot_mat_idxs=tt_rot_mat_idxs[i],
-                page_table=tt_page_table[i],
+            tt_logits_i, tt_log_probs_i = model_i.ttnn_decode_forward(
+                tt_tokens_i,
+                tt_current_pos_i,
+                rot_mat_idxs=tt_rot_mat_idxs_i,
+                page_table=tt_page_table_i,
                 kv_cache=user_kv_cache,
                 sampling_on_device=sampling_on_device,
             )
@@ -1703,6 +1754,14 @@ class Generator(WarmupForwardMixin):
         log_probs = []
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
+                if isinstance(tt_out[i][0], torch.Tensor):
+                    li = tt_out[i][0]
+                    logits_i = li[:, -1, : self.model[i].vocab_size].float()
+                    if logits_i.ndim == 1:
+                        logits_i = logits_i.unsqueeze(0)
+                    logits.append(logits_i)
+                    log_probs.append(torch.ones(logits_i.shape))
+                    continue
                 logits_i = self.model[i].process_output_decode(
                     tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )

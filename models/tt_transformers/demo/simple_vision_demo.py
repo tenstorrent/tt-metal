@@ -15,6 +15,7 @@ from models.common.llama_models import create_vision_mask, extract_images_from_m
 IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 import os
+import re
 import time
 
 import numpy as np
@@ -28,6 +29,7 @@ from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 
 _MISTRAL_SMALL_31_24B_BASE = "Mistral-Small-3.1-24B"
+MISTRAL_SMALL_4_119B_BASE = "Mistral-Small-4-119B"
 _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
 _BERTSCORE_MODEL_TYPE = "microsoft/deberta-xlarge-mnli"
 _BERTSCORE_MIN_F1 = 0.55
@@ -166,12 +168,21 @@ def create_multimodal_model(
     use_paged_kv_cache=False,
     checkpoint=None,
 ):
+    """Build multimodal TT model + ``ModelArgs`` + checkpoint dict.
+
+    For **Mistral-Small-4-119B**, the default is ``MistralTransformer`` (Llama-style ``Transformer`` text
+    when decoder weights exist; vision-only checkpoints force ``n_layers=0``). Set env
+    ``TT_METAL_MISTRAL4_HYBRID_TEXT`` to a non-empty value (or ``1``/``true`` to use ``HF_MODEL``) to build
+    :class:`~models.tt_transformers.tt.multimodal.mistral_24b.mistral_hybrid_e2e_model.Mistral4HybridMultimodalTransformer`
+    instead: TT vision + HF ``Mistral4ForCausalLM`` hybrid text wired through ``Generator``.
+    """
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
 
     hf_tail = os.environ.get("HF_MODEL", "").strip("/").split("/")[-1]
-    if get_base_model_name(hf_tail) == _MISTRAL_SMALL_31_24B_BASE:
+    _mm_base = get_base_model_name(hf_tail)
+    if _mm_base in (_MISTRAL_SMALL_31_24B_BASE, MISTRAL_SMALL_4_119B_BASE):
         max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
@@ -185,7 +196,44 @@ def create_multimodal_model(
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
 
-    if tt_model_args.base_model_name == _MISTRAL_SMALL_31_24B_BASE:
+    has_tt_text_decoder = any(re.match(r"^layers\.\d+\.(attention|feed_forward)", k) for k in checkpoint)
+    if tt_model_args.base_model_name == MISTRAL_SMALL_4_119B_BASE and not has_tt_text_decoder:
+        # Vision+MMP (+ outer norm/embed/lm_head) slice only: omit Llama-style decoder blocks.
+        tt_model_args.n_layers = 0
+        logger.info(
+            "Mistral-Small-4-119B: no text decoder weights in checkpoint; "
+            "n_layers=0 for multimodal glue (vision layout + ModelArgs + outer text tensors)."
+        )
+
+    _hybrid_env = os.environ.get("TT_METAL_MISTRAL4_HYBRID_TEXT", "").strip()
+    if tt_model_args.base_model_name == MISTRAL_SMALL_4_119B_BASE and _hybrid_env:
+        from models.tt_transformers.tt.mistral_small_4.text_backbone import load_mistral4_for_causal_lm_bf16
+        from models.tt_transformers.tt.multimodal.mistral_24b.mistral_hybrid_e2e_model import (
+            Mistral4HybridMultimodalTransformer,
+        )
+
+        hf_id = os.environ.get("HF_MODEL", "").strip()
+        if _hybrid_env.lower() not in ("1", "true", "yes"):
+            hf_id = _hybrid_env
+        if not hf_id:
+            raise RuntimeError(
+                "TT_METAL_MISTRAL4_HYBRID_TEXT is set but no HF checkpoint id: set HF_MODEL or use the env "
+                "value as the Mistral4ForCausalLM repo / path."
+            )
+        use_sdpa = os.environ.get("TT_METAL_MISTRAL4_USE_DEVICE_SDPA", "").strip().lower() in ("1", "true", "yes")
+        hf_lm = load_mistral4_for_causal_lm_bf16(hf_id)
+        model = Mistral4HybridMultimodalTransformer(
+            tt_model_args,
+            ttnn.bfloat8_b,
+            mesh_device,
+            checkpoint,
+            tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+            hf_lm,
+            use_paged_kv_cache=use_paged_kv_cache,
+            use_device_sdpa_attention=use_sdpa,
+        )
+        logger.info("Mistral-Small-4-119B: using Mistral4 hybrid text + TT vision (TT_METAL_MISTRAL4_HYBRID_TEXT).")
+    elif tt_model_args.base_model_name in (_MISTRAL_SMALL_31_24B_BASE, MISTRAL_SMALL_4_119B_BASE):
         model = MistralTransformer(
             mesh_device=mesh_device,
             state_dict=checkpoint,
@@ -364,7 +412,7 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
     )
 
-    is_mistral = model_args[0].base_model_name == _MISTRAL_SMALL_31_24B_BASE
+    is_mistral = model_args[0].base_model_name in (_MISTRAL_SMALL_31_24B_BASE, MISTRAL_SMALL_4_119B_BASE)
 
     processor = AutoProcessor.from_pretrained(
         model_args[0].CKPT_DIR if is_mistral else ckpt_dir,

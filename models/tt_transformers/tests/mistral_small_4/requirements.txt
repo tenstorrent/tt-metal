@@ -1,0 +1,7 @@
+# Tests that import ``transformers.models.mistral4`` (e.g. ``test_rms_norm.py``) need a current transformers.
+# Other tests in this folder may run with torch + ttnn only.
+# Use a current PyPI release or mainline:
+#   pip install -U transformers
+# If ``ModuleNotFoundError: mistral4`` persists, install from source:
+#   pip install git+https://github.com/huggingface/transformers.git
+transformers>=5.5.0

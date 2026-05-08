@@ -9,7 +9,29 @@ from typing import Dict, List, Optional, Union
 import torch
 from PIL import Image
 from pydantic import BaseModel, validator
-from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
+from transformers import AutoProcessor, pipeline
+
+try:
+    from transformers import AutoModelForVision2Seq
+except ImportError:
+    AutoModelForVision2Seq = None  # type: ignore[misc, assignment]
+
+try:
+    from transformers import AutoModelForImageTextToText
+except ImportError:
+    AutoModelForImageTextToText = None  # type: ignore[misc, assignment]
+
+
+def _vision_seq_model_cls():
+    """Prefer AutoModelForVision2Seq; older transformers only expose AutoModelForImageTextToText."""
+    if AutoModelForVision2Seq is not None:
+        return AutoModelForVision2Seq
+    if AutoModelForImageTextToText is not None:
+        return AutoModelForImageTextToText
+    raise ImportError(
+        "transformers is missing AutoModelForVision2Seq and AutoModelForImageTextToText; "
+        "upgrade transformers (e.g. pip install -U transformers)."
+    )
 
 
 class Role(Enum):
@@ -185,7 +207,7 @@ class GeneratorChat:
 class GeneratorText:
     def __init__(self, model_name):
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name)
+        self.model = _vision_seq_model_cls().from_pretrained(model_name)
 
     def text_completion(
         self,

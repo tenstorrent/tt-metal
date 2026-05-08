@@ -6,6 +6,7 @@ import inspect
 import json
 import math
 import os
+import re
 from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
@@ -2695,8 +2696,18 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
+        # RoPE params (some HF hubs omit ``rope_theta`` on ``text_config``; RoPE tables require a finite base)
         self.rope_theta = text_config.get("rope_theta")
+        if self.rope_theta is None:
+            self.rope_theta = config.get("rope_theta")
+        if self.rope_theta is None:
+            default_theta = 1_000_000.0
+            logger.warning(
+                "HF config has no rope_theta on text_config or root; using default {} for RoPE (Mistral-style).",
+                default_theta,
+            )
+            self.rope_theta = default_theta
+        self.rope_theta = float(self.rope_theta)
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -3035,6 +3046,10 @@ class ModelArgs:
         prefixes = (
             "lm_head.",
             "model.lm_head.",
+            "model.language_model.lm_head.",
+            "language_model.lm_head.",
+            "model.language_model.output.",
+            "language_model.output.",
             "model.language_model.embed_tokens.",
             "language_model.embed_tokens.",
             "model.embed_tokens.",
@@ -3057,6 +3072,53 @@ class ModelArgs:
                 local_files_only=os.getenv("CI") == "true",
             )
         self._mistral3_lm_head_raw_hf_sd = raw
+        return raw
+
+    @staticmethod
+    def _mistral3_coerce_root_language_model_keys(state_dict: dict) -> dict:
+        """Prefix bare ``language_model.*`` keys with ``model.`` so ``standardize_hf_keys_multimodal`` and
+        ``map_hf_to_meta_keys`` (which strip ``model.language_model.``) apply to shard layouts that omit ``model.``."""
+        out = {}
+        for k, v in state_dict.items():
+            if k.startswith("language_model.") and not k.startswith("model."):
+                out["model." + k] = v
+            else:
+                out[k] = v
+        return out
+
+    def _load_mistral3_language_model_norm_only_raw_hf_state_dict(self) -> dict:
+        """Final RMSNorm before LM head (HF ``language_model.norm``), for vision-only checkpoint slices."""
+        if getattr(self, "_mistral3_lm_norm_raw_hf_sd", None) is not None:
+            return self._mistral3_lm_norm_raw_hf_sd
+
+        prefixes = (
+            "model.language_model.norm.",
+            "language_model.norm.",
+            "model.norm.",
+        )
+        raw = load_hf_state_dict_filtered(
+            self.CKPT_DIR,
+            prefixes,
+            local_files_only=os.getenv("CI") == "true",
+        )
+        if not raw:
+            raw = load_hf_state_dict_matching_substrings(
+                self.CKPT_DIR,
+                ("language_model.norm.weight", "model.language_model.norm.weight", "model.norm.weight"),
+                local_files_only=os.getenv("CI") == "true",
+            )
+            raw = {
+                k: v
+                for k, v in raw.items()
+                if (
+                    re.search(r"(^|\.)language_model\.norm\.weight$", k)
+                    or re.search(r"(^|\.)model\.language_model\.norm\.weight$", k)
+                    or re.search(r"(^|\.)model\.norm\.weight$", k)
+                )
+                and "vision" not in k
+                and "layers" not in k
+            }
+        self._mistral3_lm_norm_raw_hf_sd = raw
         return raw
 
     def _mistral3_outer_state_dict_keys_for_hf(self, raw_hf: dict) -> dict:
@@ -3174,6 +3236,14 @@ class ModelArgs:
                 # Best-effort: also load LM-head/tied-embedding tensors so lm_head tests can run
                 # even when full Mistral4 FP8 conversion fails on CPU.
                 state_dict.update(self._load_mistral3_lm_head_only_raw_hf_state_dict())
+                _norm_slice = self._load_mistral3_language_model_norm_only_raw_hf_state_dict()
+                if not _norm_slice:
+                    logger.warning(
+                        "Mistral3 vision fallback: no language_model.norm tensors in safetensors slice; "
+                        "outer RMSNorm weight may be missing for full multimodal glue."
+                    )
+                state_dict.update(_norm_slice)
+                state_dict = self._mistral3_coerce_root_language_model_keys(state_dict)
                 self.is_mixture_of_experts = False
             else:
                 state_dict = model.state_dict()
@@ -3231,6 +3301,13 @@ class ModelArgs:
             if lm_head_like_key is not None:
                 state_dict["lm_head.weight"] = state_dict[lm_head_like_key]
                 state_dict["output.weight"] = state_dict[lm_head_like_key]
+
+        # Tied LM head / output and token embedding (e.g. Mistral vision-only slice has output but no embed row).
+        if "tok_embeddings.weight" not in state_dict:
+            for cand in ("output.weight", "lm_head.weight"):
+                if cand in state_dict:
+                    state_dict["tok_embeddings.weight"] = state_dict[cand]
+                    break
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -3624,6 +3701,7 @@ class ModelArgs:
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+            "Mistral-Small-4-119B": "mistralai/Mistral-Small-4-119B-2603",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
         }
 
