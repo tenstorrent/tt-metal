@@ -51,6 +51,7 @@ enum class BinaryOpType {
     ATAN2,
     WHERE_TST,
     WHERE_TTS,
+    NEXTAFTER,
 };
 
 }  // namespace ttnn::operations::binary

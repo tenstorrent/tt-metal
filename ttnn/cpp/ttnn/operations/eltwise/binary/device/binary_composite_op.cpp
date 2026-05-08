@@ -9,7 +9,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -27,22 +26,17 @@ using namespace operations;
 
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = tt::tt_metal::hal::get_eps();
-    Tensor result(input_a);
-    {
-        Tensor eps_gt(input_a);
-        {
-            eps_gt = ttnn::where(
-                ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
-                ttnn::add(input_a, eps, std::nullopt, output_mem_config),
-                input_a);
-        }
-        result = ttnn::where(
-            ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
-            ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
-            eps_gt);
-    }
-    return result;
+    return ttnn::detail::invoke_binary_ng(
+        input_a,
+        input_b,
+        binary::BinaryOpType::NEXTAFTER,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 // ∣input−other∣≤ atol+rtol×∣other∣

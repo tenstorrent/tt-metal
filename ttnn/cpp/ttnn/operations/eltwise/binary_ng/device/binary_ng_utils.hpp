@@ -87,6 +87,7 @@ struct OpConfig {
         WHERE,
         EQ,
         NE,
+        NEXTAFTER,
     };
 
     template <class EnumT>

@@ -24,6 +24,7 @@
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/nextafter.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
