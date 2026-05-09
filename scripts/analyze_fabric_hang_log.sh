@@ -873,6 +873,30 @@ FIX_AV_FIRES=$(grep -cE 'FIX AV #42429|FIX AY/AV.*Skipping all remaining' "$CLEA
 FIX_AL_FIRES=$(grep -cE 'FIX AL|STARTED early-exit after.*ms.*master chan' "$CLEAN" 2>/dev/null; :)
 # FIX AM: Phase 5b skip when master chan still at STARTED after FIX AL break
 FIX_AM_FIRES=$(grep -cE 'FIX AM|skipping Phase 5b.*FIX AM|channels_not_ready_for_traffic.*FIX AM|still at STARTED.*skipping Phase 5b' "$CLEAN" 2>/dev/null; :)
+# FIX AO (#42429): wait_for_fabric_router_sync() STARTED early-exit — master chan stuck at
+# EDMStatus::STARTED (0xa0b0c0d0) after 1s.  Peer is not responding (out-of-mesh or non-MMIO
+# base-UMD).  Skips ring sync cleanly instead of waiting full timeout (10-120s).
+# Log: "wait_for_fabric_router_sync: Device N master chan=N stuck at STARTED (0xa0b0c0d0) after Nms
+#       — peer is not responding (likely out-of-mesh). Skipping ring sync cleanly. (FIX AO #42429)"
+FIX_AO_FIRES=$(grep -cE 'stuck at STARTED.*peer is not responding.*FIX AO|Skipping ring sync cleanly.*FIX AO #42429' "$CLEAN" 2>/dev/null; :)
+# FIX BD/BF (#42429): deterministic MMIO-peer-preference master channel selection.
+# Log (log_info): "FabricBuilder::create_routers: Device N selected master_router_chan=N
+#                  (peer_chip=N peer_is_mmio=true/false total_router_candidates=N) (FIX BD/BF #42429)"
+# Counts how many devices selected an MMIO peer vs non-MMIO peer for master channel.
+FIX_BF_MMIO_MASTER=$(grep -cE 'selected master_router_chan=.*peer_is_mmio=true.*FIX BD/BF' "$CLEAN" 2>/dev/null; :)
+FIX_BF_NONMMIO_MASTER=$(grep -cE 'selected master_router_chan=.*peer_is_mmio=false.*FIX BD/BF' "$CLEAN" 2>/dev/null; :)
+# FIX BG (#42429): host-pre-launch (0xdeadb07e) sentinel early-exit in wait_for_fabric_router_sync.
+# Fires when ERISC was soft-reset (FIX RR) but never started executing — stuck at host-written
+# pre-launch canary.  Device marked dead-master-chan; sync skipped.
+# Log: "Device N master chan=N stuck at host-pre-launch (0xdeadb07e) after Nms —
+#       ERISC not executing after soft-reset (FIX RR). Marking device as dead-master-chan. (FIX BG #42429)"
+FIX_BG_FIRES=$(grep -cE 'stuck at host-pre-launch.*0xdeadb07e.*FIX BG|Marking device as dead-master-chan.*FIX BG' "$CLEAN" 2>/dev/null; :)
+# FIX ST (#42429): use device's effective fabric_pre_dead_channels_ (post-FIX-RR) for
+# mmio_dead_master_chan check instead of raw probe_dead_channels_map.
+# FIX ST dead:      "... NOT recovered by FIX RR ... Sync will be skipped. (#42429 FIX AN / FIX ST)"
+# FIX ST recovered: "... Firmware loaded; sync will proceed normally. (#42429 FIX ST)"
+FIX_ST_DEAD=$(grep -cE 'NOT recovered by FIX RR.*Sync will be skipped|FIX AN / FIX ST' "$CLEAN" 2>/dev/null; :)
+FIX_ST_RECOVERED=$(grep -cE 'Firmware loaded; sync will proceed normally.*FIX ST' "$CLEAN" 2>/dev/null; :)
 # FIX AW: ~Cluster destructor runs driver_->close_device() in detached thread to avoid wait_for_non_mmio_flush hang
 FIX_AW_FIRES=$(grep -cE 'FIX AW|relay-broken non-MMIO.*running driver.*close_device.*background thread|close_device.*did not complete.*5s.*FIX AW' "$CLEAN" 2>/dev/null; :)
 # FIX BA: STARTED-state non-MMIO devices added to relay_broken_non_mmio (FIX AM fired, relay_broken=false)
@@ -1415,6 +1439,21 @@ fi
 if [ "${FIX_AM_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AM] Phase 5b skipped after FIX AL STARTED early-exit (${FIX_AM_FIRES} event(s)) — master chan still at STARTED after poll exits; subordinates stuck at REMOTE_HANDSHAKE_COMPLETE; Phase 5b is pointless. Sets fabric_channels_not_ready_for_traffic_=true. FIX BA should fire at teardown to clean up."
 fi
+if [ "${FIX_AO_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AO] ring-sync STARTED early-exit: ${FIX_AO_FIRES} device(s) — master chan stuck at STARTED after 1s (peer not responding, likely out-of-mesh). Ring sync skipped cleanly instead of waiting full timeout."
+fi
+if [ "${FIX_BG_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX BG] host-pre-launch 0xdeadb07e sentinel: ${FIX_BG_FIRES} device(s) — ERISC soft-reset (FIX RR) succeeded but ERISC never started executing. Marked dead-master-chan; ring sync skipped."
+fi
+if [ "${FIX_BF_MMIO_MASTER:-0}" -gt 0 ] || [ "${FIX_BF_NONMMIO_MASTER:-0}" -gt 0 ]; then
+    echo "  => [FIX BD/BF] master chan selection: ${FIX_BF_MMIO_MASTER:-0} MMIO-peer master(s), ${FIX_BF_NONMMIO_MASTER:-0} non-MMIO-peer master(s)."
+fi
+if [ "${FIX_ST_DEAD:-0}" -gt 0 ]; then
+    echo "  => [FIX ST] MMIO master chan confirmed dead (not recovered by FIX RR): ${FIX_ST_DEAD} channel(s) — ring sync skipped."
+fi
+if [ "${FIX_ST_RECOVERED:-0}" -gt 0 ]; then
+    echo "  => [FIX ST] MMIO master chan recovered by FIX RR soft-reset: ${FIX_ST_RECOVERED} channel(s) — ring sync proceeding normally."
+fi
 if [ "${FIX_AW_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AW] ~Cluster destructor: driver_->close_device() running in background thread with 5s timeout (${FIX_AW_FIRES} event(s)) — relay-broken non-MMIO chips registered by FIX BA/teardown; wait_for_non_mmio_flush would hang indefinitely on stale UMD relay CMD queue entries. NOTE: FIX AW was superseded by FIX AE (commit 561f7abd505) which marks chips broken before close_device() — no thread detach needed."
 fi
@@ -1900,6 +1939,12 @@ echo "  FIX_SB2R_CLEAN_BOOT:      ${FIX_SB2R_CLEAN_BOOT:-0}  (relay_broken NOT s
 echo "  FIX_SC_PRESCAN:           ${FIX_SC_PRESCAN:-0}  (FIX SC stale go_msg pre-scan fires; TENSIX=${FIX_SC_TENSIX_FIRE:-0} ETH=${FIX_SC_ETH_FIRE:-0})"
 echo "  FIX_SC_ETH_FIRE:          ${FIX_SC_ETH_FIRE:-0}  ([REGRESSION if > 0] FIX SC fired on ETH core — FIX SC-ADDR regression?)"
 echo "  FIX_SC_ADDR_ETH_VALID:    ${FIX_SC_ADDR_ETH_VALID:-0}  (ETH cores in not_done_cores scanned at correct address; valid signal (debug log))"
+echo "  FIX_AO_FIRES:              ${FIX_AO_FIRES:-0}  (ring-sync STARTED early-exit at 1s — out-of-mesh/non-MMIO peer not responding)"
+echo "  FIX_BG_FIRES:              ${FIX_BG_FIRES:-0}  (host-pre-launch 0xdeadb07e — ERISC not executing after FIX RR soft-reset)"
+echo "  FIX_BF_MMIO_MASTER:        ${FIX_BF_MMIO_MASTER:-0}  (master chans selected with MMIO peer — FIX BD/BF)"
+echo "  FIX_BF_NONMMIO_MASTER:     ${FIX_BF_NONMMIO_MASTER:-0}  (master chans selected with non-MMIO peer — FIX BD/BF fallback)"
+echo "  FIX_ST_DEAD:               ${FIX_ST_DEAD:-0}  (MMIO master chan dead, ring sync skipped — FIX ST)"
+echo "  FIX_ST_RECOVERED:          ${FIX_ST_RECOVERED:-0}  (MMIO master chan recovered by FIX RR, ring sync proceeding — FIX ST)"
 echo "  FIX_TV_SUCCESS:            ${FIX_TV_SUCCESS:-0}  (MMIO ETH heartbeat confirmed after reset_cores)"
 echo "  FIX_TV_TIMEOUT:            ${FIX_TV_TIMEOUT:-0}  (MMIO ETH heartbeat poll timed out — probe_dead likely)"
 echo "  TELEMETRY_DUMPS:           ${TELEMETRY_DUMP_BEGIN:-0}  (fabric telemetry failure dumps)"

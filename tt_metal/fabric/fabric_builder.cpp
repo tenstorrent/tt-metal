@@ -10,6 +10,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <set>
 
@@ -151,6 +152,23 @@ void FabricBuilder::create_routers() {
             });
         master_router_chan_ = best_it->first;
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
+        // FIX BD/BF (#42429): log selected master channel for diagnosability.
+        // Includes peer chip ID, MMIO status, and total candidates so failures
+        // can be correlated to specific device/channel topology.
+        {
+            const auto peer_chip = ctrl_plane.get_physical_chip_id_from_fabric_node_id(
+                best_it->second->get_peer_fabric_node_id());
+            const bool peer_mmio = (cluster.get_associated_mmio_device(peer_chip) == peer_chip);
+            log_info(
+                tt::LogFabric,
+                "FabricBuilder::create_routers: Device {} selected master_router_chan={} "
+                "(peer_chip={} peer_is_mmio={} total_router_candidates={}) (FIX BD/BF #42429)",
+                device_->id(),
+                master_router_chan_,
+                peer_chip,
+                peer_mmio,
+                routers_.size());
+        }
     }
 }
 

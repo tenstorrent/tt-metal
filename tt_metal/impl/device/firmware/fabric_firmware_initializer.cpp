@@ -1920,6 +1920,19 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // Fix: clear all four at the start of each compile_and_configure_fabric() call, alongside
     // the existing clears for dead_relay_devices_ et al.  Each cycle recomputes them from
     // fresh probe results.
+    // FIX BE (#42429): log when stale state is present so CI logs capture
+    // whether progressive accumulation occurred before clearing.
+    if (!external_umd_channels_map_.empty() || has_base_umd_channels_ ||
+        !timeout_on_base_umd_devices_.empty() || ring_sync_already_timed_out_) {
+        log_debug(
+            tt::LogMetal,
+            "compile_and_configure_fabric: FIX BE (#42429) clearing stale per-cycle state: "
+            "external_umd_map.size()={} has_base_umd={} timeout_devs.size()={} ring_sync_timed_out={}",
+            external_umd_channels_map_.size(),
+            has_base_umd_channels_,
+            timeout_on_base_umd_devices_.size(),
+            ring_sync_already_timed_out_);
+    }
     external_umd_channels_map_.clear();
     has_base_umd_channels_ = false;
     timeout_on_base_umd_devices_.clear();
