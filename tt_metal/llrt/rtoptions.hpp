@@ -351,7 +351,7 @@ class RunTimeOptions {
     uint32_t device_print_dispatch_full_us = 100000;  // 100 ms
 
     // Override for the dispatch_s DEVICE_PRINT dispatch L1 cache buffer size, in bytes.
-    // 0 means "use the per-arch HAL default" (Hal::get_dispatch_s_device_print_l1_cache_size()).
+    // 0 means "use the per-arch default" (DispatchMemMap::dispatch_s_device_print_l1_cache_size()).
     // Bump this if dispatch_s logs that it self-disabled because the buffer was too small.
     uint32_t device_print_dispatch_l1_cache_bytes = 0;
 

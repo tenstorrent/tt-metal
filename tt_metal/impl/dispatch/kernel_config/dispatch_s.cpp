@@ -117,9 +117,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
                 sizeof(device_print_dispatch::NocLocationInputInfo) * print_cores.size();
             const uint32_t l1_cache_addr =
                 (noc_locations_addr + noc_locations_size + l1_alignment - 1) & ~(l1_alignment - 1);
-            const uint32_t override_bytes = descriptor_.rtoptions().get_device_print_dispatch_l1_cache_bytes();
-            const uint32_t l1_cache_size =
-                override_bytes != 0 ? override_bytes : hal.get_dispatch_s_device_print_l1_cache_size();
+            const uint32_t l1_cache_size = my_dispatch_constants.dispatch_s_device_print_l1_cache_size();
 
             const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             const uint64_t dram_base = hal.get_dev_addr(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);

@@ -78,9 +78,6 @@ constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profi
     return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
 }
 
-// Wormhole has tight L1; keep the dispatch_s device-print scratch small.
-constexpr static std::uint32_t DISPATCH_S_DEVICE_PRINT_L1_CACHE_SIZE = 8 * 1024;
-
 static constexpr float EPS_WHB0 = 1.19209e-7f;
 static constexpr float NAN_WHB0 = 7.0040e+19;
 static constexpr float INF_WHB0 = 1.7014e+38;
@@ -275,8 +272,6 @@ void Hal::initialize_wh(
         get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
         get_dram_unreserved_size(dram_profiler_size, enable_dram_backed_cq);
-
-    this->dispatch_s_device_print_l1_cache_size_ = DISPATCH_S_DEVICE_PRINT_L1_CACHE_SIZE;
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;

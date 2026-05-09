@@ -11,6 +11,10 @@
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 
+namespace tt::llrt {
+class RunTimeOptions;
+}  // namespace tt::llrt
+
 namespace tt::tt_metal {
 class Hal;
 enum class CommandQueueDeviceAddrType : uint8_t;
@@ -36,7 +40,7 @@ public:
         uint32_t num_hw_cqs,
         const Hal& hal,
         bool is_galaxy_cluster,
-        bool are_cqs_dram_backed);
+        const tt::llrt::RunTimeOptions& rtoptions);
 
     uint32_t prefetch_q_entries() const;
 
@@ -68,6 +72,8 @@ public:
 
     uint32_t dispatch_s_buffer_pages() const;
 
+    uint32_t dispatch_s_device_print_l1_cache_size() const;
+
     uint32_t get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const;
 
     uint32_t get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const;
@@ -87,6 +93,7 @@ private:
     uint32_t cmddat_q_base_ = 0;
     uint32_t scratch_db_base_ = 0;
     uint32_t dispatch_buffer_base_ = 0;
+    uint32_t dispatch_s_device_print_l1_cache_size_ = 0;
 
     uint32_t dispatch_buffer_block_size_pages_ = 0;
     std::vector<uint32_t> device_cq_addrs_;

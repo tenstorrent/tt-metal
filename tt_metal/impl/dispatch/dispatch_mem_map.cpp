@@ -11,14 +11,23 @@
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 #include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {
 
 DispatchMemMap::DispatchMemMap(
-    const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster, bool are_cqs_dram_backed) :
+    const CoreType& core_type,
+    uint32_t num_hw_cqs,
+    const Hal& hal,
+    bool is_galaxy_cluster,
+    const tt::llrt::RunTimeOptions& rtoptions) :
     settings(DispatchSettings(
-        num_hw_cqs, core_type, is_galaxy_cluster, are_cqs_dram_backed, hal.get_alignment(HalMemType::L1))),
+        num_hw_cqs,
+        core_type,
+        is_galaxy_cluster,
+        rtoptions.get_dram_backed_cq(),
+        hal.get_alignment(HalMemType::L1))),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
     noc_overlay_start_addr_(hal.get_noc_overlay_start_addr()),
@@ -107,6 +116,21 @@ DispatchMemMap::DispatchMemMap(
         l1_size);
 
     TT_ASSERT(dispatch_cb_end < l1_size);
+
+    // Per-arch defaults for the dispatch_s DEVICE_PRINT L1 cache buffer. Lives here (rather than
+    // on Hal) because this is a dispatch-side memory layout decision, and callers should reach
+    // it through DispatchMemMap. A non-zero rtoptions override replaces the per-arch default.
+    const uint32_t device_print_override = rtoptions.get_device_print_dispatch_l1_cache_bytes();
+    if (device_print_override != 0) {
+        dispatch_s_device_print_l1_cache_size_ = device_print_override;
+    } else {
+        switch (hal.get_arch()) {
+            case tt::ARCH::WORMHOLE_B0: dispatch_s_device_print_l1_cache_size_ = 8 * 1024; break;
+            case tt::ARCH::BLACKHOLE:   dispatch_s_device_print_l1_cache_size_ = 64 * 1024; break;
+            case tt::ARCH::QUASAR:      dispatch_s_device_print_l1_cache_size_ = 128 * 1024; break;
+            default:                    dispatch_s_device_print_l1_cache_size_ = 0; break;
+        }
+    }
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
@@ -139,6 +163,10 @@ uint32_t DispatchMemMap::dispatch_s_buffer_size() const { return settings.dispat
 
 uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
     return settings.dispatch_s_buffer_size_ / (1 << tt::tt_metal::DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
+}
+
+uint32_t DispatchMemMap::dispatch_s_device_print_l1_cache_size() const {
+    return dispatch_s_device_print_l1_cache_size_;
 }
 
 uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
