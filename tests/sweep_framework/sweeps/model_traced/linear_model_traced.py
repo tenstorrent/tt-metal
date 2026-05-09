@@ -540,6 +540,8 @@ def run(
         _absent = set(kwargs.get("__absent_keys__") or [])
         if dtype is not None and dtype != "__ABSENT__":
             linear_kwargs["dtype"] = dtype
+        elif dtype is None and "dtype" not in _absent:
+            linear_kwargs["dtype"] = None
 
         if program_config is not None and program_config != "__ABSENT__":
             linear_kwargs["program_config"] = program_config
@@ -553,6 +555,8 @@ def run(
 
         if core_grid is not None and core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
+        elif core_grid is None and "core_grid" not in _absent:
+            linear_kwargs["core_grid"] = None
 
         if activation is not None:
             linear_kwargs["activation"] = activation
