@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "device_print.h"
+#include "api/debug/device_print.h"
 #include "internal/risc_attribs.h"
 #include "noc_parameters.h"
 #include "risc_common.h"
