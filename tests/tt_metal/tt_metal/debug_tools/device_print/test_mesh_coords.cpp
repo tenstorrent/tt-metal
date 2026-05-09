@@ -159,15 +159,20 @@ void RunAllChipsVerificationTest(
 }  // namespace
 
 void DevicePrintMeshCoordsFixture::ExtraSetUp() {
-    // Teardown forces MetalContext to re-initialize (including resolve_mesh_coords_to_chip_ids)
-    // when devices are opened by DebugToolsMeshFixture::SetUp().  Re-apply rtoptions afterwards
-    // because ParseAllFeatureEnv resets them to defaults on re-initialization.
+    // Release shared device refs before teardown so ~MeshDevice doesn't run after backing state
+    // is gone. Teardown forces MetalContext to re-initialize (including
+    // resolve_mesh_coords_to_chip_ids) when devices are opened by SetUp(). Re-apply rtoptions
+    // afterwards because ParseAllFeatureEnv resets them to defaults on re-initialization.
+    DevicePrintFixture::MarkSharedPoolInvalid();
     MetalContext::instance().teardown();
     CMAKE_UNIQUE_NAMESPACE::ConfigureDevicePrintForCoord(
         MetalContext::instance().rtoptions(), dprint_file_name, target_coord.first, target_coord.second);
 }
 
-void DevicePrintMeshCoordsFixture::ExtraTearDown() { MetalContext::instance().teardown(); }
+void DevicePrintMeshCoordsFixture::ExtraTearDown() {
+    DevicePrintFixture::MarkSharedPoolInvalid();
+    MetalContext::instance().teardown();
+}
 
 // Test 1: Only the device at mesh coord (0,0) should produce DEVICE_PRINT output.
 TEST_F(DevicePrintMeshCoordsFixture, TensixTestDevicePrintMeshCoordsFiltersCorrectDevice) {

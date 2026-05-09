@@ -32,6 +32,12 @@ public:
     // Waits for the print server to finish processing any current print data.
     void await();
 
+    // Like await(), but also drains any prints still buffered on attached devices and force-flushes
+    // each device's intermediate stream into the output stream. Use this when a test reads the
+    // output file while devices remain attached (e.g. devices are shared across tests in a suite);
+    // await() alone leaves intermediate-stream data unwritten until detach_device runs.
+    void flush();
+
     // Attach all enabled devices (via RTOptions) to the print server
     void attach_devices();
 

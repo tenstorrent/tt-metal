@@ -13,7 +13,7 @@ using namespace std::string_view_literals;
 
 using DevicePrintStringInfo = device_print_detail::structures::DevicePrintStringInfo32;
 
-class DevicePrintFormatUpdatesFixture : public DevicePrintFixture {
+class DevicePrintFormatUpdatesFixture : public DevicePrintCompileFixture {
 public:
     void TestFormatUpdate(
         const std::string& kernel_path,

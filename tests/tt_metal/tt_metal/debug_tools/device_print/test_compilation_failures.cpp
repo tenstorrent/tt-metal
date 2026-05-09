@@ -7,7 +7,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-class DevicePrintFailuresFixture : public DevicePrintFixture {
+class DevicePrintFailuresFixture : public DevicePrintCompileFixture {
 public:
     void TestCompileKernelFailure(
         const std::string& kernel_path,

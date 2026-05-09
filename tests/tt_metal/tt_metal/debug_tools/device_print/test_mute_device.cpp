@@ -43,6 +43,9 @@ protected:
             tt::llrt::RunTimeDebugFeatureDprint, {});
     }
     void ExtraTearDown() override {
+        // Release shared device refs before teardown so ~MeshDevice doesn't run after
+        // dispatch_core_manager has been destroyed.
+        DevicePrintFixture::MarkSharedPoolInvalid();
         MetalContext::instance()
             .teardown();  // Teardown dprint server so we can re-init later with all devices enabled again
     }

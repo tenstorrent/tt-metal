@@ -191,6 +191,7 @@ public:
 
     void set_mute(bool mute_print_server) { mute_print_server_ = mute_print_server; }
     virtual void await();
+    void flush();
     void attach_devices();
     void detach_devices();
     void clear_log_file();
@@ -280,7 +281,9 @@ protected:
     virtual bool poll_device_print_data(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores);
 
     // Transfers data from all parser intermediate streams to output stream and flushes it.
-    void transfer_all_streams_to_output(ChipId device_id);
+    // Virtual so subclasses (e.g. DevicePrintImpl) can also drain implementation-specific per-RISC
+    // partial-message state that the polling thread normally only emits when it sees a newline.
+    virtual void transfer_all_streams_to_output(ChipId device_id);
 
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
@@ -334,6 +337,7 @@ protected:
     void attach_device(ChipId device_id) override;
     bool poll_device_print_data(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores) override;
     void await() override;
+    void transfer_all_streams_to_output(ChipId device_id) override;
 
 private:
     MetalContext* context_;
@@ -575,7 +579,7 @@ void DevicePrintImpl::print_buffer_data(
                         // multiple new lines in the message or because we want to prepend line prefix to each line?
                         ostream* output_stream = get_output_stream(risc_key);
                         if (newline_pos == formatted_message.size() - 1) {
-                            *output_stream << line_prefix << formatted_message << flush;
+                            *output_stream << line_prefix << formatted_message << std::flush;
                             risc_data.message_buffer.clear();
                         } else {
                             std::size_t newline_start = 0;
@@ -719,6 +723,29 @@ bool DevicePrintImpl::core_has_outstanding_prints(
     ChipId /*device_id*/, const CoreCoord& /*virtual_core*/, HalProgrammableCoreType /*core_type*/) {
     // New implmementation doesn't have outstanding prints.
     return false;
+}
+
+void DevicePrintImpl::transfer_all_streams_to_output(ChipId device_id) {
+    // Base impl drains the legacy DPRINT parser map (risc_to_parser_), which DevicePrintImpl
+    // doesn't populate. The DEVICE_PRINT path buffers a partial trailing message (no newline yet)
+    // per RISC in risc_data_[risc_key].message_buffer. Without this drain, those buffered bytes
+    // outlive the test that produced them: when devices are reused across tests in a suite, the
+    // next test reusing the same risc_key gets the prior test's leftover prepended to its first
+    // print. Drain anything buffered to the current output stream and clear, then call the base
+    // for any legacy state (a no-op in pure DEVICE_PRINT mode).
+    for (auto& [risc_key, risc_data] : risc_data_) {
+        if (get<0>(risc_key) != device_id) {
+            continue;
+        }
+        if (risc_data.message_buffer.empty()) {
+            continue;
+        }
+        ostream* output_stream = get_output_stream(risc_key);
+        std::string line_prefix = risc_data.line_prefix.value_or("");
+        *output_stream << line_prefix << risc_data.message_buffer << std::flush;
+        risc_data.message_buffer.clear();
+    }
+    DPrintServer::Impl::transfer_all_streams_to_output(device_id);
 }
 
 void DevicePrintImpl::attach_device(ChipId device_id) {
@@ -1103,6 +1130,62 @@ void DevicePrintImpl::await() {
     DPrintServer::Impl::await();
 }  // DevicePrintImpl::await
 
+void DPrintServer::Impl::flush() {
+    // First settle any in-flight polling so new_data_last_iter_ is stable.
+    this->await();
+
+    // Snapshot the attached devices so we don't hold the lock during the per-device drain.
+    std::vector<ChipId> attached_devices;
+    {
+        std::lock_guard<std::mutex> lock(device_to_core_range_lock_);
+        attached_devices.reserve(device_to_core_range_.size());
+        for (const auto& [device_id, _] : device_to_core_range_) {
+            attached_devices.push_back(device_id);
+        }
+    }
+
+    auto& cluster = env_.get_cluster();
+    for (ChipId device_id : attached_devices) {
+        if (server_killed_due_to_hang_) {
+            break;
+        }
+
+        // Same per-core polling as detach_device: wait until no core has outstanding prints.
+        bool outstanding_prints = true;
+        while (outstanding_prints && !server_killed_due_to_hang_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+            outstanding_prints = false;
+            for (auto& logical_core : device_to_core_range_.at(device_id)) {
+                CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    device_id, logical_core.coord, logical_core.type);
+                auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+                if (core_has_outstanding_prints(device_id, virtual_core, programmable_core_type)) {
+                    outstanding_prints = true;
+                    break;
+                }
+            }
+        }
+
+        // Same intermediate-stream force-flush as detach_device, so the output stream sees every
+        // print buffered on this device. Without this, tests sharing a device across cases will
+        // read partial output from the per-test file.
+        if (server_killed_due_to_hang_) {
+            continue;
+        }
+        device_intermediate_streams_force_flush_lock_.lock();
+        device_intermediate_streams_force_flush_[device_id] = true;
+        device_intermediate_streams_force_flush_lock_.unlock();
+        bool intermediate_streams_need_to_be_flushed = true;
+        while (intermediate_streams_need_to_be_flushed) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            device_intermediate_streams_force_flush_lock_.lock();
+            intermediate_streams_need_to_be_flushed = device_intermediate_streams_force_flush_[device_id];
+            device_intermediate_streams_force_flush_lock_.unlock();
+        }
+    }
+}  // flush
+
 void DPrintServer::Impl::await() {
     auto poll_until_no_new_data = [&]() {
         // Simply poll the flag every few ms to check whether new data is still being processed,
@@ -1461,7 +1544,7 @@ bool DPrintImpl::peek_one_risc_non_blocking(
         // Write each completed line to output
         for (const auto& line : result.completed_lines) {
             ostream* output_stream = get_output_stream(risc_key);
-            *output_stream << line << flush;
+            *output_stream << line << std::flush;
         }
 
         // Update rpos based on bytes consumed
@@ -1565,7 +1648,7 @@ void DPrintServer::Impl::transfer_all_streams_to_output(ChipId device_id) {
             std::string remaining = parser->flush();
             if (!remaining.empty()) {
                 ostream* output_stream = get_output_stream(risc_key);
-                *output_stream << remaining << flush;
+                *output_stream << remaining << std::flush;
             }
         }
     }
@@ -1618,6 +1701,7 @@ DPrintServer::DPrintServer(MetalContext* context, MetalEnv& env, uint8_t num_hw_
 DPrintServer::~DPrintServer() = default;
 void DPrintServer::set_mute(bool mute_print_server) { impl_->set_mute(mute_print_server); }
 void DPrintServer::await() { impl_->await(); }
+void DPrintServer::flush() { impl_->flush(); }
 void DPrintServer::attach_devices() { impl_->attach_devices(); }
 void DPrintServer::detach_devices() { impl_->detach_devices(); }
 void DPrintServer::clear_log_file() { impl_->clear_log_file(); }
