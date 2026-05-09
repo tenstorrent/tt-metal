@@ -235,37 +235,46 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         # Use the same PREFILL_BUCKETS as the demo (test_10_videos.py).
         from models.demos.molmo2.tt.model import PREFILL_BUCKETS
 
+        # Match the demo (test_10_videos.py) warmup sequence exactly:
+        #   1. JIT-compile text decoder buckets
+        #   2. Capture prefill traces (same as demo's warmup_all_buckets(use_trace=True))
+        #   3. JIT-compile vision ops
+        #   4. Capture decode trace
+        #   5. Vision-integrated prefill (server-specific: warms up ttnn.add delta path)
         logger.info(f"Pre-compiling prefill JIT kernels for buckets {PREFILL_BUCKETS}...")
         model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+
+        # Capture prefill traces — matches demo step 2.
+        # The trace capture runs the decoder twice per bucket with ttnn.synchronize_device
+        # between passes, which fully finalizes TTNN op compilation. Without this, the
+        # first vision inference still triggers a ~6s JIT stall even after step 1.
+        # vLLM never executes these traces (vision uses eager path), but the side-effect
+        # of fully compiling the decoder for each bucket is what we need.
+        logger.info("Capturing prefill traces (matches demo warmup step 2)...")
+        model.warmup_all_buckets(use_trace=True)
+
         # After warmup_all_buckets, KV cache is filled by the last bucket's forward_prefill.
-        # Run one decode step to JIT-compile the decode kernel — avoids first-inference stall.
+        # Run one decode step to JIT-compile the decode kernel.
         logger.info("Pre-compiling decode JIT kernel...")
         _ = model.forward_decode_step(0, PREFILL_BUCKETS[-1])
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
 
-        # warmup_all_buckets runs text-only (pixel_values=None), skipping the vision
-        # feature injection path (ttnn.add for image patches). Run forward_prefill with
-        # dummy vision inputs for EVERY bucket to JIT all decoder/add paths in vision mode.
-        # Without this, each new bucket triggers a ~25s JIT stall on first vision request.
+        # Vision-integrated prefill: warms the ttnn.add delta-injection path used by
+        # forward_prefill when pixel_values is not None (not covered by text-only warmup).
         logger.info("Pre-compiling vision-integrated prefill for all buckets...")
         _n_patches, _k_pool, _n_pooled = 729, 9, 81  # 1 frame: 81 pooled positions
         _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max ViT batch)
         _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
         for _S_warmup in PREFILL_BUCKETS:
             if _S_warmup < _n_pooled:
-                continue  # bucket too small to hold n_pooled image tokens
+                continue
             _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
             _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
-            # Pass token_type_ids so build_molmo2_prefill_mask (ttnn.mul/maximum/where)
-            # is JIT-compiled here rather than on the first real inference.
-            # Limit to S_warmup <= 8192: the [S,S] mask tensor at S=16384 is 536MB and
-            # at S=32768 is 2GB — too large to allocate 2 copies during mask build.
-            # Real vision inputs max at S=4233 (51 frames × 83 tok) → bucket 8192.
             _dummy_tti = None
             if _S_warmup <= 8192:
                 _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
-                _dummy_tti[0, :_n_pooled] = 1  # mark image positions as type=1
+                _dummy_tti[0, :_n_pooled] = 1
             logger.info(f"  vision-integrated prefill bucket {_S_warmup}...")
             _ = model.forward_prefill(
                 input_ids=_dummy_ids,
@@ -274,6 +283,10 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
                 token_type_ids=_dummy_tti,
                 user_id=0,
             )
+
+        # Capture decode trace — matches demo step 4.
+        logger.info("Capturing decode trace (matches demo warmup step 4)...")
+        model.warmup_decode_trace()
         logger.info("JIT warmup complete — server ready to serve")
 
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
