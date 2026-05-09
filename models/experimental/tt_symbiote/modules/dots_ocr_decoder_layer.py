@@ -9,6 +9,25 @@ from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
+class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
+    def forward(self, inp):
+        original_shape = inp.shape
+        if len(original_shape) == 3:
+            inp = ttnn.unsqueeze(inp, 1)
+        if inp.layout != ttnn.TILE_LAYOUT:
+            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
+        tt_out = ttnn.rms_norm(
+            inp,
+            epsilon=eps,
+            weight=self.weight_distributed,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        if len(original_shape) == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+        return tt_out
+
+
 @trace_enabled
 class TTNNDotsOCRDecoderLayer(TTNNModule):
     def __init__(self):
@@ -23,8 +42,10 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         new_layer = cls()
         new_layer._fallback_torch_layer = torch_layer
         new_layer.attention_type = getattr(torch_layer, "attention_type", "full_attention")
-        new_layer.input_layernorm = TTNNDistributedRMSNorm.from_torch(torch_layer.input_layernorm)
-        new_layer.post_attention_layernorm = TTNNDistributedRMSNorm.from_torch(torch_layer.post_attention_layernorm)
+        new_layer.input_layernorm = TTNNDotsOCRLocalShardRMSNorm.from_torch(torch_layer.input_layernorm)
+        new_layer.post_attention_layernorm = TTNNDotsOCRLocalShardRMSNorm.from_torch(
+            torch_layer.post_attention_layernorm
+        )
         new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         return new_layer

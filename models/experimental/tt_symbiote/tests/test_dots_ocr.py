@@ -180,6 +180,7 @@ def test_dots_ocr_vision(mesh_device, image_link):
         images=image_inputs,
         videos=video_inputs,
         padding=True,
+        max_length=2800,
         return_tensors="pt",
     )
 

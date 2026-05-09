@@ -1,12 +1,150 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+from models.experimental.tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
-    TTNNLinearLLamaIReplicatedWColSharded,
+    TTNNLinearLLamaIColShardedWRowSharded,
 )
+
+
+class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
+    def move_weights_to_device_impl(self):
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        intermediate = self._gate_weight_torch.shape[0]
+        shard = intermediate // num_devices
+        weight_chunks = []
+        bias_chunks = []
+        for i in range(num_devices):
+            start = i * shard
+            end = (i + 1) * shard
+            weight_chunks.extend([self._gate_weight_torch[start:end], self._up_weight_torch[start:end]])
+            if self._gate_bias_torch is not None or self._up_bias_torch is not None:
+                dtype = self._gate_weight_torch.dtype
+                gate_bias = (
+                    self._gate_bias_torch[start:end]
+                    if self._gate_bias_torch is not None
+                    else torch.zeros(shard, dtype=dtype)
+                )
+                up_bias = (
+                    self._up_bias_torch[start:end]
+                    if self._up_bias_torch is not None
+                    else torch.zeros(shard, dtype=dtype)
+                )
+                bias_chunks.extend([gate_bias, up_bias])
+
+        weight = torch.cat(weight_chunks, dim=0)
+        self.tt_weight_host = preprocess_linear_weight(
+            weight,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+        )
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+
+        if bias_chunks:
+            bias = torch.cat(bias_chunks, dim=0)
+            self.tt_bias_host = preprocess_linear_bias(
+                bias,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+            )
+            self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device)
+        else:
+            self.tt_bias = None
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        if len(input_shape) == 2:
+            input_shape.insert(0, 1)
+        if len(input_shape) == 3:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        tt_output = ttnn.reduce_scatter(
+            tt_output,
+            dim=3,
+            num_links=1,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+        )
+        if self.tt_bias is not None:
+            tt_output += self.tt_bias
+        return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
+
+class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
+    def move_weights_to_device_impl(self):
+        if isinstance(self.tt_weight_host, torch.Tensor):
+            self.tt_weight_host = preprocess_linear_weight(
+                self.tt_weight_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+            )
+        if isinstance(self.tt_bias_host, torch.Tensor):
+            self.tt_bias_host = preprocess_linear_bias(
+                self.tt_bias_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+            )
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        tt_output = ttnn.reduce_scatter(
+            tt_output,
+            dim=3,
+            num_links=1,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+        )
+        if self.tt_bias is not None:
+            tt_output += self.tt_bias
+        return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
 
 class TTNNDotsOCRMLP(TTNNModule):
@@ -38,7 +176,7 @@ class TTNNDotsOCRMLP(TTNNModule):
         # Fuse gate_proj + up_proj into a single column-sharded all-reduced linear.
         tt_module.intermediate_size = torch_mlp.gate_proj.out_features
 
-        tt_module.fused_gate_up_proj = TTNNLinearLLamaIColShardedWAllReducedFusedGateUp.from_two_torch(
+        tt_module.fused_gate_up_proj = TTNNDotsOCRFusedGateUpRowSharded.from_two_torch(
             torch_mlp.gate_proj, torch_mlp.up_proj
         )
         # Keep individual proj refs for compatibility with anything that
@@ -46,7 +184,7 @@ class TTNNDotsOCRMLP(TTNNModule):
         tt_module.gate_proj = None
         tt_module.up_proj = None
 
-        tt_module.down_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(torch_mlp.down_proj)
+        tt_module.down_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(torch_mlp.down_proj)
         return tt_module
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
@@ -55,13 +193,13 @@ class TTNNDotsOCRMLP(TTNNModule):
 
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
-        I = self.intermediate_size
 
         # Single matmul + single all-reduce produces concatenated [gate | up].
         gate_up = self.fused_gate_up_proj(hidden_states)
 
         # Slice into gate / up halves along the last dim. ttnn.slice on a TILE
         # tensor is a metadata + small copy op, far cheaper than a second CCL.
+        I = int(gate_up.shape[-1]) // 2
         gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I])
         up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I])
         ttnn.deallocate(gate_up)

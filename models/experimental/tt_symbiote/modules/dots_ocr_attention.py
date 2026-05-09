@@ -124,22 +124,16 @@ class TTNNDotsOCRAttention(TTNNModule):
         if self.sdpa.program_config is None:
             self.sdpa.program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=128,
-                k_chunk_size=128,
+                q_chunk_size=256,
+                k_chunk_size=256,
                 exp_approx_mode=False,
             )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=128,
-                k_chunk_size=128,
+                q_chunk_size=0,
+                k_chunk_size=0,
                 exp_approx_mode=False,
             )
-            # Match the proven qwen_attention.py SDPA settings:
-            # fp32_dest_acc_en=False doubles dst_size from 4 to 8 tiles, ~halving
-            # the number of matmul passes inside the kernel. packer_l1_acc=False
-            # frees L1 pressure (no intermediate L1 accumulator buffer). HiFi4 is
-            # kept because softmax accuracy is more sensitive than the linear
-            # projections; with bfloat16 inputs HiFi4 here costs little.
             self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -287,6 +281,15 @@ class TTNNDotsOCRAttention(TTNNModule):
             kv_value = value_states[:, :: self.num_key_value_groups, :, :]
             past_key_values.paged_fill_on_device(kv_key, kv_value, layer_idx=self.layer_idx, batch_idx=0)
 
+        sq = int(query_states.shape[2])
+        saved_pc = self.sdpa.program_config
+        if sq >= 1024:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=saved_pc.compute_with_storage_grid_size,
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
         attn_output = self.sdpa(
             self,
             query_states,
@@ -298,6 +301,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             is_causal=self.is_causal,
             transpose_output=True,
         )
+        self.sdpa.program_config = saved_pc
 
         attn_shape = list(attn_output.shape)
         attn_output = ttnn.reshape(

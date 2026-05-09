@@ -46,8 +46,8 @@ def _vision_sdpa_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> 
         device.arch(),
         math_fidelity=math_fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
     )
 
 
@@ -879,7 +879,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         elif seq_len <= 1024:
             q_chunk = k_chunk = 128
         else:
-            q_chunk = k_chunk = 128
+            q_chunk = k_chunk = 192
 
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,

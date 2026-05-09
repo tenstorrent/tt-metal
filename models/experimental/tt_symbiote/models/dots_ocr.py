@@ -18,7 +18,7 @@ import ttnn
 
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import TracedRun
+from models.experimental.tt_symbiote.core.run_config import TracedRun, trace_enabled
 from models.experimental.tt_symbiote.modules.attention import (
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
@@ -35,6 +35,71 @@ from models.experimental.tt_symbiote.modules.linear import (
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.utils.device_management import timed_call
+
+
+@trace_enabled
+class TTNNDotsOCRPrefillGraph(TTNNModule):
+    def preprocess_weights_impl(self):
+        return self
+
+    def move_weights_to_device_impl(self):
+        return self
+
+    def __init__(self, decoder_stack, final_norm, lm_head):
+        super().__init__()
+        self._p_stack = decoder_stack
+        self._p_norm = final_norm
+        self._p_lm = lm_head
+
+    def forward(self, hidden_states, cache_position, past_key_value):
+        h = self._p_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
+        h = self._p_norm.forward(h)
+        sl = int(h.shape[-2])
+        if sl > 1:
+            hd = int(h.shape[-1])
+            h = ttnn.slice(h, [0, sl - 1, 0], [1, sl, hd])
+        return self._p_lm.forward(h)
+
+    def post_trace_execute(self, func_args, func_kwargs, result):
+        past_key_value = func_kwargs.get("past_key_value")
+        if past_key_value is None or not hasattr(past_key_value, "update_seq_length"):
+            return
+        hid = func_args[0]
+        seq_len = int(hid.shape[-2])
+        for layer in self._p_stack.layers:
+            past_key_value.update_seq_length(layer_idx=layer.self_attn.layer_idx, seq_len=seq_len)
+
+
+@trace_enabled
+class TTNNDotsOCRDecodeGraph(TTNNModule):
+    def preprocess_weights_impl(self):
+        return self
+
+    def move_weights_to_device_impl(self):
+        return self
+
+    def __init__(self, embedding, decoder_stack, final_norm, lm_head):
+        super().__init__()
+        self._d_embed = embedding
+        self._d_stack = decoder_stack
+        self._d_norm = final_norm
+        self._d_lm = lm_head
+
+    def forward(self, token_ids, cache_position, past_key_value):
+        emb = self._d_embed.forward(token_ids)
+        h = self._d_stack.forward(emb, past_key_value=past_key_value, cache_position=cache_position)
+        h = self._d_norm.forward(h)
+        return self._d_lm.forward(h)
+
+    def post_trace_execute(self, func_args, func_kwargs, result):
+        past_key_value = func_kwargs.get("past_key_value")
+        if past_key_value is None or not hasattr(past_key_value, "update_seq_length"):
+            return
+        tok = func_args[0]
+        seq_len = int(tok.shape[-1])
+        for layer in self._d_stack.layers:
+            past_key_value.update_seq_length(layer_idx=layer.self_attn.layer_idx, seq_len=seq_len)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -109,6 +174,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
         final_norm: TTNNDistributedRMSNorm,
         lm_head: TTNNLinearIColShardedWAllReduced,
         paged_cache: TTNNPagedAttentionKVCache,
+        graph_prefill: TTNNDotsOCRPrefillGraph,
+        graph_decode: TTNNDotsOCRDecodeGraph,
         device: "ttnn.MeshDevice",
         config: PipelineConfig,
     ):
@@ -120,6 +187,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self.decoder_stack = decoder_stack
         self.final_norm = final_norm
         self.lm_head = lm_head
+        self.graph_prefill = graph_prefill
+        self.graph_decode = graph_decode
         self.paged_cache = paged_cache
         self._device = device
         self.config = config
@@ -182,6 +251,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Paged KV cache
         paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
 
+        graph_prefill = TTNNDotsOCRPrefillGraph(decoder_stack, final_norm, lm_head)
+        graph_prefill._unique_name = "dots_ocr_graph_prefill"
+        graph_decode = TTNNDotsOCRDecodeGraph(embedding, decoder_stack, final_norm, lm_head)
+        graph_decode._unique_name = "dots_ocr_graph_decode"
+
         # Pipeline config
         eos_token_ids = [151643, 151673]
         if hasattr(hf_model, "generation_config") and hf_model.generation_config is not None:
@@ -204,6 +278,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             final_norm=final_norm,
             lm_head=lm_head,
             paged_cache=paged_cache,
+            graph_prefill=graph_prefill,
+            graph_decode=graph_decode,
             device=device,
             config=config,
         )
@@ -260,7 +336,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
                         if isinstance(item, TTNNModule):
                             _recurse(item)
 
-        for component in [self.embedding, self.vision_tower, self.decoder_stack, self.final_norm, self.lm_head]:
+        for component in [
+            self.embedding,
+            self.vision_tower,
+            self.decoder_stack,
+            self.final_norm,
+            self.lm_head,
+            self.graph_prefill,
+            self.graph_decode,
+        ]:
             _recurse(component)
         return found
 
@@ -315,29 +399,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # --- Decoder stack (via __call__ for TracedRun lifecycle) ---
-        hidden_states = self.decoder_stack(
-            hidden_states,
-            past_key_value=self.paged_cache,
-            cache_position=tt_cache_position,
-        )
-
-        # --- Final norm ---
-        hidden_states = self.final_norm(hidden_states)
-
-        # Slice to last token BEFORE lm_head to avoid projecting the full
-        # sequence to vocab_size (which OOMs on long vision prefills).
-        if seq_len > 1:
-            h_dim = hidden_states.shape[-1]
-            hidden_states = ttnn.slice(
-                hidden_states,
-                [0, seq_len - 1, 0],
-                [1, seq_len, h_dim],
-            )
-
-        # --- lm_head ---
-        logits = self.lm_head(hidden_states)
-        # logits shape: [1, 1, vocab_size] (rank 3, full vocab, replicated)
+        # Traced prefill graph replaces decoder stack, final norm, and lm_head calls.
+        logits = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
 
         # --- Argmax on device ---
         token_id_tt = self._argmax_on_device(logits)
@@ -370,12 +433,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # --- Embedding ---
         tt_token = ttnn.from_torch(
             torch.tensor([[prev_token_id]], dtype=torch.int32),
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        embed = self.embedding(tt_token)
 
         # --- Cache position management ---
         # Follow the pattern from TTNNDotsOCRModel.call():
@@ -400,19 +462,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             self._decode_cache_position = tt_cache_pos_new
             tt_cache_position = self._decode_cache_position
 
-        # --- Decoder stack ---
-        hidden_states = self.decoder_stack(
-            embed,
-            past_key_value=self.paged_cache,
-            cache_position=tt_cache_position,
-        )
-
-        # --- Final norm ---
-        hidden_states = self.final_norm(hidden_states)
-
-        # --- lm_head ---
-        logits = self.lm_head(hidden_states)
-        # For decode, logits is already [1, 1, 1, vocab_size]
+        # Traced decode graph replaces embedding, decoder stack, final norm, and lm_head calls.
+        logits = self.graph_decode(tt_token, tt_cache_position, past_key_value=self.paged_cache)
 
         # --- Argmax on device ---
         token_id_tt = self._argmax_on_device(logits)
