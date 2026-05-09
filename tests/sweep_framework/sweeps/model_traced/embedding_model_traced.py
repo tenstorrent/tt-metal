@@ -225,9 +225,7 @@ def run(
     has_absent_info = absent_keys is not None
     absent_keys = set(absent_keys or [])
     embedding_kwargs = dict(op_kwargs)
-    if has_absent_info and "dtype" not in absent_keys:
-        embedding_kwargs["dtype"] = dtype
-    elif dtype is not None:
+    if dtype is not None:
         embedding_kwargs["dtype"] = dtype
     if has_absent_info and "memory_config" not in absent_keys:
         if memory_config is not None:
