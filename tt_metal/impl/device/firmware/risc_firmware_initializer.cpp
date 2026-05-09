@@ -2559,6 +2559,26 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
 
     cluster_.l1_barrier(device_id);
 
+    // FIX XX (#42429): Guard deassert_risc_reset for non-MMIO devices whose relay broke
+    // DURING the multicast phase (FIX AE marks relay broken mid-init).  FIX NZ skips the
+    // entire initialize_and_launch_firmware call when relay is broken BEFORE entry, but if
+    // the relay dies mid-flight the multicast silently fails to deliver firmware/go_msg to
+    // Tensix cores.  Deasserting reset on cores that never received firmware causes them to
+    // boot from stale SRAM (e.g. go_msg=0x02) → FIX SC fires → cores dead but no hang.
+    // Skip deassert entirely when the relay is known-broken to avoid starting stale cores.
+    {
+        const bool is_non_mmio = cluster_.get_associated_mmio_device(device_id) != device_id;
+        if (is_non_mmio && cluster_.is_relay_broken(device_id)) {
+            log_warning(
+                tt::LogAlways,
+                "FIX XX (#42429): skipping deassert_risc_reset + wait for non-MMIO device {} "
+                "(relay broken mid-init — firmware multicast likely failed). "
+                "Cores left in reset; board reset may be required.",
+                device_id);
+            return;
+        }
+    }
+
     for (const auto& worker_core : not_done_cores) {
         if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode()) {
             continue;
