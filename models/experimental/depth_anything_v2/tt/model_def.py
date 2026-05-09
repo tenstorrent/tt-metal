@@ -560,10 +560,12 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
     qkv = ttnn.to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG)
 
     # ---- Split into Q, K, V heads --------------------------------------
+    # transpose_key=False: SDPA expects K in [B,H,S,D] not [B,H,D,S]
     (query, key, value) = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         num_heads=num_heads,
+        transpose_key=False,
     )
     ttnn.deallocate(qkv)
 
