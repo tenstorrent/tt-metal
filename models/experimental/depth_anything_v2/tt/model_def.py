@@ -556,22 +556,27 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
     )
     ttnn.deallocate(ln1)
 
-    # Reshard QKV to match core_grid before head split
-    block_sharded_config = ttnn.create_sharded_memory_config(
+    # Reshard QKV to HEIGHT_SHARDED (required by split_query_key_value_and_split_heads)
+    height_sharded_config = ttnn.create_sharded_memory_config(
         qkv.padded_shape,
         core_grid=config["core_grid"],
-        strategy=ttnn.ShardStrategy.BLOCK,
+        strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
-    qkv = ttnn.reshard(qkv, block_sharded_config)
+    qkv = ttnn.reshard(qkv, height_sharded_config)
 
     # ---- Split into Q, K, V heads --------------------------------------
     (query, key, value) = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         num_heads=num_heads,
     )
     ttnn.deallocate(qkv)
+
+    # SDPA needs interleaved (DRAM) inputs
+    query = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
+    key = ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG)
+    value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
 
     # ---- SDPA (FlashAttention) -----------------------------------------
     # Uses chunked attention to stay within L1 budget.
