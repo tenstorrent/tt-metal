@@ -2627,10 +2627,16 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             static_cast<uint8_t>(dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST),
             static_cast<uint8_t>(dev_msgs::RUN_MSG_REPLAY_TRACE),
         };
-        const uint32_t go_msg_addr = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         auto done_go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
         done_go_msg.view().signal() = dev_msgs::RUN_MSG_DONE;
         for (const auto& worker_core : not_done_cores) {
+            // FIX SC-ADDR (GAP-76): use the correct go_msg address per core type.
+            // ETH cores (ACTIVE_ETH / IDLE_ETH) keep go_msg at GET_ETH_MAILBOX_ADDRESS_HOST(go_messages),
+            // which differs from the Tensix go_msg address.  Using the Tensix address for an ETH core
+            // reads garbage from the wrong L1 offset → signal 0x02 (unknown) → FIX SC fires →
+            // RUN_MSG_DONE written to wrong ETH L1 address → potential ETH dispatch FW corruption.
+            const uint32_t go_msg_addr =
+                hal_.get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::GO_MSG);
             auto cur_go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
             cluster_.read_core(
                 cur_go_msg.data(), cur_go_msg.size(), tt_cxy_pair(device_id, worker_core), go_msg_addr);
