@@ -577,7 +577,7 @@ class TtLlamaAttention(LightweightModule):
         try:
             from loguru import logger
 
-            logger.info(f"  [capture] {name}: ttnn_shape={list(tensor.shape)}")
+            logger.debug(f"  [capture] {name}: ttnn_shape={list(tensor.shape)}")
             t = ttnn.to_torch(
                 tensor,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=self.cluster_shape),

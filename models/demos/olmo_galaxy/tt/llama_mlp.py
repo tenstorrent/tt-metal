@@ -526,10 +526,10 @@ class TtLlamaMLP(LightweightModule):
                     self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
                     else (
-                        # OLMo: HiFi3+fp32 dest acc (WH-recommended, avoids HiFi4 HW bug); else hifi2_fp16
-                        self.args.compute_kernel_config_hifi3
-                        if is_olmo
-                        else self.args.compute_kernel_config_hifi2_fp16
+                        # Prefill ttnn.linear stays on hifi2_fp16: HiFi3+fp32 dest acc doubles
+                        # the CB size which OOMs L1 in the demo's prefill path
+                        # (1.55 MB vs 1.5 MB max). HiFi4+fp32 also has a WH HW bug.
+                        self.args.compute_kernel_config_hifi2_fp16
                     )
                 ),
                 dtype=ff_out_dtype,
@@ -574,10 +574,10 @@ class TtLlamaMLP(LightweightModule):
                     self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
                     else (
-                        # OLMo: HiFi3+fp32 dest acc (WH-recommended, avoids HiFi4 HW bug); else hifi2_fp16
-                        self.args.compute_kernel_config_hifi3
-                        if is_olmo
-                        else self.args.compute_kernel_config_hifi2_fp16
+                        # Prefill ttnn.linear stays on hifi2_fp16: HiFi3+fp32 dest acc doubles
+                        # the CB size which OOMs L1 in the demo's prefill path
+                        # (1.55 MB vs 1.5 MB max). HiFi4+fp32 also has a WH HW bug.
+                        self.args.compute_kernel_config_hifi2_fp16
                     )
                 ),
                 dtype=ff_out_dtype,
@@ -652,12 +652,9 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in_gathered,
                 self.w2_interleaved,
-                compute_kernel_config=(
-                    # OLMo: HiFi3+fp32 dest acc (WH-recommended, avoids HiFi4 HW bug); else hifi2_fp16
-                    self.args.compute_kernel_config_hifi3
-                    if is_olmo
-                    else self.args.compute_kernel_config_hifi2_fp16
-                ),
+                # Prefill W2 stays on hifi2_fp16: HiFi3+fp32 dest acc doubles CB size and
+                # OOMs L1 in the demo's prefill path. HiFi4+fp32 has a WH HW bug.
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
                 dtype=ff_out_dtype,
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

@@ -14,8 +14,10 @@ Run with:
     pytest models/demos/olmo_galaxy/tests/test_olmo_e2e_pcc.py -xvs
 """
 
+import json
 import math
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -2525,6 +2527,420 @@ class TestOlmoE2EPCC:
             f"Argmax match: {argmax_matches}/{n_decode_tokens} " f"({100.0 * argmax_matches / n_decode_tokens:.1f}%)"
         )
         logger.info("E2E DRIFT TEST: COMPLETE")
+
+    @torch.no_grad()
+    def test_aime_compare_to_golden(self, mesh_device, reset_seeds, ensure_gc):
+        """Teacher-forced TT decode against pre-captured HF golden values.
+
+        Loads /data/aime_goldens/aime24_p{N}/{meta.json,layer_LL.pt} produced
+        by scripts/capture_aime_golden.py. Replays the prompt's prefill +
+        decode steps in TTNN; at each decode step feeds ref_tokens[step]
+        (NOT TT's argmax) so KV/context stays aligned with the golden.
+
+        Captures all per-(layer, op) tensors via the existing
+        _capture_attn / _capture_mlp / decoder layer .captured hooks, applies
+        mesh-extraction + Meta→HF layout conversion, and compares each
+        (step, layer, op) tensor to the golden — emits a CSV with cos_sim,
+        std_ratio, max_err, |TT/ref| median ratio per row.
+
+        Env vars:
+          AIME_GOLDEN_DIR   — root containing aime24_p{N}/  (default /data/aime_goldens)
+          AIME_PROBLEM_ID   — 1, 2, 3, or 4  (required)
+          AIME_N_STEPS      — cap decode steps to compare  (default: golden's full count)
+        """
+        hf_model_path = os.environ.get("HF_MODEL")
+        if not hf_model_path:
+            pytest.skip("HF_MODEL not set")
+
+        problem_id = os.environ.get("AIME_PROBLEM_ID")
+        if problem_id is None:
+            pytest.skip("AIME_PROBLEM_ID env var not set (1..4)")
+        problem_id = int(problem_id)
+        golden_root = Path(os.environ.get("AIME_GOLDEN_DIR", "/data/aime_goldens"))
+        golden_dir = golden_root / f"aime24_p{problem_id}"
+        if not golden_dir.exists():
+            pytest.skip(f"golden dir does not exist: {golden_dir}")
+
+        # ---- Load golden meta ------------------------------------------------
+        with open(golden_dir / "meta.json") as f:
+            meta = json.load(f)
+        golden_n_steps = meta["n_decode_tokens"]
+        n_decode_tokens = int(os.environ.get("AIME_N_STEPS", golden_n_steps))
+        n_decode_tokens = min(n_decode_tokens, golden_n_steps)
+        n_layers = meta["n_layers"]
+        prompt = meta["prompt"]
+        ref_tokens = meta["ref_tokens"]  # [first_token, after-step-0, after-step-1, ...]
+        seq_len_meta = meta["seq_len"]
+        padded_len = meta.get("padded_prefill", 512)
+        op_names_meta = meta.get("op_names", [])
+
+        logger.info("=" * 70)
+        logger.info(
+            f"AIME compare: problem={problem_id} n_layers={n_layers} "
+            f"steps={n_decode_tokens} (golden has {golden_n_steps}), padded_len={padded_len}"
+        )
+        logger.info("=" * 70)
+
+        # ---- Lazy golden loader ----------------------------------------------
+        # Each layer file: {step_idx (-1 for prefill, 0..N-1 for decode): {op_name: tensor[fp16]}}
+        _golden_layer_cache: Dict[int, Dict[int, Dict[str, torch.Tensor]]] = {}
+
+        def _load_layer_golden(layer_idx: int):
+            if layer_idx not in _golden_layer_cache:
+                path = golden_dir / f"layer_{layer_idx:02d}.pt"
+                _golden_layer_cache[layer_idx] = torch.load(path, map_location="cpu", weights_only=True)
+            return _golden_layer_cache[layer_idx]
+
+        # ---- Build TTNN model ------------------------------------------------
+        max_seq_len = max(meta["max_seq_len"], padded_len * 2)
+        batch_size = 1
+        dtype = ttnn.bfloat8_b
+
+        model_args = TtOlmoModelArgs(mesh_device, max_batch_size=32, max_seq_len=max_seq_len)
+        model_args.n_layers = n_layers
+        state_dict = model_args.load_state_dict()
+        tokenizer = model_args.tokenizer
+        if tokenizer is None:
+            tokenizer = GPT2Tokenizer.from_pretrained(model_args.TOKENIZER_PATH)
+
+        # Block sizing for paged attention. Need enough blocks to cover
+        # padded_len + n_decode_tokens for user 0 plus the per-device-group
+        # batch sharding constraint.
+        block_size_pa = 64
+        batch_per_dg = max(model_args.max_batch_size // 4, 1)
+        min_blocks = batch_per_dg * math.ceil((padded_len + n_decode_tokens) / block_size_pa)
+        max_num_blocks = max(128, min_blocks)
+        paged_attention_config = PagedAttentionConfig(block_size=block_size_pa, max_num_blocks=max_num_blocks)
+
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        page_table = torch.argsort(permutation).reshape(
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+        )
+
+        tt_model = TtTransformer(
+            args=model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            decode_mode_only=False,
+        )
+        kv_cache = [layer.attention.layer_past for layer in tt_model.layers]
+
+        # Enable per-op capture on every TT layer for the comparison run.
+        for layer in tt_model.layers:
+            layer.capture_intermediates = True
+            layer.attention.capture_intermediates = True
+            layer.feed_forward.capture_intermediates = True
+
+        # ---- Prefill ---------------------------------------------------------
+        ttnn_cos, ttnn_sin, _ = precompute_freqs_yarn(
+            dim=model_args.head_dim,
+            end=model_args.max_seq_len * 2,
+            theta=model_args.rope_theta,
+            scaling_factor=model_args.rope_scaling_factor,
+            original_max_position_embeddings=model_args.original_max_position_embeddings,
+            beta_fast=model_args.yarn_beta_fast,
+            beta_slow=model_args.yarn_beta_slow,
+            attention_factor=model_args.yarn_attention_factor,
+        )
+        position_ids = torch.arange(padded_len)
+        cos_gathered, sin_gathered = gather_cos_sin(position_ids, ttnn_cos, ttnn_sin)
+        rot_mats_prefill = [
+            ttnn.from_torch(
+                cos_gathered,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+            ttnn.from_torch(
+                sin_gathered,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+        ]
+        tt_model.tt_rot_mats_prefill = rot_mats_prefill
+
+        # Tokenize prompt to match the golden
+        input_ids = tokenizer.encode(prompt, add_special_tokens=True)
+        seq_len = len(input_ids)
+        assert seq_len == seq_len_meta, f"prompt re-tokenization mismatch: {seq_len} vs {seq_len_meta}"
+        eos = tokenizer.eos_token_id or 50256
+        input_ids_padded = input_ids + [eos] * (padded_len - seq_len)
+        tokens_pt = torch.tensor(input_ids_padded, dtype=torch.long).unsqueeze(0)
+
+        num_prefill_blocks = math.ceil(padded_len / block_size_pa)
+        prefill_page_table = torch.ones(32, num_prefill_blocks, dtype=torch.int32) * -1
+        prefill_page_table[0, :] = page_table[0, :num_prefill_blocks]
+
+        host_inputs = tt_model.prepare_prefill_inputs_host(tokens_pt, user_id=0, page_table=prefill_page_table)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+        transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs)
+        tt_out_prefill = tt_model.ttnn_prefill_forward(*transformed_inputs, kv_cache=kv_cache, batch_size=1)
+        tt_first_tok_result = tt_model.process_output_prefill(tt_out_prefill, last_token_idx=seq_len - 1)
+        ttnn.synchronize_device(mesh_device)
+        tt_first_token = int(tt_first_tok_result[0])
+        logger.info(f"TTNN prefill first token: {tt_first_token} (golden: {ref_tokens[0]})")
+
+        # ---- Decode loop with teacher-forcing -------------------------------
+        decode_page_table_tt = ttnn.from_torch(
+            page_table.clone(),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt_model.switch_mode("decode")
+        vocab_size = model_args.vocab_size
+        tt_out_logits_saved = torch.zeros(vocab_size)
+
+        # CSV writer
+        csv_path = golden_dir / "tt_compare.csv"
+        csv_f = open(csv_path, "w")
+        csv_f.write("step,layer,op,cos_sim,std_ratio,max_err,ratio_median,n\n")
+        first_divergence = None
+
+        # Mesh-extraction helpers (mirror the patterns used in the existing per-op test)
+        def _decoder_user0(t: torch.Tensor) -> torch.Tensor:
+            """tt_layer.captured tensors land as [1, 4, 32, 10240]; reconstruct user-0 [5120]."""
+            n_col = t.shape[1]
+            slice_dim = t.shape[3] // 8  # 1280
+            return torch.cat([t[0, j, 0, :slice_dim] for j in range(n_col)], dim=0)
+
+        def _attn_user0(t: torch.Tensor) -> torch.Tensor:
+            """Attention captures are [8, 4, 32, dim]; user-0 row-0 col-cat."""
+            # Many of the attention captures are already concat'd into a usable shape.
+            # For sdpa_out: [8 row, 32 batch, 8 q_heads, 128] → cat row × q_heads (5 real)
+            # For wo_input: [8, 4, 32, 640] → row 0, cat 4 cols
+            # For attn_out_final: [8, 4, 32, 1280] → row 0, cat 4 cols
+            if t.dim() != 4:
+                return t.flatten()
+            shp = list(t.shape)
+            if shp[1] == 4 and shp[3] in (640, 1280):
+                # row-replicated × col-sharded: take row 0, concat cols
+                return torch.cat([t[0, c, 0, :] for c in range(4)], dim=0)
+            if shp[1] == 32 and shp[2] == 8 and shp[3] == 128:
+                # sdpa_out: [8 row, 32 batch, 8 q_heads, 128] (5 real heads)
+                return torch.cat([t[r, 0, h, :] for r in range(8) for h in range(5)], dim=0)
+            return t[0, 0, 0, :].flatten()
+
+        def _mlp_user0(t: torch.Tensor) -> torch.Tensor:
+            """MLP captures are [8, 1, 32, dim_per_dev*4]; rows replicated, cols sharded."""
+            if t.dim() == 4 and t.shape[0] == 8:
+                return t[0, 0, 0, :].flatten()
+            return t.flatten()
+
+        def _tt_to_hf_layout(t: torch.Tensor) -> torch.Tensor:
+            """[r0,i0,r1,i1,...] → [r0,r1,...,r_d/2-1, i0,i1,...,i_d/2-1] per head."""
+            even = t[..., 0::2]
+            odd = t[..., 1::2]
+            return torch.cat([even, odd], dim=-1)
+
+        # Tensors that are in Meta interleaved layout in TT; need conversion to HF
+        # layout before comparison (golden was stored in Meta where applicable;
+        # see capture_aime_golden.py which stores q/k_post_norm/post_rope in Meta).
+        # In this comparison, the TT q_post_rope / k_post_rope already match
+        # golden's Meta-format storage; the HF-layout conversion only applies to
+        # raw K cache reads, not to the layer-output captures here.
+
+        # The TT layer's `.captured` attribute already holds
+        # {layer_in, attn_out, attn_normed, h_attn, ff_out, ff_normed, layer_out}.
+        # The attention's `.captured` has q/k_post_norm/rope, sdpa_out, wo_input/out_final.
+        # The MLP's `.captured` has w1_out_reduced, w3_out_reduced, ff1ff3, w2_out_pre_ar.
+        # Map those to golden op names.
+        TT_TO_GOLDEN_OP = {
+            # decoder layer captures
+            "layer_in": ("decoder", "layer_in"),
+            "attn_out": ("decoder", "attn_out"),
+            "attn_normed": ("decoder", "attn_normed"),
+            "h_attn": ("decoder", "h_attn"),
+            "ff_out": ("decoder", "ff_out"),
+            "ff_normed": ("decoder", "ff_normed"),
+            "layer_out": ("decoder", "layer_out"),
+            # attention captures
+            "q_post_norm": ("attn", "q_post_norm"),
+            "k_post_norm": ("attn", "k_post_norm"),
+            "q_post_rope": ("attn", "q_post_rope"),
+            "sdpa_out": ("attn", "sdpa_out"),
+            "wo_input": ("attn", "sdpa_out"),  # wo_input == sdpa_out
+            "attn_out_final": ("attn", "wo_out"),
+            # mlp captures
+            "w1_out_reduced": ("mlp", "w1_out"),
+            "w3_out_reduced": ("mlp", "w3_out"),
+            "ff1ff3": ("mlp", "ff1ff3"),
+            "w2_out_pre_ar": ("mlp", "w2_out_pre_ar"),
+        }
+
+        def _ratios(tt_v: torch.Tensor, ref_v: torch.Tensor):
+            n = min(tt_v.numel(), ref_v.numel())
+            tt_v = tt_v[:n].float()
+            ref_v = ref_v[:n].float()
+            cos = F.cosine_similarity(tt_v.unsqueeze(0), ref_v.unsqueeze(0)).item()
+            std_ratio = tt_v.std().item() / max(ref_v.std().item(), 1e-9)
+            max_err = (tt_v - ref_v).abs().max().item()
+            mask = ref_v.abs() > 1e-3
+            r_med = (tt_v[mask].abs() / ref_v[mask].abs()).median().item() if mask.any() else float("nan")
+            return cos, std_ratio, max_err, r_med, n
+
+        def _capture_step_to_csv(step_idx: int):
+            """Pull TT captures for every layer × every op, compare to golden, write rows."""
+            nonlocal first_divergence
+            for li, layer in enumerate(tt_model.layers):
+                lay_caps = getattr(layer, "captured", {}) or {}
+                attn_caps = getattr(layer.attention, "captured", {}) or {}
+                mlp_caps = getattr(layer.feed_forward, "captured", {}) or {}
+                golden_layer = _load_layer_golden(li)
+                golden_step = golden_layer.get(step_idx, {})
+
+                # decoder ops
+                for tt_name, (kind, golden_name) in TT_TO_GOLDEN_OP.items():
+                    if kind == "decoder":
+                        t = lay_caps.get(tt_name)
+                        extractor = _decoder_user0
+                    elif kind == "attn":
+                        t = attn_caps.get(tt_name)
+                        extractor = _attn_user0
+                    elif kind == "mlp":
+                        t = mlp_caps.get(tt_name)
+                        extractor = _mlp_user0
+                    else:
+                        continue
+                    ref = golden_step.get(golden_name)
+                    if t is None or ref is None:
+                        continue
+                    try:
+                        tt_v = extractor(t)
+                    except Exception:
+                        continue
+                    cos, std_ratio, max_err, r_med, n = _ratios(tt_v, ref)
+                    csv_f.write(
+                        f"{step_idx},{li},{golden_name},{cos:.6f},{std_ratio:.4f}," f"{max_err:.4e},{r_med:.4f},{n}\n"
+                    )
+                    if first_divergence is None and cos < 0.99:
+                        first_divergence = (step_idx, li, golden_name, cos)
+                        logger.info(
+                            f"FIRST_DIVERGENCE step={step_idx} layer={li} " f"op={golden_name} cos_sim={cos:.4f}"
+                        )
+
+                # Clear per-layer captures after use to bound RAM
+                lay_caps.clear()
+                attn_caps.clear()
+                mlp_caps.clear()
+            csv_f.flush()
+
+        # We don't have an easy way to capture *prefill* per-op via the existing
+        # _capture_attn (it writes only at specific lines); skip prefill capture
+        # for the comparison (use existing test_e2e_pcc_1layer KV-after-prefill
+        # diagnostic for that). Compare decode-step intermediates only.
+
+        # Argmax-divergence detection: compare TT's predicted next-token to the
+        # golden ref_tokens[step+1]. Skip the heavy per-layer capture in the hot
+        # path; only fire it inside an explicit step window provided by the
+        # AIME_CAPTURE_RANGE env var ("start:end_inclusive", e.g., "50:57").
+        # This avoids the chicken-and-egg problem where divergence is detected
+        # AFTER the forward pass has run without capture (so .captured dicts
+        # are stale or empty).
+        first_argmax_divergence_step: int | None = None
+        capture_range_env = os.environ.get("AIME_CAPTURE_RANGE", "")
+        if capture_range_env:
+            cap_start, cap_end = (int(x) for x in capture_range_env.split(":"))
+            logger.info(f"Per-layer capture enabled for steps {cap_start}..{cap_end}")
+        else:
+            cap_start, cap_end = -1, -1
+
+        def _set_capture(enabled: bool):
+            for tt_layer in tt_model.layers:
+                tt_layer.capture_intermediates = enabled
+                tt_layer.attention.capture_intermediates = enabled
+                tt_layer.feed_forward.capture_intermediates = enabled
+                # Clear any stale captures (e.g., from prefill) so the next
+                # forward populates fresh per-step data.
+                if hasattr(tt_layer, "captured"):
+                    tt_layer.captured.clear()
+                if hasattr(tt_layer.attention, "captured"):
+                    tt_layer.attention.captured.clear()
+                if hasattr(tt_layer.feed_forward, "captured"):
+                    tt_layer.feed_forward.captured.clear()
+
+        # Disable capture in the fast-loop body unless we're inside the window.
+        _set_capture(False)
+
+        for step in range(n_decode_tokens):
+            # Toggle capture into ON when entering the window, OFF when leaving.
+            # This lets us run fast outside the window and capture full
+            # per-(layer, op) data inside it.
+            if step == cap_start:
+                _set_capture(True)
+            elif step == cap_end + 1:
+                _set_capture(False)
+
+            # Teacher-force: feed the golden's chosen token, not TT's argmax,
+            # so KV trajectory stays aligned with golden.
+            tok_input = ref_tokens[step]
+            tok_tensor = torch.full((1, 1, 1, 32), 0, dtype=torch.long)
+            tok_tensor[0, 0, 0, 0] = tok_input
+            tt_tok_device = ttnn.from_torch(
+                tok_tensor,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            current_pos_val = seq_len + step
+            current_pos = torch.full((32,), current_pos_val, dtype=torch.long)
+            current_pos_tt = ttnn.from_torch(
+                current_pos,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=model_args.cluster_shape),
+            )
+            rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+            tt_model.ttnn_decode_forward(
+                tt_tok_device,
+                current_pos_tt,
+                rot_mat_idxs,
+                page_table=decode_page_table_tt,
+                kv_cache=kv_cache,
+                tt_out_logits_saved=tt_out_logits_saved,
+            )
+            ttnn.synchronize_device(mesh_device)
+
+            # Argmax check. ref_tokens[step] is what we just fed; the *next*
+            # golden token is ref_tokens[step+1] — that's what TT's logits
+            # should predict.
+            tt_pred = int(tt_out_logits_saved.argmax().item())
+            if step + 1 < len(ref_tokens):
+                ref_next = int(ref_tokens[step + 1])
+                if tt_pred != ref_next:
+                    if first_argmax_divergence_step is None:
+                        first_argmax_divergence_step = step
+                        logger.warning(f"FIRST_ARGMAX_DIVERGENCE step={step} " f"tt_pred={tt_pred} ref_next={ref_next}")
+                if step % 50 == 0 or first_argmax_divergence_step is not None:
+                    logger.info(
+                        f"  step {step}: tt_pred={tt_pred} ref_next={ref_next} "
+                        f"match={'Y' if tt_pred == ref_next else 'N'}"
+                    )
+
+            # Per-layer capture: only inside the explicit window.
+            if cap_start <= step <= cap_end:
+                _capture_step_to_csv(step)
+                if step == cap_end:
+                    logger.info(f"  Captured window {cap_start}..{cap_end}; stopping decode.")
+                    break
+
+        csv_f.close()
+        logger.info(f"AIME compare DONE. csv={csv_path}")
+        if first_divergence is not None:
+            s, l, op, c = first_divergence
+            logger.info(f"FIRST DIVERGENCE: step={s} layer={l} op={op} cos_sim={c:.6f}")
+        else:
+            logger.info("No (layer, op, step) crossed cos_sim < 0.99 — clean run.")
 
     @torch.no_grad()
     def test_prefill_per_op_pcc_1layer(self, mesh_device, reset_seeds, ensure_gc):

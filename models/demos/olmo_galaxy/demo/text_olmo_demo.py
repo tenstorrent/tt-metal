@@ -676,6 +676,20 @@ def run_olmo_demo(
             64,
             False,
         ),
+        (  # aime24-p1: AIME 2024 problem 1 from the eval (Aya's walk; target=204).
+            "models/demos/olmo_galaxy/demo/sample_prompts/input_data_aime24_p1.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            32768,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0.6, "top_p": 0.95, "top_k": 40, "seed": 42},
+            True,  # stop_at_eos
+            64,
+            False,
+        ),
         (  # aime24-p4: AIME 2024 problem 4 from the eval (sawtooth intersection; target=385).
             "models/demos/olmo_galaxy/demo/sample_prompts/input_data_aime24_p4.json",
             True,
@@ -791,6 +805,7 @@ def run_olmo_demo(
         "long-128-b1-32k-gen",
         "aime-b1",
         "aime24-p2",
+        "aime24-p1",
         "aime24-p4",
         "aime24-p3",
         "aime24-p3-reppen",
