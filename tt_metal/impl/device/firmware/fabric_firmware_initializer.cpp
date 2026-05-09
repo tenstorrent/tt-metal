@@ -2173,17 +2173,37 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             if (dead_relay_devices_.count(dev->id()) > 0) {
                 continue;  // already marked broken via other mechanism
             }
+            // FIX SB2-R (#42429): Only mark relay broken if this non-MMIO device's probe
+            // detected actual problems (dead channels / timeouts).  On a clean boot, all ETH
+            // channels start at 0x49706550 (base-UMD sentinel) and probe cleanly — the FIX M
+            // transition is the *intended* path and the relay is NOT broken.  Marking it broken
+            // on every clean boot caused the entire T3K fabric to show as degraded, skipping
+            // all tests.  Only fail-fast when the probe itself flagged this device.
+            const auto& probe_dead = probe_dead_channels_map.count(dev->id())
+                                         ? probe_dead_channels_map.at(dev->id())
+                                         : std::unordered_set<uint32_t>{};
+            if (probe_dead.empty()) {
+                log_debug(
+                    tt::LogMetal,
+                    "compile_and_configure_fabric: Device {} (non-MMIO) behind MMIO host {} had "
+                    "{} FIX M channel(s) but probe was clean — relay_broken NOT set (FIX SB2-R "
+                    "#42429). EDM firmware transition is expected on clean boot.",
+                    dev->id(),
+                    mmio_id,
+                    base_umd_chans.size());
+                continue;
+            }
             dev->set_fabric_relay_path_broken();
             log_warning(
                 tt::LogMetal,
                 "compile_and_configure_fabric: Device {} (non-MMIO) relay path marked broken — "
-                "MMIO host {} had {} FIX M channel(s): base-UMD relay ERISC transitioned to EDM "
-                "firmware via launch_msg without soft-reset. UMD relay reads through this MMIO "
-                "host will HANG. ENTRY snapshot / Phase 2.5 / Phase 3 relay reads skipped. "
-                "(#42429 FIX SB2)",
+                "MMIO host {} had {} FIX M channel(s) AND device probe detected {} dead "
+                "channel(s). UMD relay reads through this MMIO host will HANG. ENTRY snapshot / "
+                "Phase 2.5 / Phase 3 relay reads skipped. (#42429 FIX SB2-R)",
                 dev->id(),
                 mmio_id,
-                base_umd_chans.size());
+                base_umd_chans.size(),
+                probe_dead.size());
         }
     }
 
