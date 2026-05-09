@@ -155,6 +155,13 @@ public:
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
+    // Write-only variants: skip the relay read step so they work even when the non-MMIO ERISC
+    // is running FABRIC firmware (relay reads time out in that case). Followed by a best-effort
+    // wait_for_non_mmio_flush (FIX AE: marks relay broken on flush timeout rather than hanging).
+    void assert_risc_reset_at_core_write_only(
+        const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
+    void deassert_risc_reset_at_core_write_only(const tt_cxy_pair& core) const;
+
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;

@@ -806,6 +806,46 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::
     this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
 }
 
+void Cluster::assert_risc_reset_at_core_write_only(
+    const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->assert_risc_reset_write_only(core.chip, core_coord, soft_resets);
+    if (this->cluster_desc_->is_chip_remote(core.chip)) {
+        // FIX AE-style: best-effort flush; mark relay broken on timeout rather than hanging.
+        try {
+            this->driver_->wait_for_non_mmio_flush(core.chip);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "assert_risc_reset_at_core_write_only: wait_for_non_mmio_flush(chip {}) threw: {}. "
+                "Marking relay broken.",
+                core.chip,
+                e.what());
+            this->driver_->mark_relay_broken(core.chip);
+        }
+    }
+}
+
+void Cluster::deassert_risc_reset_at_core_write_only(const tt_cxy_pair& core) const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->deassert_risc_reset_write_only(core.chip, core_coord);
+    if (this->cluster_desc_->is_chip_remote(core.chip)) {
+        try {
+            this->driver_->wait_for_non_mmio_flush(core.chip);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "deassert_risc_reset_at_core_write_only: wait_for_non_mmio_flush(chip {}) threw: {}. "
+                "Marking relay broken.",
+                core.chip,
+                e.what());
+            this->driver_->mark_relay_broken(core.chip);
+        }
+    }
+}
+
 void Cluster::write_dram_vec(
     const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);

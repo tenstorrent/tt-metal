@@ -749,40 +749,35 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             //   while(full) spin → 15-min SIGALRM.
             //
             // Fix: Now that MMIO ETH relay is hardware-restored (FIX AC heartbeat poll
-            //   passed), attempt assert+deassert of each non-MMIO ETH ERISC that was
-            //   skipped by FIX AX.  The write goes: PCIe → MMIO relay ERISC (BASE fw) →
-            //   ETH → non-MMIO chip hardware reset register.  The non-MMIO ERISC does not
-            //   need to respond — the hardware reset fires regardless of its firmware state.
+            //   passed), use write-only assert+deassert for each non-MMIO ETH ERISC.
+            //   The reset write goes: PCIe → MMIO relay ERISC (BASE fw) → NOC →
+            //   non-MMIO chip hardware SOFT_RESET register.  The non-MMIO ERISC does
+            //   not need to respond — the hardware register write fires regardless of
+            //   its firmware state.
             //
-            //   If assert_risc_reset_at_core still fails (UMD relay protocol state not
-            //   re-synced in the current process after MMIO ERISC PCIe reset), we log a
-            //   warning and continue.  FIX AC registered the channels in
-            //   force_reset_channels_ so the next session's verify_all_fabric_channels_
-            //   healthy() can distinguish "was force-reset" from "fresh crash".
+            //   We use write-only variants (assert_risc_reset_at_core_write_only /
+            //   deassert_risc_reset_at_core_write_only) rather than the normal read-
+            //   modify-write path because the read step (get_risc_reset_state via relay)
+            //   times out when the non-MMIO ERISC is running FABRIC firmware — it does
+            //   not service UMD relay reads.  The write-only path skips the read and
+            //   writes the full reset value directly, then waits for the MMIO relay to
+            //   drain (best-effort; FIX AE marks relay broken on flush timeout).
+            //
+            //   FIX AV (#42429): break out of the per-core loop on first failure for a
+            //   device (all cores share the same relay path; one failure predicts all).
             if (get_control_plane_ && ac_heartbeat_any_ready) {
                 log_info(
                     tt::LogAlways,
-                    "teardown: FIX AY — attempting deferred ETH ERISC reset for {} "
+                    "teardown: FIX AY — attempting deferred ETH ERISC write-only reset for {} "
                     "relay-broken non-MMIO device(s) via restored MMIO relay.",
                     relay_broken_non_mmio.size());
                 uint32_t ay_succeeded = 0;
                 uint32_t ay_failed = 0;
                 for (const tt::ChipId non_mmio_id : relay_broken_non_mmio) {
-                    // FIX AV (#42429): All ETH cores on a non-MMIO device share the same
-                    // MMIO relay path.  If assert_risc_reset_at_core fails on any core
-                    // (relay not re-synced after PCIe ERISC reset), ALL subsequent cores on
-                    // the same device will also fail — each burning a full 5-second
-                    // read_non_mmio timeout before throwing.  On a typical T3K with 4 active
-                    // fabric ETH channels per non-MMIO device × 2 devices = 8 channels,
-                    // that is 8 × 5 s = 40 s wasted, long enough to trigger the 5-minute
-                    // SIGALRM in CI.  Break out of the per-core loop immediately on the
-                    // first relay failure for a device and skip all remaining cores.
                     bool device_relay_dead = false;
                     for (const auto& eth_logical_core :
                          this->get_control_plane_().get_active_ethernet_cores(non_mmio_id)) {
                         if (device_relay_dead) {
-                            // Relay confirmed dead for this device — skip all remaining
-                            // cores without attempting reads that would each block 5 s.
                             ++ay_failed;
                             continue;
                         }
@@ -795,16 +790,18 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                             continue;
                         }
                         try {
-                            cluster_.assert_risc_reset_at_core(
+                            // Write-only reset: skips relay read that times out when
+                            // non-MMIO ERISC is running FABRIC firmware (#42429).
+                            cluster_.assert_risc_reset_at_core_write_only(
                                 tt_cxy_pair(non_mmio_id, eth_virt), tt::umd::RiscType::ALL);
-                            cluster_.deassert_risc_reset_at_core(
-                                tt_cxy_pair(non_mmio_id, eth_virt), tt::umd::RiscType::ALL);
+                            cluster_.deassert_risc_reset_at_core_write_only(
+                                tt_cxy_pair(non_mmio_id, eth_virt));
                             ++ay_succeeded;
                         } catch (const std::exception& e) {
                             log_warning(
                                 tt::LogAlways,
-                                "teardown: FIX AY/AV — deferred reset of ETH {} on non-MMIO "
-                                "device {} failed (UMD relay not re-synced in current process): {}. "
+                                "teardown: FIX AY/AV — write-only reset of ETH {} on non-MMIO "
+                                "device {} failed: {}. "
                                 "Skipping all remaining ETH cores on this device. (FIX AV #42429)",
                                 eth_virt.str(),
                                 non_mmio_id,
@@ -814,8 +811,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         } catch (...) {
                             log_warning(
                                 tt::LogAlways,
-                                "teardown: FIX AY/AV — deferred reset of ETH {} on non-MMIO "
-                                "device {} threw non-std exception (UMD relay timeout). "
+                                "teardown: FIX AY/AV — write-only reset of ETH {} on non-MMIO "
+                                "device {} threw non-std exception. "
                                 "Skipping all remaining ETH cores on this device. (FIX AV #42429)",
                                 eth_virt.str(),
                                 non_mmio_id);
@@ -828,7 +825,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     log_info(
                         tt::LogAlways,
                         "teardown: FIX AY — all {} non-MMIO ETH ERISCs reset to base firmware "
-                        "via restored relay. Next session should not encounter FABRIC fw.",
+                        "via write-only relay path. Next session should not encounter FABRIC fw.",
                         ay_succeeded);
                 } else {
                     log_warning(
