@@ -440,9 +440,7 @@ void Device::configure_fabric(
     fabric_external_umd_channels_.clear();
 
     // FIX P2 (#42429): Persist pre_dead_channels so quiesce Phase 5 can skip them.
-    // These channels have no fabric firmware loaded; Phase 5's READY_FOR_TRAFFIC check must
-    // not throw for them (they will never reach that state).
-    fabric_pre_dead_channels_ = pre_dead_channels;
+    // Updated below after configure_fabric_cores() — FIX RR may recover some channels.
     // FIX EXT (#42429): Persist external_umd_channels so phase5b_erisc_health_check treats them
     // as expected-non-responding (pre_dead_unhealthy) rather than truly_unhealthy.
     fabric_external_umd_channels_ = external_umd_channels;
@@ -465,6 +463,21 @@ void Device::configure_fabric(
     skip_soft_reset_with_ext.insert(external_umd_channels.begin(), external_umd_channels.end());
     const auto health =
         tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_with_ext);
+
+    // FIX RR (#42429): Compute the effective dead set: pre_dead_channels that were NOT
+    // recovered by FIX RR.  Recovered channels got their L1 cleared and are ready for
+    // firmware load — treat them as healthy from this point forward.
+    std::unordered_set<uint32_t> effective_pre_dead;
+    for (const auto& ch : pre_dead_channels) {
+        if (!health.recovered_channels.count(ch)) {
+            effective_pre_dead.insert(ch);
+        }
+    }
+
+    // FIX P2 (#42429): Persist effective (post-RR) pre_dead set so Phase 5 skips channels
+    // that truly have no firmware loaded.  Recovered channels are NOT in this set.
+    fabric_pre_dead_channels_ = effective_pre_dead;
+
     if (!health.all_channels_healthy) {
         if (!health.newly_dead_channels.empty()) {
             // Truly unexpected new dead channels: ALL L1 writes to this device now route through
@@ -482,12 +495,14 @@ void Device::configure_fabric(
         log_warning(
             tt::LogMetal,
             "configure_fabric: Device {} running in degraded mode — {} pre-confirmed dead ETH "
-            "channel(s) skipped. Fabric firmware will not be loaded on those channels.",
+            "channel(s) skipped. Fabric firmware will not be loaded on those channels. "
+            "({} were recovered by FIX RR and will get firmware.)",
             this->id_,
-            pre_dead_channels.size());
+            effective_pre_dead.size(),
+            health.recovered_channels.size());
     }
 
-    // FIX C (#42429): Build the set of all dead ETH channels (pre-known + any newly found)
+    // FIX C (#42429): Build the set of all dead ETH channels (effective dead + any newly found)
     // so we can skip write_launch_msg_to_core for dead ETH cores.  Attempting to write launch
     // messages to an ERISC core whose ETH relay is broken causes the NOC write to route through
     // the dead channel and hang (same failure mode as the l1_barrier above).
@@ -500,13 +515,13 @@ void Device::configure_fabric(
     if (!external_umd_channels.empty()) {
         // Merge base dead + external into a new set so write_launch_msg_to_core skips both.
         const auto& base_dead =
-            pre_dead_channels.empty() ? health.newly_dead_channels : pre_dead_channels;
+            effective_pre_dead.empty() ? health.newly_dead_channels : effective_pre_dead;
         all_dead_channels_storage = base_dead;
         all_dead_channels_storage.insert(external_umd_channels.begin(), external_umd_channels.end());
         all_dead_channels_ptr = &all_dead_channels_storage;
     } else {
         all_dead_channels_storage =
-            pre_dead_channels.empty() ? health.newly_dead_channels : pre_dead_channels;
+            effective_pre_dead.empty() ? health.newly_dead_channels : effective_pre_dead;
         all_dead_channels_ptr = &all_dead_channels_storage;
     }
     const auto& all_dead_channels = *all_dead_channels_ptr;
@@ -713,13 +728,14 @@ void Device::configure_fabric(
         log_info(
             tt::LogMetal,
             "configure_fabric: Device {} complete — relay_broken={} mmio={} "
-            "pre_dead_channels={} skip_soft_reset_channels={} newly_dead={}",
+            "pre_dead_channels={} skip_soft_reset_channels={} newly_dead={} rr_recovered={}",
             this->id_,
             relay_broken_now,
             this->is_mmio_capable(),
-            pre_dead_channels.size(),
+            effective_pre_dead.size(),
             skip_soft_reset_channels.size(),
-            health.newly_dead_channels.size());
+            health.newly_dead_channels.size(),
+            health.recovered_channels.size());
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }

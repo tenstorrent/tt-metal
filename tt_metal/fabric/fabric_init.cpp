@@ -121,7 +121,6 @@ FabricCoresHealth configure_fabric_cores(
     // termination_signal_address, edm_local_sync_address, and edm_local_tensix_sync_address
     // as a belt-and-suspenders measure — so even if base firmware or stale L1 leaves garbage,
     // the next session's terminate_stale_erisc_routers() sees clean zeros.
-    bool all_channels_healthy = true;
     // Track dead channels so the L1 clear loop below can skip them.
     // For non-MMIO chips, WriteToDeviceL1 routes writes through ethernet — the same path
     // that timed out during the soft reset — and can hang indefinitely (write_core has no
@@ -142,8 +141,13 @@ FabricCoresHealth configure_fabric_cores(
     // This lets the caller (configure_fabric) distinguish "expected degraded mode" from
     // "unexpected new failure" — the former warrants a warning, the latter a hard throw.
     std::unordered_set<uint32_t> newly_dead_channels;
+    // FIX RR (#42429): Track pre_known channels that were successfully recovered by
+    // PCIe-direct soft reset.  Returned to configure_fabric() so it can subtract them from
+    // pre_dead_channels and load firmware on those channels instead of skipping them.
+    std::unordered_set<uint32_t> recovered_channels;
+    // Note: all_channels_healthy is computed at the END of this function (after FIX RR may
+    // have recovered pre_known_dead channels from dead_channels).  Do not set it here.
     if (!pre_known_dead_channels.empty()) {
-        all_channels_healthy = false;
         if (device->is_mmio_capable()) {
             // FIX RR (#42429): MMIO devices have PCIe-direct access — the relay-queue-fill
             // concern that motivates skipping assert_risc_reset_at_core for non-MMIO channels
@@ -199,7 +203,9 @@ FabricCoresHealth configure_fabric_cores(
                     cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
                     // Success — channel responded to PCIe-direct reset; clear from dead set
                     // so the L1 clear loop below zeroes sync addresses and firmware can start.
+                    // Also add to recovered_channels so configure_fabric() loads firmware on it.
                     dead_channels.erase(router_chan);
+                    recovered_channels.insert(router_chan);
                     log_info(
                         tt::LogMetal,
                         "configure_fabric_cores: device {} channel {} FIX RR — PCIe-direct "
@@ -279,7 +285,6 @@ FabricCoresHealth configure_fabric_cores(
                 // Fatal for this channel: remote chip is unreachable.
                 // Skip L1 writes for this channel — WriteToDeviceL1 on a non-MMIO chip routes
                 // through ethernet and will hang indefinitely on a dead channel.
-                all_channels_healthy = false;
                 dead_channels.insert(router_chan);
                 newly_dead_channels.insert(router_chan);
                 log_warning(
@@ -290,7 +295,6 @@ FabricCoresHealth configure_fabric_cores(
                     router_chan,
                     e.what());
             } catch (...) {
-                all_channels_healthy = false;
                 dead_channels.insert(router_chan);
                 newly_dead_channels.insert(router_chan);
                 log_warning(
@@ -364,7 +368,11 @@ FabricCoresHealth configure_fabric_cores(
         }
     }
 
-    return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels)};
+    // FIX RR (#42429): re-evaluate all_channels_healthy after FIX RR may have recovered
+    // pre_known_dead channels.  If all pre-known dead channels were recovered (dead_channels
+    // is now empty) and no new failures occurred, all channels are healthy.
+    const bool all_channels_healthy = dead_channels.empty() && newly_dead_channels.empty();
+    return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels), std::move(recovered_channels)};
 }
 
 }  // namespace tt::tt_fabric

@@ -16,13 +16,19 @@ namespace tt::tt_fabric {
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_metal::IDevice* device);
 
 // Result returned by configure_fabric_cores().
-// all_channels_healthy: true iff every active ETH channel completed its soft reset.
+// all_channels_healthy: true iff every active ETH channel completed its soft reset,
+//                       counting FIX-RR-recovered channels as healthy.
 // newly_dead_channels:  channels that NEWLY failed soft reset in this call — i.e. not in
 //                       pre_known_dead_channels.  Empty when the only dead channels were
 //                       already known before configure_fabric_cores() was called.
+// recovered_channels:   channels that were in pre_known_dead_channels but successfully
+//                       recovered via FIX RR (PCIe-direct soft reset).  configure_fabric()
+//                       subtracts these from pre_dead_channels to compute the effective
+//                       dead set; recovered channels get fabric firmware loaded on them.
 struct FabricCoresHealth {
     bool all_channels_healthy;
     std::unordered_set<uint32_t> newly_dead_channels;
+    std::unordered_set<uint32_t> recovered_channels;
 };
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for fabric kernels on this device.
