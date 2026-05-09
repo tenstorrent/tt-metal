@@ -138,7 +138,7 @@ def run_trace_2cq(device, tt_model, num_warmup, num_measure):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 23887872}],
+    [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1 << 25}],  # 32MB
     indirect=True,
 )
 def test_depth_anything_v2_trace_2cq(device):
