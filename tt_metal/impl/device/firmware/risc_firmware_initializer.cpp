@@ -725,12 +725,26 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         tt::LogAlways,
                         "teardown: FIX AQ — edm_status_address sentinel poll complete (Step 2 path).");
                 } catch (const std::exception& e) {
+                    // FIX AQ-fallback (#42429): fabric_context_ is null (atexit path).
+                    // We cannot query edm_status_address, so fall back to a time-based wait
+                    // long enough for FIX AC-reset ETH channels to complete ROM boot and
+                    // write the UMD relay sentinel (0x49706550) to edm_status_address.
+                    // Without this wait, ROM-postcode channels (0x49705180) appear as
+                    // probe_dead in the next session → channels_not_ready_for_traffic_ →
+                    // AllGather tests skipped and FIX RP timeouts.
                     log_warning(
                         tt::LogAlways,
-                        "teardown: FIX AQ — edm_status_address poll threw: {}; proceeding.",
+                        "teardown: FIX AQ — edm_status_address poll threw: {}; "
+                        "fabric_context null (atexit path) — adding 10s fallback wait for "
+                        "ROM-postcode channels to clear. (#42429)",
                         e.what());
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10000));  // FIX AQ-fallback
                 } catch (...) {
-                    log_warning(tt::LogAlways, "teardown: FIX AQ — edm_status_address poll threw unknown; proceeding.");
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AQ — edm_status_address poll threw unknown; "
+                        "adding 10s fallback wait. (#42429)");
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10000));  // FIX AQ-fallback
                 }
             }
 
