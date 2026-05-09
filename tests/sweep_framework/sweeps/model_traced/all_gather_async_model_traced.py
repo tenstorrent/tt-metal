@@ -732,6 +732,16 @@ def run(
 
                         if subdevice_id is not None or "subdevice_id" not in absent_keys:
                             op_kwargs["subdevice_id"] = subdevice_id
+                        # Ensure input tensor topology matches master trace
+                        if input_a_tensor_placement:
+                            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+                                apply_tensor_placement_topology,
+                            )
+
+                            try:
+                                apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
+                            except Exception:
+                                pass
                         tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
                         _ag_kwargs = dict(
@@ -750,6 +760,16 @@ def run(
                         )
                         if _cluster_axis_from_vector:
                             _ag_kwargs["cluster_axis"] = cluster_axis
+                        # Ensure input tensor topology matches master trace
+                        if input_a_tensor_placement:
+                            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+                                apply_tensor_placement_topology,
+                            )
+
+                            try:
+                                apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
+                            except Exception:
+                                pass
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
                             persistent_output_buffer,
