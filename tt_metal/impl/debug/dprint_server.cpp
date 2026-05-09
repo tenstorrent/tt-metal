@@ -729,7 +729,7 @@ void DevicePrintImpl::attach_device(ChipId device_id) {
     auto& cluster = env_.get_cluster();
     const auto& hal = env_.get_hal();
 
-    if (context_->get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (!context_->get_dispatch_query_manager().dispatch_s_enabled()) {
         return;
     }
 
