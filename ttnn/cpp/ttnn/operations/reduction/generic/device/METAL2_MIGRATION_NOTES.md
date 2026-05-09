@@ -733,3 +733,46 @@ The guide should:
 | 18 | `MakeProgramFromSpec` API change: now requires `MeshDevice&` (#43589) | Medium — breaks every in-flight port |
 | 19 | Multi-variant factories (one `create()`, multiple ProgramSpecs) undocumented | Low — pattern not in guide |
 | 20 | Shared compute kernels disagree when factories disagree on which CTA gets demoted | Low — corollary of #3 |
+
+
+---
+
+### H factory un-port (post-port revert)
+
+After all four reduction factories were ported in this branch, the multi-core H
+factory was reverted back to the legacy `ProgramDescriptor` / `create_descriptor`
+API. The other three (single-core HW, multi-core W, Welford) remain on Metal 2.0.
+
+Reason: per `metal2_audit_reduction_generic.md`, the width-sharded H-reduce path
+relies on the legacy "dynamic CircularBuffer" pattern (CBs built on a tensor's
+borrowed memory — `CBDescriptor::buffer = a.buffer()`). The Metal 2.0 equivalent
+is a **borrowed-memory DataflowBuffer**, which `dataflow_buffer_spec.hpp` reserves
+space for but has not yet implemented. Without it, the only options for the
+sharded H-reduce path are (1) a hybrid file (interleaved on Metal 2.0, sharded on
+legacy in the same factory) or (2) keep the whole H factory on legacy until the
+borrowed-memory DFB lands. We chose option 2 because the in-place CB-aliasing
+dataflow strategy is the foundation of the sharded sub-path, not an isolated
+feature, and splitting the file would have separated tightly-coupled host/kernel
+logic.
+
+Mechanics of the revert:
+
+- `reduce_op_multi_core_h_program_factory.cpp` is restored to main's content with
+  one cosmetic change: kernel paths point to `_legacy`-suffixed copies of the
+  shared kernels (`reduce_legacy.cpp`, `reader_unary_transpose_wh_universal_input_cols_partitioned_legacy.cpp`)
+  to avoid name collisions with the branch's Metal 2.0 versions.
+- `reduce_op_multi_core_h_program_factory.hpp` deleted; the `ReduceMultiCoreHProgramFactory`
+  struct is declared inline in `reduce_op_device_operation.hpp` with the Gen1
+  `static ProgramDescriptor create_descriptor(...)` signature.
+- `reduce_h.cpp` (added by this branch for the Metal 2.0 H factory's non-negate
+  path) deleted; the legacy H factory uses `reduce_legacy.cpp` instead.
+- `reduce_h_neg.cpp` restored to main's content (it has no other consumers).
+- The TTNN device-operation framework's variant adapter dispatches each
+  alternative based on which concept it satisfies, so a mixed
+  `std::variant<Metal2.0_factory, ProgramDescriptor_factory, Metal2.0_factory>`
+  is supported without further plumbing.
+
+When borrowed-memory DFB lands, re-port: replace the legacy H factory file with
+a Metal 2.0 version that declares a `uses_borrowed_memory = true`
+`DataflowBufferSpec` for the input/output on the width-sharded path, drop the
+`_legacy` suffixes, and collapse `reduce_h.cpp` back in.

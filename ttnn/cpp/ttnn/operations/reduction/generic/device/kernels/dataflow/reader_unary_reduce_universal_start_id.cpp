@@ -47,7 +47,7 @@ void kernel_main() {
     // The host-side TensorParameter / TensorArg pair supplies the underlying buffer
     // address through the kernel's TensorBinding common-runtime-arg slot.
     TensorAccessor input_accessor(ta::input_tensor);
-    const uint32_t tile_bytes = get_tile_size(dfb_input.get_id());
+    const uint32_t tile_bytes = dfb_input.get_tile_size();
 
     experimental::Noc noc;
 

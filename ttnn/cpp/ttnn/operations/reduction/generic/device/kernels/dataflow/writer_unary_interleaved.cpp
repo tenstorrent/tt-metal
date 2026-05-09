@@ -30,7 +30,7 @@ void kernel_main() {
     experimental::DataflowBuffer dfb_output(dfb::output);
 
     TensorAccessor output_accessor(ta::output_tensor);
-    const uint32_t tile_bytes = get_tile_size(dfb_output.get_id());
+    const uint32_t tile_bytes = dfb_output.get_tile_size();
 
     experimental::Noc noc;
 

@@ -44,8 +44,6 @@ void kernel_main() {
     experimental::DataflowBuffer dfb_combined(dfb::combined);
     experimental::DataflowBuffer dfb_output(dfb::output);
 
-    const uint32_t cb_partial = dfb_partial.get_id();
-
     // welford_finalize_to_row stores 32 per-column values in tile row 0. In tile
     // format, row 0 spans Face 0 (cols 0–15) and Face 1 (cols 16–31). Each face
     // is FACE_W rows × FACE_W columns elements.
@@ -53,8 +51,8 @@ void kernel_main() {
     constexpr uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
-    const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
-    const uint32_t out_tile_size_bytes = get_tile_size(dfb_output.get_id());
+    const uint32_t partial_tile_size_bytes = dfb_partial.get_tile_size();
+    const uint32_t out_tile_size_bytes = dfb_output.get_tile_size();
 
     TensorAccessor output_accessor(ta::output_tensor);
 
