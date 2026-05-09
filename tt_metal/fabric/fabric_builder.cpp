@@ -10,6 +10,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include <algorithm>
 #include <set>
 
 namespace tt::tt_fabric {
@@ -109,7 +110,19 @@ void FabricBuilder::create_routers() {
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
     if (!routers_.empty()) {
-        master_router_chan_ = routers_.begin()->first;
+        // FIX BD (#42429): Deterministic master channel selection.
+        // Previously used routers_.begin()->first which is non-deterministic for
+        // std::unordered_map — different runs could pick different master channels
+        // depending on hash bucket layout.  An out-of-mesh master channel (e.g.
+        // chan 15 on Device 0 connecting to a non-MMIO device in base-UMD mode)
+        // wastes 10s+ in Phase 5 ETH handshake per device per quiesce cycle.
+        // On T3K with 4 affected devices this was 40s+ per cycle.
+        // Fix: deterministically select the lowest channel ID.  Channel IDs are
+        // uint8_t and the map has 2-8 entries — min_element is trivial.
+        auto min_it = std::min_element(
+            routers_.begin(), routers_.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+        master_router_chan_ = min_it->first;
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
     }
 }

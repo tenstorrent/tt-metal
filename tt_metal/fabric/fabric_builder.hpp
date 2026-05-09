@@ -137,7 +137,7 @@ private:
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors_;
     std::unordered_set<chan_id_t> dispatch_links_;
 
-    // Master router channel (first in map)
+    // Master router channel — deterministically lowest channel ID (FIX BD #42429)
     chan_id_t master_router_chan_ = 0;
 };
 
