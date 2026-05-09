@@ -550,7 +550,7 @@ def run(
         if compute_kernel_config is not None and compute_kernel_config != "__ABSENT__":
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        if core_grid != "__ABSENT__":
+        if core_grid is not None and core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
 
         if activation is not None:
