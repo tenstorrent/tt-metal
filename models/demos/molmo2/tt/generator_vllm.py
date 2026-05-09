@@ -33,9 +33,13 @@ try:
 
     class _TT_Molmo2ProcessingInfo(Molmo2ProcessingInfo):
         def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-            # Support both image and video — prefill_forward handles both via
-            # pixel_values (image) and pixel_values_videos (video) kwargs.
-            return {"video": 1, "image": 1}
+            # Video only — adding "image": 1 causes vllm to generate image dummy
+            # inputs during server init that our _get_mm_fields_config does not
+            # handle, leading to IndexError in _merge_mm_kwargs. Image inference
+            # works via the video path (pixel_values in prefill_forward), but
+            # the server-side dummy input generation for "image" modality needs
+            # additional processor work to enable.
+            return {"video": 1}
 
     _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
         Molmo2MultiModalProcessor,
