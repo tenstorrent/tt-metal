@@ -45,6 +45,18 @@ def _scan_mc(obj, state):
 def _scan_pc(obj, state):
     if obj is None or obj == "__ABSENT__":
         return
+    # Handle dict format: {'compute_with_storage_grid_size': {'x': 8, 'y': 8}, ...}
+    if isinstance(obj, dict):
+        grid = obj.get("compute_with_storage_grid_size")
+        if isinstance(grid, dict):
+            gx = grid.get("x", 0)
+            gy = grid.get("y", 0)
+            if isinstance(gx, (int, float)) and gx >= 8:
+                state["needs_row"] = True
+            if isinstance(gy, (int, float)) and gy >= 10:
+                state["needs_col"] = True
+            return
+    # Handle string/repr format: "compute_with_storage_grid_size=8-8"
     pc_text = ""
     if isinstance(obj, dict):
         pc_text = str(obj.get("value", "")) or str(obj.get("repr", ""))
