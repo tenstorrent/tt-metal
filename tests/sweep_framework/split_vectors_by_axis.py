@@ -10,6 +10,7 @@ _Y9 = re.compile(r"""['"]y['"]\s*:\s*9(?!\d)""")
 _X7 = re.compile(r"""['"]x['"]\s*:\s*7(?!\d)""")
 _GRID_X = re.compile(r"x\s*=\s*(\d+)")
 _GRID_Y = re.compile(r"y\s*=\s*(\d+)")
+_GRID_XY_DASH = re.compile(r"compute_with_storage_grid_size=(\d+)-(\d+)")
 
 
 def _scan_mc(obj, state):
