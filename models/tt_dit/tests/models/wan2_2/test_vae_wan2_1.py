@@ -923,7 +923,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
             feat_idx=torch_feat_idx,
         )
 
-    tt_output, new_logical_h = tt_model(
+    tt_output, new_logical_h, _new_logical_w = tt_model(
         tt_input_tensor,
         logical_h,
         feat_cache=tt_feat_cache,
@@ -1066,7 +1066,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             )
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
+        tt_output, new_logical_h, _new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -1263,7 +1263,7 @@ def test_wan_decoder3d(
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
+        tt_output, new_logical_h, _new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -1481,7 +1481,7 @@ def test_wan_decoder(
 
     logger.info(f"running tt model (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+    tt_output, new_logical_h, _new_logical_w = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1508,6 +1508,9 @@ def test_wan_decoder(
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
+        if _new_logical_w != tt_output_torch.shape[4]:
+            tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+            logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
     else:
         logger.warning("Skipping check")
@@ -1623,7 +1626,7 @@ def test_wan_decoder_production_blocking(
 
     logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+    tt_output, new_logical_h, _new_logical_w = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1649,6 +1652,9 @@ def test_wan_decoder_production_blocking(
     if new_logical_h != tt_output_torch.shape[3]:
         tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
         logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
+    if _new_logical_w != tt_output_torch.shape[4]:
+        tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+        logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1758,7 +1764,7 @@ def test_wan_encoder_production_blocking(
 
     logger.info(f"running tt encoder (encoder_t_chunk_size={encoder_t_chunk_size}, forward_chunk={forward_chunk})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, encoder_t_chunk_size=forward_chunk)
+    tt_output, new_logical_h, _new_logical_w = tt_model(tt_input_tensor, logical_h, encoder_t_chunk_size=forward_chunk)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1784,6 +1790,9 @@ def test_wan_encoder_production_blocking(
     if new_logical_h != tt_output_torch.shape[3]:
         tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
         logger.warning(f"Trimmed tt_output_torch height to {tt_output_torch.shape}")
+    if _new_logical_w != tt_output_torch.shape[4]:
+        tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+        logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1893,7 +1902,7 @@ def test_wan_decoder_chunked_consistency(
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=ttnn.float32 if dtype == ttnn.DataType.FLOAT32 else ttnn.bfloat16,
         )
-        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+        tt_output, new_logical_h, _new_logical_w = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
         return ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
@@ -2045,7 +2054,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
+        tt_output, new_logical_h, _new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -2229,7 +2238,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
 
     logger.info(f"running tt model")
     start = time.time()
-    tt_output, new_logical_h = tt_model(
+    tt_output, new_logical_h, _new_logical_w = tt_model(
         tt_input_tensor,
         logical_h,
     )
@@ -2262,6 +2271,9 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
+        if _new_logical_w != tt_output_torch.shape[4]:
+            tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
+            logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
         assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")

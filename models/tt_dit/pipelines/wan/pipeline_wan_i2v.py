@@ -155,7 +155,7 @@ class WanPipelineI2V(WanPipeline):
             },
         )
 
-        encoded_video_BCTHW, new_logical_h = self.tt_vae_encoder(tt_video_condition_BTHWC, logical_h)
+        encoded_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(tt_video_condition_BTHWC, logical_h)
 
         # convert to torch
         concat_dims = [None, None]
@@ -167,7 +167,7 @@ class WanPipelineI2V(WanPipeline):
             concat_dims,
             ccl_manager=self.vae_ccl_manager,
         )
-        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
+        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :new_logical_w]
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
 
         latents_mean = (
