@@ -1,6 +1,22 @@
 # Built as outlined in Tracy documentation (pg.12)
 set(TRACY_HOME ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy)
 
+# TSan and Tracy are structurally incompatible:
+# Tracy's rpmalloc allocator uses intentionally relaxed atomics for performance,
+# and spawns its worker thread during static initialisation (before main()).
+# Both patterns produce false-positive TSan races that cannot be suppressed
+# without masking real races in application code.  The combination also defeats
+# profiling accuracy because TSan adds 5-10x overhead that distorts timing.
+if(CMAKE_BUILD_TYPE STREQUAL "TSan" AND ENABLE_TRACY)
+    message(
+        FATAL_ERROR
+        "TSan and Tracy cannot be combined.\n"
+        "Tracy's rpmalloc uses relaxed atomics and pre-main thread spawning that "
+        "produce structural false-positive races under TSan, drowning real findings.\n"
+        "Use -DENABLE_TRACY=OFF for sanitizer builds, or build without TSan for profiling."
+    )
+endif()
+
 # Propagate ENABLE_TRACY to TRACY_ENABLE (Tracy build option)
 # CMake options are propagated as PUBLIC compile definitions to tracy build
 if(ENABLE_TRACY)
