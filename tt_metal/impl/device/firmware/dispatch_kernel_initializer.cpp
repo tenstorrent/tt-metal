@@ -288,11 +288,12 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         // arrives because the fabric was already torn down).  The exception is caught below and
         // teardown continues; running triage here adds 27s per device and causes the test suite to
         // exceed the 700s predecessor timeout.
-        // Use 200ms explicit timeout instead of 0 (which inherits TT_METAL_OPERATION_TIMEOUT_SECONDS=5)
+        // Use 1000ms explicit timeout instead of 0 (which inherits TT_METAL_OPERATION_TIMEOUT_SECONDS=5)
         // to avoid adding 5s per-device overhead to every test teardown — this is purely waste since
         // the exception is caught and teardown continues regardless.
+        // NOTE: was 200ms; increased to 1000ms (#42429) to avoid premature timeout on slower relay paths.
         try {
-            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 200, true);
+            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 1000, true);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
@@ -427,7 +428,8 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
         // signal path (process_termination_signals) may still succeed.
         auto dispatch_cores = get_virtual_dispatch_cores(device->id());
         try {
-            tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 100, true);
+            // NOTE: was 100ms; increased to 1000ms (#42429) to avoid premature timeout on slower relay paths.
+            tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 1000, true);
             log_info(
                 tt::LogMetal,
                 "rescue_stuck_dispatch_cores: Device {} dispatch cores successfully unblocked after rescue injection",
