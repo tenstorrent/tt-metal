@@ -393,7 +393,6 @@ def test_demo(
     text_outputs_all_users_all_batches = []
     logger.info("Starting inference...")
     vision_model_traced = False
-    profiler.start("inference_prefill", iteration=batch_idx)
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
 
@@ -438,6 +437,7 @@ def test_demo(
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # Single loop: process each user completely before moving to next
+        profiler.start("inference_prefill", iteration=batch_idx)
         for user_id in range(batch_size):
             logger.info(f"Processing user {user_id + 1}/{batch_size} for batch {batch_idx}")
 
