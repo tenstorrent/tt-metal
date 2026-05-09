@@ -70,8 +70,59 @@ try:
                 return super().get_dummy_mm_data(seq_len, {"video": num_i}, mm_options)
             return super().get_dummy_mm_data(seq_len, mm_counts, mm_options)
 
+    class _TT_Molmo2MultiModalProcessor(Molmo2MultiModalProcessor):
+        """Routes image inputs through the video path.
+
+        Molmo2 processes images identically to videos (same ViT + pooling).
+        We convert image data items → video data items at the top of apply()
+        so that all downstream vLLM validation (mm_item_counts, mm_hashes,
+        _validate_mm_kwargs) sees "video" modality consistently throughout.
+        """
+
+        def apply(self, inputs, timing_ctx):
+            """Convert image data items to 1-frame video data items before processing."""
+            import numpy as np
+            from PIL.Image import Image as PILImage
+
+            from vllm.multimodal.parse import VideoProcessorItems
+
+            if inputs.mm_data_items.get_count("image", strict=False) > 0:
+                image_items = inputs.mm_data_items.pop("image")
+                video_data = []
+                for i in range(image_items.get_count()):
+                    pil_img = image_items.get(i)
+                    if pil_img is None:
+                        video_data.append(None)
+                        continue
+                    if isinstance(pil_img, PILImage):
+                        arr = np.array(pil_img.convert("RGB"))  # [H, W, 3]
+                    else:
+                        arr = np.asarray(pil_img)
+                    video_data.append(
+                        (
+                            arr[np.newaxis],  # [1, H, W, 3]
+                            {
+                                "fps": 1.0,
+                                "total_num_frames": 1,
+                                "duration": 1.0,
+                                "video_backend": "numpy",
+                                "frames_indices": [0],
+                                "do_sample_frames": False,
+                            },
+                        )
+                    )
+                inputs.mm_data_items["video"] = VideoProcessorItems(video_data)
+                # HF processor inserts video tokens at <|video|> (token 151945), not <|image|> (151941).
+                _IMAGE_TOKEN_ID = 151941
+                _VIDEO_TOKEN_ID = 151945
+                if isinstance(inputs.prompt, str):
+                    inputs.prompt = inputs.prompt.replace("<|image|>", "<|video|>")
+                elif isinstance(inputs.prompt, list):
+                    inputs.prompt = [_VIDEO_TOKEN_ID if t == _IMAGE_TOKEN_ID else t for t in inputs.prompt]
+            return super().apply(inputs, timing_ctx)
+
     _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
-        Molmo2MultiModalProcessor,
+        _TT_Molmo2MultiModalProcessor,
         info=_TT_Molmo2ProcessingInfo,
         dummy_inputs=_TT_Molmo2DummyInputsBuilder,
     )
