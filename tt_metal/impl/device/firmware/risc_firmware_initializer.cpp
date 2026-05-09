@@ -2635,22 +2635,45 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             // which differs from the Tensix go_msg address.  Using the Tensix address for an ETH core
             // reads garbage from the wrong L1 offset → signal 0x02 (unknown) → FIX SC fires →
             // RUN_MSG_DONE written to wrong ETH L1 address → potential ETH dispatch FW corruption.
+            const HalProgrammableCoreType worker_core_type = llrt::get_core_type(device_id, worker_core);
+            // Build a short type string for diagnostic logs — TENSIX / ACTIVE_ETH / IDLE_ETH.
+            const char* core_type_str = [&]() -> const char* {
+                switch (worker_core_type) {
+                    case HalProgrammableCoreType::TENSIX:     return "TENSIX";
+                    case HalProgrammableCoreType::ACTIVE_ETH: return "ACTIVE_ETH";
+                    case HalProgrammableCoreType::IDLE_ETH:   return "IDLE_ETH";
+                    default:                                   return "UNKNOWN";
+                }
+            }();
             const uint32_t go_msg_addr =
-                hal_.get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::GO_MSG);
+                hal_.get_dev_addr(worker_core_type, HalL1MemAddrType::GO_MSG);
             auto cur_go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
             cluster_.read_core(
                 cur_go_msg.data(), cur_go_msg.size(), tt_cxy_pair(device_id, worker_core), go_msg_addr);
             const uint8_t signal = cur_go_msg.view().signal();
             const bool is_known =
                 std::find(kKnownRunMsgValues.begin(), kKnownRunMsgValues.end(), signal) != kKnownRunMsgValues.end();
+            // FIX SC-ADDR diagnostic: log that the per-core-type address was used (debug level).
+            // For ETH cores this confirms the correct ETH mailbox address is being read, not the
+            // Tensix go_msg address (which would produce a garbage signal and falsely trigger FIX SC).
+            log_debug(
+                LogDevice,
+                "FIX SC-ADDR (GAP-76): Device {} core {} ({}) go_msg_addr=0x{:08x} signal=0x{:02x} — {}",
+                device_id,
+                worker_core.str(),
+                core_type_str,
+                go_msg_addr,
+                signal,
+                is_known ? "valid (no FIX SC)" : "STALE → FIX SC will fire");
             if (!is_known) {
                 log_warning(
                     tt::LogAlways,
-                    "FIX SC (GAP-76): Device {} core {} has stale go_msg=0x{:02x} after firmware multicast "
-                    "write — asserting BRISC reset to halt stale firmware then writing RUN_MSG_DONE; "
-                    "board reset will be required",
+                    "FIX SC (GAP-76): Device {} core {} ({}) has stale go_msg=0x{:02x} after firmware "
+                    "multicast write — asserting BRISC reset to halt stale firmware then writing "
+                    "RUN_MSG_DONE; board reset will be required",
                     device_id,
                     worker_core.str(),
+                    core_type_str,
                     signal);
                 // FIX SC: Assert BRISC reset BEFORE writing RUN_MSG_DONE.  Without this the stale
                 // firmware is still running and immediately overwrites our write back to 0x55,

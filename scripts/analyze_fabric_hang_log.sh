@@ -914,13 +914,27 @@ FIX_TF_CP_FIRES=$(grep -cE 'FIX TF \(#42429\).*not in router_port_directions map
 # FIX SC asserts BRISC reset BEFORE writing RUN_MSG_DONE (fixes the FIX SB race condition where
 # stale firmware overwrote the DONE write).  Also handles cores that transition to 0x55 between
 # the pre-scan and the wait_until_cores_done poll loop.
-# Log (pre-scan): "FIX SC (GAP-76): Device N core X has stale go_msg=0xNN after firmware multicast"
-# Log (inline):   "FIX SC (GAP-76): Tensix core X run_mailbox=0xNN — asserting reset + writing DONE"
-# Log (failure):  "FIX SC (GAP-76): assert_risc_reset failed for Device N core X"
-#                 "FIX SC (GAP-76): inline rescue failed for core X"
+# FIX SC-ADDR (GAP-76): risc_firmware_initializer.cpp — FIX SC pre-scan was always using the
+# TENSIX go_msg address even for ETH cores (ACTIVE_ETH / IDLE_ETH) in not_done_cores.  ETH cores
+# keep go_msg at a different L1 offset.  Reading wrong address returned garbage (0x02) → FIX SC
+# fired falsely → wrote RUN_MSG_DONE to wrong ETH L1 address → ETH dispatch FW corruption →
+# deterministic 1000ms teardown timeout for all 8 devices every open/close cycle.
+# Fixed by calling llrt::get_core_type() per core and using hal_.get_dev_addr(core_type, GO_MSG).
+# Core-type annotation added to log messages so ETH vs Tensix stale fires are distinguishable.
+# Log (pre-scan, stale):  "FIX SC (GAP-76): Device N core X (TENSIX) has stale go_msg=0xNN"
+#                         "FIX SC (GAP-76): Device N core X (ACTIVE_ETH) has stale go_msg=0xNN"
+# Log (debug, SC-ADDR):   "FIX SC-ADDR (GAP-76): Device N core X (ACTIVE_ETH) go_msg_addr=0xNNN signal=0xNN — valid"
+# Log (inline):           "FIX SC (GAP-76): Tensix core X run_mailbox=0xNN — asserting reset + writing DONE"
+# Log (failure):          "FIX SC (GAP-76): assert_risc_reset failed for Device N core X"
+#                         "FIX SC (GAP-76): inline rescue failed for core X"
 FIX_SC_PRESCAN=$(grep -cE 'FIX SC \(GAP-76\).*stale go_msg' "$CLEAN" 2>/dev/null; :)
+FIX_SC_ETH_FIRE=$(grep -cE 'FIX SC \(GAP-76\).*(ACTIVE_ETH|IDLE_ETH).*stale go_msg' "$CLEAN" 2>/dev/null; :)
+FIX_SC_TENSIX_FIRE=$(grep -cE 'FIX SC \(GAP-76\).*TENSIX.*stale go_msg' "$CLEAN" 2>/dev/null; :)
 FIX_SC_INLINE=$(grep -cE 'FIX SC \(GAP-76\).*Tensix core.*asserting reset' "$CLEAN" 2>/dev/null; :)
 FIX_SC_FAIL=$(grep -cE 'FIX SC \(GAP-76\).*(assert_risc_reset failed|inline rescue failed)' "$CLEAN" 2>/dev/null; :)
+# FIX SC-ADDR debug logs (only present when METAL_LOG_LEVEL=DEBUG or TT_LOGGER_LEVEL=DEBUG)
+FIX_SC_ADDR_ETH_VALID=$(grep -cE 'FIX SC-ADDR \(GAP-76\).*(ACTIVE_ETH|IDLE_ETH).*valid \(no FIX SC\)' "$CLEAN" 2>/dev/null; :)
+FIX_SC_ADDR_ETH_STALE=$(grep -cE 'FIX SC-ADDR \(GAP-76\).*(ACTIVE_ETH|IDLE_ETH).*STALE' "$CLEAN" 2>/dev/null; :)
 # FIX TG (#42429): control_plane.cpp configure_routing_tables_for_fabric_ethernet_channels —
 # TT_ASSERT (no-op in Release) guarded host_rank_for_chip.value() for connected chips excluded
 # by FIX TB.  Fixed by guarding with has_value() check and continuing (skip), matching FIX TE.
@@ -1544,13 +1558,27 @@ if [ "${FIX_SA_LLRT_FIRES:-0}" -gt 0 ]; then
 fi
 FIX_SC_TOTAL=$(( ${FIX_SC_PRESCAN:-0} + ${FIX_SC_INLINE:-0} ))
 if [ "${FIX_SC_TOTAL:-0}" -gt 0 ]; then
-    echo "  => [FIX SC] Tensix stale go_msg rescue: ${FIX_SC_PRESCAN:-0} pre-scan + ${FIX_SC_INLINE:-0} inline (${FIX_SC_TOTAL} total)."
+    echo "  => [FIX SC] Stale go_msg rescue: ${FIX_SC_PRESCAN:-0} pre-scan + ${FIX_SC_INLINE:-0} inline (${FIX_SC_TOTAL} total)."
     echo "     Hard BRISC reset by rescue_stuck_dispatch_cores left stale L1 firmware writing 0x55."
     echo "     FIX SC asserts BRISC reset → writes RUN_MSG_DONE → core marked done immediately."
     echo "     Without FIX SC: 10s × N_cores wasted wait → TT_THROW FW init timeout."
+    if [ "${FIX_SC_TENSIX_FIRE:-0}" -gt 0 ] || [ "${FIX_SC_ETH_FIRE:-0}" -gt 0 ]; then
+        echo "     Core-type breakdown: TENSIX=${FIX_SC_TENSIX_FIRE:-0}  ETH(ACTIVE+IDLE)=${FIX_SC_ETH_FIRE:-0}."
+    fi
+    if [ "${FIX_SC_ETH_FIRE:-0}" -gt 0 ]; then
+        echo "     [REGRESSION] FIX SC fired on ${FIX_SC_ETH_FIRE} ETH core(s) — this should not happen with FIX SC-ADDR."
+        echo "     ETH cores in not_done_cores should use ETH go_msg address (FIX SC-ADDR).  If FIX SC"
+        echo "     fires on ETH: wrong address still being used OR ETH core genuinely has stale go_msg."
+        echo "     Check commit a50407086ac (FIX SC-ADDR) is present and llrt::get_core_type() is correct."
+    fi
     if [ "${FIX_SC_FAIL:-0}" -gt 0 ]; then
         echo "     [WARNING] FIX SC rescue FAILED for ${FIX_SC_FAIL} core(s) — assert_risc_reset threw."
     fi
+fi
+if [ "${FIX_SC_ADDR_ETH_VALID:-0}" -gt 0 ] || [ "${FIX_SC_ADDR_ETH_STALE:-0}" -gt 0 ]; then
+    echo "  => [FIX SC-ADDR] ETH core go_msg debug (requires debug log level):"
+    echo "     Valid (no fire): ${FIX_SC_ADDR_ETH_VALID:-0}  STALE (fire): ${FIX_SC_ADDR_ETH_STALE:-0}."
+    echo "     FIX SC-ADDR confirmed using per-core-type go_msg address for ETH cores in not_done_cores."
 fi
 if [ "${FIX_TF_CP_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TF cp] control_plane: excluded chip skipped in routing-plane/routing-table init (${FIX_TF_CP_FIRES} skip(s))."
@@ -1844,6 +1872,9 @@ echo "  FIX_AR2_FIRES:            ${FIX_AR2_FIRES:-0}  (post-deassert delay befo
 echo "  FIX_AU_AX_FIRES:          ${FIX_AU_FIRES:-0}/${FIX_AX_FIRES:-0}  (FIX AU-2 TERMINATE attempts / FIX AX-2 assert_risc_reset attempts on relay-dead)"
 echo "  FIX_XY2_RELAY_RESTORED:   ${FIX_XY2_RELAY_RESTORED:-0}  (relay_broken cleared after successful ERISC force-reset — relay path restored)"
 echo "  FIX_SB2R_CLEAN_BOOT:      ${FIX_SB2R_CLEAN_BOOT:-0}  (relay_broken NOT set: probe was clean, FIX M was mid-init sentinel not a real failure)"
+echo "  FIX_SC_PRESCAN:           ${FIX_SC_PRESCAN:-0}  (FIX SC stale go_msg pre-scan fires; TENSIX=${FIX_SC_TENSIX_FIRE:-0} ETH=${FIX_SC_ETH_FIRE:-0})"
+echo "  FIX_SC_ETH_FIRE:          ${FIX_SC_ETH_FIRE:-0}  ([REGRESSION if > 0] FIX SC fired on ETH core — FIX SC-ADDR regression?)"
+echo "  FIX_SC_ADDR_ETH_VALID:    ${FIX_SC_ADDR_ETH_VALID:-0}  (ETH cores in not_done_cores scanned at correct address; valid signal (debug log))"
 echo "  FIX_TV_SUCCESS:            ${FIX_TV_SUCCESS:-0}  (MMIO ETH heartbeat confirmed after reset_cores)"
 echo "  FIX_TV_TIMEOUT:            ${FIX_TV_TIMEOUT:-0}  (MMIO ETH heartbeat poll timed out — probe_dead likely)"
 echo "  TELEMETRY_DUMPS:           ${TELEMETRY_DUMP_BEGIN:-0}  (fabric telemetry failure dumps)"
