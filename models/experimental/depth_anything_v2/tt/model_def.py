@@ -579,7 +579,6 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         value,
         is_causal=False,
         scale=1.0 / (head_size ** 0.5),
-        program_config=pconfigs["sdpa_program_config"],
         compute_kernel_config=pconfigs["compute_kernel_config"],
     )
     ttnn.deallocate(query)
