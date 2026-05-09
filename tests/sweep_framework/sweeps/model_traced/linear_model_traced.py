@@ -534,8 +534,6 @@ def run(
         # Forward memory_config when master had it (not __ABSENT__)
         if memory_config != "__ABSENT__" and memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
-        elif memory_config is None and core_grid != "__ABSENT__":
-            linear_kwargs["memory_config"] = None
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
@@ -544,8 +542,6 @@ def run(
 
         if program_config is not None and program_config != "__ABSENT__":
             linear_kwargs["program_config"] = program_config
-        elif program_config is None and memory_config != "__ABSENT__":
-            linear_kwargs["program_config"] = None
 
         # Pass compute_kernel_config even when None — the master trace records it
         # when the model explicitly passed it (including None). Use __absent_keys__
