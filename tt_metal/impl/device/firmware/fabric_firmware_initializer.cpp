@@ -501,32 +501,49 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             continue;
         }
 
-        // Skip relay-dependent writes for non-MMIO devices with a broken relay path.
-        // These channels will be force-reset in the second pass below after the poll deadline.
+        // FIX AU-2 (#42429): The original FIX AU skipped TERMINATE write + l1_barrier entirely
+        // for non-MMIO devices with broken relay, which left ERISC channels dirty for subsequent
+        // CI jobs.  Now we ATTEMPT the write and catch on failure — cleanup must always be tried.
+        // If the write throws (relay dead), the channel still proceeds to the force-reset second
+        // pass below, which is the safety net.
         const bool is_non_mmio = cluster_.get_associated_mmio_device(dev->id()) != dev->id();
         if (is_non_mmio && dev->is_fabric_relay_path_broken()) {
             log_warning(
                 tt::LogMetal,
-                "FabricFirmwareInitializer::teardown: Device {} (non-MMIO) relay path broken "
-                "(fabric_relay_path_broken_=true) — skipping TERMINATE write and l1_barrier to prevent "
-                "5 s UMD relay hang and exception that would abort the force-reset second pass. "
-                "Active channels will be force-reset after the poll deadline. (FIX AU #42429)",
+                "FIX AU-2 (#42429): Device {} (non-MMIO) relay path broken — "
+                "attempting TERMINATE write anyway (was previously skipped). "
+                "Failure will be caught; channels will still be force-reset.",
                 dev->id());
-            continue;
         }
 
-        auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
-            builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
-        detail::WriteToDeviceL1(
-            dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
+        try {
+            auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
+                builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
+            detail::WriteToDeviceL1(
+                dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
 
-        // Ensure the TERMINATE write has landed in L1 before we begin polling for
-        // EDMStatus::TERMINATED.  The Tensix MUX path has an equivalent l1_barrier
-        // after its TERMINATE writes (see above).  While the NOC protocol guarantees
-        // read-after-write ordering for the *same* core, the barrier also flushes any
-        // in-flight NOC writes to *other* cores on this chip, preventing stale reads
-        // during the round-robin poll across all active channels.
-        cluster_.l1_barrier(dev->id());
+            // Ensure the TERMINATE write has landed in L1 before we begin polling for
+            // EDMStatus::TERMINATED.  The Tensix MUX path has an equivalent l1_barrier
+            // after its TERMINATE writes (see above).  While the NOC protocol guarantees
+            // read-after-write ordering for the *same* core, the barrier also flushes any
+            // in-flight NOC writes to *other* cores on this chip, preventing stale reads
+            // during the round-robin poll across all active channels.
+            cluster_.l1_barrier(dev->id());
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "FIX AU-2 (#42429): TERMINATE write or l1_barrier failed for Device {}: {} — "
+                "channel will proceed to force-reset second pass.",
+                dev->id(),
+                e.what());
+        } catch (...) {
+            // UmdException may not inherit from std::exception
+            log_warning(
+                tt::LogMetal,
+                "FIX AU-2 (#42429): TERMINATE write or l1_barrier threw non-std exception for "
+                "Device {} (likely UMD relay timeout) — channel will proceed to force-reset.",
+                dev->id());
+        }
     }
 
     // Fix B: Poll ALL active ETH router channels per device for EDMStatus::TERMINATED before
@@ -796,21 +813,23 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // link and lets non-MMIO ERISCs boot into base firmware in the next session.  We
             // still register the channel in force_reset_channels_ (done above) and
             // reset_failed_channels (below) so the next session's diagnostics are correct.
+            // FIX AX-2 (#42429): The original FIX AX skipped assert_risc_reset_at_core entirely
+            // for non-MMIO channels with dead relay, which left ERISCs running stale firmware
+            // and contaminated subsequent CI jobs.  Now we ATTEMPT the reset for all channels
+            // and catch failures — cleanup must always be attempted, never silently skipped.
             const bool is_non_mmio_relay_dead =
                 cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
                 relay_dead_devices.count(ch.dev->id()) > 0;
             if (is_non_mmio_relay_dead) {
                 log_warning(
                     tt::LogMetal,
-                    "FabricFirmwareInitializer::teardown: Device {} chan={} relay confirmed dead — "
-                    "skipping assert_risc_reset_at_core to avoid 5s UMD timeout per channel "
-                    "(FIX AX #42429). RiscFirmwareInitializer::teardown will PCIe-reset MMIO "
-                    "ETH cores and restore the link.",
+                    "FIX AX-2 (#42429): Device {} chan={} relay confirmed dead — "
+                    "attempting assert_risc_reset_at_core anyway (was previously skipped). "
+                    "Failure will be caught and logged.",
                     ch.dev->id(),
                     ch.eth_chan_id);
-                reset_failed_channels.push_back(
-                    fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id));
-            } else {
+            }
+            {
                 // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
                 //
                 // Previously this only called assert_risc_reset_at_core(ALL) without deassert,
@@ -854,6 +873,15 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     } catch (...) {
                         // Best-effort: MMIO devices succeed via PCIe; non-MMIO with a dead relay
                         // may throw — acceptable, FIX PA in reset_cores() handles the fallback.
+                    }
+                    // FIX XY-2 (#42429): Successful assert+deassert means the relay path is
+                    // restored (ERISC rebooted into base firmware).  Clear relay_broken so that
+                    // subsequent multicast writes (cleanup, next session init) are not blocked
+                    // by the stale relay_broken flag from an earlier transient failure.
+                    try {
+                        cluster_.clear_relay_broken(ch.dev->id());
+                    } catch (...) {
+                        // Best-effort: if clear fails (e.g. chip not remote), harmless.
                     }
                 } catch (const std::exception& e) {
                     log_error(
