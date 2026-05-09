@@ -261,13 +261,26 @@ void process_go_signal_mcast_cmd() {
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
         aligned_go_signal_storage[storage_offset] = go_signal_value;
 
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        // wait_for_workers polls device_print_dispatcher.execute() inside its busy loop when
+        // DEVICE_PRINT dispatch is enabled. That dispatcher may issue writes using
+        // NCRISC_WR_REG_CMD_BUF, which would clobber the state programmed by
+        // cq_noc_async_write_init_state below. Wait first in that build so init_state's state
+        // is the last thing touching this command buffer before the cq_noc_async_write_with_state
+        // call. In the non-DEVICE_PRINT build keep the original ordering so init_state + write
+        // accounting overlap with the worker wait.
+        wait_for_workers(wait_count, wait_stream);
+#endif
+
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
 
         // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
 
+#if !DEVICE_PRINT_DISPATCH_ENABLED
         wait_for_workers(wait_count, wait_stream);
+#endif
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
         noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
