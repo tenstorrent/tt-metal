@@ -26,6 +26,7 @@
 #include "fabric/fabric_builder_context.hpp"
 #include "device/edm_status_utils.hpp"
 #include "hal_types.hpp"
+#include "hal.hpp"  // FIX XZ: FWMailboxMsg for MMIO ETH heartbeat poll
 
 // Timeout hierarchy (all host-side wall-clock):
 //   5000ms — teardown/init per-phase: covers full firmware startup/shutdown cycle
@@ -887,6 +888,125 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 "may still be running: [{}]. Next fabric init should expect corrupt state on these channels.",
                 reset_failed_channels.size(),
                 failed_list);
+        }
+    }
+
+    // FIX XZ (#42429): Wait for MMIO ERISC channels to finish rebooting after force-reset.
+    //
+    // Root cause: the force-reset loop above (FIX AI) does assert+deassert on channels that
+    // did not reach TERMINATED in time.  After deassert, the ERISC begins rebooting into
+    // base-UMD firmware (sentinel 0x49706550), but teardown returns immediately without
+    // waiting for the reboot to complete.  If the next session starts quickly:
+    //   - terminate_stale_erisc_routers() reads via ETH command-queue protocol, which requires
+    //     ERISC to be running to service reads → mid-reboot ERISC can't service → probe_dead
+    //   - probe_dead on MMIO cascades to relay_timeout on all non-MMIO devices
+    //   - All ETH channels dead → SKIP or FAIL
+    //
+    // FIX TV in run_launch_phase() provides the same wait on the NEXT session's init, but
+    // waiting HERE in teardown eliminates the race entirely — the next session always sees
+    // fully-booted MMIO ERISC channels.
+    //
+    // Only poll MMIO channels (PCIe direct reads, no relay needed).  Non-MMIO channels with
+    // dead relay are unreachable anyway and handled by FIX NZ/AX guards.
+    {
+        const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+        if (hb_addr != 0u) {
+            // Collect MMIO channels that were force-reset.
+            struct MmioResetChannel {
+                tt_cxy_pair target;
+                uint32_t prev_hb = 0;
+                bool nonzero_seen = false;
+                bool ready = false;
+            };
+            std::vector<MmioResetChannel> mmio_reset_chans;
+            {
+                std::lock_guard<std::mutex> lock(force_reset_channels_mutex_);
+                for (const auto& [chip_id, eth_chan_id] : force_reset_channels_) {
+                    if (cluster_.get_associated_mmio_device(chip_id) != chip_id) {
+                        continue;  // Non-MMIO — skip, unreachable via PCIe
+                    }
+                    try {
+                        const CoreCoord logical_core =
+                            cluster_.get_soc_desc(chip_id).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                        const CoreCoord virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            chip_id, logical_core, CoreType::ETH);
+                        mmio_reset_chans.push_back({tt_cxy_pair(chip_id, virt), 0, false, false});
+                    } catch (...) {
+                        // Coord lookup failed — skip this channel.
+                    }
+                }
+            }
+
+            if (!mmio_reset_chans.empty()) {
+                constexpr int kRebootWaitMs = 3000;
+                constexpr auto kPollInterval = std::chrono::milliseconds(10);
+                const auto poll_start = std::chrono::steady_clock::now();
+
+                while (true) {
+                    bool all_done = true;
+                    for (auto& mc : mmio_reset_chans) {
+                        if (mc.ready) continue;
+                        uint32_t hb_val = 0;
+                        try {
+                            cluster_.read_reg(&hb_val, mc.target, hb_addr);
+                        } catch (...) {
+                            mc.ready = true;  // PCIe read failed — count as done
+                            continue;
+                        }
+                        if (!mc.nonzero_seen) {
+                            if (hb_val != 0) {
+                                mc.prev_hb = hb_val;
+                                mc.nonzero_seen = true;
+                                // UMD base firmware writes static 0xABCDxxxx marker — never increments.
+                                if ((hb_val >> 16) == 0xABCDu) {
+                                    mc.ready = true;
+                                }
+                            }
+                        } else if ((hb_val >> 16) == 0xABCDu || hb_val != mc.prev_hb) {
+                            mc.ready = true;
+                        }
+                        if (!mc.ready) all_done = false;
+                    }
+                    if (all_done) break;
+                    const auto elapsed_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - poll_start)
+                            .count();
+                    if (elapsed_ms >= kRebootWaitMs) {
+                        const auto not_ready = static_cast<int>(std::count_if(
+                            mmio_reset_chans.begin(),
+                            mmio_reset_chans.end(),
+                            [](const MmioResetChannel& mc) { return !mc.ready; }));
+                        log_warning(
+                            tt::LogAlways,
+                            "FIX XZ (#42429): teardown MMIO ETH heartbeat poll timed out after {}ms; "
+                            "{}/{} channel(s) not yet reporting base firmware. "
+                            "Next session may see probe_dead on these channels.",
+                            elapsed_ms,
+                            not_ready,
+                            static_cast<int>(mmio_reset_chans.size()));
+                        break;
+                    }
+                    std::this_thread::sleep_for(kPollInterval);
+                }
+
+                const auto total_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - poll_start)
+                        .count();
+                const auto ready_count = static_cast<int>(std::count_if(
+                    mmio_reset_chans.begin(),
+                    mmio_reset_chans.end(),
+                    [](const MmioResetChannel& mc) { return mc.ready; }));
+                if (ready_count == static_cast<int>(mmio_reset_chans.size())) {
+                    log_info(
+                        tt::LogAlways,
+                        "FIX XZ (#42429): all {} force-reset MMIO ETH channel(s) confirmed "
+                        "base firmware heartbeat in {}ms — clean state for next session.",
+                        mmio_reset_chans.size(),
+                        total_ms);
+                }
+            }
         }
     }
 
