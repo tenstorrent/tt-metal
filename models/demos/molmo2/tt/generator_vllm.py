@@ -33,10 +33,9 @@ try:
 
     class _TT_Molmo2ProcessingInfo(Molmo2ProcessingInfo):
         def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-            # Video only — image modality reuses the video path; exposing "image"
-            # causes vllm to generate image dummy inputs that our _get_mm_fields_config
-            # does not handle, leading to IndexError in _merge_mm_kwargs.
-            return {"video": 1}
+            # Support both image and video — prefill_forward handles both via
+            # pixel_values (image) and pixel_values_videos (video) kwargs.
+            return {"video": 1, "image": 1}
 
     _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
         Molmo2MultiModalProcessor,
