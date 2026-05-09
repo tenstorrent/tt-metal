@@ -9,7 +9,6 @@ Things to remember:
  - Metal 2.0 is a work in progress; not all legacy API features fully implemented.
  - Not all planned improvements are available yet.
 
-
 > **Prerequisite**: Before attempting Metal 2.0 migration, complete the [Device 2.0 Data Movement migration](../../kernel_apis/data_movement/device_api_migration_guide.md). All kernel code migration examples in this guide assume Device 2.0 migration is already done.
 
 ## Table of Contents
@@ -50,9 +49,11 @@ Key Metal 2.0 changes, at a glance:
 Some benefits of Metal 2.0:
 
 - **Named resource bindings**. Metal 2.0 natively supports binding resources (DFBs, semaphores, tensors, etc) to kernels. The corresponding handles are cleanly passed to the device code with user-defined accessor names.
-- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides
+- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides. Positional CTAs are gone from the API entirely; positional RTAs/CRTAs survive only as **varargs**, intended for the rare kernels that read a dynamic-count argument tail in a loop (e.g. shape of an N-D tensor where N is a CTA). For everything else, prefer names.
 
 > **Stated goal: eliminate raw pointer arguments.** With DFBs, semaphores, and tensors all bindable as named resources, runtime args carrying a buffer or tensor address should now be the exception rather than the rule. If you're about to put `tensor.buffer()->address()` in a runtime arg, you're probably doing it wrong — bind the tensor as a `TensorParameter` instead.
+
+> **Argument naming.** Metal 2.0 is designed around named arguments. Compile-time arguments must be named — positional CTAs are no longer part of the API. Runtime and common runtime arguments may be named (the typical case) or positional (varargs, intended for kernels with a genuinely dynamic argument count consumed in a loop — e.g., an N-dimensional shape where N is a CTA). When porting from a legacy kernel, individually-known RTAs translate naturally to named RTAs; reach for varargs only when the kernel actually loops over the arguments.
 
 Many additional improvements are planned, but are not yet available in the experimental APIs.
 
@@ -510,21 +511,22 @@ params.kernel_run_params = {{
 SetProgramRunParameters(program, params); // temporary free function
 ```
 
-Vararg form (positional, dynamic count):
+Vararg form — for kernels with a genuinely dynamic argument tail (loop-retrieved on the device side). The canonical fit is a CTA-bound count plus a per-element payload, e.g. an N-dimensional shape:
 
 ```cpp
 // Schema:
+.compile_time_arg_bindings = {{"rank", rank}},
 .runtime_arguments_schema = {
-    .num_runtime_varargs = 3,         // 3 RTA varargs (per node)
-    .num_common_runtime_varargs = 1,  // 1 CRTA vararg (broadcast)
+    .num_runtime_varargs = rank,  // shape: one entry per dimension
 },
 
 // Values:
-.runtime_varargs = {{NodeCoord{0, 0}, {dim0, dim1, dim2}}},
-.common_runtime_varargs = {flag},
+.runtime_varargs = {{NodeCoord{0, 0}, shape_dims}},  // shape_dims.size() == rank
 ```
 
-Named and vararg forms can coexist on the same kernel. Vararg indices are stable across schema changes — promoting a named RTA to a CRTA, or adding/removing named args, does not shift vararg indices.
+Named and vararg forms can coexist on the same kernel. Vararg indices are stable across schema changes — promoting a named RTA to a CRTA, or adding/removing named args, does not shift vararg indices. Common runtime varargs (`num_common_runtime_varargs`, retrieved on the device via `get_common_vararg(i)`) work analogously, broadcast across all nodes.
+
+> The vararg form is intended for kernels whose device-side code retrieves arguments in a loop — i.e., `get_vararg(i)` with `i` a runtime variable. When the kernel reads each argument by a constant index (`get_vararg(0)`, `get_vararg(1)`, …), the named form reads more clearly on both sides.
 
 ---
 
@@ -646,16 +648,16 @@ void kernel_main() {
 
 CTAs, RTAs, and CRTAs are accessed through the same `get_arg(args::name)` mechanism in device code. The dispatch type (compile-time, runtime, common runtime) is a host-only concept — the kernel author no longer needs to know or care which kind of argument they're reading. The C++ type-deduction context (`constexpr auto`, `auto`, `const auto`) is the only place the distinction surfaces.
 
-**Example 2 — Named arguments plus varargs.**
+**Example 2 — Named arguments plus varargs (the niche case).**
 
-Some kernels need a variable-count argument tail (e.g. an N-dimensional tensor's shape, where N is itself a CTA). Metal 2.0 supports this as positional **varargs**, which coexist with named arguments:
+Some kernels read a dynamic-count argument tail in a loop — e.g. an N-dimensional tensor's shape, where N is itself a CTA. That's the case varargs are designed for:
 
 ```cpp
+.compile_time_arg_bindings = {{"rank", rank}},
 .runtime_arguments_schema = {
     .named_runtime_args = {"start_page"},
     .named_common_runtime_args = {"num_entries"},
-    .num_runtime_varargs = 3,         // 3 positional RTA varargs (per node)
-    .num_common_runtime_varargs = 1,  // 1 positional CRTA vararg (broadcast)
+    .num_runtime_varargs = rank,  // shape: one entry per dimension
 },
 ```
 
@@ -663,21 +665,24 @@ Some kernels need a variable-count argument tail (e.g. an N-dimensional tensor's
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    auto start_page          = get_arg(args::start_page);
-    const auto num_entries = get_arg(args::num_entries);
+    constexpr auto rank      = get_arg(args::rank);          // CTA
+    auto start_page          = get_arg(args::start_page);    // RTA
+    const auto num_entries   = get_arg(args::num_entries);   // CRTA
 
-    // Vararg RTAs (positional, indexed from 0):
-    uint32_t dim0 = get_vararg(0);
-    uint32_t dim1 = get_vararg(1);
-    uint32_t dim2 = get_vararg(2);
-
-    // Vararg CRTAs (broadcast across all nodes the kernel runs on):
-    uint32_t flag = get_common_vararg(0);
+    // Vararg RTAs read in a loop — count is bound to `rank`:
+    uint32_t shape[rank];
+    for (uint32_t i = 0; i < rank; ++i) {
+        shape[i] = get_vararg(i);
+    }
     // ...
 }
 ```
 
-Vararg indices are stable across schema changes: if you later promote a named RTA to a CRTA, or add or remove named arguments, the existing `get_vararg(N)` / `get_common_vararg(N)` calls still resolve to the same vararg slots. Migrators porting kernels with a variable argument count can rely on this — leave existing positional access in place, layer named arguments on top.
+Common runtime varargs are analogous: declare with `num_common_runtime_varargs`, retrieve on the device with `get_common_vararg(i)`. Same loop-retrieval criterion applies.
+
+> When porting a legacy kernel with positional RTAs, the natural Metal 2.0 form is named RTAs — one per legacy positional argument. A translation into vararg slots compiles and runs (and may be useful as an interim step on a large kernel), but the named form is the recommended endpoint for new code. The distinguishing criterion is whether the kernel's device-side `get_vararg(i)` calls use `i` as a runtime variable (varargs are appropriate) or constants (named RTAs are clearer).
+
+Vararg indices are stable across schema changes: promoting a named RTA to a CRTA, or adding or removing named arguments, does not shift vararg indices. (This stability lets you migrate incrementally — rename arguments to named form one at a time without disturbing the remaining varargs.)
 
 > **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including std::array and user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible. Migrators should plan to revisit kernel arguments after these changes.
 
@@ -947,6 +952,6 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **Every kernel must belong to a `WorkUnitSpec`.** A kernel listed in `ProgramSpec::kernels` but not referenced by any `WorkUnitSpec::kernels` has no place to run. This will trigger an error.
 - **DFB placement is derived, not specified.** Don't pass a node range to `DataflowBufferSpec` — the DFB lives wherever its bound producer / consumer kernels run. `DataflowBufferSpec` has no `target_nodes` field by design.
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
-- **Unnamed/positional compile-time arguments are not supported**. Use named compile time arguments.
-- **Unnamed/position runtime arguments _are_ supported**. You can use varargs to restore the old behavior, but this is discouraged.
+- **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
+- **Runtime varargs are intended for dynamic-count tails.** `num_runtime_varargs` (and `num_common_runtime_varargs`) is the right fit for kernels that consume a variable number of arguments in a loop — e.g., an N-dimensional shape gated on a CTA-known `rank`. For kernels with a fixed set of individually-known arguments, named RTAs are the recommended form, even when porting from a positional legacy interface.
 - **`ProgramRunParams` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunParameters` to error. The same applies to varargs. (Note: There is also a power-user `ProgramRunParamsView` API that provides a stateful view into the dispatch buffers; it is not yet supported.)
