@@ -319,8 +319,8 @@ static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
 
 class DevicePrintImpl : public DPrintServer::Impl {
 public:
-    DevicePrintImpl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
-        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config) {}
+    DevicePrintImpl(MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
+        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config), context_(context) {}
 
 protected:
     bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;
@@ -336,6 +336,7 @@ protected:
     void await() override;
 
 private:
+    MetalContext* context_;
     struct RiscData {
         std::string firmware_elf_path;
         std::shared_ptr<DevicePrintParser> firmware_elf_parser;
@@ -725,11 +726,10 @@ void DevicePrintImpl::attach_device(ChipId device_id) {
     DPrintServer::Impl::attach_device(device_id);
 
     // Check if we should set up dispatch_s DRAM aggregation for this device.
-    auto& context = tt::tt_metal::MetalContext::instance();
     auto& cluster = env_.get_cluster();
     const auto& hal = env_.get_hal();
 
-    if (!context.get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (context_->get_dispatch_query_manager().dispatch_s_enabled()) {
         return;
     }
 
@@ -1602,9 +1602,9 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
 }  // get_output_stream
 
 // Wrapper class functions
-DPrintServer::DPrintServer(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+DPrintServer::DPrintServer(MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     if (MetalEnvAccessor(env).impl().get_rtoptions().get_use_device_print()) {
-        impl_ = std::make_unique<DevicePrintImpl>(env, num_hw_cqs, dispatch_core_config);
+        impl_ = std::make_unique<DevicePrintImpl>(context, env, num_hw_cqs, dispatch_core_config);
     } else {
         // TODO: Enable this warning once DPRINT is fully deprecated and removed from the codebase.
         // log_warning(

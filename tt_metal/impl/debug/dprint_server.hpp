@@ -15,13 +15,14 @@
 
 namespace tt::tt_metal {
 
+class MetalContext;
 class MetalEnv;
 class DispatchCoreConfig;
 
 class DPrintServer {
 public:
     // Constructor/destructor, reads dprint options from RTOptions.
-    DPrintServer(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
+    DPrintServer(MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
     ~DPrintServer();
 
     // Sets whether the print server is muted. Calling this function while a kernel is running may
