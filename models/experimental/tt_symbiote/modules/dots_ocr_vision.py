@@ -14,17 +14,25 @@ vision block, patch merger, and the top-level vision tower.
 
 from __future__ import annotations
 
-
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
+from models.experimental.tt_symbiote.modules.dots_ocr_memory import (
+    DOTS_L1_MAX_ELEMENTS,
+    dots_chunk_matmul_program_config_1d,
+    dots_chunk_matmul_program_config_2d,
+    dots_linear_output_memory_config,
+    dots_max_tile_rows_for_l1_input,
+    dots_stage_matmul_input_l1_or_shard,
+)
 from ttnn.operations.transformer import SDPAProgramConfig
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
 # Norms (RMS/LayerNorm) keep HiFi4 for stability.
 VISION_MATMUL_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
+# Vision matmul path uses HiFi2 (lower fidelity than norms).
 VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
 VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi4
 
@@ -49,6 +57,124 @@ def _vision_sdpa_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> 
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
+
+
+def _patch_embed_matmul_compute_config(device) -> ttnn.DeviceComputeKernelConfig:
+    """HiFi2 for patch projection matmuls; aligns with vision matmul throughput tuning."""
+    return _vision_matmul_compute_config(device, math_fidelity=VISION_MATMUL_MATH_FIDELITY)
+
+
+def _patch_embed_tokens_per_chunk(k_features: int) -> int:
+    """Max patch tokens per projection chunk so flattened activations fit ``DOTS_L1_MAX_ELEMENTS``.
+
+    Aligns to tile rows for TILE layout (symbiote ``dots_ocr_memory`` policy; same spirit as
+    ``conv.TTNNPatchEmbedding`` staging matmul inputs in L1).
+    """
+    tile = ttnn.TILE_SIZE
+    k_dim = max(1, int(k_features))
+    max_rows = DOTS_L1_MAX_ELEMENTS // k_dim
+    return max(tile, (max_rows // tile) * tile)
+
+
+# Long sequences: use wider DRAM chunks (tile-aligned) to cut repeated 192×K×N patch matmuls.
+_PATCH_EMBED_DRAM_CHUNK_ROWS = 384
+
+
+def _patch_embed_linear_chunked(
+    x_tt: ttnn.Tensor,
+    *,
+    device,
+    proj_weight,
+    proj_bias,
+    embed_dim: int,
+    compute_kernel_config,
+    dram_mem,
+) -> ttnn.Tensor:
+    """Chunk patch projection; stage slice inputs in L1 (interleaved or height-sharded) when possible.
+
+    Slices larger than ``DOTS_L1_MAX_ELEMENTS`` are split along tokens into tile-aligned row
+    blocks (e.g. 384×608 → two 192×608 matmuls in L1). Full-image tensors stay DRAM-interleaved
+    between outer chunks; outputs use ``dots_linear_output_memory_config``. Tries 2D / 1D
+    program configs then default matmul.
+    """
+    s = int(x_tt.shape[2])
+    k_dim = int(x_tt.shape[3])
+    l1_chunk = _patch_embed_tokens_per_chunk(k_dim)
+    chunk_step = l1_chunk if s <= l1_chunk else max(l1_chunk, min(_PATCH_EMBED_DRAM_CHUNK_ROWS, s))
+    max_l1_rows = dots_max_tile_rows_for_l1_input(k_dim)
+
+    def _linear_one(x_in: ttnn.Tensor, num_tokens: int) -> ttnn.Tensor:
+        x_staged = dots_stage_matmul_input_l1_or_shard(device, x_in)
+        m_i = int(x_staged.shape[2])
+        k_i = int(x_staged.shape[3])
+        out_mem = dots_linear_output_memory_config(num_tokens * embed_dim)
+        attempts = (
+            dots_chunk_matmul_program_config_2d(device, m=m_i, k=k_i, n=int(embed_dim)),
+            dots_chunk_matmul_program_config_1d(device, m=m_i, k=k_i, n=int(embed_dim), mcast_in0=True),
+            dots_chunk_matmul_program_config_1d(device, m=m_i, k=k_i, n=int(embed_dim), mcast_in0=False),
+        )
+        for prog in attempts:
+            try:
+                return ttnn.linear(
+                    x_staged,
+                    proj_weight,
+                    bias=proj_bias,
+                    transpose_b=True,
+                    memory_config=out_mem,
+                    compute_kernel_config=compute_kernel_config,
+                    program_config=prog,
+                )
+            except RuntimeError:
+                continue
+        return ttnn.linear(
+            x_staged,
+            proj_weight,
+            bias=proj_bias,
+            transpose_b=True,
+            memory_config=out_mem,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    def _linear_slice(x_in: ttnn.Tensor, num_tokens: int) -> ttnn.Tensor:
+        m_i = int(x_in.shape[2])
+        if m_i <= max_l1_rows:
+            return _linear_one(x_in, num_tokens)
+        outs_l1 = []
+        row0 = 0
+        while row0 < m_i:
+            row1 = min(row0 + max_l1_rows, m_i)
+            sub = ttnn.slice(x_in, (0, 0, row0, 0), (1, 1, row1, k_dim))
+            outs_l1.append(_linear_one(sub, row1 - row0))
+            row0 = row1
+        if len(outs_l1) == 1:
+            return outs_l1[0]
+        return ttnn.concat(outs_l1, dim=2, memory_config=dram_mem)
+
+    if s <= chunk_step:
+        return _linear_slice(x_tt, s)
+
+    outs = []
+    row0 = 0
+    while row0 < s:
+        row1 = min(row0 + chunk_step, s)
+        x_chunk = ttnn.slice(x_tt, (0, 0, row0, 0), (1, 1, row1, k_dim))
+        outs.append(_linear_slice(x_chunk, row1 - row0))
+        row0 = row1
+
+    if len(outs) == 1:
+        return outs[0]
+    return ttnn.concat(outs, dim=2, memory_config=dram_mem)
+
+
+def _tile_norm_weight_bf16_from_1d(w_1d: torch.Tensor) -> ttnn.Tensor:
+    """TILE gamma/beta for layernorm/RMSNorm (bfloat16).
+
+    layernorm_device_operation requires TILE weights to satisfy
+    ``padded_shape[-2] == 32`` and ``padded_shape[-1] == hidden_dim`` (match activations).
+    Achieved by repeating the 1D vector across 32 rows (same pattern as TTNNRMSNorm).
+    """
+    w = w_1d.to(torch.bfloat16).reshape(-1).unsqueeze(0).expand(32, -1)
+    return ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +345,7 @@ class TTNNDotsVision2DRoPE:
         cos_full = cos_full.to(torch.bfloat16)
         sin_full = sin_full.to(torch.bfloat16)
 
+        # rotary_embedding_llama requires cos, sin, q, k, and trans_mat all bfloat16 (device op contract).
         cos_tt = ttnn.from_torch(
             cos_full,
             device=self.device,
@@ -303,12 +430,14 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
+            # self.tt_weight = _tile_norm_weight_bf16_from_1d(self._weight_torch)
             if self._bias_torch is not None:
                 self.tt_bias = ttnn.from_torch(
                     self._bias_torch.unsqueeze(0),
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                 )
+                # self.tt_bias = _tile_norm_weight_bf16_from_1d(self._bias_torch)
         else:
             dim = self._weight_torch.numel()
             tile = 32
@@ -319,6 +448,7 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
+            # self.tt_weight = _tile_norm_weight_bf16_from_1d(self._weight_torch)
 
     def move_weights_to_device_impl(self):
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
@@ -411,23 +541,23 @@ class TTNNDotsVisionMLP(TTNNModule):
         return new_mlp
 
     def preprocess_weights_impl(self):
-        """Linear weights in bfloat8_b (PyTorch Linear [out,in]; preprocessing applies TT layout)."""
+        """Linear weights in bfloat16 (PyTorch Linear [out,in]; preprocessing applies TT layout)."""
 
         def pw(w):
             if w is None:
                 return None
-            return preprocess_linear_weight(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            return preprocess_linear_weight(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         def pb(b):
             if b is None:
                 return None
-            return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            return preprocess_linear_bias(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         if self._fc1_weight is not None and self._fc3_weight is not None:
             fused_w = torch.cat([self._fc1_weight, self._fc3_weight], dim=0)
             self._intermediate_size = self._fc1_weight.shape[0]
             self.tt_fused_gate_up_weight = preprocess_linear_weight(
-                fused_w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+                fused_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
             if self._fc1_bias is not None or self._fc3_bias is not None:
                 I = self._intermediate_size
@@ -435,7 +565,7 @@ class TTNNDotsVisionMLP(TTNNModule):
                 u = self._fc3_bias if self._fc3_bias is not None else torch.zeros(I, dtype=fused_w.dtype)
                 fused_b = torch.cat([g, u], dim=0)
                 self.tt_fused_gate_up_bias = preprocess_linear_bias(
-                    fused_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+                    fused_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                 )
             else:
                 self.tt_fused_gate_up_bias = None
@@ -615,6 +745,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
+            # self.tt_norm_weight = _tile_norm_weight_bf16_from_1d(self._norm_weight)
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -630,6 +761,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         self.vision_matmul_compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
+        # self.vision_matmul_compute_kernel_config = _patch_embed_matmul_compute_config(self.device)
         self.vision_norm_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
@@ -651,13 +783,14 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             if len(x_tt.shape) == 3:
                 x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
 
-            out = ttnn.linear(
+            out = _patch_embed_linear_chunked(
                 x_tt,
-                self.tt_proj_weight,
-                bias=self.tt_proj_bias,
-                transpose_b=True,
-                memory_config=mem,
+                device=self.device,
+                proj_weight=self.tt_proj_weight,
+                proj_bias=self.tt_proj_bias,
+                embed_dim=int(self.embed_dim),
                 compute_kernel_config=self.vision_matmul_compute_kernel_config,
+                dram_mem=mem,
             )
 
             if self.tt_norm_weight is not None:
@@ -702,13 +835,14 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         if len(x_tt.shape) == 3:
             x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
 
-        out = ttnn.linear(
+        out = _patch_embed_linear_chunked(
             x_tt,
-            self.tt_proj_weight,
-            bias=self.tt_proj_bias,
-            transpose_b=True,
-            memory_config=mem,
+            device=self.device,
+            proj_weight=self.tt_proj_weight,
+            proj_bias=self.tt_proj_bias,
+            embed_dim=int(self.embed_dim),
             compute_kernel_config=self.vision_matmul_compute_kernel_config,
+            dram_mem=mem,
         )
 
         if self.tt_norm_weight is not None:
@@ -863,7 +997,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         if ctx.memory_config().buffer_type == ttnn.BufferType.L1:
             return ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(ctx)
         ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx_l1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(ctx_l1)
@@ -897,11 +1031,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        mem = ttnn.DRAM_MEMORY_CONFIG
         s = int(hidden_states.shape[2])
         h = self.num_heads
         hd = self.head_dim
 
+        mem = ttnn.DRAM_MEMORY_CONFIG
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
@@ -1165,15 +1299,14 @@ class TTNNDotsPatchMerger(TTNNModule):
         return new_merger
 
     def preprocess_weights_impl(self):
-        def _to_host(w, layout=ttnn.TILE_LAYOUT):
-            if w is None:
-                return None
-            return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout)
-
         if self._use_layer_norm:
-            self.tt_ln_weight = _to_host(self._ln_weight.unsqueeze(0))
+            self.tt_ln_weight = ttnn.from_torch(
+                self._ln_weight.unsqueeze(0), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            )
             if self._ln_bias is not None:
-                self.tt_ln_bias = _to_host(self._ln_bias.unsqueeze(0))
+                self.tt_ln_bias = ttnn.from_torch(
+                    self._ln_bias.unsqueeze(0), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+                )
         else:
             if self._ln_weight is not None:
                 dim = self._ln_weight.numel()
@@ -1181,6 +1314,7 @@ class TTNNDotsPatchMerger(TTNNModule):
                 w = self._ln_weight.to(torch.bfloat16)
                 w = w.view(1, 1, dim).reshape(1, 1, dim // tile, tile)
                 self.tt_ln_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+                # self.tt_ln_weight = _tile_norm_weight_bf16_from_1d(self._ln_weight)
 
         self.tt_w1 = (
             ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
@@ -1259,8 +1393,6 @@ class TTNNDotsPatchMerger(TTNNModule):
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        mem = ttnn.DRAM_MEMORY_CONFIG
-
         if self._use_layer_norm:
             hidden_states = ttnn.layer_norm(
                 hidden_states,
@@ -1283,6 +1415,7 @@ class TTNNDotsPatchMerger(TTNNModule):
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         compute_kc = getattr(self, "compute_kernel_config", None)
+        mem = ttnn.DRAM_MEMORY_CONFIG
 
         hidden_states = ttnn.linear(
             hidden_states,

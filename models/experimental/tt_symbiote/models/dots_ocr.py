@@ -89,7 +89,18 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
         emb = self._d_embed.forward(token_ids)
         h = self._d_stack.forward(emb, past_key_value=past_key_value, cache_position=cache_position)
         h = self._d_norm.forward(h)
-        return self._d_lm.forward(h)
+        logits = self._d_lm.forward(h)
+        # Keep argmax inside this traced graph so replay includes untilize + argmax (not extra host ops).
+        logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(logits)
+        token_id = ttnn.argmax(
+            logits_rm,
+            dim=-1,
+            keepdim=True,
+            use_multicore=True,
+        )
+        ttnn.deallocate(logits_rm)
+        return token_id
 
     def post_trace_execute(self, func_args, func_kwargs, result):
         past_key_value = func_kwargs.get("past_key_value")
@@ -193,8 +204,13 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self._device = device
         self.config = config
 
-        # Decode-loop buffer (allocated on first decode call, reused thereafter)
+        # Decode-loop I/O (lazy alloc): tiny host tensors + copy into persistent device buffers.
+        self._decode_token_dev: Optional[ttnn.Tensor] = None
         self._decode_cache_position: Optional[ttnn.Tensor] = None
+        self._decode_token_torch: Optional[torch.Tensor] = None
+        self._decode_cache_pos_torch: Optional[torch.Tensor] = None
+        self._tok_host_tt: Optional[ttnn.Tensor] = None
+        self._cache_pos_host_tt: Optional[ttnn.Tensor] = None
 
     # ------------------------------------------------------------------
     # Factory
@@ -348,6 +364,43 @@ class TTNNDotsOCRPipeline(TTNNModule):
             _recurse(component)
         return found
 
+    def _ensure_decode_step_io_tensors(self) -> None:
+        """Allocate persistent decode token / cache-position tensors once (host + device)."""
+        if self._decode_token_dev is not None:
+            return
+        dev = self.device
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        self._decode_token_dev = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            dev,
+            mem,
+        )
+        self._decode_cache_position = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1]),
+            ttnn.int32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            dev,
+            mem,
+        )
+        self._decode_token_torch = torch.zeros((1, 1), dtype=torch.int32)
+        self._decode_cache_pos_torch = torch.zeros((1,), dtype=torch.int32)
+        self._tok_host_tt = ttnn.Tensor(self._decode_token_torch, ttnn.uint32).to(ttnn.ROW_MAJOR_LAYOUT)
+        self._cache_pos_host_tt = ttnn.Tensor(self._decode_cache_pos_torch, ttnn.int32).to(ttnn.ROW_MAJOR_LAYOUT)
+
+    def _free_decode_step_io_tensors(self) -> None:
+        if self._decode_token_dev is not None:
+            ttnn.deallocate(self._decode_token_dev)
+            self._decode_token_dev = None
+        if self._decode_cache_position is not None:
+            ttnn.deallocate(self._decode_cache_position)
+            self._decode_cache_position = None
+        self._decode_token_torch = None
+        self._decode_cache_pos_torch = None
+        self._tok_host_tt = None
+        self._cache_pos_host_tt = None
+
     # ------------------------------------------------------------------
     # Prefill
     # ------------------------------------------------------------------
@@ -430,43 +483,19 @@ class TTNNDotsOCRPipeline(TTNNModule):
         Returns:
             Next predicted token ID (int).
         """
-        # --- Embedding ---
-        tt_token = ttnn.from_torch(
-            torch.tensor([[prev_token_id]], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        self._ensure_decode_step_io_tensors()
 
-        # --- Cache position management ---
-        # Follow the pattern from TTNNDotsOCRModel.call():
-        # Pre-allocate _decode_cache_position buffer on first decode,
-        # reuse via ttnn.copy on subsequent calls.
+        self._decode_token_torch[0, 0] = int(prev_token_id)
+        ttnn.copy_host_to_device_tensor(self._tok_host_tt, self._decode_token_dev)
+
         cur_seq_len = self.paged_cache.get_seq_length(layer_idx=0)
-        cache_pos_val = torch.tensor([cur_seq_len], dtype=torch.int32)
-        tt_cache_pos_new = ttnn.from_torch(
-            cache_pos_val,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        self._decode_cache_pos_torch[0] = int(cur_seq_len)
+        ttnn.copy_host_to_device_tensor(self._cache_pos_host_tt, self._decode_cache_position)
+
+        # Traced decode graph: embedding → decoder → norm → lm_head → untilize → argmax.
+        token_id_tt = self.graph_decode(
+            self._decode_token_dev, self._decode_cache_position, past_key_value=self.paged_cache
         )
-
-        if self._decode_cache_position is not None:
-            ttnn.copy(tt_cache_pos_new, self._decode_cache_position)
-            ttnn.deallocate(tt_cache_pos_new)
-            tt_cache_position = self._decode_cache_position
-        else:
-            self._decode_cache_position = tt_cache_pos_new
-            tt_cache_position = self._decode_cache_position
-
-        # Traced decode graph replaces embedding, decoder stack, final norm, and lm_head calls.
-        logits = self.graph_decode(tt_token, tt_cache_position, past_key_value=self.paged_cache)
-
-        # --- Argmax on device ---
-        token_id_tt = self._argmax_on_device(logits)
 
         # --- Read to host ---
         token_id_torch = ttnn.to_torch(
@@ -499,7 +528,6 @@ class TTNNDotsOCRPipeline(TTNNModule):
         """
         # Reset cache for fresh generation
         self.paged_cache.reset()
-        self._decode_cache_position = None
 
         # Prefill
         first_token_id = self.prefill(input_ids, pixel_values, image_grid_thw)
@@ -682,7 +710,6 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Pass 1: Warmup (TracedRun phase 1 -- no trace capture)
         self.generate(input_ids, pixel_values, image_grid_thw, max_new_tokens=2)
         self.paged_cache.reset()
-        self._decode_cache_position = None
 
         # Release all traces so run 2 starts clean
         TracedRun.release_all()
@@ -690,9 +717,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Pass 2: Trace capture (TracedRun phase 2)
         self.generate(input_ids, pixel_values, image_grid_thw, max_new_tokens=4)
         self.paged_cache.reset()
-        self._decode_cache_position = None
 
     def release(self) -> None:
         """Release all traced runs and deallocate pre-allocated buffers."""
         TracedRun.release_all()
-        self._decode_cache_position = None
+        self._free_decode_step_io_tensors()

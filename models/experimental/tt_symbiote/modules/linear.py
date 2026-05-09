@@ -8,8 +8,61 @@ from torch import nn
 import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 import ttnn
+from models.experimental.tt_symbiote.modules.dots_ocr_memory import (
+    dots_linear_output_memory_config,
+    dots_max_tile_rows_for_l1_input,
+    dots_stage_matmul_input_l1_or_shard,
+)
 from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
 from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
+
+
+def _linear_col_sharded_l1_chunked_matmul(
+    *,
+    device,
+    input_tensor_4d: ttnn.Tensor,
+    tt_weight: ttnn.Tensor,
+    compute_kernel_config,
+) -> ttnn.Tensor:
+    """Long-sequence matmul (e.g. lm_head prefill): L1 or height-sharded-L1 inputs; slice rows to fit L1 budget."""
+    shape = input_tensor_4d.shape
+    rank = len(shape)
+    if rank != 4:
+        raise RuntimeError(f"_linear_col_sharded_l1_chunked_matmul expects 4D input, got rank {rank}")
+    s = int(shape[-2])
+    k_dim = int(shape[-1])
+    max_rows = dots_max_tile_rows_for_l1_input(k_dim)
+    # ``preprocess_linear_weight`` stores ``torch.Linear.weight.T`` → TTNN shape [in_features, out_features].
+    out_cols = int(tt_weight.shape[-1])
+
+    def _one(x_in: ttnn.Tensor, num_rows: int) -> ttnn.Tensor:
+        x_st = dots_stage_matmul_input_l1_or_shard(device, x_in)
+        out_mem = dots_linear_output_memory_config(num_rows * out_cols)
+        # Do not pass a manual ``program_config`` here: TTNN's matmul auto-config respects
+        # height-sharded activations (full-N per_core_N) and padded shapes on device. Hand-built
+        # multicast configs repeatedly hit ``num_blocks_x`` / grid asserts when any tile/M/N count
+        # diverges from Metal's fused-batch math (mesh tensors, BFP8 tiles, etc.).
+        return ttnn.linear(
+            x_st,
+            tt_weight,
+            memory_config=out_mem,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    if s <= max_rows:
+        return _one(input_tensor_4d, s)
+
+    b0, b1, kd = int(shape[0]), int(shape[1]), int(shape[3])
+    outs = []
+    row0 = 0
+    while row0 < s:
+        row1 = min(row0 + max_rows, s)
+        sub = ttnn.slice(input_tensor_4d, (0, 0, row0, 0), (b0, b1, row1, kd))
+        outs.append(_one(sub, row1 - row0))
+        row0 = row1
+    if len(outs) == 1:
+        return outs[0]
+    return ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 @trace_enabled
@@ -145,10 +198,10 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-        tt_output = ttnn.linear(
-            input_tensor,
-            self.tt_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tt_output = _linear_col_sharded_l1_chunked_matmul(
+            device=self.device,
+            input_tensor_4d=input_tensor,
+            tt_weight=self.tt_weight,
             compute_kernel_config=self.compute_kernel_config,
         )
         tt_output = ttnn.reduce_scatter(
@@ -185,12 +238,10 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         if len(input_shape) == 3:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-
-        # Matmul: partial sum on each device
-        tt_output = ttnn.linear(
-            input_tensor,
-            self.tt_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tt_output = _linear_col_sharded_l1_chunked_matmul(
+            device=self.device,
+            input_tensor_4d=input_tensor,
+            tt_weight=self.tt_weight,
             compute_kernel_config=self.compute_kernel_config,
         )
         # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.

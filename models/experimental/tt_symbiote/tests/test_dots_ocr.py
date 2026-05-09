@@ -3,6 +3,7 @@
 
 """E2E TTNN pipeline tests for dots.ocr (text-only and vision+text)."""
 
+import json
 import os
 import time
 
@@ -45,6 +46,37 @@ def _resolve_model_path():
 
 
 DOTS_OCR_LOCAL_PATH = _resolve_model_path()
+
+# Vision test tuning for CI / smoke runs (override without editing the test):
+#   DOTS_OCR_VISION_IMAGE_PATH=/path/to/demo.jpg     — skip HTTP; avoids flaky network
+#   DOTS_OCR_VISION_IMAGE_URL=https://...             — override default remote demo URL
+#   DOTS_OCR_VISION_MAX_NEW_TOKENS=32                — shorter decode (default 180)
+#   DOTS_OCR_VISION_MAX_LENGTH=2800                  — processor padding budget (default 2800)
+DOTS_OCR_VISION_DEFAULT_IMAGE_URL = (
+    "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg"
+)
+
+
+def _load_vision_demo_image(image_link: str):
+    """Load demo PIL image: ``DOTS_OCR_VISION_IMAGE_PATH`` avoids HTTP; URL fetch uses timeout."""
+    from PIL import Image
+
+    env_local = os.environ.get("DOTS_OCR_VISION_IMAGE_PATH")
+    if env_local and os.path.isfile(env_local):
+        with open(env_local, "rb") as f:
+            im = Image.open(f)
+            im.load()
+            return im
+
+    import requests
+    from io import BytesIO
+
+    url = os.environ.get("DOTS_OCR_VISION_IMAGE_URL", image_link)
+    r = requests.get(url, timeout=60)
+    r.raise_for_status()
+    im = Image.open(BytesIO(r.content))
+    im.load()
+    return im
 
 
 @pytest.mark.parametrize(
@@ -121,23 +153,24 @@ def test_dots_ocr_text(mesh_device):
 )
 @pytest.mark.parametrize(
     "image_link",
-    [
-        "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg",
-    ],
+    [DOTS_OCR_VISION_DEFAULT_IMAGE_URL],
 )
 def test_dots_ocr_vision(mesh_device, image_link):
-    """Test standalone TTNN pipeline for dots.ocr with vision (image + text)."""
+    """Test standalone TTNN pipeline for dots.ocr with vision (image + text).
+
+    Perf knobs: see module-level env vars ``DOTS_OCR_VISION_*`` (local image, max tokens, padding).
+    """
     pytest.importorskip("qwen_vl_utils")
     from qwen_vl_utils import process_vision_info
-    from PIL import Image
-    import requests
+
+    max_new_tokens = int(os.environ.get("DOTS_OCR_VISION_MAX_NEW_TOKENS", "180"))
+    prompt_max_length = int(os.environ.get("DOTS_OCR_VISION_MAX_LENGTH", "2800"))
 
     pipeline = TTNNDotsOCRPipeline.from_hf_model(
         model_path=DOTS_OCR_LOCAL_PATH,
         device=mesh_device,
     )
 
-    import json
     from transformers import AutoImageProcessor, AutoVideoProcessor, Qwen2_5_VLProcessor
 
     image_processor = AutoImageProcessor.from_pretrained(DOTS_OCR_LOCAL_PATH)
@@ -149,17 +182,14 @@ def test_dots_ocr_vision(mesh_device, image_link):
     processor.image_token = "<|imgpad|>"
     processor.image_token_id = 151665
 
-    # Load and crop the image
-    image = Image.open(requests.get(image_link, stream=True).raw)
+    image = _load_vision_demo_image(image_link)
     original_width, original_height = image.size
 
     # Crop to 57.5% of original height from the top
     new_height = int(original_height * 0.575)
-    top = 0
-    bottom = new_height
 
     # Crop box: (left, top, right, bottom)
-    image = image.crop((0, top, original_width, bottom))
+    image = image.crop((0, 0, original_width, new_height))
 
     print(f"Cropped image from {original_width}x{original_height} to {original_width}x{new_height}")
 
@@ -175,50 +205,52 @@ def test_dots_ocr_vision(mesh_device, image_link):
 
     text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
-    inputs = processor(
-        text=[text_prompt],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        max_length=2800,
-        return_tensors="pt",
-    )
+    with torch.inference_mode():
+        inputs = processor(
+            text=[text_prompt],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            max_length=prompt_max_length,
+            return_tensors="pt",
+        )
 
-    input_ids = inputs["input_ids"]
-    pixel_values = inputs["pixel_values"].to(torch.bfloat16)
-    image_grid_thw = inputs["image_grid_thw"]
+        input_ids = inputs["input_ids"]
+        pixel_values = inputs["pixel_values"].to(torch.bfloat16)
+        image_grid_thw = inputs["image_grid_thw"]
 
-    pipeline.warmup(input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
+        pipeline.warmup(input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
 
-    DispatchManager.clear_timings()
-    start_time = time.time()
-    generated_ids = pipeline.generate(
-        input_ids,
-        pixel_values=pixel_values,
-        image_grid_thw=image_grid_thw,
-        max_new_tokens=180,
-    )
-    ttnn.synchronize_device(mesh_device)
-    end_time = time.time()
+        DispatchManager.clear_timings()
+        start_time = time.time()
+        generated_ids = pipeline.generate(
+            input_ids,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            max_new_tokens=max_new_tokens,
+        )
+        ttnn.synchronize_device(mesh_device)
+        end_time = time.time()
 
-    decoded = processor.decode(generated_ids, skip_special_tokens=True)
-    print(f"Pipeline VISION OUTPUT: {decoded}")
+        decoded = processor.decode(generated_ids, skip_special_tokens=True)
 
-    total_time = end_time - start_time
-    num_tokens = len(generated_ids)
-    tokens_per_second = num_tokens / total_time
-    ms_per_token = total_time / num_tokens * 1000
+        print(f"Pipeline VISION OUTPUT: {decoded}")
 
-    print(f"\n{'='*60}")
-    print(f"dots.ocr Pipeline Vision Performance Summary")
-    print(f"{'='*60}")
-    print(f"Generated tokens:     {num_tokens}")
-    print(f"Total time:           {total_time:.3f} s")
-    print(f"Throughput:           {tokens_per_second:.1f} tok/s")
-    print(f"Avg time per token:   {ms_per_token:.1f} ms/tok")
-    print(f"{'='*60}\n")
+        total_time = end_time - start_time
+        num_tokens = len(generated_ids)
+        tokens_per_second = num_tokens / total_time
+        ms_per_token = total_time / num_tokens * 1000
 
-    assert len(decoded.strip()) > 0, "Generated output should not be empty"
+        print(f"\n{'='*60}")
+        print(f"dots.ocr Pipeline Vision Performance Summary")
+        print(f"{'='*60}")
+        print(f"Generated tokens:     {num_tokens}")
+        print(f"Total time:           {total_time:.3f} s")
+        print(f"Throughput:           {tokens_per_second:.1f} tok/s")
+        print(f"Avg time per token:   {ms_per_token:.1f} ms/tok")
+        print(f"{'='*60}\n")
+
+        assert len(decoded.strip()) > 0, "Generated output should not be empty"
 
     DispatchManager.save_stats_to_file("dots_ocr_vision_timing_stats.csv")
     pipeline.release()
