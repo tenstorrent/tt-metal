@@ -35,7 +35,7 @@ void calculate_recip_first_column() {
             sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
         } else {
             sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, sfpi::RoundMode::Stochastic));
         }
         sfpi::dst_reg += 2;
     }
