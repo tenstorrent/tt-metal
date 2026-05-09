@@ -82,7 +82,7 @@ class DispatcherCoreData:
     # active-vs-idle ETH without re-consulting the cluster descriptor.
     block_type: BlockType | None = None
     # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
-    # or workload destroyed despite cache being on) so callers can append it to "PC not in range style errors.
+    # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
     kernel_lookup_warning: str | None = None
 
 
