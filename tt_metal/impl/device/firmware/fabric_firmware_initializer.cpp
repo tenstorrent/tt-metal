@@ -1901,6 +1901,29 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     dead_relay_devices_.clear();
     mmio_dead_peer_devices_.clear();
     mmio_dead_master_chan_devices_.clear();
+    // FIX BE (#42429): Clear per-cycle state that was never reset between teardown+reinit
+    // cycles, causing progressive accumulation of base-UMD channel bookkeeping.
+    //
+    // Root cause: after each teardown+reinit cycle, channels that were running fabric firmware
+    // get force-reset back to base-UMD (edm_status=0x49706550).  On the next init cycle,
+    // terminate_stale_erisc_routers() correctly identifies them as base-UMD.  But these
+    // four members were never cleared at cycle start:
+    //   - external_umd_channels_map_: stale entries from prior cycle cause get_external()
+    //     to return wrong channel sets for devices that went through FIX H fast-path
+    //   - has_base_umd_channels_: once true, never reverted — causes extended ring-sync
+    //     timeouts (30s instead of 10s) on cycles where no base-UMD channels exist
+    //   - timeout_on_base_umd_devices_: accumulated across cycles, causing health checks
+    //     to skip channels on devices that were healthy in the current cycle
+    //   - ring_sync_already_timed_out_: once set, fast-skips ring sync for all subsequent
+    //     devices in every future cycle — even when the ring is healthy
+    //
+    // Fix: clear all four at the start of each compile_and_configure_fabric() call, alongside
+    // the existing clears for dead_relay_devices_ et al.  Each cycle recomputes them from
+    // fresh probe results.
+    external_umd_channels_map_.clear();
+    has_base_umd_channels_ = false;
+    timeout_on_base_umd_devices_.clear();
+    ring_sync_already_timed_out_ = false;
     for (auto* dev : compiled_devices) {
         if (dev) {
             dev->set_fabric_is_mmio_dead_peer_device(false);
