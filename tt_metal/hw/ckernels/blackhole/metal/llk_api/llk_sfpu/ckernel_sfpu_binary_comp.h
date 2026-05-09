@@ -84,6 +84,9 @@ inline constexpr bool is_fp32_weak_ordered_compare_v = Op == SfpuType::le || Op 
 template <SfpuType Op>
 inline constexpr bool is_fp32_compare_v = is_fp32_equal_compare_v<Op> || is_fp32_strict_ordered_compare_v<Op> || is_fp32_weak_ordered_compare_v<Op>;
 
+template <SfpuType>
+inline constexpr bool unsupported_fp32_compare_v = false;
+
 template <int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(is_fp32_equal_compare_v<RELATIONAL_OP>, "Supported operation types: eq, ne");
@@ -233,6 +236,8 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
     } else if constexpr (is_fp32_weak_ordered_compare_v<RELATIONAL_OP>) {
         calculate_binary_comp_fp32_weak_ordered<ITERATIONS, RELATIONAL_OP>(
             dst_index_in0, dst_index_in1, dst_index_out);
+    } else {
+        static_assert(unsupported_fp32_compare_v<RELATIONAL_OP>, "Unsupported fp32 comparison operation");
     }
 }
 
