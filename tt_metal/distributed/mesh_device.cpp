@@ -1560,7 +1560,22 @@ void MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() {
     // Match init-time tunnel ordering (farthest-to-closest, then MMIO) because this phase
     // publishes READY_FOR_TRAFFIC and can unblock peer ERISCs. Submesh order and row-major
     // order are not equivalent to the startup sequence on T3K.
-    for (auto* idev : get_fabric_quiesce_ready_order(get_devices())) {
+    // FIX BO (#42429): When any non-MMIO device has stale base-UMD channels, the ring
+    // handshake (LOCAL_HANDSHAKE_COMPLETE) takes longer than the default 10s kSyncTimeoutMs
+    // in wait_for_fabric_workers_ready() — exactly as it does at initial startup (FIX TH3).
+    // Propagate fabric_stale_base_umd_channels_ to ALL devices (including MMIO) so their
+    // Phase 5 poll can extend kSyncTimeoutMs to 120s (matching FIX TH3's 12x multiplier).
+    // MMIO devices 0 and 2 also time out in Phase 5 because the ring handshake stalls until
+    // non-MMIO base-UMD channels (devices 4-7) complete their quiesce + re-handshake.
+    auto all_devices = get_devices();
+    const bool any_stale_base_umd = std::any_of(
+        all_devices.begin(), all_devices.end(), [](IDevice* d) { return d->is_fabric_stale_base_umd_channels(); });
+    if (any_stale_base_umd) {
+        for (auto* idev : all_devices) {
+            idev->set_fabric_stale_base_umd_channels();
+        }
+    }
+    for (auto* idev : get_fabric_quiesce_ready_order(all_devices)) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             dev->wait_for_fabric_workers_ready();

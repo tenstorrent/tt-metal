@@ -2982,10 +2982,23 @@ void Device::wait_for_fabric_workers_ready() {
     // READY_FOR_TRAFFIC — exactly what wait_for_fabric_router_sync() does at initial startup.
     // After that, a final per-channel health check confirms all channels are healthy.
     {
-        const auto [router_sync_addr, sync_status] = builder_ctx.get_fabric_router_sync_address_and_status();
-        constexpr uint32_t expected_ready = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-        // 10s matches the fabric router sync timeout used at initial startup.
-        constexpr uint32_t kSyncTimeoutMs = 10000;
+        const auto [router_sync_addr, sync_status] =
+            builder_ctx.get_fabric_router_sync_address_and_status();
+        constexpr uint32_t expected_ready =
+            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+        // FIX BO (#42429): When stale base-UMD channels are present in the cluster (set by
+        // MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce on ALL devices when any
+        // non-MMIO device has fabric_stale_base_umd_channels_=true), the ring handshake takes
+        // longer than 10s — matching the initial startup case that FIX TH3 addresses.
+        // Extend to 120s (12x) to match FIX TH3's get_fabric_router_sync_timeout_ms() multiplier.
+        const uint32_t kSyncTimeoutMs = this->is_fabric_stale_base_umd_channels() ? 120000 : 10000;
+        if (this->is_fabric_stale_base_umd_channels()) {
+            log_info(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} FIX BO — stale base-UMD channels "
+                "detected, extending Phase 5 kSyncTimeoutMs from 10000ms to 120000ms. (#42429)",
+                this->id());
+        }
         // FIX AL (#42429): When the ERISC is running (status=STARTED, not 0x0) but has not
         // completed the ETH handshake after kStartedTimeoutMs, the master channel's peer is
         // likely not responding — most commonly because the peer is an out-of-mesh device

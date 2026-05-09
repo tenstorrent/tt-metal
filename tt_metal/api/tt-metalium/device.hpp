@@ -205,6 +205,11 @@ public:
     // Leaving it set permanently causes FIX QW to skip ALL subsequent tests and FIX RX to
     // skip quiesce in TearDown, each leading to progressively degraded hardware state.
     virtual void clear_fabric_stale_base_umd_channels() {}
+    // FIX BO (#42429): Set by MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() on ALL
+    // devices (including MMIO) when any device in the cluster has stale base-UMD channels.
+    // Allows wait_for_fabric_workers_ready() Phase 5 to extend kSyncTimeoutMs to 120s (matching
+    // FIX TH3) so the LOCAL_HANDSHAKE_COMPLETE poll does not time out prematurely.
+    virtual void set_fabric_stale_base_umd_channels() {}
     virtual bool is_fabric_teardown_timed_out() const { return false; }
     virtual void set_fabric_teardown_timed_out() {}
     // Called by FabricFirmwareInitializer when a non-MMIO device enters dead_relay_devices_
