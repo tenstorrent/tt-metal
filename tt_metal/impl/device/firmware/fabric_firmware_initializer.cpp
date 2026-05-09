@@ -880,6 +880,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     // by the stale relay_broken flag from an earlier transient failure.
                     try {
                         cluster_.clear_relay_broken(ch.dev->id());
+                        log_info(
+                            tt::LogMetal,
+                            "FIX XY-2 (#42429): relay_broken cleared for Device {} chan={} — "
+                            "ERISC force-reset succeeded, relay path restored for subsequent writes.",
+                            ch.dev->id(),
+                            ch.eth_chan_id);
                     } catch (...) {
                         // Best-effort: if clear fails (e.g. chip not remote), harmless.
                     }
