@@ -45,29 +45,23 @@ namespace tt::tt_metal {
 
 // Thread-local compile seam — default-constructed (empty std::function) in all threads.
 // Only set by tests via set_compile_fn_for_testing() before MeshDevice::create().
-thread_local FabricFirmwareInitializer::CompileFabricFn
-    FabricFirmwareInitializer::s_compile_fn_for_testing_;
+thread_local FabricFirmwareInitializer::CompileFabricFn FabricFirmwareInitializer::s_compile_fn_for_testing_;
 
 void FabricFirmwareInitializer::set_compile_fn_for_testing(CompileFabricFn fn) {
     s_compile_fn_for_testing_ = std::move(fn);
 }
 
-void FabricFirmwareInitializer::clear_compile_fn_for_testing() {
-    s_compile_fn_for_testing_ = {};
-}
+void FabricFirmwareInitializer::clear_compile_fn_for_testing() { s_compile_fn_for_testing_ = {}; }
 
 // Thread-local status-override seam — default-constructed (empty std::function) in all threads.
 // Only set by tests via set_status_override_fn_for_testing() before MeshDevice::create().
-thread_local FabricFirmwareInitializer::StatusOverrideFn
-    FabricFirmwareInitializer::s_status_override_fn_;
+thread_local FabricFirmwareInitializer::StatusOverrideFn FabricFirmwareInitializer::s_status_override_fn_;
 
 void FabricFirmwareInitializer::set_status_override_fn_for_testing(StatusOverrideFn fn) {
     s_status_override_fn_ = std::move(fn);
 }
 
-void FabricFirmwareInitializer::clear_status_override_fn_for_testing() {
-    s_status_override_fn_ = {};
-}
+void FabricFirmwareInitializer::clear_status_override_fn_for_testing() { s_status_override_fn_ = {}; }
 
 FabricFirmwareInitializer::FabricFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor, tt::tt_fabric::ControlPlane& control_plane) :
@@ -113,26 +107,24 @@ void FabricFirmwareInitializer::init(
             // get_num_fabric_initialized_routers(), which TT_FATALs until per-device router
             // counts are registered by write_routing_tables_to_all_chips().  Use
             // is_physical_chip_in_fabric_cluster() instead to skip non-fabric devices.
-            const auto router_sync_address =
-                control_plane_.get_fabric_context().get_builder_context()
-                    .get_fabric_router_sync_address_and_status().first;
+            const auto router_sync_address = control_plane_.get_fabric_context()
+                                                 .get_builder_context()
+                                                 .get_fabric_router_sync_address_and_status()
+                                                 .first;
             constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
 
             for (auto* dev : devices_) {
                 if (!control_plane_.is_physical_chip_in_fabric_cluster(dev->id())) {
                     continue;
                 }
-                const auto fabric_node_id =
-                    control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
-                const auto& active_channels =
-                    control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
                 uint32_t stale_count = 0;
                 uint32_t corrupt_count = 0;
                 for (const auto& [eth_chan_id, direction] : active_channels) {
                     const auto eth_logical_core =
-                        cluster_.get_soc_desc(dev->id())
-                            .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                        cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
                     std::vector<uint32_t> status_buf(1, 0);
                     try {
                         detail::ReadFromDeviceL1(
@@ -279,8 +271,7 @@ void FabricFirmwareInitializer::configure() {
             // stale flag so FIX QW allows tests to run and FIX RX allows proper quiesce.
             for (auto* dev : devices_) {
                 if (dev && dev->is_fabric_stale_base_umd_channels() &&
-                    !dev->is_fabric_channels_not_ready_for_traffic() &&
-                    !dev->is_fabric_relay_path_broken()) {
+                    !dev->is_fabric_channels_not_ready_for_traffic() && !dev->is_fabric_relay_path_broken()) {
                     dev->clear_fabric_stale_base_umd_channels();
                     log_info(
                         tt::LogMetal,
@@ -576,8 +567,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         constexpr uint32_t kSpinsBetweenSleeps = 64;
 
         // Record a single global deadline for the entire ETH poll phase.
-        const auto global_deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(teardown_timeout_ms);
+        const auto global_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(teardown_timeout_ms);
 
         // Collect (dev, chan_id, eth_logical_core) for all active ETH channels.
         struct PendingChannel {
@@ -717,7 +707,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         if (!pending.empty()) {
             std::string missed_list;
             for (const auto& ch : pending) {
-                if (!missed_list.empty()) missed_list += ", ";
+                if (!missed_list.empty()) {
+                    missed_list += ", ";
+                }
                 missed_list += fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id);
             }
             log_warning(
@@ -739,9 +731,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // non-MMIO device takes the full 5-second UMD timeout before throwing.
             // Skipping saves (N_channels_per_device - 1) × 5 s per affected device.
             // The sentinel 0xDEAD'DEAD remains in status_buf — same as if the read had thrown.
-            const bool is_non_mmio_already_dead =
-                cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
-                relay_dead_devices.count(ch.dev->id()) > 0;
+            const bool is_non_mmio_already_dead = cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
+                                                  relay_dead_devices.count(ch.dev->id()) > 0;
 
             // Diagnostic read: log the last-seen status before asserting reset.
             // Wrapped in try/catch — if the read itself throws (e.g. device unresponsive),
@@ -817,9 +808,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // for non-MMIO channels with dead relay, which left ERISCs running stale firmware
             // and contaminated subsequent CI jobs.  Now we ATTEMPT the reset for all channels
             // and catch failures — cleanup must always be attempted, never silently skipped.
-            const bool is_non_mmio_relay_dead =
-                cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
-                relay_dead_devices.count(ch.dev->id()) > 0;
+            const bool is_non_mmio_relay_dead = cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
+                                                relay_dead_devices.count(ch.dev->id()) > 0;
             if (is_non_mmio_relay_dead) {
                 log_warning(
                     tt::LogMetal,
@@ -864,10 +854,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     // Clear fw_launch_addr here so reset_cores() sees the core as idle and skips
                     // the stall entirely.
                     try {
-                        const auto aeth_idx = hal_.get_programmable_core_type_index(
-                            HalProgrammableCoreType::ACTIVE_ETH);
-                        const uint32_t fw_launch_addr =
-                            hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                        const auto aeth_idx =
+                            hal_.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+                        const uint32_t fw_launch_addr = hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
                         cluster_.write_core_immediate(
                             ch.dev->id(), virtual_eth_coord, std::vector<uint32_t>{0}, fw_launch_addr);
                     } catch (...) {
@@ -898,8 +887,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                         ch.dev->id(),
                         ch.eth_chan_id,
                         e.what());
-                    reset_failed_channels.push_back(
-                        fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id));
+                    reset_failed_channels.push_back(fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id));
                     // FIX AJ: if assert itself threw (relay path completely dead), mark device
                     // so we skip l1_barrier below — l1_barrier on a dead-relay non-MMIO device
                     // blocks indefinitely in wait_for_non_mmio_flush instead of throwing.
@@ -913,7 +901,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         if (!reset_failed_channels.empty()) {
             std::string failed_list;
             for (const auto& s : reset_failed_channels) {
-                if (!failed_list.empty()) failed_list += ", ";
+                if (!failed_list.empty()) {
+                    failed_list += ", ";
+                }
                 failed_list += s;
             }
             log_error(
@@ -966,7 +956,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                             chip_id, logical_core, CoreType::ETH);
                         mmio_reset_chans.push_back({tt_cxy_pair(chip_id, virt), 0, false, false});
                     } catch (...) {
-                        // Coord lookup failed — skip this channel.
+                        log_debug(
+                            tt::LogMetal,
+                            "FIX BH: Device {} chan={} coord lookup threw non-std exception — skipping MUX poll "
+                            "channel",
+                            chip_id,
+                            eth_chan_id);
                     }
                 }
             }
@@ -979,11 +974,20 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 while (true) {
                     bool all_done = true;
                     for (auto& mc : mmio_reset_chans) {
-                        if (mc.ready) continue;
+                        if (mc.ready) {
+                            continue;
+                        }
                         uint32_t hb_val = 0;
                         try {
                             cluster_.read_reg(&hb_val, mc.target, hb_addr);
                         } catch (...) {
+                            log_debug(
+                                tt::LogMetal,
+                                "FIX BH: PCIe read for MUX heartbeat poll at ({},{},{}) threw non-std exception — "
+                                "marking ready",
+                                mc.target.chip,
+                                mc.target.x,
+                                mc.target.y);
                             mc.ready = true;  // PCIe read failed — count as done
                             continue;
                         }
@@ -999,18 +1003,21 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                         } else if ((hb_val >> 16) == 0xABCDu || hb_val != mc.prev_hb) {
                             mc.ready = true;
                         }
-                        if (!mc.ready) all_done = false;
+                        if (!mc.ready) {
+                            all_done = false;
+                        }
                     }
-                    if (all_done) break;
-                    const auto elapsed_ms =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - poll_start)
-                            .count();
+                    if (all_done) {
+                        break;
+                    }
+                    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::steady_clock::now() - poll_start)
+                                                .count();
                     if (elapsed_ms >= kRebootWaitMs) {
                         const auto not_ready = static_cast<int>(std::count_if(
-                            mmio_reset_chans.begin(),
-                            mmio_reset_chans.end(),
-                            [](const MmioResetChannel& mc) { return !mc.ready; }));
+                            mmio_reset_chans.begin(), mmio_reset_chans.end(), [](const MmioResetChannel& mc) {
+                                return !mc.ready;
+                            }));
                         log_warning(
                             tt::LogAlways,
                             "FIX XZ (#42429): teardown MMIO ETH heartbeat poll timed out after {}ms; "
@@ -1025,13 +1032,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 }
 
                 const auto total_ms =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - poll_start)
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - poll_start)
                         .count();
-                const auto ready_count = static_cast<int>(std::count_if(
-                    mmio_reset_chans.begin(),
-                    mmio_reset_chans.end(),
-                    [](const MmioResetChannel& mc) { return mc.ready; }));
+                const auto ready_count = static_cast<int>(
+                    std::count_if(mmio_reset_chans.begin(), mmio_reset_chans.end(), [](const MmioResetChannel& mc) {
+                        return mc.ready;
+                    }));
                 if (ready_count == static_cast<int>(mmio_reset_chans.size())) {
                     log_info(
                         tt::LogAlways,
@@ -1077,7 +1083,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     if (!relay_dead_devices.empty()) {
         std::string dead_list;
         for (const auto dead_id : relay_dead_devices) {
-            if (!dead_list.empty()) dead_list += ", ";
+            if (!dead_list.empty()) {
+                dead_list += ", ";
+            }
             dead_list += std::to_string(dead_id);
         }
         log_warning(
@@ -1301,52 +1309,64 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
         // hangs for >10 minutes without triggering the timeout — suspected lock contention
         // or kernel blocking state accumulated from the prior three timeouts.  Skipping the
         // call entirely for pre-confirmed dead channels avoids this indefinite hang.
-        if (!seam_provided_status) try {
-            detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
-        } catch (const std::exception& read_ex) {
-            log_error(
-                tt::LogMetal,
-                "terminate_stale_erisc_routers: Device {} chan={} probe read TIMED OUT ({}). "
-                "ERISC is completely unresponsive; sending TERMINATE best-effort, skipping poll. "
-                "configure_fabric_cores() will skip soft reset for this channel.",
-                dev->id(),
-                eth_chan_id,
-                read_ex.what());
-            probe_dead_channels.insert(eth_chan_id);
+        if (!seam_provided_status) {
             try {
-                std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
-                detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
-            } catch (...) {
-                // write-side also unresponsive — best effort only, ignore
-            }
-            // Best-effort: zero edm_status_address even on probe-dead channels.
-            // If the read threw but the write succeeds (asymmetric failure), this prevents
-            // the next session from seeing stale garbage.  If the write also throws, no harm.
-            try {
-                std::vector<uint32_t> zero_buf(1, 0);
-                detail::WriteToDeviceL1(dev, eth_logical_core, router_sync_address, zero_buf, CoreType::ETH);
-            } catch (...) {
-                // write-side also unresponsive — best effort only
-            }
-            // Track relay timeouts.  Once we reach kMaxRelayTimeouts, the ETH relay queue
-            // for this device has (cmd_buf_size - 1) stuck commands and one slot remains.
-            // One more timed-out read would fill the queue; the FOLLOWING read would enter
-            // read_non_mmio's no-timeout while(full) loop.  Set relay_broken so the next
-            // channel iteration skips the read entirely.
-            if (++relay_timeout_count >= kMaxRelayTimeouts) {
-                log_warning(
+                detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            } catch (const std::exception& read_ex) {
+                log_error(
                     tt::LogMetal,
-                    "terminate_stale_erisc_routers: Device {} relay timeout count {} >= {} — "
-                    "ETH relay path appears broken (crashed relay ERISCs on non-MMIO device). "
-                    "Remaining channels will skip probe reads to prevent relay queue fill "
-                    "and indefinite hang in read_non_mmio while(full) loop.",
+                    "terminate_stale_erisc_routers: Device {} chan={} probe read TIMED OUT ({}). "
+                    "ERISC is completely unresponsive; sending TERMINATE best-effort, skipping poll. "
+                    "configure_fabric_cores() will skip soft reset for this channel.",
                     dev->id(),
-                    relay_timeout_count,
-                    kMaxRelayTimeouts);
-                relay_broken = true;
+                    eth_chan_id,
+                    read_ex.what());
+                probe_dead_channels.insert(eth_chan_id);
+                try {
+                    std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
+                    detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+                } catch (...) {
+                    log_debug(
+                        tt::LogMetal,
+                        "terminate_stale_erisc_routers: Device {} chan={} TERMINATE write threw non-std exception — "
+                        "best effort only",
+                        dev->id(),
+                        eth_chan_id);
+                }
+                // Best-effort: zero edm_status_address even on probe-dead channels.
+                // If the read threw but the write succeeds (asymmetric failure), this prevents
+                // the next session from seeing stale garbage.  If the write also throws, no harm.
+                try {
+                    std::vector<uint32_t> zero_buf(1, 0);
+                    detail::WriteToDeviceL1(dev, eth_logical_core, router_sync_address, zero_buf, CoreType::ETH);
+                } catch (...) {
+                    log_debug(
+                        tt::LogMetal,
+                        "terminate_stale_erisc_routers: Device {} chan={} edm_status zero-write threw non-std "
+                        "exception — best effort only",
+                        dev->id(),
+                        eth_chan_id);
+                }
+                // Track relay timeouts.  Once we reach kMaxRelayTimeouts, the ETH relay queue
+                // for this device has (cmd_buf_size - 1) stuck commands and one slot remains.
+                // One more timed-out read would fill the queue; the FOLLOWING read would enter
+                // read_non_mmio's no-timeout while(full) loop.  Set relay_broken so the next
+                // channel iteration skips the read entirely.
+                if (++relay_timeout_count >= kMaxRelayTimeouts) {
+                    log_warning(
+                        tt::LogMetal,
+                        "terminate_stale_erisc_routers: Device {} relay timeout count {} >= {} — "
+                        "ETH relay path appears broken (crashed relay ERISCs on non-MMIO device). "
+                        "Remaining channels will skip probe reads to prevent relay queue fill "
+                        "and indefinite hang in read_non_mmio while(full) loop.",
+                        dev->id(),
+                        relay_timeout_count,
+                        kMaxRelayTimeouts);
+                    relay_broken = true;
+                }
+                corrupt_count++;
+                continue;
             }
-            corrupt_count++;
-            continue;
         }
 
         if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
@@ -1526,8 +1546,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 // Do NOT zero edm_status_address — 0x49705180 is a valid ROM postcode, not
                 // garbage; zeroing it mid-boot could interfere with the ROM init sequence.
                 // Do NOT send TERMINATE — there is no firmware to receive it during ROM boot.
-                const bool is_non_mmio =
-                    cluster_.get_associated_mmio_device(dev->id()) != dev->id();
+                const bool is_non_mmio = cluster_.get_associated_mmio_device(dev->id()) != dev->id();
                 rom_postcode_deferred.push_back({eth_chan_id, eth_logical_core, is_non_mmio});
                 log_info(
                     tt::LogMetal,
@@ -1564,7 +1583,12 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                         eth_chan_id,
                         status_buf[0]);
                 } catch (...) {
-                    // write failed — best effort; the channel may truly be unreachable
+                    log_debug(
+                        tt::LogMetal,
+                        "terminate_stale_erisc_routers: Device {} chan={} cascade-prevention zero-write threw non-std "
+                        "exception — channel may be unreachable",
+                        dev->id(),
+                        eth_chan_id);
                 }
                 // FIX O (#42429): Add truly-corrupt channels to probe_dead_channels.
                 //
@@ -1620,8 +1644,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             // loop and aborts cleanup for ALL remaining channels on this device.
             // On exception, treat as "not yet terminated" and continue the timeout poll.
             try {
-                detail::ReadFromDeviceL1(
-                    dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
             } catch (const std::exception& read_ex) {
                 log_warning(
                     tt::LogMetal,
@@ -1694,8 +1717,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             kRomPostcodePollTotalMs,
             rom_postcode_deferred.size() * kRomPostcodePollTotalMs);
 
-        const auto rp_deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(kRomPostcodePollTotalMs);
+        const auto rp_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kRomPostcodePollTotalMs);
         std::vector<RomPostcodeChan> rp_remaining = rom_postcode_deferred;
 
         while (!rp_remaining.empty() && std::chrono::steady_clock::now() < rp_deadline) {
@@ -1704,8 +1726,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             for (const auto& ci : rp_remaining) {
                 std::vector<uint32_t> poll_buf(1, 0);
                 try {
-                    detail::ReadFromDeviceL1(
-                        dev, ci.eth_logical_core, router_sync_address, 4, poll_buf, CoreType::ETH);
+                    detail::ReadFromDeviceL1(dev, ci.eth_logical_core, router_sync_address, 4, poll_buf, CoreType::ETH);
                 } catch (...) {
                     // channel became unresponsive during poll — treat as dead
                     probe_dead_channels.insert(ci.eth_chan_id);
@@ -1776,10 +1797,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     }
 
     return {
-        std::move(probe_dead_channels),
-        relay_broken,
-        std::move(base_umd_channels),
-        std::move(external_umd_channels)};
+        std::move(probe_dead_channels), relay_broken, std::move(base_umd_channels), std::move(external_umd_channels)};
 }
 
 // Quiesce/Teardown Phase Protocol
@@ -1850,8 +1868,8 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     //   2. Correctness: all tasks for this init round use the same compile function,
     //      even if the test seam is changed by another test on the same thread afterward.
     const CompileFabricFn compile_fn = s_compile_fn_for_testing_
-        ? s_compile_fn_for_testing_
-        : CompileFabricFn([](Device* d) { return d->compile_fabric(); });
+                                           ? s_compile_fn_for_testing_
+                                           : CompileFabricFn([](Device* d) { return d->compile_fabric(); });
 
     std::vector<std::shared_future<Device*>> events;
     events.reserve(devices_.size());
@@ -1879,6 +1897,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // map's internal storage, causing SIGSEGV ("Address not mapped" at
     // unordered_map<int,DeviceBuildEnv>::operator[]).
     std::exception_ptr first_ex;
+    uint32_t suppressed_count = 0;
     std::vector<Device*> compiled_devices;
     compiled_devices.reserve(events.size());
     for (const auto& event : events) {
@@ -1887,11 +1906,19 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         } catch (...) {
             if (!first_ex) {
                 first_ex = std::current_exception();
+            } else {
+                suppressed_count++;
             }
         }
     }
     // Rethrow now that all tasks have completed — no orphaned threads remain.
     if (first_ex) {
+        if (suppressed_count > 0) {
+            log_error(
+                tt::LogMetal,
+                "compile_and_configure_fabric: {} additional device(s) also threw (suppressed by first exception)",
+                suppressed_count);
+        }
         std::rethrow_exception(first_ex);
     }
 
@@ -1922,8 +1949,8 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // fresh probe results.
     // FIX BE (#42429): log when stale state is present so CI logs capture
     // whether progressive accumulation occurred before clearing.
-    if (!external_umd_channels_map_.empty() || has_base_umd_channels_ ||
-        !timeout_on_base_umd_devices_.empty() || ring_sync_already_timed_out_) {
+    if (!external_umd_channels_map_.empty() || has_base_umd_channels_ || !timeout_on_base_umd_devices_.empty() ||
+        ring_sync_already_timed_out_) {
         log_debug(
             tt::LogMetal,
             "compile_and_configure_fabric: FIX BE (#42429) clearing stale per-cycle state: "
@@ -2164,9 +2191,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     for (auto* dev : compiled_devices) {
         if (dev && cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
             dev->configure_fabric(
-                probe_dead_channels_map[dev->id()],
-                base_umd_channels_map[dev->id()],
-                get_external(dev->id()));
+                probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()], get_external(dev->id()));
             configured_count++;
         }
     }
@@ -2174,9 +2199,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     for (auto* dev : compiled_devices) {
         if (dev && cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
             dev->configure_fabric(
-                probe_dead_channels_map[dev->id()],
-                base_umd_channels_map[dev->id()],
-                get_external(dev->id()));
+                probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()], get_external(dev->id()));
             configured_count++;
         }
     }
@@ -2196,10 +2219,22 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // Proactively mark all non-MMIO devices behind affected MMIO hosts as relay-broken so
     // the ENTRY snapshot, Phase 2.5, and Phase 3 all skip their relay reads (FIX R guard:
     // fabric_relay_path_broken_ && !is_mmio_capable()).
-    for (auto& [mmio_id, base_umd_chans] : base_umd_channels_map) {
-        if (base_umd_chans.empty()) {
+    // FIX BE2 (#42429): iterate compiled_devices for deterministic log ordering
+    // (base_umd_channels_map is unordered — direct iteration gives non-deterministic logs)
+    for (auto* mmio_dev : compiled_devices) {
+        if (!mmio_dev) {
             continue;
         }
+        // Only process MMIO devices
+        if (cluster_.get_associated_mmio_device(mmio_dev->id()) != mmio_dev->id()) {
+            continue;
+        }
+        auto it = base_umd_channels_map.find(mmio_dev->id());
+        if (it == base_umd_channels_map.end() || it->second.empty()) {
+            continue;
+        }
+        const auto mmio_id = mmio_dev->id();
+        const auto& base_umd_chans = it->second;
         // This MMIO host had FIX M channels — its ERISC now runs EDM firmware, not UMD relay.
         for (auto* dev : compiled_devices) {
             if (!dev) {
@@ -2221,9 +2256,8 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             // transition is the *intended* path and the relay is NOT broken.  Marking it broken
             // on every clean boot caused the entire T3K fabric to show as degraded, skipping
             // all tests.  Only fail-fast when the probe itself flagged this device.
-            const auto& probe_dead = probe_dead_channels_map.count(dev->id())
-                                         ? probe_dead_channels_map.at(dev->id())
-                                         : std::unordered_set<uint32_t>{};
+            const auto& probe_dead = probe_dead_channels_map.count(dev->id()) ? probe_dead_channels_map.at(dev->id())
+                                                                              : std::unordered_set<uint32_t>{};
             if (probe_dead.empty()) {
                 log_debug(
                     tt::LogMetal,
@@ -2387,8 +2421,9 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 "Sync will be skipped. (#42429 FIX AN / FIX ST)",
                 dev->id(),
                 master_chan);
-        } else if (probe_dead_channels_map.count(dev->id()) > 0 &&
-                   probe_dead_channels_map.at(dev->id()).count(master_chan) > 0) {
+        } else if (
+            probe_dead_channels_map.count(dev->id()) > 0 &&
+            probe_dead_channels_map.at(dev->id()).count(master_chan) > 0) {
             // Master chan was in probe_dead but FIX RR recovered it — firmware IS loaded.
             log_info(
                 tt::LogMetal,
@@ -2475,8 +2510,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         // so the ring-sync value will never appear.  Skip cleanly — no timeout, no FIX TI.
         {
             auto ext_it = external_umd_channels_map_.find(dev->id());
-            if (ext_it != external_umd_channels_map_.end() &&
-                ext_it->second.count(master_router_chan) > 0) {
+            if (ext_it != external_umd_channels_map_.end() && ext_it->second.count(master_router_chan) > 0) {
                 log_info(
                     tt::LogMetal,
                     "wait_for_fabric_router_sync: Device {} master chan={} is an external ETH "
@@ -2530,8 +2564,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                 break;
             }
             // Also accept READY_FOR_TRAFFIC — a peer may have already written it.
-            if (master_router_status[0] ==
-                static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
+            if (master_router_status[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
                 break;
             }
             auto current_time = std::chrono::steady_clock::now();
@@ -2543,8 +2576,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
             // channel is in base-UMD mode.  Skip cleanly instead of waiting the full timeout_ms
             // (10-120s), which wastes 10s+ per device on every init cycle.
             constexpr uint32_t kStartedEarlyExitMs = 1000;
-            if (master_router_status[0] ==
-                    static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STARTED) &&
+            if (master_router_status[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STARTED) &&
                 elapsed_ms > kStartedEarlyExitMs) {
                 log_warning(
                     tt::LogMetal,
@@ -2568,8 +2600,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
             // at the PCIe level but the ERISC is not actually running — treat as dead master
             // channel and skip the ring sync instead of burning the full timeout_ms (10s).
             constexpr uint32_t kPreLaunchEarlyExitMs = 2000;
-            if (master_router_status[0] == 0xdeadb07eu &&
-                elapsed_ms > kPreLaunchEarlyExitMs) {
+            if (master_router_status[0] == 0xdeadb07eu && elapsed_ms > kPreLaunchEarlyExitMs) {
                 log_warning(
                     tt::LogMetal,
                     "wait_for_fabric_router_sync: Device {} master chan={} stuck at host-pre-launch "
@@ -2898,8 +2929,7 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
         } else {
             // Valid EDMStatus but not READY_FOR_TRAFFIC — name it.
             auto status_enum = static_cast<tt::tt_fabric::EDMStatus>(fc.actual_status);
-            classification = fmt::format(
-                "STILL_INITIALIZING (status={})", edm_status_name(status_enum));
+            classification = fmt::format("STILL_INITIALIZING (status={})", edm_status_name(status_enum));
             initializing_count++;
         }
 
@@ -2913,11 +2943,7 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
             classification);
 
         failure_details += fmt::format(
-            "  dev={} chan={} status=0x{:08x} ({})\n",
-            fc.device_id,
-            fc.eth_chan_id,
-            fc.actual_status,
-            classification);
+            "  dev={} chan={} status=0x{:08x} ({})\n", fc.device_id, fc.eth_chan_id, fc.actual_status, classification);
     }
 
     TT_THROW(

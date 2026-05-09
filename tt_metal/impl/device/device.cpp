@@ -461,8 +461,7 @@ void Device::configure_fabric(
     // and skips soft-reset for them — merged union used for configure_fabric_cores call only.
     std::unordered_set<uint32_t> skip_soft_reset_with_ext = skip_soft_reset_channels;
     skip_soft_reset_with_ext.insert(external_umd_channels.begin(), external_umd_channels.end());
-    const auto health =
-        tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_with_ext);
+    const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_with_ext);
 
     // FIX RR (#42429): Compute the effective dead set: pre_dead_channels that were NOT
     // recovered by FIX RR.  Recovered channels got their L1 cleared and are ready for
@@ -527,14 +526,12 @@ void Device::configure_fabric(
     const std::unordered_set<uint32_t>* all_dead_channels_ptr;
     if (!external_umd_channels.empty()) {
         // Merge base dead + external into a new set so write_launch_msg_to_core skips both.
-        const auto& base_dead =
-            effective_pre_dead.empty() ? health.newly_dead_channels : effective_pre_dead;
+        const auto& base_dead = effective_pre_dead.empty() ? health.newly_dead_channels : effective_pre_dead;
         all_dead_channels_storage = base_dead;
         all_dead_channels_storage.insert(external_umd_channels.begin(), external_umd_channels.end());
         all_dead_channels_ptr = &all_dead_channels_storage;
     } else {
-        all_dead_channels_storage =
-            effective_pre_dead.empty() ? health.newly_dead_channels : effective_pre_dead;
+        all_dead_channels_storage = effective_pre_dead.empty() ? health.newly_dead_channels : effective_pre_dead;
         all_dead_channels_ptr = &all_dead_channels_storage;
     }
     const auto& all_dead_channels = *all_dead_channels_ptr;
@@ -560,8 +557,7 @@ void Device::configure_fabric(
             for (const auto& lc : logical_cores_in_prog[pct_idx]) {
                 try {
                     auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(lc.x, lc.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
+                        tt::umd::CoreCoord(lc.x, lc.y, CoreType::ETH, CoordSystem::LOGICAL), CoordSystem::LOGICAL);
                     if (all_dead_channels.count(eth_chan)) {
                         dead_eth_logical_cores.insert(lc);
                     }
@@ -618,10 +614,8 @@ void Device::configure_fabric(
     const auto& control_plane_cf = MetalContext::instance().get_control_plane();
     const auto& fabric_context_cf = control_plane_cf.get_fabric_context();
     const auto& builder_ctx_cf = fabric_context_cf.get_builder_context();
-    const auto router_sync_address =
-        builder_ctx_cf.get_fabric_router_sync_address_and_status().first;
-    static constexpr uint32_t kHostPreLaunchCanary =
-        static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
+    const auto router_sync_address = builder_ctx_cf.get_fabric_router_sync_address_and_status().first;
+    static constexpr uint32_t kHostPreLaunchCanary = static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
     std::vector<uint32_t> canary_buf{kHostPreLaunchCanary};
 
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
@@ -675,8 +669,8 @@ void Device::configure_fabric(
                         CoordSystem::LOGICAL);
                     // FIX EXT (#42429): also skip canary write for external channels (same
                     // reasoning — preserve live 0x49706550 sentinel for next session detection).
-                    is_skip_reset_chan = skip_soft_reset_channels.count(eth_chan) > 0 ||
-                                        external_umd_channels.count(eth_chan) > 0;
+                    is_skip_reset_chan =
+                        skip_soft_reset_channels.count(eth_chan) > 0 || external_umd_channels.count(eth_chan) > 0;
                 } catch (...) {
                     // Cannot resolve channel — conservatively skip canary write.
                     log_warning(
@@ -690,8 +684,7 @@ void Device::configure_fabric(
                 }
                 if (!is_skip_reset_chan) {
                     try {
-                        detail::WriteToDeviceL1(
-                            this, logical_core, router_sync_address, canary_buf, CoreType::ETH);
+                        detail::WriteToDeviceL1(this, logical_core, router_sync_address, canary_buf, CoreType::ETH);
                     } catch (const std::exception& e) {
                         log_warning(
                             tt::LogMetal,
@@ -815,8 +808,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // BEFORE any phase runs.  This lets us distinguish "prior test left channels in bad state"
     // vs "failing test caused the problem" — per Neil's request.
     {
-        const auto router_sync_addr_diag =
-            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        const auto router_sync_addr_diag = builder_ctx.get_fabric_router_sync_address_and_status().first;
         const auto& soc_desc_entry = env_impl.get_cluster().get_soc_desc(this->id());
         log_info(
             tt::LogMetal,
@@ -845,61 +837,59 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 "relay reads to prevent 5s-per-channel timeout accumulation.",
                 this->id());
         } else {
-        for (const auto& [eth_chan_id, direction] : active_channels) {
-            // Per-read deadline: bail once we've spent kSnapshotDeadlineMs on snapshot
-            // reads.  Prevents a single hanging chan (relay ERISC alive but peering with
-            // fabric-firmware peer that never responds) from blocking indefinitely.
-            const auto snapshot_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                              std::chrono::steady_clock::now() - snapshot_start)
-                                              .count();
-            if (snapshot_elapsed > kSnapshotDeadlineMs) {
-                // FIX S (#42429): Snapshot deadline exceeded means the UMD relay path to this
-                // non-MMIO device is broken (relay reads accumulate 5s timeouts per channel).
-                // Set fabric_relay_path_broken_ so Phase 2.5 and Phase 3 skip all relay
-                // reads/writes — preventing the ~650s hang where some channels throw 5s
-                // timeouts but others hang indefinitely without exception (relay ERISC alive
-                // but peering firmware unresponsive to UMD protocol).
-                fabric_relay_path_broken_ = true;
-                log_warning(
-                    tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
-                    "deadline ({}ms) exceeded after {}ms — relay path broken, setting "
-                    "fabric_relay_path_broken_=true to skip Phase 2.5/3 relay reads.",
-                    this->id(),
-                    kSnapshotDeadlineMs,
-                    snapshot_elapsed);
-                break;
-            }
+            for (const auto& [eth_chan_id, direction] : active_channels) {
+                // Per-read deadline: bail once we've spent kSnapshotDeadlineMs on snapshot
+                // reads.  Prevents a single hanging chan (relay ERISC alive but peering with
+                // fabric-firmware peer that never responds) from blocking indefinitely.
+                const auto snapshot_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                  std::chrono::steady_clock::now() - snapshot_start)
+                                                  .count();
+                if (snapshot_elapsed > kSnapshotDeadlineMs) {
+                    // FIX S (#42429): Snapshot deadline exceeded means the UMD relay path to this
+                    // non-MMIO device is broken (relay reads accumulate 5s timeouts per channel).
+                    // Set fabric_relay_path_broken_ so Phase 2.5 and Phase 3 skip all relay
+                    // reads/writes — preventing the ~650s hang where some channels throw 5s
+                    // timeouts but others hang indefinitely without exception (relay ERISC alive
+                    // but peering firmware unresponsive to UMD protocol).
+                    fabric_relay_path_broken_ = true;
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                        "deadline ({}ms) exceeded after {}ms — relay path broken, setting "
+                        "fabric_relay_path_broken_=true to skip Phase 2.5/3 relay reads.",
+                        this->id(),
+                        kSnapshotDeadlineMs,
+                        snapshot_elapsed);
+                    break;
+                }
 
-            const auto eth_lc_diag = soc_desc_entry.get_eth_core_for_channel(
-                eth_chan_id, CoordSystem::LOGICAL);
-            std::vector<uint32_t> diag_buf(1, 0U);
-            // Wrap in try/catch: non-MMIO reads route through the MMIO device's ERISC relay.
-            // If the MMIO device was quiesced earlier in Pass 1, its ERISCs may not yet be
-            // READY_FOR_TRAFFIC and UMD will timeout.  The ENTRY snapshot is diagnostic only —
-            // log a warning but do NOT abort the quiesce.
-            try {
-                detail::ReadFromDeviceL1(
-                    this, eth_lc_diag, router_sync_addr_diag, 4, diag_buf, CoreType::ETH);
-            } catch (const std::exception& ex) {
-                log_warning(
+                const auto eth_lc_diag = soc_desc_entry.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                std::vector<uint32_t> diag_buf(1, 0U);
+                // Wrap in try/catch: non-MMIO reads route through the MMIO device's ERISC relay.
+                // If the MMIO device was quiesced earlier in Pass 1, its ERISCs may not yet be
+                // READY_FOR_TRAFFIC and UMD will timeout.  The ENTRY snapshot is diagnostic only —
+                // log a warning but do NOT abort the quiesce.
+                try {
+                    detail::ReadFromDeviceL1(this, eth_lc_diag, router_sync_addr_diag, 4, diag_buf, CoreType::ETH);
+                } catch (const std::exception& ex) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                        "eth_chan {} L1 read failed (relay not ready?): {}",
+                        this->id(),
+                        eth_chan_id,
+                        ex.what());
+                    diag_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
+                }
+                log_info(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
-                    "eth_chan {} L1 read failed (relay not ready?): {}",
+                    "eth_chan {} (logical={}) edm_status=0x{:08x}",
                     this->id(),
                     eth_chan_id,
-                    ex.what());
-                diag_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
+                    eth_lc_diag.str(),
+                    diag_buf[0]);
             }
-            log_info(
-                tt::LogMetal,
-                "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
-                "eth_chan {} (logical={}) edm_status=0x{:08x}",
-                this->id(),
-                eth_chan_id,
-                eth_lc_diag.str(),
-                diag_buf[0]);
-        }
         }  // end else (!fabric_relay_path_broken_)
     }
 
@@ -967,7 +957,8 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     break;
                 }
                 const auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
                 if (elapsed > timeout_ms) {
                     break;
                 }
@@ -1074,227 +1065,224 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             this->id(),
             active_channels.size());
     } else {
-    {
-        const auto [erisc_term_addr, erisc_term_signal] =
-            builder_ctx.get_fabric_router_termination_address_and_signal();
-        const auto router_sync_addr =
-            builder_ctx.get_fabric_router_sync_address_and_status().first;
-        constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-        // 2000ms: extended from 150ms to observe actual termination latency.
-        // ERISCs typically respond in <1ms; a longer window lets us see whether a slow
-        // or unresponsive ERISC eventually self-terminates, which guides whether we need
-        // a hardware reset vs. just waiting longer. Fast cases still exit the loop
-        // immediately on the first successful read — no performance regression.
-        constexpr uint32_t erisc_timeout_ms = 2000;
-        // Log current status every 200ms if ERISC has not yet terminated.
-        constexpr uint32_t kTermIntermediateLogMs = 200;
-        constexpr uint32_t kSpinsBetweenSleeps = 64;
+        {
+            const auto [erisc_term_addr, erisc_term_signal] =
+                builder_ctx.get_fabric_router_termination_address_and_signal();
+            const auto router_sync_addr = builder_ctx.get_fabric_router_sync_address_and_status().first;
+            constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+            // 2000ms: extended from 150ms to observe actual termination latency.
+            // ERISCs typically respond in <1ms; a longer window lets us see whether a slow
+            // or unresponsive ERISC eventually self-terminates, which guides whether we need
+            // a hardware reset vs. just waiting longer. Fast cases still exit the loop
+            // immediately on the first successful read — no performance regression.
+            constexpr uint32_t erisc_timeout_ms = 2000;
+            // Log current status every 200ms if ERISC has not yet terminated.
+            constexpr uint32_t kTermIntermediateLogMs = 200;
+            constexpr uint32_t kSpinsBetweenSleeps = 64;
 
-        std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(erisc_term_signal));
+            std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(erisc_term_signal));
 
-        for (const auto& [eth_chan_id, direction] : active_channels) {
-            // FIX PY (#42429): If relay_path_broken_ was set by a prior channel in this
-            // same Phase 2.5 loop iteration (not just the outer guard above), skip remaining
-            // channels on this non-MMIO device immediately.  Without this, after the FIRST
-            // channel fails and spends 3×retry×5s≈21s setting fabric_relay_path_broken_=true,
-            // the REMAINING channels each also spin through the full 21s retry cycle even
-            // though we already know the relay is dead.  Skipping them is safe — Phase 3's
-            // FIX Q guard already skips configure_fabric_cores() when relay_path_broken_=true.
-            if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
-                log_warning(
+            for (const auto& [eth_chan_id, direction] : active_channels) {
+                // FIX PY (#42429): If relay_path_broken_ was set by a prior channel in this
+                // same Phase 2.5 loop iteration (not just the outer guard above), skip remaining
+                // channels on this non-MMIO device immediately.  Without this, after the FIRST
+                // channel fails and spends 3×retry×5s≈21s setting fabric_relay_path_broken_=true,
+                // the REMAINING channels each also spin through the full 21s retry cycle even
+                // though we already know the relay is dead.  Skipping them is safe — Phase 3's
+                // FIX Q guard already skips configure_fabric_cores() when relay_path_broken_=true.
+                if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "relay already marked broken by prior channel — skipping (FIX PY #42429).",
+                        this->id(),
+                        eth_chan_id);
+                    continue;
+                }
+                const auto eth_logical_core = env_impl.get_cluster()
+                                                  .get_soc_desc(this->id())
+                                                  .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+
+                std::vector<uint32_t> status_buf(1, 0);
+                // FIX PG (#42429): For non-MMIO devices the L1 read goes through the UMD relay.
+                // After an AllGather completes, in-flight relay traffic can cause a transient
+                // 5-second relay timeout.  Retry up to 2 times with a 3-second sleep to give
+                // the relay time to drain before declaring the path broken (FIX AN).
+                // MMIO devices have no relay path, so no retry is needed (max_retries=0).
+                const int pg_max_retries = this->is_mmio_capable() ? 0 : 2;
+                bool pg_read_ok = false;
+                for (int pg_attempt = 0; pg_attempt <= pg_max_retries; ++pg_attempt) {
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                        pg_read_ok = true;
+                        break;
+                    } catch (const std::exception& e) {
+                        if (pg_attempt < pg_max_retries) {
+                            log_warning(
+                                tt::LogMetal,
+                                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                                "relay read attempt {}/{} failed, retrying in 3s (FIX PG #42429): {}",
+                                this->id(),
+                                eth_chan_id,
+                                pg_attempt + 1,
+                                pg_max_retries + 1,
+                                e.what());
+                            std::this_thread::sleep_for(std::chrono::seconds(3));
+                        } else {
+                            // L1 read failed in Phase 2.5.  Two distinct failure modes:
+                            // (a) Non-MMIO: UMD relay ERISC is not running relay firmware (Phase 3
+                            //     loaded fabric firmware on the MMIO device's relay channels, or
+                            //     relay was force-reset).  WriteToDeviceL1 via relay would hang.
+                            // (b) MMIO: channel is out-of-mesh (e.g. chan 14/15 not in SOC descriptor
+                            //     for a partial-mesh N300 peer) — get_eth_core_for_channel throws.
+                            // In both cases: set fabric_relay_path_broken_ = true.  Phase 5 has an
+                            // unconditional fabric_relay_path_broken_ skip that protects BOTH MMIO
+                            // and non-MMIO devices from reading channels whose ETH state is
+                            // indeterminate after a failed Phase 2.5 read.
+                            //
+                            // FIX AN (#42429): Set fabric_relay_path_broken_ = true unconditionally
+                            // so that Phase 3's FIX Q guard skips configure_fabric_cores() and
+                            // Phase 5 is skipped via the relay-broken early-return for this device.
+                            fabric_relay_path_broken_ = true;
+                            log_warning(
+                                tt::LogMetal,
+                                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                                "L1 read failed after {} attempt(s) — setting "
+                                "fabric_relay_path_broken_=true (FIX AN/PG #42429): {}",
+                                this->id(),
+                                eth_chan_id,
+                                pg_attempt + 1,
+                                e.what());
+                        }
+                    }
+                }
+                if (!pg_read_ok) {
+                    continue;
+                }
+
+                if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
+                    log_info(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "ERISC already clean (status=0x{:08x}), skipping",
+                        this->id(),
+                        eth_chan_id,
+                        status_buf[0]);
+                    continue;
+                }
+
+                log_info(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                    "relay already marked broken by prior channel — skipping (FIX PY #42429).",
+                    "ERISC active (status=0x{:08x}), sending TERMINATE",
                     this->id(),
-                    eth_chan_id);
-                continue;
-            }
-            const auto eth_logical_core = env_impl.get_cluster()
-                                              .get_soc_desc(this->id())
-                                              .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                    eth_chan_id,
+                    status_buf[0]);
 
-            std::vector<uint32_t> status_buf(1, 0);
-            // FIX PG (#42429): For non-MMIO devices the L1 read goes through the UMD relay.
-            // After an AllGather completes, in-flight relay traffic can cause a transient
-            // 5-second relay timeout.  Retry up to 2 times with a 3-second sleep to give
-            // the relay time to drain before declaring the path broken (FIX AN).
-            // MMIO devices have no relay path, so no retry is needed (max_retries=0).
-            const int pg_max_retries = this->is_mmio_capable() ? 0 : 2;
-            bool pg_read_ok = false;
-            for (int pg_attempt = 0; pg_attempt <= pg_max_retries; ++pg_attempt) {
-                try {
-                    detail::ReadFromDeviceL1(
-                        this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
-                    pg_read_ok = true;
-                    break;
-                } catch (const std::exception& e) {
-                    if (pg_attempt < pg_max_retries) {
+                detail::WriteToDeviceL1(this, eth_logical_core, erisc_term_addr, term_buf, CoreType::ETH);
+
+                const auto start = std::chrono::steady_clock::now();
+                uint32_t spin_counter = 0;
+                bool terminated = false;
+                int64_t last_term_log_ms = -1;
+                while (true) {
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                    } catch (const std::exception& e) {
                         log_warning(
                             tt::LogMetal,
                             "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                            "relay read attempt {}/{} failed, retrying in 3s (FIX PG #42429): {}",
+                            "polling read failed — treating as timed out: {}",
                             this->id(),
                             eth_chan_id,
-                            pg_attempt + 1,
-                            pg_max_retries + 1,
                             e.what());
-                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                        break;
+                    }
+                    if (status_buf[0] == terminated_val) {
+                        terminated = true;
+                        break;
+                    }
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                            .count();
+                    // Log every kTermIntermediateLogMs so we can observe actual termination latency
+                    // in CI logs and determine whether timeout thresholds need adjustment.
+                    if (elapsed / kTermIntermediateLogMs >
+                        last_term_log_ms / static_cast<int64_t>(kTermIntermediateLogMs)) {
+                        last_term_log_ms = elapsed;
+                        log_info(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                            "still waiting for TERMINATED after {}ms — current status=0x{:08x}",
+                            this->id(),
+                            eth_chan_id,
+                            elapsed,
+                            status_buf[0]);
+                    }
+                    if (elapsed > erisc_timeout_ms) {
+                        break;
+                    }
+                    if (++spin_counter >= kSpinsBetweenSleeps) {
+                        spin_counter = 0;
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
                     } else {
-                        // L1 read failed in Phase 2.5.  Two distinct failure modes:
-                        // (a) Non-MMIO: UMD relay ERISC is not running relay firmware (Phase 3
-                        //     loaded fabric firmware on the MMIO device's relay channels, or
-                        //     relay was force-reset).  WriteToDeviceL1 via relay would hang.
-                        // (b) MMIO: channel is out-of-mesh (e.g. chan 14/15 not in SOC descriptor
-                        //     for a partial-mesh N300 peer) — get_eth_core_for_channel throws.
-                        // In both cases: set fabric_relay_path_broken_ = true.  Phase 5 has an
-                        // unconditional fabric_relay_path_broken_ skip that protects BOTH MMIO
-                        // and non-MMIO devices from reading channels whose ETH state is
-                        // indeterminate after a failed Phase 2.5 read.
-                        //
-                        // FIX AN (#42429): Set fabric_relay_path_broken_ = true unconditionally
-                        // so that Phase 3's FIX Q guard skips configure_fabric_cores() and
-                        // Phase 5 is skipped via the relay-broken early-return for this device.
-                        fabric_relay_path_broken_ = true;
+                        ttsl::pause();
+                    }
+                }
+
+                const auto p25_elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
+                if (terminated) {
+                    log_info(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "ERISC TERMINATED in {}ms",
+                        this->id(),
+                        eth_chan_id,
+                        p25_elapsed);
+                } else {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} (mmio={}) eth_chan {} Phase 2.5: "
+                        "ERISC did not terminate within budget {}ms (actual elapsed {}ms, status=0x{:08x} {}) — "
+                        "force-resetting ERISC to guarantee it is halted before Phase 3 overwrites L1",
+                        this->id(),
+                        this->is_mmio_capable(),
+                        eth_chan_id,
+                        erisc_timeout_ms,
+                        p25_elapsed,
+                        status_buf[0],
+                        edm_status_str(status_buf[0]));
+                    // R1: Force-reset the unresponsive ERISC before Phase 3 writes new firmware to its L1.
+                    // Without this, Phase 3's configure_fabric_cores() may overwrite L1 while the ERISC
+                    // is mid-packet-send, causing data corruption (the same issue this branch fixes).
+                    try {
+                        const auto eth_virtual_core = virtual_core_from_logical_core(eth_logical_core, CoreType::ETH);
+                        env_impl.get_cluster().assert_risc_reset_at_core(
+                            tt_cxy_pair(this->id(), eth_virtual_core), tt::umd::RiscType::ALL);
+                        pending_phase25_force_reset_chans_.insert(eth_chan_id);
                         log_warning(
                             tt::LogMetal,
                             "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                            "L1 read failed after {} attempt(s) — setting "
-                            "fabric_relay_path_broken_=true (FIX AN/PG #42429): {}",
+                            "force-reset applied — ERISC halted before Phase 3 L1 overwrite "
+                            "(tracked for Phase 3 deassert)",
+                            this->id(),
+                            eth_chan_id);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                            "force-reset failed — Phase 3 L1 overwrite may be unsafe: {}",
                             this->id(),
                             eth_chan_id,
-                            pg_attempt + 1,
                             e.what());
                     }
                 }
             }
-            if (!pg_read_ok) {
-                continue;
-            }
-
-            if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
-                log_info(
-                    tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                    "ERISC already clean (status=0x{:08x}), skipping",
-                    this->id(),
-                    eth_chan_id,
-                    status_buf[0]);
-                continue;
-            }
-
-            log_info(
-                tt::LogMetal,
-                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                "ERISC active (status=0x{:08x}), sending TERMINATE",
-                this->id(),
-                eth_chan_id,
-                status_buf[0]);
-
-            detail::WriteToDeviceL1(this, eth_logical_core, erisc_term_addr, term_buf, CoreType::ETH);
-
-            const auto start = std::chrono::steady_clock::now();
-            uint32_t spin_counter = 0;
-            bool terminated = false;
-            int64_t last_term_log_ms = -1;
-            while (true) {
-                try {
-                    detail::ReadFromDeviceL1(
-                        this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                        "polling read failed — treating as timed out: {}",
-                        this->id(),
-                        eth_chan_id,
-                        e.what());
-                    break;
-                }
-                if (status_buf[0] == terminated_val) {
-                    terminated = true;
-                    break;
-                }
-                const auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - start)
-                        .count();
-                // Log every kTermIntermediateLogMs so we can observe actual termination latency
-                // in CI logs and determine whether timeout thresholds need adjustment.
-                if (elapsed / kTermIntermediateLogMs >
-                    last_term_log_ms / static_cast<int64_t>(kTermIntermediateLogMs)) {
-                    last_term_log_ms = elapsed;
-                    log_info(
-                        tt::LogMetal,
-                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                        "still waiting for TERMINATED after {}ms — current status=0x{:08x}",
-                        this->id(),
-                        eth_chan_id,
-                        elapsed,
-                        status_buf[0]);
-                }
-                if (elapsed > erisc_timeout_ms) {
-                    break;
-                }
-                if (++spin_counter >= kSpinsBetweenSleeps) {
-                    spin_counter = 0;
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
-                } else {
-                    ttsl::pause();
-                }
-            }
-
-            const auto p25_elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - start)
-                    .count();
-            if (terminated) {
-                log_info(
-                    tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                    "ERISC TERMINATED in {}ms",
-                    this->id(),
-                    eth_chan_id,
-                    p25_elapsed);
-            } else {
-                log_warning(
-                    tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Device {} (mmio={}) eth_chan {} Phase 2.5: "
-                    "ERISC did not terminate within budget {}ms (actual elapsed {}ms, status=0x{:08x} {}) — "
-                    "force-resetting ERISC to guarantee it is halted before Phase 3 overwrites L1",
-                    this->id(),
-                    this->is_mmio_capable(),
-                    eth_chan_id,
-                    erisc_timeout_ms,
-                    p25_elapsed,
-                    status_buf[0],
-                    edm_status_str(status_buf[0]));
-                // R1: Force-reset the unresponsive ERISC before Phase 3 writes new firmware to its L1.
-                // Without this, Phase 3's configure_fabric_cores() may overwrite L1 while the ERISC
-                // is mid-packet-send, causing data corruption (the same issue this branch fixes).
-                try {
-                    const auto eth_virtual_core = virtual_core_from_logical_core(eth_logical_core, CoreType::ETH);
-                    env_impl.get_cluster().assert_risc_reset_at_core(
-                        tt_cxy_pair(this->id(), eth_virtual_core), tt::umd::RiscType::ALL);
-                    pending_phase25_force_reset_chans_.insert(eth_chan_id);
-                    log_warning(
-                        tt::LogMetal,
-                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                        "force-reset applied — ERISC halted before Phase 3 L1 overwrite "
-                        "(tracked for Phase 3 deassert)",
-                        this->id(),
-                        eth_chan_id);
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                        "force-reset failed — Phase 3 L1 overwrite may be unsafe: {}",
-                        this->id(),
-                        eth_chan_id,
-                        e.what());
-                }
-            }
         }
-    }
     }  // end else (Phase 2.5 — relay path not broken)
 
     // Phase 3: Re-configure and re-launch the fabric workers
@@ -1309,7 +1297,10 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         return;
     }
 
-    log_info(tt::LogMetal, "quiesce_and_restart_fabric_workers: Device {} entering Phase 3 (re-configure + re-launch)", this->id());
+    log_info(
+        tt::LogMetal,
+        "quiesce_and_restart_fabric_workers: Device {} entering Phase 3 (re-configure + re-launch)",
+        this->id());
 
     // FIX Q (#42429): Skip Phase 3 entirely for non-MMIO devices when the relay path is known broken.
     //
@@ -1535,8 +1526,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             for (const auto& lc0 : logical_cores_used[p0_idx]) {
                 try {
                     auto eth_chan_0 = soc_desc_q.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(lc0.x, lc0.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
+                        tt::umd::CoreCoord(lc0.x, lc0.y, CoreType::ETH, CoordSystem::LOGICAL), CoordSystem::LOGICAL);
                     if (!pending_phase25_force_reset_chans_.count(eth_chan_0)) {
                         continue;
                     }
@@ -1559,10 +1549,9 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     //  6-9,14. FIX PC was in the wrong path; this quiesce path is the source.)
                     try {
                         const auto& hal_pd = env_impl.get_hal();
-                        const auto aeth_idx = hal_pd.get_programmable_core_type_index(
-                            HalProgrammableCoreType::ACTIVE_ETH);
-                        const uint32_t fw_launch_addr_pd =
-                            hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                        const auto aeth_idx =
+                            hal_pd.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+                        const uint32_t fw_launch_addr_pd = hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
                         env_impl.get_cluster().write_core_immediate(
                             this->id(), phys_core_0, std::vector<uint32_t>{0}, fw_launch_addr_pd);
                     } catch (...) {
@@ -1595,24 +1584,28 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         // before writing launch messages — prevents race with .bss init zeroing edm_status.
         constexpr uint32_t kForceResetPollIntervalMs_inline = 5;
         constexpr uint32_t kForceResetPollTimeoutMs_inline = 500;
-        const uint32_t umd_relay_canary_p0 = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
-        constexpr uint32_t terminated_val_p0 =
-            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-        const auto erisc_sync_addr_p0 =
-            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        const uint32_t umd_relay_canary_p0 =
+            static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
+        constexpr uint32_t terminated_val_p0 = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+        const auto erisc_sync_addr_p0 = builder_ctx.get_fabric_router_sync_address_and_status().first;
         uint32_t total_waited_ms_p0 = 0;
         bool all_ready_p0 = deasserted_lcs_inline.empty();
         while (!all_ready_p0 && total_waited_ms_p0 < kForceResetPollTimeoutMs_inline) {
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(kForceResetPollIntervalMs_inline));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetPollIntervalMs_inline));
             total_waited_ms_p0 += kForceResetPollIntervalMs_inline;
             all_ready_p0 = true;
             for (const auto& lc_poll : deasserted_lcs_inline) {
                 std::vector<uint32_t> poll_buf(1, 0U);
                 try {
-                    detail::ReadFromDeviceL1(
-                        this, lc_poll, erisc_sync_addr_p0, 4, poll_buf, CoreType::ETH);
+                    detail::ReadFromDeviceL1(this, lc_poll, erisc_sync_addr_p0, 4, poll_buf, CoreType::ETH);
                 } catch (...) {
+                    log_debug(
+                        tt::LogMetal,
+                        "Device {} Phase 3 canary poll read at ETH logical ({},{}) threw non-std exception — treating "
+                        "as not-ready",
+                        this->id(),
+                        lc_poll.x,
+                        lc_poll.y);
                     poll_buf[0] = 0U;
                 }
                 if (poll_buf[0] != umd_relay_canary_p0 && poll_buf[0] != terminated_val_p0) {
@@ -1624,13 +1617,18 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         for (const auto& lc_rpt : deasserted_lcs_inline) {
             std::vector<uint32_t> final_buf(1, 0U);
             try {
-                detail::ReadFromDeviceL1(
-                    this, lc_rpt, erisc_sync_addr_p0, 4, final_buf, CoreType::ETH);
+                detail::ReadFromDeviceL1(this, lc_rpt, erisc_sync_addr_p0, 4, final_buf, CoreType::ETH);
             } catch (...) {
+                log_debug(
+                    tt::LogMetal,
+                    "Device {} Phase 3 final report read at ETH logical ({},{}) threw non-std exception — defaulting "
+                    "to 0",
+                    this->id(),
+                    lc_rpt.x,
+                    lc_rpt.y);
                 final_buf[0] = 0U;
             }
-            const bool ready_p0 =
-                (final_buf[0] == umd_relay_canary_p0 || final_buf[0] == terminated_val_p0);
+            const bool ready_p0 = (final_buf[0] == umd_relay_canary_p0 || final_buf[0] == terminated_val_p0);
             if (ready_p0) {
                 log_info(
                     tt::LogMetal,
@@ -1654,8 +1652,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     final_buf[0]);
                 try {
                     auto dead_chan_inline = soc_desc_q.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(
-                            lc_rpt.x, lc_rpt.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        tt::umd::CoreCoord(lc_rpt.x, lc_rpt.y, CoreType::ETH, CoordSystem::LOGICAL),
                         CoordSystem::LOGICAL);
                     pending_quiesce_newly_dead_eth_chans_.insert(dead_chan_inline);
                 } catch (...) {
@@ -1721,12 +1718,10 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             // FIX AR (#42429): after Pass-0 deassert + 50ms boot sleep, force-reset channels
             // will show 0x49706550 (UMD relay firmware canary) — allow that for them.
             {
-                const auto [erisc_sync_addr_pre, unused_pre] =
-                    builder_ctx.get_fabric_router_sync_address_and_status();
+                const auto [erisc_sync_addr_pre, unused_pre] = builder_ctx.get_fabric_router_sync_address_and_status();
                 std::vector<uint32_t> pre_launch_buf(1, 0U);
                 try {
-                    detail::ReadFromDeviceL1(
-                        this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
+                    detail::ReadFromDeviceL1(this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
                 } catch (const std::exception& e) {
                     pre_launch_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
                     log_warning(
@@ -1756,28 +1751,32 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     logical_core.y,
                     pre_launch_buf[0]);
 
-                constexpr uint32_t terminated_val =
-                    static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-                const uint32_t umd_relay_canary = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
+                constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+                const uint32_t umd_relay_canary =
+                    static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
                 bool is_force_reset_chan_inline = false;
                 if (!pending_phase25_force_reset_chans_.empty()) {
                     try {
                         auto eth_chan_chk = soc_desc_q.get_eth_channel_for_core(
-                            tt::umd::CoreCoord(
-                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
                             CoordSystem::LOGICAL);
-                        is_force_reset_chan_inline =
-                            pending_phase25_force_reset_chans_.count(eth_chan_chk) > 0;
+                        is_force_reset_chan_inline = pending_phase25_force_reset_chans_.count(eth_chan_chk) > 0;
                     } catch (...) {
+                        log_debug(
+                            tt::LogMetal,
+                            "Device {} Phase 3 get_eth_channel_for_core at ETH logical ({},{}) threw non-std exception "
+                            "— assuming not force-reset chan",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y);
                     }
                 }
                 // FIX AS (#42429): force-reset channels must show UMD canary or TERMINATED —
                 // NOT 0x0, which means .bss init hasn't completed and edm_status would get
                 // zeroed after we write the launch message (the root cause of the race).
-                const bool status_ok_inline =
-                    (pre_launch_buf[0] == terminated_val) ||
-                    (!is_force_reset_chan_inline && pre_launch_buf[0] == 0x0) ||
-                    (is_force_reset_chan_inline && pre_launch_buf[0] == umd_relay_canary);
+                const bool status_ok_inline = (pre_launch_buf[0] == terminated_val) ||
+                                              (!is_force_reset_chan_inline && pre_launch_buf[0] == 0x0) ||
+                                              (is_force_reset_chan_inline && pre_launch_buf[0] == umd_relay_canary);
                 if (!status_ok_inline) {
                     log_warning(
                         tt::LogMetal,
@@ -1792,11 +1791,17 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         edm_status_str(pre_launch_buf[0]));
                     try {
                         auto eth_chan_dead = soc_desc_q.get_eth_channel_for_core(
-                            tt::umd::CoreCoord(
-                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
                             CoordSystem::LOGICAL);
                         pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_dead);
                     } catch (...) {
+                        log_debug(
+                            tt::LogMetal,
+                            "Device {} Phase 3 dead-channel resolution at ETH logical ({},{}) threw non-std exception "
+                            "— cannot mark dead",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y);
                     }
                     continue;
                 }
@@ -1951,8 +1956,7 @@ void Device::launch_eth_cores_for_quiesce() {
             for (const auto& lc0 : logical_cores_used[p0_idx]) {
                 try {
                     auto eth_chan_0 = soc_desc_q.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(lc0.x, lc0.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
+                        tt::umd::CoreCoord(lc0.x, lc0.y, CoreType::ETH, CoordSystem::LOGICAL), CoordSystem::LOGICAL);
                     if (!p25_force_reset.count(eth_chan_0)) {
                         continue;
                     }
@@ -1972,10 +1976,9 @@ void Device::launch_eth_cores_for_quiesce() {
                     // This path is taken when defer_eth_launch=true (launch_eth_cores_for_quiesce).
                     try {
                         const auto& hal_pd = env_impl.get_hal();
-                        const auto aeth_idx = hal_pd.get_programmable_core_type_index(
-                            HalProgrammableCoreType::ACTIVE_ETH);
-                        const uint32_t fw_launch_addr_pd =
-                            hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                        const auto aeth_idx =
+                            hal_pd.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+                        const uint32_t fw_launch_addr_pd = hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
                         env_impl.get_cluster().write_core_immediate(
                             this->id(), phys_core_0, std::vector<uint32_t>{0}, fw_launch_addr_pd);
                     } catch (...) {
@@ -2016,11 +2019,10 @@ void Device::launch_eth_cores_for_quiesce() {
         // so Phase 5 and subsequent quiesce operations skip them.
         constexpr uint32_t kForceResetPollIntervalMs = 5;
         constexpr uint32_t kForceResetPollTimeoutMs = 500;
-        const uint32_t umd_relay_canary_poll = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
-        constexpr uint32_t terminated_val_poll =
-            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-        const auto erisc_sync_addr_poll =
-            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        const uint32_t umd_relay_canary_poll =
+            static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
+        constexpr uint32_t terminated_val_poll = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+        const auto erisc_sync_addr_poll = builder_ctx.get_fabric_router_sync_address_and_status().first;
 
         uint32_t total_waited_ms = 0;
         bool all_ready = deasserted_lcs.empty();
@@ -2031,9 +2033,15 @@ void Device::launch_eth_cores_for_quiesce() {
             for (const auto& lc_poll : deasserted_lcs) {
                 std::vector<uint32_t> poll_buf(1, 0U);
                 try {
-                    detail::ReadFromDeviceL1(
-                        this, lc_poll, erisc_sync_addr_poll, 4, poll_buf, CoreType::ETH);
+                    detail::ReadFromDeviceL1(this, lc_poll, erisc_sync_addr_poll, 4, poll_buf, CoreType::ETH);
                 } catch (...) {
+                    log_debug(
+                        tt::LogMetal,
+                        "Device {} Phase 5 canary poll read at ETH logical ({},{}) threw non-std exception — treating "
+                        "as not-ready",
+                        this->id(),
+                        lc_poll.x,
+                        lc_poll.y);
                     poll_buf[0] = 0U;
                 }
                 if (poll_buf[0] != umd_relay_canary_poll && poll_buf[0] != terminated_val_poll) {
@@ -2046,13 +2054,18 @@ void Device::launch_eth_cores_for_quiesce() {
         for (const auto& lc_rpt : deasserted_lcs) {
             std::vector<uint32_t> rpt_buf(1, 0U);
             try {
-                detail::ReadFromDeviceL1(
-                    this, lc_rpt, erisc_sync_addr_poll, 4, rpt_buf, CoreType::ETH);
+                detail::ReadFromDeviceL1(this, lc_rpt, erisc_sync_addr_poll, 4, rpt_buf, CoreType::ETH);
             } catch (...) {
+                log_debug(
+                    tt::LogMetal,
+                    "Device {} Phase 5 final report read at ETH logical ({},{}) threw non-std exception — defaulting "
+                    "to 0",
+                    this->id(),
+                    lc_rpt.x,
+                    lc_rpt.y);
                 rpt_buf[0] = 0U;
             }
-            const bool ready =
-                (rpt_buf[0] == umd_relay_canary_poll || rpt_buf[0] == terminated_val_poll);
+            const bool ready = (rpt_buf[0] == umd_relay_canary_poll || rpt_buf[0] == terminated_val_poll);
             if (ready) {
                 log_info(
                     tt::LogMetal,
@@ -2143,12 +2156,10 @@ void Device::launch_eth_cores_for_quiesce() {
             // Skip the channel and mark it newly-dead so Phase 5 / subsequent quiesce do not relay
             // through it.
             {
-                const auto [erisc_sync_addr_pre, unused_pre] =
-                    builder_ctx.get_fabric_router_sync_address_and_status();
+                const auto [erisc_sync_addr_pre, unused_pre] = builder_ctx.get_fabric_router_sync_address_and_status();
                 std::vector<uint32_t> pre_launch_buf(1, 0U);
                 try {
-                    detail::ReadFromDeviceL1(
-                        this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
+                    detail::ReadFromDeviceL1(this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
                 } catch (const std::exception& e) {
                     pre_launch_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
                     log_warning(
@@ -2179,31 +2190,36 @@ void Device::launch_eth_cores_for_quiesce() {
                     pre_launch_buf[0]);
 
                 // FIX-3: gate launch on ERISC being in a quiesced state.
-                constexpr uint32_t terminated_val =
-                    static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+                constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
                 // FIX AR (#42429): after Pass-0 deassert + 50ms boot sleep, force-reset channels
                 // will have completed base UMD .bss init and show 0x49706550 (UMD relay firmware
                 // canary) at edm_status_address.  This is an expected quiesced state for those
                 // channels — allow it through so we don't incorrectly mark them dead.
-                const uint32_t umd_relay_canary = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
+                const uint32_t umd_relay_canary =
+                    static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
                 bool is_force_reset_chan = false;
                 if (!p25_force_reset.empty()) {
                     try {
                         auto eth_chan_check = soc_desc_q.get_eth_channel_for_core(
-                            tt::umd::CoreCoord(
-                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
                             CoordSystem::LOGICAL);
                         is_force_reset_chan = p25_force_reset.count(eth_chan_check) > 0;
                     } catch (...) {
+                        log_debug(
+                            tt::LogMetal,
+                            "Device {} Phase 5 get_eth_channel_for_core at ETH logical ({},{}) threw non-std exception "
+                            "— assuming not force-reset chan",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y);
                     }
                 }
                 // FIX AS (#42429): force-reset channels must show UMD canary or TERMINATED —
                 // NOT 0x0, which means .bss init hasn't completed and edm_status would be
                 // zeroed after the launch message write (root cause of the race condition).
-                const bool status_ok =
-                    (pre_launch_buf[0] == terminated_val) ||
-                    (!is_force_reset_chan && pre_launch_buf[0] == 0x0) ||
-                    (is_force_reset_chan && pre_launch_buf[0] == umd_relay_canary);
+                const bool status_ok = (pre_launch_buf[0] == terminated_val) ||
+                                       (!is_force_reset_chan && pre_launch_buf[0] == 0x0) ||
+                                       (is_force_reset_chan && pre_launch_buf[0] == umd_relay_canary);
                 if (!status_ok) {
                     log_warning(
                         tt::LogMetal,
@@ -2220,12 +2236,17 @@ void Device::launch_eth_cores_for_quiesce() {
                     // quiesce relay ops skip it.
                     try {
                         auto eth_chan = soc_desc_q.get_eth_channel_for_core(
-                            tt::umd::CoreCoord(
-                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
                             CoordSystem::LOGICAL);
                         pending_quiesce_newly_dead_eth_chans_.insert(eth_chan);
                     } catch (...) {
-                        // Channel resolution failed — can't mark dead, but still skip launch.
+                        log_debug(
+                            tt::LogMetal,
+                            "Device {} Phase 5 dead-channel resolution at ETH logical ({},{}) threw non-std exception "
+                            "— cannot mark dead",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y);
                     }
                     continue;
                 }
@@ -2245,14 +2266,11 @@ void Device::launch_eth_cores_for_quiesce() {
                 this->id(),
                 logical_core.x,
                 logical_core.y);
-
         }
     }
 
     log_info(
-        tt::LogMetal,
-        "launch_eth_cores_for_quiesce: Device {} complete — all ETH ERISC cores launched.",
-        this->id());
+        tt::LogMetal, "launch_eth_cores_for_quiesce: Device {} complete — all ETH ERISC cores launched.", this->id());
 }
 
 // FIX AF (#42429): Poll this device's ETH channels until all show a non-zero
@@ -2290,8 +2308,7 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
     const auto& hal = env_impl.get_hal();
 
-    const auto [erisc_sync_addr, unused_expected] =
-        builder_ctx.get_fabric_router_sync_address_and_status();
+    const auto [erisc_sync_addr, unused_expected] = builder_ctx.get_fabric_router_sync_address_and_status();
 
     // Collect all ETH logical cores from the fabric program.
     struct ChanInfo {
@@ -2309,9 +2326,7 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
     }
     if (eth_cores.empty()) {
         log_info(
-            tt::LogMetal,
-            "wait_for_eth_cores_launched: Device {} — no ETH cores in fabric program, done.",
-            this->id());
+            tt::LogMetal, "wait_for_eth_cores_launched: Device {} — no ETH cores in fabric program, done.", this->id());
         return;
     }
 
@@ -2339,9 +2354,7 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
 
     while (!pending.empty()) {
         const auto elapsed_ms =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start)
-                .count();
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
         if (elapsed_ms > static_cast<int64_t>(timeout_ms)) {
             log_warning(
                 tt::LogMetal,
@@ -2357,13 +2370,7 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
         for (size_t idx : pending) {
             std::vector<uint32_t> buf(1, 0U);
             try {
-                detail::ReadFromDeviceL1(
-                    this,
-                    eth_cores[idx].logical_core,
-                    erisc_sync_addr,
-                    4,
-                    buf,
-                    CoreType::ETH);
+                detail::ReadFromDeviceL1(this, eth_cores[idx].logical_core, erisc_sync_addr, 4, buf, CoreType::ETH);
             } catch (const std::exception& e) {
                 log_warning(
                     tt::LogMetal,
@@ -2395,9 +2402,7 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
 
         if (!pending.empty()) {
             const auto now_ms =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - start)
-                    .count();
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
             if (now_ms / kLogIntervalMs > last_log_ms / static_cast<int64_t>(kLogIntervalMs)) {
                 last_log_ms = now_ms;
                 log_info(
@@ -2419,9 +2424,7 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
     }
 
     const auto total_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start)
-            .count();
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
     log_info(
         tt::LogMetal,
         "wait_for_eth_cores_launched: Device {} — done in {}ms ({}/{} channels confirmed STARTED).",
@@ -2463,8 +2466,7 @@ bool Device::phase5b_erisc_health_check(
                 eth_chan_id);
             continue;
         }
-        const auto eth_logical_core =
-            soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+        const auto eth_logical_core = soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
         chans.push_back({eth_chan_id, eth_logical_core});
     }
 
@@ -2503,8 +2505,7 @@ bool Device::phase5b_erisc_health_check(
             // hang is the phase5_relay_read_threw guard in the caller (Phase 5b is
             // skipped entirely when Phase 5's own read threw).
             const auto pre_read_elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - hc_start)
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - hc_start)
                     .count();
             if (pre_read_elapsed > kHealthCheckTimeoutMs) {
                 log_warning(
@@ -2520,14 +2521,14 @@ bool Device::phase5b_erisc_health_check(
                     total_chans);
                 still_pending.push_back(idx);
                 // 0xDEAD5B5B: Phase 5b per-iteration deadline exceeded — read was skipped.
-                still_pending_statuses.push_back({ch.eth_chan_id, static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED)});
+                still_pending_statuses.push_back(
+                    {ch.eth_chan_id, static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED)});
                 continue;
             }
             chans_checked++;
 
             try {
-                detail::ReadFromDeviceL1(
-                    this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                detail::ReadFromDeviceL1(this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
             } catch (const std::exception& e) {
                 // Non-MMIO relay read timed out — treat this channel as not-ready.
                 // Without this catch, the exception propagates uncaught through
@@ -2553,12 +2554,10 @@ bool Device::phase5b_erisc_health_check(
         if (pending.empty()) {
             break;
         }
-        const auto hc_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::steady_clock::now() - hc_start)
-                                    .count();
+        const auto hc_elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - hc_start).count();
         // Log every kHCIntermediateLogMs to observe actual time-to-healthy
-        if (hc_elapsed / kHCIntermediateLogMs >
-            last_hc_log_ms / static_cast<int64_t>(kHCIntermediateLogMs)) {
+        if (hc_elapsed / kHCIntermediateLogMs > last_hc_log_ms / static_cast<int64_t>(kHCIntermediateLogMs)) {
             last_hc_log_ms = hc_elapsed;
             std::string pending_str;
             for (const auto& [cid, st] : still_pending_statuses) {
@@ -2581,8 +2580,7 @@ bool Device::phase5b_erisc_health_check(
                 const auto& ch = chans[idx];
                 std::vector<uint32_t> status_buf(1, 0);
                 const auto diag_elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - hc_start)
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - hc_start)
                         .count();
                 constexpr int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;
                 if (diag_elapsed > kDiagBudgetMs) {
@@ -2599,12 +2597,7 @@ bool Device::phase5b_erisc_health_check(
                 } else {
                     try {
                         detail::ReadFromDeviceL1(
-                            this,
-                            ch.eth_logical_core,
-                            router_sync_addr,
-                            4,
-                            status_buf,
-                            CoreType::ETH);
+                            this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
                     } catch (const std::exception& e) {
                         log_warning(
                             tt::LogMetal,
@@ -2648,7 +2641,10 @@ bool Device::phase5b_erisc_health_check(
             for (const auto& u : pre_dead_unhealthy) {
                 dead_details += fmt::format(
                     "  dev={} chan={} status=0x{:08x}({})\n",
-                    this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
+                    this->id(),
+                    u.eth_chan_id,
+                    u.actual_status,
+                    edm_status_str(u.actual_status));
             }
             log_warning(
                 tt::LogMetal,
@@ -2665,7 +2661,10 @@ bool Device::phase5b_erisc_health_check(
             for (const auto& u : truly_unhealthy) {
                 details += fmt::format(
                     "  dev={} chan={} status=0x{:08x}({})\n",
-                    this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
+                    this->id(),
+                    u.eth_chan_id,
+                    u.actual_status,
+                    edm_status_str(u.actual_status));
             }
             // FIX V/W (#42429): If ALL truly-unhealthy channels are at 0x0,
             // 0xDEAD5B5B (deadline-skipped), or 0xDEADECE7 (read exception), the
@@ -2677,10 +2676,8 @@ bool Device::phase5b_erisc_health_check(
             // rescue_stuck_dispatch_cores via the still-broken UMD relay on non-MMIO
             // devices, accumulating 5-second timeouts per stream for 8+ minutes.
             // Instead: log_error + return cleanly.
-            const bool all_dead = std::all_of(
-                truly_unhealthy.begin(),
-                truly_unhealthy.end(),
-                [](const UnhealthyChannel& u) {
+            const bool all_dead =
+                std::all_of(truly_unhealthy.begin(), truly_unhealthy.end(), [](const UnhealthyChannel& u) {
                     return u.actual_status == 0x0 ||
                            u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED) ||
                            u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION);
@@ -2715,10 +2712,8 @@ bool Device::phase5b_erisc_health_check(
             // We must NOT set fabric_relay_path_broken_ here — the relay IS functional, it is
             // the PEER device that did not respond.
             using EDMSt = tt::tt_fabric::EDMStatus;
-            const bool all_handshake_incomplete = !all_dead && std::all_of(
-                truly_unhealthy.begin(),
-                truly_unhealthy.end(),
-                [](const UnhealthyChannel& u) {
+            const bool all_handshake_incomplete =
+                !all_dead && std::all_of(truly_unhealthy.begin(), truly_unhealthy.end(), [](const UnhealthyChannel& u) {
                     return u.actual_status == 0x0 ||
                            u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED) ||
                            u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION) ||
@@ -2753,10 +2748,12 @@ bool Device::phase5b_erisc_health_check(
             // Return cleanly rather than throwing — the MMIO host is the authoritative
             // fabric controller and will detect true failures.
             if (!is_mmio_capable()) {
-                log_warning(LogDevice,
+                log_warning(
+                    LogDevice,
                     "Device {}: Phase 5b fabric health: {} truly-unhealthy channel(s) with unexpected "
                     "status (non-MMIO device in partial mesh) — returning non-fatal",
-                    id_, truly_unhealthy.size());
+                    id_,
+                    truly_unhealthy.size());
                 fabric_channels_not_ready_for_traffic_ = true;
                 return true;
             }
@@ -2902,7 +2899,8 @@ void Device::wait_for_fabric_workers_ready() {
                     break;
                 }
                 const auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
                 // Log every kP4IntermediateLogMs so CI logs show progress while waiting.
                 if (elapsed / kP4IntermediateLogMs > last_p4_log_ms / kP4IntermediateLogMs) {
                     last_p4_log_ms = elapsed;
@@ -2947,8 +2945,9 @@ void Device::wait_for_fabric_workers_ready() {
                     eth_chan_id,
                     status_buf[0]);
                 try {
-                    const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                        this->id(), mux_core, CoreType::WORKER);
+                    const auto virtual_mux_coord =
+                        env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                            this->id(), mux_core, CoreType::WORKER);
                     env_impl.get_cluster().assert_risc_reset_at_core(
                         tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
                 } catch (const std::exception& e) {
@@ -2983,10 +2982,8 @@ void Device::wait_for_fabric_workers_ready() {
     // READY_FOR_TRAFFIC — exactly what wait_for_fabric_router_sync() does at initial startup.
     // After that, a final per-channel health check confirms all channels are healthy.
     {
-        const auto [router_sync_addr, sync_status] =
-            builder_ctx.get_fabric_router_sync_address_and_status();
-        constexpr uint32_t expected_ready =
-            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+        const auto [router_sync_addr, sync_status] = builder_ctx.get_fabric_router_sync_address_and_status();
+        constexpr uint32_t expected_ready = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         // 10s matches the fabric router sync timeout used at initial startup.
         constexpr uint32_t kSyncTimeoutMs = 10000;
         // FIX AL (#42429): When the ERISC is running (status=STARTED, not 0x0) but has not
@@ -3010,8 +3007,7 @@ void Device::wait_for_fabric_workers_ready() {
 
         const auto master_chan = builder_ctx.get_fabric_master_router_chan(this->id());
         const auto& soc_desc_p5 = env_impl.get_cluster().get_soc_desc(this->id());
-        const auto master_logical_core =
-            soc_desc_p5.get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
+        const auto master_logical_core = soc_desc_p5.get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
 
         // Track whether Phase 5 relay read threw so Phase 5b can skip reads that would hang.
         // When the Phase 5 master-channel read throws, it means the UMD relay path to this
@@ -3098,8 +3094,7 @@ void Device::wait_for_fabric_workers_ready() {
                 master_chan);
         }
         const bool master_is_dead =
-            fabric_pre_dead_channels_.count(master_chan) > 0 || master_newly_dead_fixas ||
-            master_is_external;
+            fabric_pre_dead_channels_.count(master_chan) > 0 || master_newly_dead_fixas || master_is_external;
         if (!master_is_dead) {
             log_info(
                 tt::LogMetal,
@@ -3114,8 +3109,7 @@ void Device::wait_for_fabric_workers_ready() {
             int64_t last_log_ms = -1;
             while (true) {
                 try {
-                    detail::ReadFromDeviceL1(
-                        this, master_logical_core, router_sync_addr, 4, sync_buf, CoreType::ETH);
+                    detail::ReadFromDeviceL1(this, master_logical_core, router_sync_addr, 4, sync_buf, CoreType::ETH);
                 } catch (const std::exception& e) {
                     phase5_relay_read_threw = true;
                     // Persist across quiesce calls: TearDown will trigger a second quiesce,
@@ -3142,13 +3136,14 @@ void Device::wait_for_fabric_workers_ready() {
                 if (sync_buf[0] == expected_ready) {
                     break;
                 }
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::steady_clock::now() - sync_start)
-                                         .count();
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sync_start)
+                        .count();
                 // Periodic intermediate log every kIntermediateLogIntervalMs — tells us whether
                 // ERISC is stuck at STARTED (launched but no peer), at 0x0 (launch msg never
                 // arrived), or at some unexpected value.
-                if (elapsed / kIntermediateLogIntervalMs > last_log_ms / static_cast<int64_t>(kIntermediateLogIntervalMs)) {
+                if (elapsed / kIntermediateLogIntervalMs >
+                    last_log_ms / static_cast<int64_t>(kIntermediateLogIntervalMs)) {
                     last_log_ms = elapsed;
                     log_info(
                         tt::LogMetal,
@@ -3239,8 +3234,7 @@ void Device::wait_for_fabric_workers_ready() {
                     // than rethrowing: the successful Phase 5 handshake result must not be masked
                     // by a best-effort write failure.
                     try {
-                        detail::WriteToDeviceL1(
-                            this, master_logical_core, ready_sig->first, ready_buf, CoreType::ETH);
+                        detail::WriteToDeviceL1(this, master_logical_core, ready_sig->first, ready_buf, CoreType::ETH);
                     } catch (const std::exception& e) {
                         log_warning(
                             tt::LogMetal,
