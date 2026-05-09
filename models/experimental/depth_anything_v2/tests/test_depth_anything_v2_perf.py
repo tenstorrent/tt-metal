@@ -13,7 +13,7 @@ from models.common.utility_functions import profiler
 from models.perf.perf_utils import prep_perf_report
 
 # Device l1_small_size needed for conv2d ops
-DEVICE_PARAMS = {"l1_small_size": 16384}
+DEVICE_PARAMS = {"l1_small_size": 32768}
 
 
 BATCH_SIZE = 1

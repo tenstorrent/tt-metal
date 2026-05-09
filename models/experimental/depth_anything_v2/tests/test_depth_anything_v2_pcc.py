@@ -11,7 +11,7 @@ from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2
 from models.common.utility_functions import comp_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_depth_anything_v2_pcc(device):
     """Compare ttnn model output against the torch reference.
 

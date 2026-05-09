@@ -449,9 +449,9 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
     # ---- 2. Pad to tile boundaries and project -------------------------
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-    # seq dimension: seqL_padded - 32 CLS tokens = 1376 patch slots
-    patch_seq_padded = config.get("seqL_padded", 1408) - 32  # 1376
-    pad_seq = patch_seq_padded - x.shape[1]  # 1376 - 1369 = 7
+    # seq dimension: seqL_padded - 32 CLS tokens = 1536 patch slots
+    patch_seq_padded = config.get("seqL_padded", 1568) - 32  # 1536
+    pad_seq = patch_seq_padded - x.shape[1]  # 1536 - 1369 = 167
     # feature dimension: patch_size*patch_size*C = 588; padded to 608 (19 tiles)
     pad_feat = 608 - x.shape[2]  # 608 - 588 = 20
 
@@ -469,17 +469,21 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
 
 
 def vit_embeddings(config, pixel_values, parameters, device):
-    """Combine patch embeddings, CLS token, and position embeddings."""
+    """Combine patch embeddings, CLS token, and position embeddings.
+
+    Output shape: (B, seqL_padded, 1024) where seqL_padded comes from config.
+    """
     assert pixel_values.shape[0] == 1, (
         f"Only batch_size=1 is supported (CLS token and position embeddings are not broadcast). "
         f"Got batch_size={pixel_values.shape[0]}."
     )
 
-    # 1. Patch embeddings: (B, 1376, 1024)
+    seqL_padded = config.get("seqL_padded", 1568)
+
+    # 1. Patch embeddings: (B, patch_seq_padded, 1024)
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters["patch_embeddings"], device)
 
     # 2. CLS token -- stored pre-padded to shape (1, 32, 1024) in ROW_MAJOR.
-    #    _cls_pad = 32 - original_cls_len ensures tile alignment.
     _cls = parameters["cls_token"]
     _cls_pad = 32 - _cls.shape[1]
     if _cls_pad > 0:
@@ -488,10 +492,18 @@ def vit_embeddings(config, pixel_values, parameters, device):
         cls_token = _cls
     cls_token = ttnn.to_layout(cls_token, ttnn.TILE_LAYOUT)
 
-    # Concat along seq dim: (B, 32 + 1376, 1024) = (B, 1408, 1024)
+    # Concat along seq dim: (B, 32 + patch_seq_padded, 1024)
     embedding_output = ttnn.concat([cls_token, patch_embeddings], dim=1)
 
-    # 3. Position embeddings -- pre-padded to (1, 1408, 1024).
+    # Pad to seqL_padded if needed
+    current_seq = embedding_output.shape[1]
+    if current_seq < seqL_padded:
+        pad_seq = seqL_padded - current_seq
+        embedding_output = ttnn.pad(embedding_output, padding=((0, 0), (0, pad_seq), (0, 0)), value=0)
+
+    embedding_output = ttnn.to_layout(embedding_output, ttnn.TILE_LAYOUT)
+
+    # 3. Position embeddings -- pre-padded to (1, seqL_padded, 1024).
     pos_raw = parameters["position_embeddings"]
     seqL = embedding_output.shape[1]
     if pos_raw.shape[1] != seqL:
@@ -504,26 +516,29 @@ def vit_embeddings(config, pixel_values, parameters, device):
     pos_embeds = _dram_tile(pos_embeds)
     embedding_output = ttnn.add(embedding_output, pos_embeds, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    return embedding_output  # (B, 1408, 1024)
+    return embedding_output  # (B, seqL_padded, 1024)
 
 
 def vit_layer(hidden_states, parameters, config, attention_mask=None):
-    """Single ViT-Large transformer block.
+    """Single ViT-Large transformer block — L1 block-sharded.
 
-    Uses fused QKV matmul + ttnn's split/concatenate_heads helpers.
-    All ops stay on DRAM (no sharding) for N300 8x7 grid compatibility.
+    All ops use L1_BLOCK_SHARDED_MEMORY_CONFIG with explicit program configs
+    to keep data on-chip throughout.  Mirrors the reference optimized ViT WH
+    (models/demos/vision/classification/vit/wormhole/tt/ttnn_optimized_sharded_vit_wh.py).
     """
     num_heads = config["num_attention_heads"]  # 16
     hidden_size = config["hidden_size"]  # 1024
     head_size = hidden_size // num_heads  # 64
+    pconfigs = config["program_configs"]
 
     # ---- LayerNorm 1 ---------------------------------------------------
-    # Do NOT pass memory_config or program_config: causes TT_FATAL when
-    # the Gamma tensor is 1D ROW_MAJOR.
     ln1 = ttnn.layer_norm(
         hidden_states,
         weight=parameters["layernorm_before"]["weight"],
         bias=parameters["layernorm_before"]["bias"],
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        program_config=pconfigs["layernorm_program_config"],
+        compute_kernel_config=pconfigs["compute_kernel_config"],
     )
 
     # ---- Fused QKV projection ------------------------------------------
@@ -531,58 +546,95 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         ln1,
         parameters["attention"]["qkv"]["weight"],
         bias=parameters["attention"]["qkv"]["bias"],
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=pconfigs["qkv_matmul_program_config"],
     )
     ttnn.deallocate(ln1)
+
+    # Reshard QKV to match core_grid before head split
+    block_sharded_config = ttnn.create_sharded_memory_config(
+        qkv.padded_shape,
+        core_grid=config["core_grid"],
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    qkv = ttnn.reshard(qkv, block_sharded_config)
 
     # ---- Split into Q, K, V heads --------------------------------------
     (query, key, value) = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         num_heads=num_heads,
     )
     ttnn.deallocate(qkv)
 
     # ---- Scaled dot-product attention ----------------------------------
-    attn_scores = ttnn.matmul(query, key, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    attn_scores = ttnn.matmul(
+        query,
+        key,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=pconfigs["qk_matmul_program_config"],
+    )
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
-    # Must move to DRAM before scalar multiply -- fails on L1-sharded tensors.
-    attn_scores = ttnn.to_memory_config(attn_scores, ttnn.DRAM_MEMORY_CONFIG)
-    attn_scores = ttnn.mul(
-        attn_scores,
-        1.0 / (head_size**0.5),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Scale attention scores
+    scale = 1.0 / (head_size**0.5)
+    attn_scores = ttnn.mul_(attn_scores, scale)
 
     # Apply attention mask to prevent padding tokens from affecting softmax.
-    # Mask is (1, 1, 1, seqL) with -inf at padding positions, 0 elsewhere.
     if attention_mask is not None:
-        attn_scores = ttnn.add(attn_scores, attention_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_scores = ttnn.add(attn_scores, attention_mask, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
 
-    attn_probs = ttnn.softmax(attn_scores, dim=-1)
-    ttnn.deallocate(attn_scores)
+    # In-place softmax on sharded tensor
+    attn_probs = ttnn.softmax_in_place(
+        attn_scores,
+        program_config=pconfigs["softmax_program_config"],
+    )
 
-    context_layer = ttnn.matmul(attn_probs, value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    context_layer = ttnn.matmul(
+        attn_probs,
+        value,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=pconfigs["attn_v_matmul_program_config"],
+    )
     ttnn.deallocate(attn_probs)
     ttnn.deallocate(value)
 
     # ---- Merge heads & output projection --------------------------------
-    context_layer = ttnn.transformer.concatenate_heads(context_layer, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    context_layer = ttnn.transformer.concatenate_heads(
+        context_layer,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    )
+
+    # Reshard back to full grid for output dense matmul
+    block_sharded_config_full = ttnn.create_sharded_memory_config(
+        context_layer.padded_shape,
+        core_grid=config["core_grid"],
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_full)
 
     attn_out = ttnn.linear(
         context_layer,
         parameters["attention"]["output"]["dense"]["weight"],
         bias=parameters["attention"]["output"]["dense"]["bias"],
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=pconfigs["output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
 
     # ---- Residual 1 ----------------------------------------------------
-    hidden_states = _dram_tile(hidden_states)
-    attn_out = _dram_tile(attn_out)
-    hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    hidden_states = ttnn.add(
+        attn_out, hidden_states,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+    )
     ttnn.deallocate(attn_out)
 
     # ---- LayerNorm 2 ---------------------------------------------------
@@ -590,15 +642,19 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         hidden_states,
         weight=parameters["layernorm_after"]["weight"],
         bias=parameters["layernorm_after"]["bias"],
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        program_config=pconfigs["layernorm_program_config"],
+        compute_kernel_config=pconfigs["compute_kernel_config"],
     )
 
-    # ---- MLP: FC1 (GELU) -> FC2 ----------------------------------------
+    # ---- MLP: FC1 (fused GELU) -> FC2 ----------------------------------
     mlp_out = ttnn.linear(
         ln2,
         parameters["intermediate"]["dense"]["weight"],
         bias=parameters["intermediate"]["dense"]["bias"],
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        activation="gelu",
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=pconfigs["ff1_matmul_program_config"],
     )
     ttnn.deallocate(ln2)
 
@@ -606,13 +662,17 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         mlp_out,
         parameters["output"]["dense"]["weight"],
         bias=parameters["output"]["dense"]["bias"],
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=pconfigs["ff2_matmul_program_config"],
     )
 
     # ---- Residual 2 ----------------------------------------------------
-    hidden_states = _dram_tile(hidden_states)
-    mlp_out = _dram_tile(mlp_out)
-    hidden_states = ttnn.add(hidden_states, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    hidden_states = ttnn.add(
+        mlp_out, hidden_states,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+    )
     ttnn.deallocate(mlp_out)
 
     return hidden_states
@@ -695,18 +755,30 @@ class TtDepthAnythingV2:
             self.device,
         )
 
-        # Ensure TILE + DRAM before encoder (no sharding -- N300 8x7 grid).
-        hidden_states = _dram_tile(hidden_states)
+        # ---- Shard into L1 before encoder --------------------------------
+        # Move from interleaved DRAM to block-sharded L1 across all cores.
+        seqL = self.config["seqL_padded"]  # 1568
+        hidden_size = self.config["hidden_size"]  # 1024
+        encoder_sharded_config = ttnn.create_sharded_memory_config(
+            [hidden_states.shape[0], seqL, hidden_size],
+            core_grid=self.config["core_grid"],
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        hidden_states = ttnn.to_memory_config(
+            hidden_states,
+            memory_config=encoder_sharded_config,
+            dtype=ttnn.bfloat8_b,
+        )
 
         # ---- Attention mask for padding tokens ----------------------------
-        # Sequence layout: [CLS(1 real + 31 pad), patches(1369 real + 7 pad)] = 1408
+        # Sequence layout: [CLS(1 real + 31 pad), patches(1369 real + 167 pad)] = 1568
         # Real tokens: position 0 (CLS), positions 32-1400 (patches)
-        # Padding tokens: positions 1-31, 1401-1407  -> set to -inf
+        # Padding tokens: positions 1-31, 1401-1567  -> set to -inf
         import torch
-        seqL = 1408
         mask_np = torch.zeros(1, 1, 1, seqL)
-        mask_np[0, 0, 0, 1:32] = float("-inf")     # CLS padding
-        mask_np[0, 0, 0, 1401:1408] = float("-inf")  # patch padding
+        mask_np[0, 0, 0, 1:32] = float("-inf")         # CLS padding
+        mask_np[0, 0, 0, 1401:seqL] = float("-inf")    # patch padding
         attention_mask = ttnn.from_torch(mask_np, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         # ---- 2. ViT-Large encoder (24 layers) --------------------------
@@ -724,6 +796,8 @@ class TtDepthAnythingV2:
                 features.append(ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG))
 
         # ---- 3. Final backbone LayerNorm --------------------------------
+        # Move to DRAM for the final layernorm (neck/head use DRAM anyway)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.parameters["backbone"]["layernorm"]["weight"],
@@ -748,10 +822,15 @@ class TtDepthAnythingV2:
 
 
 def get_model_config(batch_size, device):
-    """Return DRAM-only model config for N300 (8x7 grid) compatibility.
+    """Return L1 block-sharded model config for N300 (8x7 grid).
 
-    All ops use DRAM_MEMORY_CONFIG to avoid grid / shard mismatches.
-    Sharding optimisations belong in a later stage.
+    All encoder ops use L1_BLOCK_SHARDED_MEMORY_CONFIG with explicit
+    program configs for matmul, layernorm, and softmax.  This eliminates
+    DRAM round-trips inside the ViT encoder, which is the primary
+    bottleneck at Stage 1.
+
+    Sequence is padded to 1568 (= 49 tiles) so that each of the 7 rows
+    gets exactly 7 tiles, giving perfectly balanced compute.
     """
     if device is not None:
         raw = device.compute_with_storage_grid_size()
@@ -761,12 +840,111 @@ def get_model_config(batch_size, device):
 
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
 
-    # Padded sequence length aligned to tile boundary (32).
-    # 1369 patches + 1 CLS = 1370 -> must reach a multiple of 32.
-    # CLS is padded to 32 tokens (one full tile), so total = 1369 + 32 = 1401
-    # -> rounded up to 1408 (= 44 x 32).
-    min_tok = 1369 + 32
-    seqL_padded = ((min_tok + 31) // 32) * 32  # 1408
+    TILE_HEIGHT = 32
+
+    # Padded sequence length: 1369 patches + 32 CLS = 1401 real tokens.
+    # Pad to 1568 (= 49 * 32) so that 49 / 7 = 7 tiles per core row.
+    seqL_padded = 1568
+
+    # Tile counts
+    seqL_t = seqL_padded // TILE_HEIGHT         # 49 tiles
+    dim_t = 1024 // TILE_HEIGHT                  # 32 tiles
+    dim_t__x = dim_t // grid_x                   # 4 tiles per core (width)
+    seqL_t__y = seqL_t // grid_y                 # 7 tiles per core (height)
+    head_num = 16
+    head_size_t = dim_t // head_num              # 2 tiles per head
+    head_seqL_t__x = (head_num * seqL_t) // grid_x  # 98
+
+    # MLP intermediate dimension: 4096
+    mlp_dim_t__x = (4096 // TILE_HEIGHT) // grid_x  # 16 tiles per core
+
+    # Sharded program configs (mirrors the reference optimized ViT WH)
+    program_configs = {
+        # LayerNorm (used for both LN1 and LN2 in each encoder layer)
+        "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            subblock_w=dim_t__x,        # 4
+            block_h=seqL_t__y,           # 7
+            block_w=dim_t__x,            # 4
+            inplace=False,
+        ),
+        # Fused QKV matmul: (seqL, 1024) × (1024, 3072) → (seqL, 3072)
+        "qkv_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=dim_t__x,        # 4
+            out_subblock_h=1,
+            out_subblock_w=dim_t__x,      # 4
+            per_core_M=seqL_t__y,         # 7
+            per_core_N=3 * dim_t__x,      # 12
+            transpose_mcast=False,
+            fused_activation=None,
+        ),
+        # Q×K^T: attention scores per head
+        "qk_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=head_size_t,      # 2
+            out_subblock_h=1,
+            out_subblock_w=seqL_t__y,     # 7
+            per_core_M=head_seqL_t__x,    # 98
+            per_core_N=seqL_t__y,         # 7
+        ),
+        # Softmax on attention scores
+        "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            subblock_w=seqL_t__y,         # 7
+            block_h=head_seqL_t__x,       # 98
+            block_w=seqL_t__y,            # 7
+        ),
+        # attn_probs × V matmul
+        "attn_v_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=seqL_t__y,        # 7
+            out_subblock_h=1,
+            out_subblock_w=head_size_t,    # 2
+            per_core_M=head_seqL_t__x,    # 98
+            per_core_N=head_size_t,        # 2
+        ),
+        # Output dense: (seqL, 1024) × (1024, 1024) → (seqL, 1024)
+        "output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=dim_t__x,         # 4
+            out_subblock_h=1,
+            out_subblock_w=dim_t__x,       # 4
+            per_core_M=seqL_t__y,          # 7
+            per_core_N=dim_t__x,           # 4
+            transpose_mcast=False,
+            fused_activation=None,
+        ),
+        # MLP FC1 with fused GELU: (seqL, 1024) × (1024, 4096)
+        "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=dim_t__x,          # 4
+            out_subblock_h=1,
+            out_subblock_w=mlp_dim_t__x // 2,  # 8
+            per_core_M=seqL_t__y,           # 7
+            per_core_N=mlp_dim_t__x,        # 16
+            transpose_mcast=False,
+            fused_activation=(ttnn.UnaryOpType.GELU, True),
+        ),
+        # MLP FC2: (seqL, 4096) × (4096, 1024)
+        "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=mlp_dim_t__x,      # 16
+            out_subblock_h=1,
+            out_subblock_w=dim_t__x,        # 4
+            per_core_M=seqL_t__y,           # 7
+            per_core_N=dim_t__x,            # 4
+            transpose_mcast=False,
+            fused_activation=None,
+        ),
+        # Compute kernel config for all matmuls and layernorms
+        "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
+    }
 
     return {
         "num_attention_heads": 16,
@@ -774,10 +952,9 @@ def get_model_config(batch_size, device):
         "core_grid": core_grid,
         "core_grid_8x8": core_grid,
         "seqL_padded": seqL_padded,
-        "program_configs": {},
-        # Stage 1: DRAM everywhere.  Stage 2+ can replace with L1 shard configs.
-        "l1_sharded_config": ttnn.DRAM_MEMORY_CONFIG,
-        "l1_height_sharded_config": ttnn.DRAM_MEMORY_CONFIG,
+        "program_configs": program_configs,
+        "l1_sharded_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        "l1_height_sharded_config": ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     }
 
 
@@ -858,7 +1035,7 @@ def custom_preprocessor(torch_model, name):
                     torch_model.backbone.embeddings.position_embeddings[:, :1, :],  # CLS pos (1, 1, 1024)
                     torch.zeros(1, 31, 1024),  # pad CLS region to 32 tokens
                     torch_model.backbone.embeddings.position_embeddings[:, 1:, :],  # patch positions (1, 1369, 1024)
-                    torch.zeros(1, 1408 - 32 - 1369, 1024),  # pad to seqL_padded
+                    torch.zeros(1, 1568 - 32 - 1369, 1024),  # pad to seqL_padded=1568
                 ], dim=1)
             ),
         },
@@ -901,14 +1078,14 @@ def custom_preprocessor(torch_model, name):
             },
             "attention": {
                 "qkv": {
-                    "weight": _tile(qkv_w, dtype=ttnn.bfloat16),
+                    "weight": _tile(qkv_w, dtype=ttnn.bfloat8_b),
                     "bias": _tile(qkv_b),
                 },
                 "output": {
                     "dense": {
                         "weight": _tile(
                             layer.attention.output.dense.weight.transpose(0, 1),
-                            dtype=ttnn.bfloat16,
+                            dtype=ttnn.bfloat8_b,
                         ),
                         "bias": _rm(layer.attention.output.dense.bias),
                     }
@@ -920,13 +1097,13 @@ def custom_preprocessor(torch_model, name):
             },
             "intermediate": {
                 "dense": {
-                    "weight": _tile(layer.mlp.fc1.weight.transpose(0, 1), dtype=ttnn.bfloat16),
+                    "weight": _tile(layer.mlp.fc1.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
                     "bias": _rm(layer.mlp.fc1.bias),
                 }
             },
             "output": {
                 "dense": {
-                    "weight": _tile(layer.mlp.fc2.weight.transpose(0, 1), dtype=ttnn.bfloat16),
+                    "weight": _tile(layer.mlp.fc2.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
                     "bias": _rm(layer.mlp.fc2.bias),
                 }
             },
