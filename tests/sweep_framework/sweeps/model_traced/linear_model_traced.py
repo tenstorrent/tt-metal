@@ -575,27 +575,7 @@ def run(
                 return ttnn.linear(_a, input_tensor_b=_b, **_kw)
             return ttnn.linear(_a, _b, **_kw)
 
-        try:
-            output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
-        except Exception:
-            ttnn_a, ttnn_b = _make_dram_tensors()
-            # First try keeping program_config so the trace records it (drop only
-            # memory_config + core_grid, which depend on shard layout).
-            fallback_kwargs = {k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "core_grid")}
-            try:
-                output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs)
-            except Exception:
-                # Drop program_config too if it's also incompatible.
-                fallback_kwargs2 = {
-                    k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "program_config", "core_grid")
-                }
-                try:
-                    output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs2)
-                except Exception:
-                    minimal_kwargs = {"bias": ttnn_bias}
-                    if dtype is not None:
-                        minimal_kwargs["dtype"] = dtype
-                    output_tensor = _do_linear(ttnn_a, ttnn_b, **minimal_kwargs)
+        output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
 
