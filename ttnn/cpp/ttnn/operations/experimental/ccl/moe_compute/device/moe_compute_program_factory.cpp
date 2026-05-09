@@ -35,7 +35,7 @@ namespace ttnn::experimental::prim {
 // Runtime BH ring size, configurable via env var TT_MOE_BH_N. Supported values: 8, 12, 16.
 // Default is 16 (current perf-experiment default). The chosen N must have a corresponding
 // DeepSeekRingConfig<HasBias, N>/GptRingConfig<HasBias, N> specialization in moe_ring_common.h.
-// N=8 selects HEIGHT_SHARDED weights (1:1 with BH's 8 DRAM banks); N=12/16 select INTERLEAVED.
+// N=8 maps 1:1 to BH's 8 DRAM banks; N=12/16 use HEIGHT_SHARDED (8 banks) + bank-run reads.
 // Read once and cached so back-to-back op invocations within a session see a stable N.
 uint32_t get_bh_ring_size() {
     static const uint32_t value = []() {
@@ -172,11 +172,10 @@ get_cores(
     // matmul cores come from the DRAM-bank-to-worker assignment: WH returns 12, BH returns 8.
     // WH instantiates the N=12 ring; BH instantiates the N=get_bh_ring_size() ring (perf knob,
     // env var TT_MOE_BH_N, supported {8, 12, 16}).
-    //   - N=8: keep only the 8 DRAM-adjacent cores; weights HEIGHT_SHARDED 1:1 with banks
-    //     (M1 pattern, dm0.cpp set_state + with_state fast path).
-    //   - N=12/16: append extras inside the matmul mcast bbox ({0,0},{7,9}); weights
-    //     INTERLEAVED (see Python `get_weight_mem_configs`) page tiles across all DRAM banks
-    //     so the ring core count is independent of bank count.
+    //   - N=8 (BH): keep only the 8 DRAM-adjacent cores; weights HEIGHT_SHARDED 1:1 with banks.
+    //   - N=12/16 (BH): append extras inside the matmul mcast bbox ({0,0},{7,9}); weights still
+    //     HEIGHT_SHARDED with 8 shards, but each ring core's slice spans 1-2 banks → dm0.cpp
+    //     walks the slice via the bank-run loop, set_state'ing once per bank crossing.
     // Issue #41827 PR1 (N=12 baseline) + N=16/N=8 perf experiments.
     auto matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
@@ -490,8 +489,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // a2a_cb_pages = IN2_TILES_PER_STEP for the active workload. WH instantiates <12>, BH
-    // instantiates <get_bh_ring_size()> (templatize knob; INTERLEAVED weights decouple ring
-    // core count from DRAM bank count on BH). Runtime-to-compile-time switch over supported N.
+    // instantiates <get_bh_ring_size()> (templatize knob). On BH, when N != bank count (=8),
+    // the kernel bank-run loop walks each ring core's slice across multiple banks.
+    // Runtime-to-compile-time switch over supported N.
     const uint32_t expected_matmul_n =
         (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? ttnn::experimental::prim::get_bh_ring_size() : 12u;
     TT_FATAL(
@@ -1263,19 +1263,38 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::experimental::prim::detail::MoEActivationFunction activation_type = args.activation_type;
 
     const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
-    // weight_is_height_sharded: controls dm0.cpp's read path. WH always uses HEIGHT_SHARDED
-    // (M1 byte-identical baseline). BH uses HEIGHT_SHARDED at N=8 (1:1 with 8 DRAM banks)
-    // and INTERLEAVED at N=12/16 (per-tile reads via TensorAccessor). Must agree with the
-    // weight memory configs constructed in moe_compute_utils.py.
-    const bool weight_is_height_sharded =
-        (mesh_device->arch() == tt::ARCH::WORMHOLE_B0) ||
-        (mesh_device->arch() == tt::ARCH::BLACKHOLE && ttnn::experimental::prim::get_bh_ring_size() == 8u);
+    // num_banks: number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on.
+    // WH=12 (one bank per ring core, 1:1). BH=8 always; ring N may be 8/12/16, so on
+    // BH N=12/16 each ring core's slice spans multiple banks → kernel walks via the
+    // bank-run loop in dm0.cpp.
+    const uint32_t num_dram_banks = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 8u : 12u;
+    // pages_per_ring_core_total / w2_pages_per_ring_core_total: number of tile-pages each
+    // ring core "owns" in the FLAT layout of the HEIGHT_SHARDED weight tensor. The flat
+    // layout is core-major (ring_core_0's tiles for all (layer, expert), then ring_core_1's,
+    // etc.), so this value equals total_pages / num_cores. The kernel uses it to derive the
+    // global page offset for each (ring_core, layer, expert).
+    const uint32_t w0_w1_total_pages_buf = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
+    const uint32_t w2_total_pages_buf = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
+    TT_FATAL(
+        w0_w1_total_pages_buf % matmul_num_cores == 0,
+        "moe_compute: w0_w1 total pages ({}) not divisible by num_cores ({})",
+        w0_w1_total_pages_buf,
+        matmul_num_cores);
+    TT_FATAL(
+        w2_total_pages_buf % matmul_num_cores == 0,
+        "moe_compute: w2 total pages ({}) not divisible by num_cores ({})",
+        w2_total_pages_buf,
+        matmul_num_cores);
+    const uint32_t w0_w1_pages_per_ring_core_total = w0_w1_total_pages_buf / matmul_num_cores;
+    const uint32_t w2_pages_per_ring_core_total = w2_total_pages_buf / matmul_num_cores;
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
         {"layer_id", args.layer_id},
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
-        {"weight_is_height_sharded", weight_is_height_sharded ? 1u : 0u},
+        {"num_banks", num_dram_banks},
+        {"w0_w1_pages_per_ring_core_total", w0_w1_pages_per_ring_core_total},
+        {"w2_pages_per_ring_core_total", w2_pages_per_ring_core_total},
         {"activation_function", static_cast<uint32_t>(activation_type)},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
@@ -1380,31 +1399,73 @@ MoEComputeMeshWorkloadFactory::create_at(
     matmul_runtime_args.push_back(0);                  // Neighbor physical x
     matmul_runtime_args.push_back(0);                  // Neighbor physical y
 
-    // BH INTERLEAVED-only extra args: per-core start page_id for INTERLEAVED weight buffers.
-    // The prepared weight tensors have the leading num_cores dim, so each ring core's
-    // slice is a contiguous range of `pages_per_core` page_ids. HEIGHT_SHARDED paths
-    // (WH, BH N=8) do not need these — dm0.cpp doesn't read them in that branch.
-    const bool is_blackhole = mesh_device->arch() == tt::ARCH::BLACKHOLE;
-    const bool weights_interleaved = is_blackhole && !weight_is_height_sharded;
-    uint32_t w0_w1_pages_per_core = 0;
-    uint32_t w2_pages_per_core = 0;
-    if (weights_interleaved) {
+    // Append shard_to_bank table: shard_to_bank[i] = chip bank id holding shard i.
+    //
+    // We query the buffer's actual page mapping (built by ttnn) to recover the precise
+    // shard-index → bank-id correspondence. ttnn's `all_cores` list holds CoreCoords of
+    // the form `(bank_id, 0)` for DRAM-sharded buffers; the i-th entry is the chip bank
+    // holding shard `i`. Using the page mapping directly avoids depending on the C++
+    // `ring_pos2bank_id` ordering (which differs from the Python `sorted_dram_core_coords`
+    // when matmul_cores has padded extras for ring sizes > num_banks, e.g. BH N=12/16).
+    {
+        const auto& mapping = matmul_w0_w1_tensor.buffer()->get_buffer_page_mapping();
+        TT_FATAL(
+            mapping->all_cores.size() == num_dram_banks,
+            "moe_compute: w0_w1 buffer page mapping has {} cores, expected num_dram_banks={}",
+            mapping->all_cores.size(),
+            num_dram_banks);
+        for (const auto& c : mapping->all_cores) {
+            TT_FATAL(
+                c.y == 0,
+                "moe_compute: DRAM shard core ({}, {}) has y != 0; expected DRAM CoreCoord(bank_id, 0)",
+                c.x,
+                c.y);
+            matmul_runtime_args.push_back(static_cast<uint32_t>(c.x));
+        }
+    }
+
+    // shard_to_bank translation table: maps shard index → physical chip DRAM bank id.
+    //
+    // Why we need this: The Python helper builds `dram_core_range_set` from
+    // `[CoreCoord(sorted_dram_core_coords[ring_pos], 0) for ring_pos in 0..num_banks-1]`,
+    // where `sorted_dram_core_coords[ring_pos]` is the chip bank id whose adjacent worker
+    // core is at the ring's `ring_pos`. Critically, `CoreRangeSet(list[CoreRange])` does
+    // NOT call `merge_ranges()` (only the `Span<const CoreCoord>` constructor does), so
+    // the ring-pos ordering is preserved across `corerange_to_cores`. ttnn HEIGHT_SHARDED
+    // places shard `i` on the i-th core in that traversal order — i.e., shard `i` lands
+    // on bank `sorted_dram_core_coords[i] == ring_pos2bank_id[i]`, not bank `i`.
+    //
+    // The kernel's bank-run loop computes `shard_idx = gp / pages_per_bank_total`. To find
+    // the actual chip bank, it needs `bank = shard_to_bank[shard_idx]`. We pass this table
+    // as runtime args (one entry per bank, after the 9 standard args). The same shape
+    // applies on WH (num_banks=12) and BH (num_banks=8); only the values differ.
+    //
+    // Sanity-check the divisibility invariants the bank-run kernel relies on. The Python
+    // helper `get_weight_mem_configs` enforces matching invariants when constructing the
+    // ShardSpec, so this is belt-and-braces.
+    {
         const uint32_t w0_w1_total_pages = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
         const uint32_t w2_total_pages = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
         TT_FATAL(
+            w0_w1_total_pages % num_dram_banks == 0,
+            "moe_compute: w0_w1 total pages ({}) must be divisible by num_banks ({})",
+            w0_w1_total_pages,
+            num_dram_banks);
+        TT_FATAL(
+            w2_total_pages % num_dram_banks == 0,
+            "moe_compute: w2 total pages ({}) must be divisible by num_banks ({})",
+            w2_total_pages,
+            num_dram_banks);
+        TT_FATAL(
             w0_w1_total_pages % matmul_num_cores == 0,
-            "BH INTERLEAVED weights: w0_w1 total pages ({}) must be divisible by matmul_num_cores ({})",
+            "moe_compute: w0_w1 total pages ({}) must be divisible by num_cores ({})",
             w0_w1_total_pages,
             matmul_num_cores);
         TT_FATAL(
             w2_total_pages % matmul_num_cores == 0,
-            "BH INTERLEAVED weights: w2 total pages ({}) must be divisible by matmul_num_cores ({})",
+            "moe_compute: w2 total pages ({}) must be divisible by num_cores ({})",
             w2_total_pages,
             matmul_num_cores);
-        w0_w1_pages_per_core = w0_w1_total_pages / matmul_num_cores;
-        w2_pages_per_core = w2_total_pages / matmul_num_cores;
-        matmul_runtime_args.push_back(0);  // w0_w1_core_start_page_id placeholder
-        matmul_runtime_args.push_back(0);  // w2_core_start_page_id placeholder
     }
 
     // matmul cores ordered by core ID, this will be used by selective combine to direct semaphore signaling
@@ -1441,13 +1502,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         matmul_runtime_args[6] = ring_pos;
         matmul_runtime_args[7] = static_cast<uint32_t>(next_physical.x);
         matmul_runtime_args[8] = static_cast<uint32_t>(next_physical.y);
-        if (weights_interleaved) {
-            // INTERLEAVED weight buffers: each ring core's slice starts at ring_pos * pages_per_core.
-            // dm1.cpp/compute.cpp don't read these args (they only read 9 args); pushing extras to all
-            // three SetRuntimeArgs calls is harmless because each kernel only reads what it knows about.
-            matmul_runtime_args[9] = ring_pos * w0_w1_pages_per_core;
-            matmul_runtime_args[10] = ring_pos * w2_pages_per_core;
-        }
 
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm0_kernel_handle, core, matmul_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm1_kernel_handle, core, matmul_runtime_args);

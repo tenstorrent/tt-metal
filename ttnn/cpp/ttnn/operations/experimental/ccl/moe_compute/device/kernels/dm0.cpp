@@ -34,16 +34,19 @@ void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
-
-    // Weight memory layout switch (host-driven). HEIGHT_SHARDED uses one set_state +
-    // many noc_async_read_one_packet_with_state_with_trid (M1 fast path). INTERLEAVED
-    // uses TensorAccessor + per-tile reads to page tiles across all DRAM banks (BH
-    // N=12/16 path; ring core count > bank count). WH always = 1; BH N=8 = 1; BH N=12/16 = 0.
-    constexpr bool weight_is_height_sharded = get_named_compile_time_arg_val("weight_is_height_sharded") == 1;
+    // Number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on. WH=12 (1:1
+    // with ring N=12). BH=8 always; ring N can be 8, 12, or 16 → on BH N=12/16 we walk a
+    // ring core's slice across multiple banks via the bank-run loop below.
+    constexpr uint32_t num_banks = get_named_compile_time_arg_val("num_banks");
+    // Per-ring-core total tile-page count (across ALL layers and ALL experts). Derived from
+    // the HEIGHT_SHARDED weight tensor's total page count divided by num_cores (the prepare
+    // function emits a leading dim of num_cores; HEIGHT_SHARDED keeps the byte order so the
+    // flat layout is core-major).
+    constexpr uint32_t w0_w1_pages_per_ring_core_total =
+        get_named_compile_time_arg_val("w0_w1_pages_per_ring_core_total");
+    constexpr uint32_t w2_pages_per_ring_core_total = get_named_compile_time_arg_val("w2_pages_per_ring_core_total");
 
     // Ring is templatized on num_cores: 12 on Wormhole, 8/12/16 on Blackhole.
-    // BH N=8 uses HEIGHT_SHARDED (1:1 with 8 DRAM banks); BH N=12/16 use INTERLEAVED
-    // weights to decouple ring core count from bank count. See moe_ring_common.h.
     using config_t = moe_ring::ConfigType_t<has_bias, config_type, num_cores>;
 
     // For synchronization with tilize cores
@@ -57,7 +60,7 @@ void kernel_main() {
 
     // Run-time arguments
     uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w2_addr = get_arg_val<uint32_t>(argidx++);
@@ -66,13 +69,15 @@ void kernel_main() {
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
-    // INTERLEAVED-only: starting global page_id of this ring core's slice in the INTERLEAVED
-    // weight buffer (in tiles). HEIGHT_SHARDED paths (WH always; BH N=8) keep each core's
-    // slice in its own dedicated DRAM bank, so the start_page_id concept doesn't apply.
-    [[maybe_unused]] const uint32_t w0_w1_core_start_page_id =
-        weight_is_height_sharded ? 0u : get_arg_val<uint32_t>(argidx++);
-    [[maybe_unused]] const uint32_t w2_core_start_page_id =
-        weight_is_height_sharded ? 0u : get_arg_val<uint32_t>(argidx++);
+
+    // shard_to_bank translation table: maps shard index → physical chip DRAM bank id.
+    // The host appends `num_banks` entries here. The bank-run loop below reads its
+    // shard_idx from `gp / pages_per_bank_total`, then translates via this table to get
+    // the actual chip bank to feed `get_noc_addr_from_bank_id`.
+    uint32_t shard_to_bank[num_banks];
+    for (uint32_t i = 0; i < num_banks; ++i) {
+        shard_to_bank[i] = get_arg_val<uint32_t>(argidx++);
+    }
 
     // CBs
     constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
@@ -97,7 +102,6 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    // constexpr uint32_t w0_w1_tiles_w = moe_ring::W0_W1_BLOCK_TILES_W;
     constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
@@ -109,8 +113,7 @@ void kernel_main() {
     constexpr uint32_t w2_dram_tiles_h = config_t::NUM_W2_DRAM_TILES_H;
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;  // 14 * 2 = 28
     constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
@@ -121,54 +124,55 @@ void kernel_main() {
     constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
-    // Offsets for layer_id
+    // Tile-count math for the bank-run loop. The HEIGHT_SHARDED weight tensor stores the
+    // FULL flat tile sequence of the prepare-output tensor, whose leading dim is `num_cores`.
+    // The flat layout is therefore CORE-MAJOR: ring_core_0's tiles for all (layer, expert),
+    // then ring_core_1's tiles, etc. HEIGHT_SHARDED splits this flat sequence into
+    // `num_banks` equal chunks (one per physical DRAM bank).
+    //
+    //   pages_per_logical_shard       = blocks_per_expert * tiles_per_block
+    //                                       (this ring core's tiles for ONE expert in ONE layer)
+    //   pages_per_ring_core_total     = num_layers * num_experts * pages_per_logical_shard
+    //                                       (computed host-side from buffer->num_pages() / num_cores)
+    //   pages_per_bank_total          = num_cores * pages_per_ring_core_total / num_banks
+    //
+    // For ring core r, layer l, expert e, the slice's first global page is
+    //     gp = r * pages_per_ring_core_total + l * num_experts * pages_per_logical_shard
+    //          + e * pages_per_logical_shard
+    // and it runs for `pages_per_logical_shard` consecutive pages.
+    //
+    // For a global page id `gp`:
+    //     bank_id      = gp / pages_per_bank_total
+    //     in_bank_page = gp - bank_id * pages_per_bank_total
+    constexpr uint32_t w0_w1_pages_per_logical_shard = w0_w1_blocks_per_expert * w0_w1_tiles_per_block;
+    constexpr uint32_t w0_w1_pages_total = num_cores * w0_w1_pages_per_ring_core_total;
+    static_assert(w0_w1_pages_total % num_banks == 0, "w0_w1 pages_total must be divisible by num_banks");
+    constexpr uint32_t w0_w1_pages_per_bank_total = w0_w1_pages_total / num_banks;
+    // Each transaction is `tiles_per_txn` (=14) contiguous tiles. For the bank-run to work
+    // without splitting a single transaction across a bank boundary, both the slice size and
+    // the bank size must be multiples of the transaction tile count.
+    static_assert(
+        w0_w1_pages_per_logical_shard % w0_w1_tiles_per_txn == 0,
+        "w0_w1 pages_per_logical_shard must be a multiple of tiles_per_txn (no mid-txn bank split allowed)");
+    static_assert(
+        w0_w1_pages_per_bank_total % w0_w1_tiles_per_txn == 0,
+        "w0_w1 pages_per_bank_total must be a multiple of tiles_per_txn");
 
-    constexpr uint32_t w0_w1_total_size_per_expert = w0_w1_blocks_per_expert * 2 * w0_w1_bytes_per_txn;
-    constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
-    constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
+    constexpr uint32_t w2_pages_per_logical_shard = w2_blocks_per_expert * w2_tiles_per_block;
+    constexpr uint32_t w2_pages_total = num_cores * w2_pages_per_ring_core_total;
+    static_assert(w2_pages_total % num_banks == 0, "w2 pages_total must be divisible by num_banks");
+    constexpr uint32_t w2_pages_per_bank_total = w2_pages_total / num_banks;
+    static_assert(
+        w2_pages_per_logical_shard % w2_tiles_per_txn == 0,
+        "w2 pages_per_logical_shard must be a multiple of tiles_per_txn");
+    static_assert(
+        w2_pages_per_bank_total % w2_tiles_per_txn == 0, "w2 pages_per_bank_total must be a multiple of tiles_per_txn");
 
-    // W2: same approach
-    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert * 2 * w2_bytes_per_txn;
-    constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
-    constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
-
-    // INTERLEAVED-only constants: tile counts for layer/expert striding in tile units.
-    // Compiled away when weight_is_height_sharded (HEIGHT_SHARDED path uses byte offsets).
-    constexpr uint32_t w0_w1_pages_per_expert = w0_w1_total_size_per_expert / w0_w1_tile_size;
-    constexpr uint32_t w0_w1_pages_per_layer = w0_w1_total_size_per_layer / w0_w1_tile_size;
-    constexpr uint32_t w0_w1_layer_page_offset = layer_id * w0_w1_pages_per_layer;
-    constexpr uint32_t w0_w1_pages_per_txn = w0_w1_tiles_per_txn;
-
-    constexpr uint32_t w2_pages_per_expert = w2_total_size_per_expert / w2_tile_size;
-    constexpr uint32_t w2_pages_per_layer = w2_total_size_per_layer / w2_tile_size;
-    constexpr uint32_t w2_layer_page_offset = layer_id * w2_pages_per_layer;
-    constexpr uint32_t w2_pages_per_txn = w2_tiles_per_txn;
-
-    // HEIGHT_SHARDED state (WH always; BH N=8): byte offsets within this core's bank slice.
-    // INTERLEAVED state (BH N=12/16): per-tile global page_id base.
-    uint32_t w0_w1_expert_offset = 0;
-    uint32_t w2_expert_offset = 0;
-    uint32_t w0_w1_expert_page_offset = 0;
-    uint32_t w2_expert_page_offset = 0;
-    uint64_t dram_noc_addr = 0;
-    if constexpr (weight_is_height_sharded) {
-        w0_w1_expert_offset = w0_w1_layer_offset + w0_w1_addr;
-        w2_expert_offset = w2_layer_offset + w2_addr;
-        // DRAM bank's base NOC address
-        dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
-    } else {
-        // Starting global page_id for this ring core's first expert in the current layer.
-        // INTERLEAVED bank selection is handled by TensorAccessor on each fast_read.
-        w0_w1_expert_page_offset = w0_w1_core_start_page_id + w0_w1_layer_page_offset;
-        w2_expert_page_offset = w2_core_start_page_id + w2_layer_page_offset;
-        (void)dram_bank_id;
-        (void)vchannel;
-    }
-
-    // TensorAccessors for INTERLEAVED weight buffers (page size = tile size). Constructed
-    // unconditionally (cheap; just stores the address). Only used in the !HS branch.
-    const auto w0_w1_acc = TensorAccessor(w0_w1_args, w0_w1_addr, w0_w1_tile_size);
-    const auto w2_acc = TensorAccessor(w2_args, w2_addr, w2_tile_size);
+    // Layer's per-ring-core stride in pages.
+    constexpr uint32_t w0_w1_layer_pages_per_ring_core = num_experts * w0_w1_pages_per_logical_shard;
+    constexpr uint32_t w2_layer_pages_per_ring_core = num_experts * w2_pages_per_logical_shard;
+    constexpr uint32_t w0_w1_layer_offset_in_ring_core = layer_id * w0_w1_layer_pages_per_ring_core;
+    constexpr uint32_t w2_layer_offset_in_ring_core = layer_id * w2_layer_pages_per_ring_core;
 
     //-------------------------------------------------------------------------
     // CB addresses
@@ -179,15 +183,6 @@ void kernel_main() {
     // Each slot holds 2 transactions (28 tiles)
     const uint32_t slot_addr[NUM_SLOTS] = {
         w_cb_base_addr, w_cb_base_addr + w0_w1_bytes_per_block, w_cb_base_addr + 2 * w0_w1_bytes_per_block};
-
-    //-------------------------------------------------------------------------
-    // Expert loop
-    //-------------------------------------------------------------------------
-    if constexpr (weight_is_height_sharded) {
-        // HEIGHT_SHARDED only: set w0_w1 state once before loop (will be reused for all
-        // experts). INTERLEAVED path issues per-tile reads and cannot reuse a single base.
-        noc_async_read_one_packet_set_state<true>(dram_noc_addr, w0_w1_bytes_per_txn, vchannel);
-    }
 
     //-------------------------------------------------------------------------
     // Variables to track pipeline state
@@ -221,60 +216,101 @@ void kernel_main() {
     // We reserve one to kick start the pipeline, and then it is steady state
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
+    // Pre-set state for this ring core's bank if the slice fits in one bank (M1 fast path
+    // optimization for WH where pages_per_ring_core_total <= pages_per_bank_total). This
+    // matches the pre-loop set_state in HEAD's M1 kernel and ensures the first transaction
+    // doesn't have to call set_state in the hot path.
+    const uint32_t initial_shard_idx_w0 =
+        (ring_core_id * w0_w1_pages_per_ring_core_total + w0_w1_layer_offset_in_ring_core) / w0_w1_pages_per_bank_total;
+    const uint32_t initial_bank_id_w0 = shard_to_bank[initial_shard_idx_w0];
+    {
+        const uint64_t initial_dram_noc_addr_w0 = get_noc_addr_from_bank_id<true>(initial_bank_id_w0, 0);
+        noc_async_read_one_packet_set_state<true>(initial_dram_noc_addr_w0, w0_w1_bytes_per_txn, vchannel);
+    }
+    // Track the currently set_state'd bank for w0_w1 reads. Initially equal to the bank we
+    // just set above. The bank-run loop only re-set_states if shard_idx changes.
+    uint32_t cur_shard_idx_w0 = initial_shard_idx_w0;
+    // Same for w2 reads. w2 is read AFTER w0_w1 within each expert iteration, so we
+    // initialize to the sentinel to force a set_state on the first w2 transaction (its
+    // bytes_per_txn may differ from w0_w1_bytes_per_txn).
+    uint32_t cur_shard_idx_w2 = num_banks;
+
+    // This ring core's first global page id for the CURRENT layer.
+    const uint32_t w0_w1_ring_core_first_global_page =
+        ring_core_id * w0_w1_pages_per_ring_core_total + w0_w1_layer_offset_in_ring_core;
+    const uint32_t w2_ring_core_first_global_page =
+        ring_core_id * w2_pages_per_ring_core_total + w2_layer_offset_in_ring_core;
+
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+
+        // Per-expert slice's first GLOBAL page id (in the FULL flat tensor across all banks).
+        const uint32_t w0_w1_slice_first_global_page =
+            w0_w1_ring_core_first_global_page + expert_id * w0_w1_pages_per_logical_shard;
+        const uint32_t w2_slice_first_global_page =
+            w2_ring_core_first_global_page + expert_id * w2_pages_per_logical_shard;
+
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             //-------------------------------------------------------------------------
-            // Pipelined reading of W0/W1
+            // Pipelined reading of W0/W1 — bank-run loop
             //-------------------------------------------------------------------------
-            // Layout-conditional: HEIGHT_SHARDED uses byte offsets, INTERLEAVED uses page ids.
-            uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
-            uint32_t w0_w1_page_id = w0_w1_expert_page_offset;
+            // Walk the slice [slice_first_global_page, slice_first_global_page +
+            // pages_per_logical_shard) page-by-page, batching reads within each bank. Each
+            // block issues 2 transactions of `tiles_per_txn` contiguous tiles. The
+            // static_asserts above guarantee bank boundaries land on txn boundaries, so we
+            // never split a single transaction across two banks. We may re-set_state
+            // mid-block though if the SECOND txn of a block lands in a different bank.
+            //
+            // shard_idx (= gp / pages_per_bank_total) is the placement-order index in
+            // [0, num_banks); we translate to the chip bank id via shard_to_bank[].
+            uint32_t w0_w1_global_page = w0_w1_slice_first_global_page;
+            // cur_shard_idx_w0 lives across iterations; we don't reset per-expert/chunk so
+            // that if the slice fits in the same bank as the previous one we skip set_state.
 
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
-                // Issue reads with current trid (set_trid persists in NOC_PACKET_TAG cmd_buf
-                // register; subsequent fast_reads inherit the trid until next set_trid).
+                // Set trid (persists in NOC_PACKET_TAG cmd_buf; subsequent fast_reads inherit it).
                 noc_async_read_set_trid(trid_to_issue);
-                if constexpr (weight_is_height_sharded) {
-                    // HEIGHT_SHARDED: 2 transactions per block via the set_state'd base.
-                    // Single set_state covers every txn for the entire op (M1 fast path).
-                    noc_async_read_one_packet_with_state_with_trid<
-                        /*skip_ptr_update=*/false,
-                        /*skip_cmdbuf_chk=*/true>(
-                        dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
-                    w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
 
+                // Issue 2 transactions of `tiles_per_txn` (=14) tiles each.
+                // First transaction:
+                {
+                    const uint32_t shard_idx = w0_w1_global_page / w0_w1_pages_per_bank_total;
+                    const uint32_t in_bank_page = w0_w1_global_page - shard_idx * w0_w1_pages_per_bank_total;
+                    const uint32_t in_bank_byte_offset = in_bank_page * w0_w1_tile_size + w0_w1_addr;
+                    const uint32_t bank_id = shard_to_bank[shard_idx];
+                    if (shard_idx != cur_shard_idx_w0) {
+                        const uint64_t bank_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+                        noc_async_read_one_packet_set_state<true>(bank_base, w0_w1_bytes_per_txn, vchannel);
+                        cur_shard_idx_w0 = shard_idx;
+                    }
                     noc_async_read_one_packet_with_state_with_trid<
                         /*skip_ptr_update=*/false,
                         /*skip_cmdbuf_chk=*/true>(
-                        dram_noc_addr,
-                        w0_w1_dram_read_offset,
+                        get_noc_addr_from_bank_id<true>(bank_id, 0),
+                        in_bank_byte_offset,
+                        slot_addr[slot_to_issue],
+                        trid_to_issue);
+                    w0_w1_global_page += w0_w1_tiles_per_txn;
+                }
+                // Second transaction (may cross a bank boundary):
+                {
+                    const uint32_t shard_idx = w0_w1_global_page / w0_w1_pages_per_bank_total;
+                    const uint32_t in_bank_page = w0_w1_global_page - shard_idx * w0_w1_pages_per_bank_total;
+                    const uint32_t in_bank_byte_offset = in_bank_page * w0_w1_tile_size + w0_w1_addr;
+                    const uint32_t bank_id = shard_to_bank[shard_idx];
+                    if (shard_idx != cur_shard_idx_w0) {
+                        const uint64_t bank_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+                        noc_async_read_one_packet_set_state<true>(bank_base, w0_w1_bytes_per_txn, vchannel);
+                        cur_shard_idx_w0 = shard_idx;
+                    }
+                    noc_async_read_one_packet_with_state_with_trid<
+                        /*skip_ptr_update=*/false,
+                        /*skip_cmdbuf_chk=*/true>(
+                        get_noc_addr_from_bank_id<true>(bank_id, 0),
+                        in_bank_byte_offset,
                         slot_addr[slot_to_issue] + w0_w1_bytes_per_txn,
                         trid_to_issue);
-                    w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
-                } else {
-                    // INTERLEAVED: 2 transactions per block, each = w0_w1_pages_per_txn (=14)
-                    // per-tile reads. Each tile is on a (potentially) different bank —
-                    // TensorAccessor::get_noc_addr resolves bank automatically. trid is reused
-                    // across all per-tile issues until the next set_trid call.
-                    {
-                        uint32_t l1_dst_addr = slot_addr[slot_to_issue];
-                        for (uint32_t t = 0; t < w0_w1_pages_per_txn; ++t) {
-                            noc_async_read_one_packet(
-                                w0_w1_acc.get_noc_addr(w0_w1_page_id), l1_dst_addr, w0_w1_tile_size);
-                            l1_dst_addr += w0_w1_tile_size;
-                            ++w0_w1_page_id;
-                        }
-                    }
-                    {
-                        uint32_t l1_dst_addr = slot_addr[slot_to_issue] + w0_w1_bytes_per_txn;
-                        for (uint32_t t = 0; t < w0_w1_pages_per_txn; ++t) {
-                            noc_async_read_one_packet(
-                                w0_w1_acc.get_noc_addr(w0_w1_page_id), l1_dst_addr, w0_w1_tile_size);
-                            l1_dst_addr += w0_w1_tile_size;
-                            ++w0_w1_page_id;
-                        }
-                    }
+                    w0_w1_global_page += w0_w1_tiles_per_txn;
                 }
 
                 ADVANCE_SLOT(slot_to_issue);
@@ -288,54 +324,59 @@ void kernel_main() {
                     ADVANCE_TRID(trid_to_wait);
 
                     // Reserve for next block
-                    // Reserve back is not incremental, so to reserve one more, we need to reserve 2
-                    // This accounts for the one we already have reserved (for in-flight read)
                     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
                 }
                 txns_in_flight = true;
             }
 
             //-------------------------------------------------------------------------
-            // Pipelined reading of W2
+            // Pipelined reading of W2 — bank-run loop
             //-------------------------------------------------------------------------
-            // Layout-conditional: HEIGHT_SHARDED uses byte offsets, INTERLEAVED uses page ids.
-            uint32_t w2_dram_read_offset = w2_expert_offset;
-            uint32_t w2_page_id = w2_expert_page_offset;
+            uint32_t w2_global_page = w2_slice_first_global_page;
+            // cur_shard_idx_w2 lives across iterations (declared before the expert loop).
 
             for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
-                // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
-                if constexpr (weight_is_height_sharded) {
-                    // HEIGHT_SHARDED: NOTE w2 reuses the same set_state'd base as w0_w1
-                    // (same dram_noc_addr per ring core; only the byte offset differs).
-                    noc_async_read_one_packet_with_state_with_trid<
-                        /*skip_ptr_update=*/false,
-                        /*skip_cmdbuf_chk=*/true>(
-                        dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
-                    w2_dram_read_offset += w2_bytes_per_txn;
 
+                // First transaction:
+                {
+                    const uint32_t shard_idx = w2_global_page / w2_pages_per_bank_total;
+                    const uint32_t in_bank_page = w2_global_page - shard_idx * w2_pages_per_bank_total;
+                    const uint32_t in_bank_byte_offset = in_bank_page * w2_tile_size + w2_addr;
+                    const uint32_t bank_id = shard_to_bank[shard_idx];
+                    if (shard_idx != cur_shard_idx_w2) {
+                        const uint64_t bank_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+                        noc_async_read_one_packet_set_state<true>(bank_base, w2_bytes_per_txn, vchannel);
+                        cur_shard_idx_w2 = shard_idx;
+                    }
                     noc_async_read_one_packet_with_state_with_trid<
                         /*skip_ptr_update=*/false,
                         /*skip_cmdbuf_chk=*/true>(
-                        dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue] + w2_bytes_per_txn, trid_to_issue);
-                    w2_dram_read_offset += w2_bytes_per_txn;
-                } else {
-                    {
-                        uint32_t l1_dst_addr = slot_addr[slot_to_issue];
-                        for (uint32_t t = 0; t < w2_pages_per_txn; ++t) {
-                            noc_async_read_one_packet(w2_acc.get_noc_addr(w2_page_id), l1_dst_addr, w2_tile_size);
-                            l1_dst_addr += w2_tile_size;
-                            ++w2_page_id;
-                        }
+                        get_noc_addr_from_bank_id<true>(bank_id, 0),
+                        in_bank_byte_offset,
+                        slot_addr[slot_to_issue],
+                        trid_to_issue);
+                    w2_global_page += w2_tiles_per_txn;
+                }
+                // Second transaction (may cross a bank boundary):
+                {
+                    const uint32_t shard_idx = w2_global_page / w2_pages_per_bank_total;
+                    const uint32_t in_bank_page = w2_global_page - shard_idx * w2_pages_per_bank_total;
+                    const uint32_t in_bank_byte_offset = in_bank_page * w2_tile_size + w2_addr;
+                    const uint32_t bank_id = shard_to_bank[shard_idx];
+                    if (shard_idx != cur_shard_idx_w2) {
+                        const uint64_t bank_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+                        noc_async_read_one_packet_set_state<true>(bank_base, w2_bytes_per_txn, vchannel);
+                        cur_shard_idx_w2 = shard_idx;
                     }
-                    {
-                        uint32_t l1_dst_addr = slot_addr[slot_to_issue] + w2_bytes_per_txn;
-                        for (uint32_t t = 0; t < w2_pages_per_txn; ++t) {
-                            noc_async_read_one_packet(w2_acc.get_noc_addr(w2_page_id), l1_dst_addr, w2_tile_size);
-                            l1_dst_addr += w2_tile_size;
-                            ++w2_page_id;
-                        }
-                    }
+                    noc_async_read_one_packet_with_state_with_trid<
+                        /*skip_ptr_update=*/false,
+                        /*skip_cmdbuf_chk=*/true>(
+                        get_noc_addr_from_bank_id<true>(bank_id, 0),
+                        in_bank_byte_offset,
+                        slot_addr[slot_to_issue] + w2_bytes_per_txn,
+                        trid_to_issue);
+                    w2_global_page += w2_tiles_per_txn;
                 }
 
                 ADVANCE_SLOT(slot_to_issue);
@@ -347,19 +388,8 @@ void kernel_main() {
                 ADVANCE_TRID(trid_to_wait);
 
                 // Reserve for next block
-                // Reserve back is not incremental, so to reserve one more, we need to reserve 2
-                // This accounts for the one we already have reserved (for in-flight read)
                 cb_reserve_back(cb_r2c_w2, w2_tiles_per_block * 2);
             }
-        }
-
-        // Update offsets for next expert
-        if constexpr (weight_is_height_sharded) {
-            w0_w1_expert_offset += w0_w1_total_size_per_expert;
-            w2_expert_offset += w2_total_size_per_expert;
-        } else {
-            w0_w1_expert_page_offset += w0_w1_pages_per_expert;
-            w2_expert_page_offset += w2_pages_per_expert;
         }
     }
 

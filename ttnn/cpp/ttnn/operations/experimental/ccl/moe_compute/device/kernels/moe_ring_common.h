@@ -24,9 +24,10 @@ namespace moe_ring {
 
 // Ring core count is templatized via DeepSeekRingConfig<HasBias, N> / GptRingConfig<HasBias, N>.
 // The kernel reads N from the named CT arg "num_cores" and selects the appropriate
-// specialization at compile time. Both Wormhole and Blackhole currently instantiate <12>
-// (BH pads its 8-DRAM-bank assignment with 4 extra cores and uses INTERLEAVED weights
-// to decouple ring core count from bank count). See issue #41827 PR1 (BH N=12).
+// specialization at compile time. WH always instantiates <12>; BH instantiates <8>, <12>,
+// or <16> depending on TT_MOE_BH_N. On BH, when N != bank count (=8), the dm0.cpp bank-run
+// loop walks each ring core's slice across multiple banks of the HEIGHT_SHARDED weight
+// tensor. See issue #41827 PR1 (BH N=12).
 
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
@@ -79,10 +80,9 @@ constexpr std::array<uint32_t, N> compute_combine_w_offset_per_core(const uint32
 }  // namespace detail
 
 // Forward declaration for the templatized DeepSeek ring config.
-// Currently specialized for N=8 (BH HEIGHT_SHARDED, M1 pattern), N=12, N=16. The N=8 path
-// matches BH's 8 DRAM bank count and uses HEIGHT_SHARDED weights (same code path as WH).
-// N=12/16 use INTERLEAVED weights to decouple ring core count from bank count. See issue
-// #41827.
+// Currently specialized for N=8 (BH HEIGHT_SHARDED 1:1 with 8 banks), N=12, N=16. All three
+// BH N values use HEIGHT_SHARDED weights with leading dim = 8 banks; for N>8, the dm0.cpp
+// bank-run loop walks each ring core's slice across multiple banks. See issue #41827.
 template <bool HasBias, uint32_t N>
 struct DeepSeekRingConfig;
 
