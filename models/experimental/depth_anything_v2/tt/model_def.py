@@ -853,7 +853,9 @@ def get_model_config(batch_size, device):
     seqL_t__y = seqL_t // grid_y                 # 7 tiles per core (height)
     head_num = 16
     head_size_t = dim_t // head_num              # 2 tiles per head
-    head_seqL_t__x = (head_num * seqL_t) // grid_x  # 98
+    # HEIGHT_SHARDED distributes across ALL cores (grid_x * grid_y = 56),
+    # not just grid_x.  Total head-seq tiles = 16 * 49 = 784 → 784/56 = 14.
+    head_seqL_t_per_core = (head_num * seqL_t) // (grid_x * grid_y)  # 14
 
     # MLP intermediate dimension: 4096
     mlp_dim_t__x = (4096 // TILE_HEIGHT) // grid_x  # 16 tiles per core
@@ -879,30 +881,33 @@ def get_model_config(batch_size, device):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        # Q×K^T: attention scores per head
+        # Q×K^T: attention scores per head (HEIGHT_SHARDED across all 56 cores)
+        # Output is (batch, heads, seqL, seqL) — N dimension is full seqL_t,
+        # NOT seqL_t__y which is the per-core height in block sharding.
         "qk_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=head_size_t,      # 2
+            in0_block_w=head_size_t,              # 2
             out_subblock_h=1,
-            out_subblock_w=seqL_t__y,     # 7
-            per_core_M=head_seqL_t__x,    # 98
-            per_core_N=seqL_t__y,         # 7
+            out_subblock_w=7,                      # divides seqL_t=49: 49/7=7; h*w=7 ≤ 8 ✓
+            per_core_M=head_seqL_t_per_core,       # 14 (was 98 — crashed)
+            per_core_N=seqL_t,                     # 49 (was 7 — wrong dimension)
         ),
-        # Softmax on attention scores
+        # Softmax on attention scores (HEIGHT_SHARDED)
         "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            subblock_w=seqL_t__y,         # 7
-            block_h=head_seqL_t__x,       # 98
-            block_w=seqL_t__y,            # 7
+            subblock_w=7,                          # divides block_w=49: 49/7=7
+            block_h=head_seqL_t_per_core,          # 14 (was 98 — crashed)
+            block_w=seqL_t,                        # 49 (was 7 — wrong dimension)
         ),
-        # attn_probs × V matmul
+        # attn_probs × V matmul (HEIGHT_SHARDED)
+        # Contracting dimension is seqL_t (full sequence), not per-core.
         "attn_v_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=seqL_t__y,        # 7
+            in0_block_w=seqL_t,                    # 49 (was 7 — wrong dimension)
             out_subblock_h=1,
-            out_subblock_w=head_size_t,    # 2
-            per_core_M=head_seqL_t__x,    # 98
-            per_core_N=head_size_t,        # 2
+            out_subblock_w=head_size_t,             # 2
+            per_core_M=head_seqL_t_per_core,        # 14 (was 98 — crashed)
+            per_core_N=head_size_t,                 # 2
         ),
         # Output dense: (seqL, 1024) × (1024, 1024) → (seqL, 1024)
         "output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

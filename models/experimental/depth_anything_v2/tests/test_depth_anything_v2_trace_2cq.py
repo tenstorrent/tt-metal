@@ -1,109 +1,138 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
 """Trace + Dual Command Queue (2CQ) performance test for Depth Anything V2.
 
-This test captures a device execution trace on CQ0 and overlaps I/O on CQ1
-with compute on CQ0, eliminating both dispatch and data transfer overhead
-for peak throughput.
+Follows the exact 2CQ pattern from the official ViT Wormhole reference:
+  models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+
+CQ0 executes the captured trace (compute).
+CQ1 overlaps host-to-device input transfer and device-to-host output read.
+Events synchronize the two queues to avoid data hazards.
 """
 
 import pytest
-import time
 import torch
+import time
 from loguru import logger
 from transformers import AutoModelForDepthEstimation
 
 import ttnn
-from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
+from models.experimental.depth_anything_v2.tt.model_def import (
+    TtDepthAnythingV2, custom_preprocessor, get_model_config
+)
+from models.perf.perf_utils import prep_perf_report
+
+MODEL_ID    = "depth-anything/Depth-Anything-V2-Large-hf"
+NUM_WARMUP  = 50
+NUM_MEASURE = 200
+TARGET_FPS  = 15.0
 
 
-BATCH_SIZE = 1
-MODEL_ID = "depth-anything/Depth-Anything-V2-Large-hf"
-NUM_WARMUP = 5
-NUM_ITERATIONS = 50
+def run_trace_2cq(device, tt_model, num_warmup, num_measure):
+    """Full 2CQ trace benchmark following the official ViT reference pattern."""
 
-
-def run_trace_2cq_depth_anything_v2(device):
-    """Run inference with trace capture on CQ0 and I/O overlap on CQ1."""
-
-    # 1. Load reference model and convert weights
-    torch_model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, trust_remote_code=True)
-    torch_model.eval()
-
-    parameters = custom_preprocessor(torch_model, "depth_anything_v2")
-    tt_model = TtDepthAnythingV2(torch_model.config, parameters, device)
-
-    # 2. Create input tensors
-    torch.manual_seed(42)
-    input_shape = (BATCH_SIZE, 3, 518, 518)
-    pixel_values_host = torch.randn(input_shape)
-    tt_inputs_host = ttnn.from_torch(pixel_values_host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-    # Persistent DRAM buffer for input data
-    tt_input_dram = ttnn.from_torch(
-        pixel_values_host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    # ── Persistent DRAM input buffer ────────────────────────────────────
+    pixel_values = torch.randn(1, 3, 518, 518)
+    tt_inputs_host = ttnn.from_torch(
+        pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
     )
+    sharded_dram_cfg = ttnn.DRAM_MEMORY_CONFIG
+    tt_image_dram = tt_inputs_host.to(device, sharded_dram_cfg)
 
-    # 3. Warmup (compile all ops) -- JIT compilation pass
-    logger.info("Warming up (compiling)...")
-    for _ in range(NUM_WARMUP):
-        _output = tt_model(tt_input_dram)
-    ttnn.synchronize_device(device)
-    logger.info("Warmup complete.")
-
-    # 4. Capture trace on CQ0
-    logger.info("Capturing execution trace...")
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    _output = tt_model(tt_input_dram)
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    logger.info(f"Trace captured (id={trace_id}).")
-
-    # 5. Initialize events for 2CQ synchronization
+    # Bootstrap events so the first loop iteration has something to wait on
     first_op_event = ttnn.record_event(device, 0)
-    read_event = ttnn.record_event(device, 1)
+    read_event     = ttnn.record_event(device, 1)
 
-    # 6. Warmup trace replay with 2CQ
-    for _ in range(NUM_WARMUP):
-        # CQ1: write input while CQ0 runs
+    # ── JIT compile pass (CQ0 compute, CQ1 write) ──────────────────────
+    ttnn.wait_for_event(1, first_op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_dram, 1)
+    write_event = ttnn.record_event(device, 1)
+    ttnn.wait_for_event(0, write_event)
+
+    model_input    = ttnn.to_memory_config(tt_image_dram, ttnn.L1_MEMORY_CONFIG)
+    first_op_event = ttnn.record_event(device, 0)
+    output         = tt_model(model_input)
+    output_dram    = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.record_event(device, 0)
+
+    # ── Capture trace ───────────────────────────────────────────────────
+    ttnn.wait_for_event(1, first_op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_dram, 1)
+    write_event = ttnn.record_event(device, 1)
+    ttnn.wait_for_event(0, write_event)
+
+    model_input    = ttnn.to_memory_config(tt_image_dram, ttnn.L1_MEMORY_CONFIG)
+    first_op_event = ttnn.record_event(device, 0)
+
+    spec             = model_input.spec
+    input_trace_addr = model_input.buffer_address()
+    output.deallocate(force=True)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    output   = tt_model(model_input)
+    input_l1 = ttnn.allocate_tensor_on_device(spec, device)
+    assert input_trace_addr == input_l1.buffer_address(), \
+        "L1 address mismatch — trace will use wrong buffer"
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+
+    # ── Warmup with 2CQ ────────────────────────────────────────────────
+    ttnn.wait_for_event(1, first_op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_dram, 1)
+    write_event = ttnn.record_event(device, 1)
+
+    for _ in range(num_warmup):
+        # CQ0: wait for input write, reshard DRAM→L1, execute trace
+        ttnn.wait_for_event(0, write_event)
+        input_l1 = ttnn.reshard(tt_image_dram, ttnn.L1_MEMORY_CONFIG, input_l1)
+        first_op_event = ttnn.record_event(device, 0)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.wait_for_event(0, read_event)
+
+        output_dram   = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+        last_op_event = ttnn.record_event(device, 0)
+
+        # CQ1: write next input + read current output (overlapped)
         ttnn.wait_for_event(1, first_op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_input_dram, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_dram, 1)
         write_event = ttnn.record_event(device, 1)
 
-        # CQ0: wait for write, then execute trace
-        ttnn.wait_for_event(0, write_event)
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-        first_op_event = ttnn.record_event(device, 0)
+        ttnn.wait_for_event(1, last_op_event)
+        _ = ttnn.from_device(output_dram, blocking=False, cq_id=1)
+        read_event = ttnn.record_event(device, 1)
 
     ttnn.synchronize_device(device)
 
-    # 7. Measurement loop with 2CQ overlap
-    logger.info(f"Replaying trace {NUM_ITERATIONS} times with 2CQ...")
+    # ── Measurement loop ────────────────────────────────────────────────
+    ttnn.wait_for_event(1, first_op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_dram, 1)
+    write_event = ttnn.record_event(device, 1)
 
-    start = time.perf_counter()
-    for _ in range(NUM_ITERATIONS):
-        # CQ1: write next input
+    t0 = time.perf_counter()
+    for _ in range(num_measure):
+        ttnn.wait_for_event(0, write_event)
+        input_l1 = ttnn.reshard(tt_image_dram, ttnn.L1_MEMORY_CONFIG, input_l1)
+        first_op_event = ttnn.record_event(device, 0)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.wait_for_event(0, read_event)
+
+        output_dram   = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+        last_op_event = ttnn.record_event(device, 0)
+
         ttnn.wait_for_event(1, first_op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_input_dram, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_dram, 1)
         write_event = ttnn.record_event(device, 1)
 
-        # CQ0: wait for write, then execute trace
-        ttnn.wait_for_event(0, write_event)
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-        first_op_event = ttnn.record_event(device, 0)
+        ttnn.wait_for_event(1, last_op_event)
+        _ = ttnn.from_device(output_dram, blocking=False, cq_id=1)
+        read_event = ttnn.record_event(device, 1)
 
     ttnn.synchronize_device(device)
-    elapsed = time.perf_counter() - start
+    elapsed = time.perf_counter() - t0
 
-    fps = NUM_ITERATIONS / elapsed
-    logger.info(f"Trace + 2CQ replay: {NUM_ITERATIONS} iters in {elapsed:.3f}s = {fps:.1f} FPS")
-
-    # 8. Cleanup
     ttnn.release_trace(device, trace_id)
-    logger.info("Trace released.")
-
-    return fps
+    return elapsed / num_measure  # avg inference time per frame
 
 
 @pytest.mark.models_performance_bare_metal
@@ -119,7 +148,31 @@ def test_depth_anything_v2_trace_2cq(device):
     to measure peak throughput with zero dispatch and minimal data transfer
     overhead.  Target: >= 15 FPS.
     """
-    fps = run_trace_2cq_depth_anything_v2(device)
-    logger.info(f"Depth Anything V2 trace+2CQ FPS: {fps:.1f}")
-    # Target: >= 15 FPS with trace replay + 2CQ
-    assert fps > 12, f"FPS {fps:.1f} below minimum threshold of 12"
+    torch_model = AutoModelForDepthEstimation.from_pretrained(
+        MODEL_ID, trust_remote_code=True
+    )
+    torch_model.eval()
+
+    parameters = custom_preprocessor(torch_model, "depth_anything_v2")
+    tt_model   = TtDepthAnythingV2(torch_model.config, parameters, device)
+
+    avg_time = run_trace_2cq(device, tt_model, NUM_WARMUP, NUM_MEASURE)
+    fps      = 1.0 / avg_time
+
+    logger.info(f"avg inference time : {avg_time * 1000:.1f} ms")
+    logger.info(f"FPS                : {fps:.1f}")
+
+    prep_perf_report(
+        model_name="depth_anything_v2_large_trace_2cq",
+        batch_size=1,
+        inference_and_compile_time=avg_time,
+        inference_time=avg_time,
+        expected_compile_time=0,
+        expected_inference_time=1.0 / TARGET_FPS,  # 0.067 s
+        comments="trace+2cq BS=1 518x518",
+        inference_time_cpu=0,
+    )
+
+    assert fps >= TARGET_FPS, \
+        f"FPS {fps:.1f} below target {TARGET_FPS}. " \
+        f"avg={avg_time * 1000:.1f}ms, expected<{1000 / TARGET_FPS:.0f}ms"
