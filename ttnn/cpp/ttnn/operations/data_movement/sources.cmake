@@ -40,6 +40,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     fold/fold.cpp
     indexed_fill/device/indexed_fill_device_operation.cpp
     indexed_fill/device/indexed_fill_program_factory.cpp
+    indexed_fill/device/indexed_fill_utils.cpp
     indexed_fill/indexed_fill.cpp
     moe_expert_token_remap/moe_expert_token_remap.cpp
     moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
@@ -143,6 +144,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     transpose/device/transpose_wh_program_factory.cpp
     transpose/device/transpose_wh_sharded_program_factory.cpp
     transpose/device/transpose_wh_sharded_rm_program_factory.cpp
+    transpose/device/transpose_utils.cpp
     transpose/transpose.cpp
     unsqueeze/unsqueeze.cpp
     untilize/device/untilize_device_operation.cpp
