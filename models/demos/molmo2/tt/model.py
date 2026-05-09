@@ -528,30 +528,46 @@ class TtMolmo2Model(LightweightModule):
     def warmup_vision_compile(self) -> None:
         """Pre-compile all vision (ViT + pooling + projector) JIT kernels.
 
-        Runs dummy forward passes for every possible last-chunk size so that no
-        cold compilation happens at inference time regardless of the input video.
+        The pooling uses ttnn.embedding with a lookup table of shape
+        [n_crops * n_patches, feat_dim] — a different shape for each unique
+        n_crops value.  TTNN compiles a separate kernel for each shape, so we
+        must run warmup at all n_crops multiples expected at inference time.
 
-        Because _run_chunked_ttnn_pooling now pads every chunk to exactly
-        _POOL_CHUNK_WINDOWS windows, the pooling TTNN ops always see the same
-        tensor shape regardless of video length. One warmup run per k_pool value
-        is sufficient to compile all pooling kernels.
+        n_crops grows in steps of _MAX_VIT_BATCH=8 (crops per ViT chunk).
+        The ViT encoder kernel is the same for all multiples, so ViT compiles
+        only on the first call.  Only the pooling embedding table shape differs.
 
-        ViT encode chunks (_MAX_VIT_BATCH=8) still vary in the last batch
-        (1..8 crops), so we still compile for those.
+        We compile up to max_crops derived from max_seq_len:
+          max_frames ≈ max_seq_len / 83  (81 pooled patches + ~2 frame markers)
+          max_crops  = max_frames (1 crop per frame)
+        This covers all video lengths the model might see at inference time.
         """
         N_PATCHES = 729
         _MAX_VIT_BATCH = 8
+        N_PATCHES_PER_FRAME_TOK = 83  # 81 pooled + ~2 frame-marker tokens
 
-        # ---- Video: k_pool=9 (3×3) — one run at full chunk size covers all videos ----
+        # Derive max crops from the model's max sequence length.
+        max_crops = max(
+            _MAX_VIT_BATCH,
+            (self.configuration.max_seq_len // N_PATCHES_PER_FRAME_TOK // _MAX_VIT_BATCH) * _MAX_VIT_BATCH,
+        )
+
+        # ---- Video: k_pool=9 (3×3) ----
+        # _run_chunked_ttnn_pooling now pads feat_2d to multiples of 8*729=5832 rows,
+        # so unique embedding table shapes = {5832, 11664, ..., max_crops*729-aligned}.
+        # Compile all of them here so no new JIT happens at inference time.
         K_POOL_VIDEO = 9
-        n_pooled_video = self._POOL_CHUNK_WINDOWS  # always padded to this
-        print(f"[vision warmup] video k_pool=9, N_pooled={n_pooled_video} ...", flush=True)
-        dummy_pv = torch.zeros(1, _MAX_VIT_BATCH, N_PATCHES, 588)
-        dummy_idx = torch.zeros(1, n_pooled_video, K_POOL_VIDEO, dtype=torch.long)
-        _ = self.run_vision_backbone(dummy_pv, dummy_idx)
+        n_pooled_video = self._POOL_CHUNK_WINDOWS
+        print(f"[vision warmup] video k_pool=9, compiling all table sizes up to {max_crops} crops...", flush=True)
+        for n_crops_w in range(_MAX_VIT_BATCH, max_crops + 1, _MAX_VIT_BATCH):
+            # Only run the full ViT for the first iteration (compiles ViT kernels);
+            # subsequent iterations only need to hit the pooling embedding kernel.
+            dummy_pv = torch.zeros(1, n_crops_w, N_PATCHES, 588)
+            dummy_idx = torch.zeros(1, n_pooled_video, K_POOL_VIDEO, dtype=torch.long)
+            _ = self.run_vision_backbone(dummy_pv, dummy_idx)
         print("[vision warmup] video done", flush=True)
 
-        # ---- Image: k_pool=4 (2×2) — same, one run at full chunk size ----
+        # ---- Image: k_pool=4 (2×2) — single image = 1 crop ----
         K_POOL_IMAGE = 4
         n_pooled_image = self._POOL_CHUNK_WINDOWS
         print(f"[vision warmup] image k_pool=4, N_pooled={n_pooled_image} ...", flush=True)
@@ -761,8 +777,19 @@ class TtMolmo2Model(LightweightModule):
         k_pool = pooled_patches_idx.shape[2]
         mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
-        # H2D: full feature table as 2D ROW_MAJOR embedding lookup table
+        # H2D: full feature table as 2D ROW_MAJOR embedding lookup table.
+        # IMPORTANT: pad rows to the next multiple of _MAX_VIT_BATCH * n_patches so
+        # ttnn.embedding always sees one of a small set of fixed table shapes and
+        # never JIT-compiles a new kernel variant at inference time (which would cost
+        # ~6s per unique n_crops value). Padding rows with zeros is safe because the
+        # pooling indices always reference valid crops (never the padded rows).
+        _VIT_BATCH_PATCHES = 8 * n_patches  # 8 crops × 729 patches = 5832
+        actual_rows = B * n_crops * n_patches
+        padded_rows = ((actual_rows + _VIT_BATCH_PATCHES - 1) // _VIT_BATCH_PATCHES) * _VIT_BATCH_PATCHES
         feat_2d = vit_cpu.reshape(-1, feat_dim).to(torch.bfloat16)
+        if padded_rows > actual_rows:
+            pad = torch.zeros(padded_rows - actual_rows, feat_dim, dtype=torch.bfloat16)
+            feat_2d = torch.cat([feat_2d, pad], dim=0)
         feat_tt = ttnn.from_torch(
             feat_2d,
             dtype=ttnn.bfloat16,
@@ -912,10 +939,20 @@ class TtMolmo2Model(LightweightModule):
         # Apply valid-token filter
         valid_token = (pooled_patches_idx[0] >= 0).any(dim=-1)  # [N_pooled]
         pooled_valid = pooled_cpu[0][valid_token]  # [N_valid, 1152]
+        N_valid = pooled_valid.shape[0]
 
-        # Image projector (TTNN) → [N_valid, 4096]
+        # Image projector (TTNN) → [_POOL_CHUNK_WINDOWS, 4096] padded, then slice to [N_valid, 4096].
+        # Padding pooled_valid to _POOL_CHUNK_WINDOWS rows ensures the projector always receives a
+        # fixed-shape tensor [1, 1, _POOL_CHUNK_WINDOWS, 1152], avoiding JIT recompilation for each
+        # unique N_valid value (which would cost ~6s per unique video length at inference time).
+        pooled_padded = pooled_valid
+        if N_valid < self._POOL_CHUNK_WINDOWS:
+            pad_rows = self._POOL_CHUNK_WINDOWS - N_valid
+            pooled_padded = torch.cat(
+                [pooled_valid, torch.zeros(pad_rows, pooled_valid.shape[1], dtype=torch.bfloat16)], dim=0
+            )
         pooled_ttnn = ttnn.from_torch(
-            pooled_valid.to(torch.bfloat16).unsqueeze(0).unsqueeze(0),
+            pooled_padded.to(torch.bfloat16).unsqueeze(0).unsqueeze(0),  # [1, 1, _POOL_CHUNK_WINDOWS, 1152]
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
@@ -927,7 +964,7 @@ class TtMolmo2Model(LightweightModule):
 
         proj_cpu = ttnn.to_torch(ttnn.get_device_tensors(proj_out)[0]).float().squeeze(0).squeeze(0)
         ttnn.deallocate(proj_out)
-        return proj_cpu  # [N_valid, 4096]
+        return proj_cpu[:N_valid]  # slice back to [N_valid, 4096]
 
     # ------------------------------------------------------------------ #
     # Main forward
@@ -954,10 +991,6 @@ class TtMolmo2Model(LightweightModule):
             _S_pad_early = ((S + 255) // 256) * 256
 
         # ---- Embedding ----
-        # Pad input_ids to _S_pad_early on CPU before H2D so ttnn.embedding produces
-        # a bucket-aligned [B, _S_pad_early, H] tensor directly — no on-device concat.
-        # ttnn.embedding([B, _S_pad_early]) was JIT-compiled during warmup (S=bucket),
-        # so there is no per-S JIT stall at inference time.
         if _S_pad_early > S:
             ids_padded = input_ids.new_zeros(B, _S_pad_early)
             ids_padded[:, :S] = input_ids
