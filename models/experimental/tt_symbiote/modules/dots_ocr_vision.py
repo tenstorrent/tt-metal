@@ -29,8 +29,19 @@ VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
 VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi4
 
 
-def _vision_device_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
-    """Single place for matmul/SDPA-style compute settings on the active device arch."""
+def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
+    """Compute config for vision linear/matmul ops."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
+def _vision_sdpa_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
+    """Compute config for vision SDPA and norm ops."""
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=math_fidelity,
@@ -312,7 +323,7 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
     def move_weights_to_device_impl(self):
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
-        self.compute_kernel_config = _vision_device_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
+        self.compute_kernel_config = _vision_sdpa_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
 
         if self._use_layer_norm:
             self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -448,7 +459,7 @@ class TTNNDotsVisionMLP(TTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = _vision_device_compute_config(
+        self.compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
@@ -616,10 +627,10 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         if self.tt_norm_weight is not None:
             self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=mem)
 
-        self.vision_matmul_compute_kernel_config = _vision_device_compute_config(
+        self.vision_matmul_compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
-        self.vision_norm_compute_kernel_config = _vision_device_compute_config(
+        self.vision_norm_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
 
@@ -820,7 +831,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = _vision_device_compute_config(
+        self.compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
@@ -829,7 +840,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
         self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
 
-        self.sdpa_compute_kernel_config = _vision_device_compute_config(
+        self.sdpa_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
         )
 
@@ -847,6 +858,17 @@ class TTNNDotsVisionAttention(TTNNModule):
             mesh_mapper=mapper,
         )
 
+    def _concat_heads(self, ctx: ttnn.Tensor) -> ttnn.Tensor:
+        """Gather head slices back into a single sequence-major tensor."""
+        if ctx.memory_config().buffer_type == ttnn.BufferType.L1:
+            return ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(ctx)
+        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx_l1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(ctx_l1)
+        return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     def _get_sdpa_program_config(self, seq_len: int):
         """Chunked SDPA program config for the vision tower."""
         grid = self.device.compute_with_storage_grid_size()
@@ -857,7 +879,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         elif seq_len <= 1024:
             q_chunk = k_chunk = 128
         else:
-            q_chunk = k_chunk = 256
+            q_chunk = k_chunk = 128
 
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -917,11 +939,9 @@ class TTNNDotsVisionAttention(TTNNModule):
                 is_causal=False,
                 program_config=program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            ctx = ttnn.experimental.nlp_concat_heads(
-                ctx,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            ctx = self._concat_heads(ctx)
             return ttnn.linear(
                 ctx,
                 self.tt_o_proj_weight,
@@ -942,6 +962,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 is_causal=False,
                 program_config=program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         else:
             ctx_segments = []
@@ -964,15 +985,13 @@ class TTNNDotsVisionAttention(TTNNModule):
                     is_causal=False,
                     program_config=program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 ctx_segments.append(ctx_seg)
 
             ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
 
-        ctx = ttnn.experimental.nlp_concat_heads(
-            ctx,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        ctx = self._concat_heads(ctx)
         return ttnn.linear(
             ctx,
             self.tt_o_proj_weight,
@@ -1232,7 +1251,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             self.tt_w2 = _to_dev(self.tt_w2)
             self.tt_w2_bias = _to_dev(self.tt_w2_bias)
 
-        self.compute_kernel_config = _vision_device_compute_config(
+        self.compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
