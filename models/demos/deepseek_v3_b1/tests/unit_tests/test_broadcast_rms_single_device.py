@@ -15,6 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
@@ -127,7 +128,7 @@ def test_broadcast_rms_single_device(
     if use_socket:
         element_size = dtype_size(input_dtype)
         socket_page_size = output_shape[0] * output_shape[1] * element_size
-        token_page_size = 64
+        token_page_size = DeepseekMetadata.aligned_size_bytes()
 
         sender_tensor_4d = torch_input.reshape(1, 1, 1, output_shape[1])
         embedding_tensor = ttnn.from_torch(
