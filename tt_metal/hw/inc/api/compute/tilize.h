@@ -228,7 +228,13 @@ ALWI void unpack_tilizeA_B_block(
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb)));
+    // Reinit packer to clear tilize mode. Without this, the packer remains in
+    // tilize configuration after tilize_uninit, causing issues when subsequent
+    // operations (e.g. typecast) need the packer in normal (non-tilize) mode.
+    // Pass icb explicitly so the BH 8-bit-tilize stride workaround inside
+    // llk_pack_init reads the correct unpack_src_format (default input_operand=0
+    // would mis-program strides when reshape's CB 0 holds a different format).
+    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb, 1, icb)));
 #endif
 }
 

@@ -16,7 +16,8 @@ Tensor typecast(
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor typecast(
     const Tensor& input_tensor,
@@ -24,6 +25,7 @@ Tensor typecast(
     const DataType& tt_output_dtype,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 }  // namespace ttnn
