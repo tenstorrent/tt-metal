@@ -2995,14 +2995,18 @@ void Device::wait_for_fabric_workers_ready() {
         // that was never included in this quiesce set and remains in base-UMD mode.  In the
         // STARTED case we already know firmware booted (so the relay path is not broken), and
         // Phase 5b's FIX AK health-check will handle the non-fatal partial-mesh diagnosis.
-        // NOTE: increased from 3000ms → 10000ms (#42429) to give slower fabric paths (e.g.
-        // post-BRISC-reset dispatch teardown) enough time to complete the ETH handshake before
-        // declaring the channel stuck at STARTED and setting channels_not_ready.
-        constexpr uint32_t kStartedTimeoutMs = 10000;
+        // FIX AO (#42429): reduced from 10000ms → 1000ms.  A channel at STARTED means firmware
+        // booted and is waiting for the ETH handshake — which completes in <1ms when both peers
+        // are alive.  If still STARTED after 1s, the peer is not responding (out-of-mesh device
+        // in base-UMD mode, or peer's fabric firmware never launched).  The previous 10s timeout
+        // wasted 40s+ per quiesce cycle on a T3K when 4 devices had out-of-mesh master channels.
+        // 1000ms is generous (100x the normal handshake time) while eliminating the 10x waste.
+        constexpr uint32_t kStartedTimeoutMs = 1000;
         constexpr uint32_t kSpinLimit = 64U;
-        // Log intermediate status every 2.5s so we can see whether the ERISC is stuck at
+        // Log intermediate status every 500ms so we can see whether the ERISC is stuck at
         // STARTED (0xA0B0C0D0), 0x0 (never launched), or something unexpected.
-        constexpr uint32_t kIntermediateLogIntervalMs = 2500;
+        // FIX AO: reduced from 2500ms to match the shorter kStartedTimeoutMs (1000ms).
+        constexpr uint32_t kIntermediateLogIntervalMs = 500;
 
         const auto master_chan = builder_ctx.get_fabric_master_router_chan(this->id());
         const auto& soc_desc_p5 = env_impl.get_cluster().get_soc_desc(this->id());

@@ -2493,8 +2493,38 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
             if (master_router_status[0] == expected_status) {
                 break;
             }
+            // Also accept READY_FOR_TRAFFIC — a peer may have already written it.
+            if (master_router_status[0] ==
+                static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
+                break;
+            }
             auto current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
+            // FIX AO (#42429): STARTED early-exit for initial ring sync.  STARTED (0xa0b0c0d0)
+            // means firmware booted but ETH handshake hasn't completed.  In normal operation
+            // this takes <1ms.  If the master channel is still at STARTED after 1s, its peer
+            // is not responding — most commonly an out-of-mesh device whose corresponding
+            // channel is in base-UMD mode.  Skip cleanly instead of waiting the full timeout_ms
+            // (10-120s), which wastes 10s+ per device on every init cycle.
+            constexpr uint32_t kStartedEarlyExitMs = 1000;
+            if (master_router_status[0] ==
+                    static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STARTED) &&
+                elapsed_ms > kStartedEarlyExitMs) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} master chan={} stuck at STARTED "
+                    "(0x{:08x}) after {}ms — peer is not responding (likely out-of-mesh). "
+                    "Skipping ring sync cleanly.  (FIX AO #42429)",
+                    dev->id(),
+                    master_router_chan,
+                    master_router_status[0],
+                    elapsed_ms);
+                if (has_base_umd_channels_) {
+                    timeout_on_base_umd_devices_.insert(dev->id());
+                    ring_sync_already_timed_out_ = true;
+                }
+                return;
+            }
             if (elapsed_ms > timeout_ms) {
                 // FIX AL (#42429): router sync timed out — mesh fabric is partially broken
                 // (likely a dead-relay neighbor holding up the ring handshake; see Job 932).
