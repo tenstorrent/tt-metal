@@ -112,7 +112,7 @@ jobs:
       build-wheel: true
       publish-artifact: false
       publish-package: true
-      skip-tt-train: true
+      tracy: true
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
