@@ -159,7 +159,9 @@ private:
     // channel unresponsive). No firmware was loaded on the master chan, so the sync
     // value 0xa2b2c2d2 will never be written. Skip sync for these devices to avoid
     // the 10s-per-device timeout.
-    std::unordered_set<ChipId> mmio_dead_master_chan_devices_;
+    // Declared mutable so wait_for_fabric_router_sync() (const) can populate it
+    // for the FIX BG (0xdeadb07e pre-launch early-exit) path.
+    mutable std::unordered_set<ChipId> mmio_dead_master_chan_devices_;
 
     // FIX TH2 (#42429): Set to true when any device has base-UMD channels this session.
     // Base-UMD ERISCs are transitioned via launch_msg (not soft reset), so they need extra

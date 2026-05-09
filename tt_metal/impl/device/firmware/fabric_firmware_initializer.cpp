@@ -2548,6 +2548,30 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                 }
                 return;
             }
+            // FIX BG (#42429): host-pre-launch (0xdeadb07e) early-exit.  This sentinel means
+            // write_launch_msg was called but ERISC has not yet started executing firmware.  In
+            // normal operation the transition is instantaneous (<1ms).  If the master channel
+            // is still at 0xdeadb07e after 2s, the PCIe-direct soft reset (FIX RR) succeeded
+            // at the PCIe level but the ERISC is not actually running — treat as dead master
+            // channel and skip the ring sync instead of burning the full timeout_ms (10s).
+            constexpr uint32_t kPreLaunchEarlyExitMs = 2000;
+            if (master_router_status[0] == 0xdeadb07eu &&
+                elapsed_ms > kPreLaunchEarlyExitMs) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} master chan={} stuck at host-pre-launch "
+                    "(0xdeadb07e) after {}ms — ERISC not executing after soft-reset (FIX RR). "
+                    "Marking device as dead-master-chan. (FIX BG #42429)",
+                    dev->id(),
+                    master_router_chan,
+                    elapsed_ms);
+                mmio_dead_master_chan_devices_.insert(dev->id());
+                if (has_base_umd_channels_) {
+                    timeout_on_base_umd_devices_.insert(dev->id());
+                    ring_sync_already_timed_out_ = true;
+                }
+                return;
+            }
             if (elapsed_ms > timeout_ms) {
                 // FIX AL (#42429): router sync timed out — mesh fabric is partially broken
                 // (likely a dead-relay neighbor holding up the ring handshake; see Job 932).
