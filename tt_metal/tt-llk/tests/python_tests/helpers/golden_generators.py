@@ -2124,6 +2124,15 @@ class EltwiseBinaryGolden(FidelityMasking):
         # Compute in float32 for better fidelity, then cast back to original dtype.
         return (t1.to(torch.float32) * t2.to(torch.float32)).to(t1.dtype)
 
+    def _div(self, t1, t2):
+        # Compute in float32 to match the SFPU divide path (reciprocal +
+        # Newton-Raphson refinement in fp32; the bf16 dest case rounds back
+        # via RNE on store, modeled by the final `.to(t1.dtype)` cast).
+        # IEEE 754 division naturally produces:
+        #   0/0 -> NaN, x/0 -> ±inf, x/x -> 1.0
+        # which matches the special-case branches in the SFPU helper.
+        return (t1.to(torch.float32) / t2.to(torch.float32)).to(t1.dtype)
+
 
 @register_golden
 class BinarySFPUGolden(EltwiseBinaryGolden):
@@ -2134,6 +2143,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwadd: self._add,
                 MathOperation.SfpuElwsub: self._sub,
                 MathOperation.SfpuElwmul: self._mul,
+                MathOperation.SfpuElwdiv: self._div,
                 MathOperation.SfpuXlogy: self._xlogy,
                 MathOperation.SfpuElwRightShift: self._right_shift,
                 MathOperation.SfpuElwLeftShift: self._left_shift,

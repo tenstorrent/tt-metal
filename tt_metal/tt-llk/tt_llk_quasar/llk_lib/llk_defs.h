@@ -100,6 +100,7 @@ enum class BinaryOp : std::uint8_t
     ADD,
     SUB,
     MUL,
+    DIV,
 };
 
 enum class DstSync : std::uint8_t
