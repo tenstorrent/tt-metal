@@ -478,6 +478,19 @@ void Device::configure_fabric(
     // that truly have no firmware loaded.  Recovered channels are NOT in this set.
     fabric_pre_dead_channels_ = effective_pre_dead;
 
+    // FIX RS (#42429): Log recovered channels so analyze_fabric_hang_log.sh can track them.
+    // FIX RR recovery is silent at configure_fabric() level without this entry.
+    if (!health.recovered_channels.empty()) {
+        log_info(
+            tt::LogMetal,
+            "configure_fabric: Device {} FIX RS — {} channel(s) recovered by FIX RR "
+            "propagated back: effective_pre_dead={} (was {}). Firmware WILL load on recovered channels.",
+            this->id_,
+            health.recovered_channels.size(),
+            effective_pre_dead.size(),
+            pre_dead_channels.size());
+    }
+
     if (!health.all_channels_healthy) {
         if (!health.newly_dead_channels.empty()) {
             // Truly unexpected new dead channels: ALL L1 writes to this device now route through
