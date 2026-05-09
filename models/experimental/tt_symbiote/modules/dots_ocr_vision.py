@@ -879,7 +879,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         elif seq_len <= 1024:
             q_chunk = k_chunk = 128
         else:
-            q_chunk = k_chunk = 192
+            q_chunk = k_chunk = 256
 
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -922,13 +922,12 @@ class TTNNDotsVisionAttention(TTNNModule):
         if rot_mats is not None and len(rot_mats) == 2:
             cos, sin = rot_mats
 
-            if q.dtype != ttnn.bfloat16:
-                q = ttnn.typecast(q, dtype=ttnn.bfloat16)
-            if k.dtype != ttnn.bfloat16:
-                k = ttnn.typecast(k, dtype=ttnn.bfloat16)
-
             q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.transformation_mat, is_decode_mode=False)
             k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.transformation_mat, is_decode_mode=False)
+
+        q = ttnn.typecast(q, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.typecast(k, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.typecast(v, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if cu_seqlens is None:
             program_config = self._get_sdpa_program_config(s)

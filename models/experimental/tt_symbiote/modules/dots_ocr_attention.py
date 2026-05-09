@@ -124,8 +124,8 @@ class TTNNDotsOCRAttention(TTNNModule):
         if self.sdpa.program_config is None:
             self.sdpa.program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=256,
-                k_chunk_size=256,
+                q_chunk_size=192,
+                k_chunk_size=192,
                 exp_approx_mode=False,
             )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
@@ -207,11 +207,6 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
         self._rotary_setup = TTNNDotsOCRAttention._shared_rotary_setups[setup_key]
 
-    def _repeat_kv(self, hidden_states, n_rep):
-        if n_rep == 1:
-            return hidden_states
-        return ttnn.repeat_interleave(hidden_states, n_rep, dim=1)
-
     def _get_cur_pos_device_tensor(self, cache_position, batch_size):
         cp = cache_position
         if isinstance(cp, TorchTTNNTensor):
@@ -272,24 +267,10 @@ class TTNNDotsOCRAttention(TTNNModule):
         if key_states.shape[2] != seq_len:
             key_states = key_states[:, :, :seq_len, :]
 
-        key_states = self._repeat_kv(key_states, self.num_key_value_groups)
-        value_states = self._repeat_kv(value_states, self.num_key_value_groups)
-
         use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
         if past_key_values is not None and use_paged:
-            kv_key = key_states[:, :: self.num_key_value_groups, :, :]
-            kv_value = value_states[:, :: self.num_key_value_groups, :, :]
-            past_key_values.paged_fill_on_device(kv_key, kv_value, layer_idx=self.layer_idx, batch_idx=0)
+            past_key_values.paged_fill_on_device(key_states, value_states, layer_idx=self.layer_idx, batch_idx=0)
 
-        sq = int(query_states.shape[2])
-        saved_pc = self.sdpa.program_config
-        if sq >= 1024:
-            self.sdpa.program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=saved_pc.compute_with_storage_grid_size,
-                q_chunk_size=256,
-                k_chunk_size=256,
-                exp_approx_mode=False,
-            )
         attn_output = self.sdpa(
             self,
             query_states,
@@ -301,7 +282,6 @@ class TTNNDotsOCRAttention(TTNNModule):
             is_causal=self.is_causal,
             transpose_output=True,
         )
-        self.sdpa.program_config = saved_pc
 
         attn_shape = list(attn_output.shape)
         attn_output = ttnn.reshape(
