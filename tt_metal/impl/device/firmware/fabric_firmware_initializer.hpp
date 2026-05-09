@@ -169,6 +169,11 @@ private:
     // is insufficient. get_fabric_router_sync_timeout_ms() triples the timeout when set.
     bool has_base_umd_channels_ = false;
 
+    // SINGLE-THREAD INVARIANT: wait_for_fabric_router_sync() and verify_all_fabric_channels_healthy()
+    // are always called sequentially from the same thread. These mutable members are NOT thread-safe
+    // (unordered_set::insert races under concurrent access). Do not call from parallel device threads.
+    // (#42429 FIX BE audit Q5-D)
+
     // FIX TI (#42429): Set of devices whose ring barrier timed out in wait_for_fabric_router_sync
     // when base-UMD channels were present. Even with the extended 30s timeout (FIX TH2), the
     // inter-rank ring signal may not propagate if base-UMD ERISCs on a partner rank are still
