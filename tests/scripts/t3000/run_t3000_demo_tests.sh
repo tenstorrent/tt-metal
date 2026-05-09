@@ -31,6 +31,7 @@ run_t3000_sentence_bert_tests() {
 
   echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
 
+  export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
   # Sentence BERT demo test
   pytest models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
 
