@@ -89,6 +89,12 @@ public:
     // initialize_and_launch_firmware for unreachable devices, and by read_core to avoid
     // per-read 5s timeouts in wait_until_cores_done.
     bool is_relay_broken(ChipId chip_id) const { return relay_broken_chips_.count(chip_id) > 0; }
+    // FIX XY-2 (#42429): clear relay_broken after successful ERISC force-reset so subsequent
+    // multicast writes and launch phases are not permanently suppressed.
+    void clear_relay_broken(ChipId chip_id) {
+        relay_broken_chips_.erase(chip_id);
+        this->driver_->clear_relay_broken(chip_id);
+    }
 
     size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
 
