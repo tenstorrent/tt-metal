@@ -496,35 +496,26 @@ def run(
             )
         op_kwargs["attention_sink"] = sink_tensor
 
-    # Forward program_config when master had it (use __absent_keys__ guard).
     # build_op_kwargs strips program_config; parse from raw kwargs
     if "program_config" not in op_kwargs:
         traced_pc = kwargs.get("program_config")
-        if traced_pc is not None and traced_pc != "__ABSENT__":
-            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value as _pdv_pc
+        if isinstance(traced_pc, dict) and traced_pc.get("type") == "SDPAProgramConfig":
+            import re
 
-            parsed_pc = _pdv_pc("program_config", traced_pc) if isinstance(traced_pc, dict) else traced_pc
-            op_kwargs["program_config"] = parsed_pc
-        else:
-            op_kwargs["program_config"] = None
-
-    # Clamp program_config grid to device if needed
-    pc = op_kwargs.get("program_config")
-    if pc is not None:
-        try:
-            device_grid = device.compute_with_storage_grid_size()
-            pc_grid = pc.compute_with_storage_grid_size
-            if pc_grid.x > device_grid.x or pc_grid.y > device_grid.y:
-                clamped_x = min(pc_grid.x, device_grid.x)
-                clamped_y = min(pc_grid.y, device_grid.y)
+            val = traced_pc.get("value", "")
+            gm = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
+            qm = re.search(r"q_chunk_size=(\d+)", val)
+            km = re.search(r"k_chunk_size=(\d+)", val)
+            em = re.search(r"exp_approx_mode=(\w+)", val)
+            if gm and qm and km:
                 op_kwargs["program_config"] = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=(clamped_x, clamped_y),
-                    q_chunk_size=pc.q_chunk_size,
-                    k_chunk_size=pc.k_chunk_size,
-                    exp_approx_mode=pc.exp_approx_mode,
+                    compute_with_storage_grid_size=(int(gm.group(1)), int(gm.group(2))),
+                    q_chunk_size=int(qm.group(1)),
+                    k_chunk_size=int(km.group(1)),
+                    exp_approx_mode=em.group(1).lower() == "true" if em else False,
                 )
-        except Exception:
-            pass
+        elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
+            op_kwargs["program_config"] = traced_pc
 
     # Pass memory_config from V2 vector when present (master records it).
     v2_memory_config = kwargs.get("memory_config")
