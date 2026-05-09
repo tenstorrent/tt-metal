@@ -111,6 +111,13 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
 
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+        log_debug(tt::LogMetal,
+                  "Real-time profiler disabled on device {}: target is mock.",
+                  device_id);
+        return {};
+    }
+
     if (!device->is_mmio_capable()) {
         log_debug(
             tt::LogMetal,
