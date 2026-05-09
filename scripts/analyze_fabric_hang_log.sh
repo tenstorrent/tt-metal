@@ -869,8 +869,8 @@ FIX_AY_FIRES=$(grep -cE 'FIX AY' "$CLEAN" 2>/dev/null; :)
 FIX_AY_SUCCEEDED=$(grep -cE 'FIX AY.*all.*reset to base firmware|FIX AY.*succeeded' "$CLEAN" 2>/dev/null; :)
 FIX_AY_FAILED=$(grep -cE 'FIX AY.*failed|FIX AY.*non-std exception|FIX AY/AV.*failed' "$CLEAN" 2>/dev/null; :)
 FIX_AV_FIRES=$(grep -cE 'FIX AV #42429|FIX AY/AV.*Skipping all remaining' "$CLEAN" 2>/dev/null; :)
-# FIX AL: STARTED early-exit — Phase 5 master chan stuck at EDMStatus::STARTED after kStartedTimeoutMs
-FIX_AL_FIRES=$(grep -cE 'FIX AL|STARTED early-exit after.*ms.*master chan' "$CLEAN" 2>/dev/null; :)
+# FIX AL: read-failure early-exit (relay exception, firmware unusable — not a STARTED timeout)
+FIX_AL_FIRES=$(grep -cE 'FIX AL|firmware.*unusable.*early.exit|relay.*read.*FAILED.*early.exit' "$CLEAN" 2>/dev/null; :)
 # FIX AM: Phase 5b skip when master chan still at STARTED after FIX AL break
 FIX_AM_FIRES=$(grep -cE 'FIX AM|skipping Phase 5b.*FIX AM|channels_not_ready_for_traffic.*FIX AM|still at STARTED.*skipping Phase 5b' "$CLEAN" 2>/dev/null; :)
 # FIX AO (#42429): wait_for_fabric_router_sync() STARTED early-exit — master chan stuck at
@@ -885,6 +885,11 @@ FIX_AO_FIRES=$(grep -cE 'stuck at STARTED.*peer is not responding.*FIX AO|Skippi
 # Counts how many devices selected an MMIO peer vs non-MMIO peer for master channel.
 FIX_BF_MMIO_MASTER=$(grep -cE 'selected master_router_chan=.*peer_is_mmio=true.*FIX BD/BF' "$CLEAN" 2>/dev/null; :)
 FIX_BF_NONMMIO_MASTER=$(grep -cE 'selected master_router_chan=.*peer_is_mmio=false.*FIX BD/BF' "$CLEAN" 2>/dev/null; :)
+# FIX BE (#42429): per-cycle stale state clearing — structural fix, no direct log line.
+# Prevents external_umd_channels_map_ / has_base_umd_channels_ / timeout_on_base_umd_devices_ /
+# ring_sync_already_timed_out_ from accumulating across teardown+reinit cycles.
+# Regression evidence: base-UMD channel count grows 2→4→6+ per cycle without this fix.
+FIX_BE_STRUCTURAL=1  # always active in this branch
 # FIX BG (#42429): host-pre-launch (0xdeadb07e) sentinel early-exit in wait_for_fabric_router_sync.
 # Fires when ERISC was soft-reset (FIX RR) but never started executing — stuck at host-written
 # pre-launch canary.  Device marked dead-master-chan; sync skipped.
@@ -1943,6 +1948,7 @@ echo "  FIX_AO_FIRES:              ${FIX_AO_FIRES:-0}  (ring-sync STARTED early-
 echo "  FIX_BG_FIRES:              ${FIX_BG_FIRES:-0}  (host-pre-launch 0xdeadb07e — ERISC not executing after FIX RR soft-reset)"
 echo "  FIX_BF_MMIO_MASTER:        ${FIX_BF_MMIO_MASTER:-0}  (master chans selected with MMIO peer — FIX BD/BF)"
 echo "  FIX_BF_NONMMIO_MASTER:     ${FIX_BF_NONMMIO_MASTER:-0}  (master chans selected with non-MMIO peer — FIX BD/BF fallback)"
+echo "  FIX_BE_STRUCTURAL:         active (per-cycle state cleared at compile_and_configure_fabric entry)"
 echo "  FIX_ST_DEAD:               ${FIX_ST_DEAD:-0}  (MMIO master chan dead, ring sync skipped — FIX ST)"
 echo "  FIX_ST_RECOVERED:          ${FIX_ST_RECOVERED:-0}  (MMIO master chan recovered by FIX RR, ring sync proceeding — FIX ST)"
 echo "  FIX_TV_SUCCESS:            ${FIX_TV_SUCCESS:-0}  (MMIO ETH heartbeat confirmed after reset_cores)"
