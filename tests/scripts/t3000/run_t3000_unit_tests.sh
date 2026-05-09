@@ -245,10 +245,19 @@ except Exception as e:
       UP2_RING_TIMEOUT=1
     fi
     if [[ $UP2_RING_TIMEOUT -eq 1 ]]; then
-      echo "LOG_METAL: [FIX UP2] INFRA_ERROR — ring-sync timeout persists after 2 reset+warm-up cycles. Hardware requires reboot." >&2
-      exit 1
+      # FIX UP3 (#42429): The warm-up itself triggers the dispatch-ERISC timeout cycle:
+      # base-UMD ERISC channels (loaded after tt-smi -r) interfere with dispatch FW
+      # during open/close, causing rescue_stuck_dispatch_cores to fire and leave
+      # go_msg=0x02 stale.  Running more warm-ups cannot break this circular dependency.
+      # Instead: do a final tt-smi -r to clear the go_msg=0x02 stale state left by
+      # rescue_stuck_dispatch_cores, then proceed WITHOUT another warm-up.
+      # The test sessions have FIX SC (stale go_msg cleanup) + FIX M/RZ2 (base-UMD
+      # transition + ring-sync health check) to handle first-session state safely.
+      echo "LOG_METAL: [FIX UP3] dispatch-ERISC timeout loop detected — running final tt-smi -r to clear rescue_stuck stale state, then proceeding to tests without warm-up. (#42429)" >&2
+      timeout 30 tt-smi -r || true
+    else
+      echo "LOG_METAL: [FIX UP2] ring-sync healthy after retry — proceeding to test loop."
     fi
-    echo "LOG_METAL: [FIX UP2] ring-sync healthy after retry — proceeding to test loop."
   fi
 
   # Per-test-failure hardware reset hook.
