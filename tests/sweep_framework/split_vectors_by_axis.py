@@ -64,6 +64,16 @@ def _scan_pc(obj, state):
         pc_text = repr(obj)
     if "compute_with_storage_grid_size" not in pc_text:
         return
+    # Try X-Y dash format first (e.g. "=8-8")
+    dash_m = _GRID_XY_DASH.search(pc_text)
+    if dash_m:
+        gx, gy = int(dash_m.group(1)), int(dash_m.group(2))
+        if gx >= 8:
+            state["needs_row"] = True
+        if gy >= 10:
+            state["needs_col"] = True
+        return
+    # Fallback to x=N, y=N format
     idx = pc_text.find("compute_with_storage_grid_size")
     section = pc_text[idx : idx + 80]
     xm = _GRID_X.search(section)
