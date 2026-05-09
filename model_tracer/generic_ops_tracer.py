@@ -702,19 +702,33 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
         if op_name not in master_data["operations"]:
             master_data["operations"][op_name] = {"configurations": []}
 
-        # Create argument signature for deduplication
-        args_str = json.dumps(op_args, sort_keys=True, default=str)
-        arg_signature = hashlib.md5(args_str.encode()).hexdigest()
+        # Create argument signature for deduplication.
+        # When sweep_source_hash is present (sweep validation mode), use it as
+        # the dedup key — each sweep vector maps to exactly one master config,
+        # so different vectors must produce distinct configs even if their
+        # serialized arguments happen to hash identically.
+        sweep_source_hash = operation.get("sweep_source_hash")
+        if sweep_source_hash:
+            arg_signature = sweep_source_hash
+        else:
+            args_str = json.dumps(op_args, sort_keys=True, default=str)
+            arg_signature = hashlib.md5(args_str.encode()).hexdigest()
 
         # Check if this configuration already exists
         matching_config = None
         for existing_config in master_data["operations"][op_name]["configurations"]:
-            if isinstance(existing_config, dict) and "arguments" in existing_config:
-                existing_args = existing_config["arguments"]
-                existing_sig = hashlib.md5(json.dumps(existing_args, sort_keys=True, default=str).encode()).hexdigest()
-                if existing_sig == arg_signature:
+            if isinstance(existing_config, dict):
+                if sweep_source_hash and existing_config.get("sweep_source_hash") == sweep_source_hash:
                     matching_config = existing_config
                     break
+                elif not sweep_source_hash and "arguments" in existing_config:
+                    existing_args = existing_config["arguments"]
+                    existing_sig = hashlib.md5(
+                        json.dumps(existing_args, sort_keys=True, default=str).encode()
+                    ).hexdigest()
+                    if existing_sig == arg_signature:
+                        matching_config = existing_config
+                        break
 
         if matching_config is None:
             # New configuration - assign new config_id
@@ -737,7 +751,6 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                 ],
             }
 
-            sweep_source_hash = operation.get("sweep_source_hash")
             if sweep_source_hash:
                 config_entry["sweep_source_hash"] = sweep_source_hash
 
