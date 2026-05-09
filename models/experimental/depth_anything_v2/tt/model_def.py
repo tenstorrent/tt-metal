@@ -821,7 +821,10 @@ def get_model_config(batch_size, device):
     """
     if device is not None:
         raw = device.compute_with_storage_grid_size()
-        grid_x, grid_y = raw.x, raw.y
+        grid_x = raw.x  # 8 on N300
+        # Force grid_y=7: 1568 tokens / 7 rows = 224 = 7×32 (tile-aligned).
+        # With grid_y=8: 1568/8 = 196 which is NOT a multiple of 32 → TT_FATAL.
+        grid_y = min(raw.y, 7)
     else:
         grid_x, grid_y = 8, 7
 
