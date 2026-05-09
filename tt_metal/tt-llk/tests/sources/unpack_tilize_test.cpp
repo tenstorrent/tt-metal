@@ -128,15 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_8bit_format = IS_8BIT_FORMAT(formats.unpack_A_src);
 
     _llk_pack_init_<UNTILIZE, false, TILIZE>(
-        formats.pack_src,
-        formats.pack_dst,
-        FACE_R_DIM,
-        TILE_C_DIM,
-        num_faces,
-        false /* partial_face */,
-        false /* narrow_tile */,
-        1 /* num_tiles */,
-        is_8bit_format /* skip_bh_tilize_workaround */);
+        formats.pack_src, FACE_R_DIM, TILE_C_DIM, num_faces, 1 /* num_tiles */, is_8bit_format /* skip_bh_tilize_workaround */);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, num_faces);

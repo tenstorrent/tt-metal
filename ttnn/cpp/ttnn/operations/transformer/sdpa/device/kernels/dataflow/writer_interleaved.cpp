@@ -29,8 +29,11 @@ void kernel_main() {
     constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(19);
     constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(23);
 
-    constexpr auto out_args = TensorAccessorArgs<21>();
+    constexpr auto out_args = TensorAccessorArgs<24>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -54,7 +57,7 @@ void kernel_main() {
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
@@ -80,24 +83,11 @@ void kernel_main() {
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
-    // Non-causal: 1 tile (neginf). Causal: 2 tiles (neginf + diagonal).
+    // Layout: [neginf(0)] [causal_diag?(1)] [k_partial?].
     if constexpr (use_lightweight_mask) {
-        constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
-        constexpr uint32_t lw_mask_tiles = is_causal ? 2 : 1;
-        cb_reserve_back(cb_mask_in, lw_mask_tiles);
-
-        // Tile 0: all -inf
-        auto* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mask_in));
-        for (uint32_t i = 0; i < mask_tile_size_bytes / sizeof(uint32_t); i++) {
-            ptr[i] = 0xFF80FF80;  // -inf in bfloat16
-        }
-
-        // Tile 1: causal diagonal (0 where col<=row, -inf where col>row)
-        if constexpr (is_causal) {
-            fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, 1);
-        }
-
-        cb_push_back(cb_mask_in, lw_mask_tiles);
+        // is_causal handles K-partial via causal stamp; skip emitting partial tile in causal mode.
+        constexpr uint32_t writer_partial_col = is_causal ? 0u : k_partial_col;
+        generate_lightweight_mask_tiles<writer_partial_col, /*joint_l*/ 0u, cb_mask_in, is_causal>();
     }
 
     if constexpr (is_chunked) {
@@ -165,15 +155,31 @@ void kernel_main() {
                     const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
                     const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                     uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
-                    write_block(
-                        out_writer,
-                        cb_out,
-                        out_chunk_tiles,
-                        out_row_tile_count,
-                        vDHt,
-                        out_tile_id,
-                        tile_bytes,
-                        barrier_threshold);
+                    if constexpr (use_streaming_compute) {
+                        // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
+                        // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
+                        // are padding and get popped without being written.
+                        write_block_row_grouped(
+                            out_writer,
+                            cb_out,
+                            Sq_chunk_t,
+                            out_row_tile_count,
+                            vDHt,
+                            out_tile_id,
+                            tile_bytes,
+                            out_subblock_h,
+                            barrier_threshold);
+                    } else {
+                        write_block(
+                            out_writer,
+                            cb_out,
+                            out_chunk_tiles,
+                            out_row_tile_count,
+                            vDHt,
+                            out_tile_id,
+                            tile_bytes,
+                            barrier_threshold);
+                    }
                 }
             }
         }

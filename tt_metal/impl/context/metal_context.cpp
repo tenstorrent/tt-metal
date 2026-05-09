@@ -725,7 +725,8 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     }
 
     CoreCoord virtual_coord = get_cluster().get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
-    return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id);
+    return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id) ||
+           get_cluster().is_dram_core(virtual_coord, id);
 }
 
 void MetalContext::on_dispatch_timeout_detected() {

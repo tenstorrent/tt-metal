@@ -1233,7 +1233,8 @@ conv_op_l1_usage calculate_L1_usage(
     const bool enable_bias,
     bool is_1d_depthwise_conv,
     uint32_t input_channels_padded,
-    bool skip_act_cb_create) {
+    bool skip_act_cb_create,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
     // Input shard doesn't affect L1 usage calculation.
     std::array<uint32_t, 2> dummy_input_shard_shape = {0, 0};
     std::vector<CBInfo> cb_info = get_cb_info(
@@ -1252,7 +1253,8 @@ conv_op_l1_usage calculate_L1_usage(
         enable_bias,
         is_1d_depthwise_conv,
         skip_act_cb_create,
-        input_channels_padded);
+        input_channels_padded,
+        reader_indices_actual_page_size);
     uint32_t total_CB_size = 0;
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {

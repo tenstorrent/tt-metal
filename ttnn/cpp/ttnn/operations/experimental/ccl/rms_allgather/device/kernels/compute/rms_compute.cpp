@@ -135,13 +135,13 @@ void kernel_main() {
 
     cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex_partial2);
+    reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
         // TODO(#38448): Temporary workaround pending further debug; do not copy this pattern elsewhere.
         tensix_sync();
-        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
+        reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
     }
 
     tile_regs_commit();
@@ -193,12 +193,13 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
                 cb_stats,
                 post_cb_scaler_global,
                 cb_var,
                 compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
+            cb_pop_front(cb_stats, num_distributed_blocks);
 
             // 1/[sqrt(Var + eps)],
             reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm

@@ -14,7 +14,7 @@ Parametrized over:
 - use_pretrained: real pretrained weights from DeepSeek-R1-0528 vs random weights
 - input_source: "random", "json_prompts", or InfiniteBench subset (passkey, kv_retrieval, etc.)
 - pcc_validation: per-stage PCC check (via return_intermediates) vs shape-only smoke test
-- n_routed_experts / capacity_factor / gate_fallback_mode: MoE configurations
+- n_routed_experts / gate_fallback_mode: MoE configurations
 """
 
 import gc
@@ -28,14 +28,28 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    create_kv_chunk_address_table,
+    init_kvpe_cache,
+)
+from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
+    ABC_SHORT_PATH,
+    P64TOK_PATH,
+    P960TOK_PATH,
+    PIE960_PATH,
     PROMPTS_PATH,
+    ReferenceCacheKey,
     check_reference_cache_exists,
     create_hf_model,
     download_infinitebench_subset,
@@ -43,6 +57,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     load_and_compute_layer_by_layer,
     load_reference_cache,
     save_reference_cache,
+    slice_non_padded,
     tokenize_prompt_to_isl,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -57,31 +72,52 @@ SEQ_LEN_25K = 25 * 1024
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
+@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
     "input_source",
-    ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
+    [
+        "json_prompts",
+        "abc_1k",
+        "abc_short",
+        "p64tok",
+        "p960tok",
+        "pie960",
+        "random",
+        "passkey",
+        "kv_retrieval",
+        "longdialogue_qa_eng",
+        "longbook_qa_eng",
+    ],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("isl_total", [SEQ_LEN_1K, SEQ_LEN_25K])
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
+@pytest.mark.parametrize(
+    "isl_total, dispatch_buffer_capacity_factor",
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+)
 @pytest.mark.parametrize(
     "num_layers",
     [
+        5,
         12,
         pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
+    ids=["5_layers", "12_layers", "61_layers"],
 )
 @pytest.mark.parametrize(
-    "n_routed_experts, capacity_factor, gate_fallback_mode",
+    "n_routed_experts, gate_fallback_mode",
     [
-        (64, 4, GateComputeMode.HOST_ALL),
-        (256, 32, GateComputeMode.HOST_ALL),
-        (256, 32, GateComputeMode.DEVICE),
+        (64, GateComputeMode.HOST_ALL),
+        (256, GateComputeMode.HOST_ALL),
+        (256, GateComputeMode.DEVICE),
+        (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e64_cf4_host", "e256_cf32_host", "e256_cf32_device"],
+    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
 )
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -115,10 +151,11 @@ def test_prefill_transformer(
     config_only,
     mesh_device,
     device_params,
+    is_balanced,
     isl_total,
+    dispatch_buffer_capacity_factor,
     num_layers,
     n_routed_experts,
-    capacity_factor,
     gate_fallback_mode,
     num_links,
     topology,
@@ -127,9 +164,11 @@ def test_prefill_transformer(
     input_source,
     use_pretrained,
     return_kv_cache,
+    temperature,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
+    tokenizer,
     request,
 ):
     torch.manual_seed(42)
@@ -165,7 +204,8 @@ def test_prefill_transformer(
     logger.info(
         f"isl_total={isl_total}, isl_per_chip={isl_per_chip}, "
         f"num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-        f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+        f"dispatch_buffer_capacity_factor={dispatch_buffer_capacity_factor}, "
+        f"gate_fallback_mode={gate_fallback_mode}, "
         f"input_source={input_source}, pcc_validation={pcc_validation}, "
         f"weights={weight_type}"
     )
@@ -173,6 +213,8 @@ def test_prefill_transformer(
     # --- Monkeypatch n_routed_experts ---
     orig_num_routed_experts = DeepSeekV3Config.NUM_ROUTED_EXPERTS
     DeepSeekV3Config.NUM_ROUTED_EXPERTS = n_routed_experts
+
+    padding_side = tokenizer.padding_side
 
     # --- Cache-aware loading strategy ---
     profiler.start("cache_check")
@@ -185,7 +227,14 @@ def test_prefill_transformer(
         else False
     )
 
-    cache_key = f"{weight_type}_{input_source}_isl{isl_total}_layers{num_layers}_experts{n_routed_experts}"
+    cache_key = ReferenceCacheKey(
+        weight_type=weight_type,
+        input_source=input_source,
+        isl_total=isl_total,
+        num_layers=num_layers,
+        n_routed_experts=n_routed_experts,
+        padding_side=padding_side,
+    )
     ref_cache_exists = check_reference_cache_exists(cache_key) if pcc_validation else False
 
     logger.info(f"Cache status: TTNN={ttnn_cache_complete}, Reference={ref_cache_exists}")
@@ -214,7 +263,7 @@ def test_prefill_transformer(
         attention_mask = torch.ones(1, isl_total, dtype=torch.int64)
     else:
         profiler.start("tokenization")
-        tok = request.getfixturevalue("tokenizer")
+        tok = tokenizer
         if input_source == "json_prompts":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
@@ -224,6 +273,22 @@ def test_prefill_transformer(
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
             prompt_text = load_prompts_from_json(str(ABC_1K_PATH))
+        elif input_source == "abc_short":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(ABC_SHORT_PATH))
+        elif input_source == "p64tok":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(P64TOK_PATH))
+        elif input_source == "p960tok":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(P960TOK_PATH))
+        elif input_source == "pie960":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(PIE960_PATH))
         elif input_source in INFINITEBENCH_SUBSET_NAMES:
             cached_path = download_infinitebench_subset(input_source)
             with open(cached_path) as f:
@@ -235,6 +300,9 @@ def test_prefill_transformer(
         logger.info(
             f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}, last 10 tokens: {token_ids[0, -10:].tolist()}"
         )
+
+    number_of_non_padded_tokens = attention_mask.sum().item()  # should be returned by tokenize..
+    logger.info(f"Number of non-padded tokens is: {number_of_non_padded_tokens}")
 
     # --- Build HF model and/or extract weights based on cache state ---
     profiler.start("weights_creation")
@@ -264,7 +332,6 @@ def test_prefill_transformer(
                 topology=topology,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
-                capacity_factor=capacity_factor,
                 gate_fallback_mode=gate_fallback_mode,
             )
 
@@ -303,12 +370,14 @@ def test_prefill_transformer(
         state_dict=state_dict,
         num_layers=num_layers,
         seq_len=isl_total,
+        is_balanced=is_balanced,
+        padding_side=padding_side,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
-        capacity_factor=capacity_factor,
         weight_cache_path=effective_cache_path,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
@@ -336,8 +405,34 @@ def test_prefill_transformer(
         num_kvpe_cache_layers=num_layers,
     )
 
+    # create kv_cache dissagregation table
+    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = num_layers
+    lookup_table_config.max_sequence_length = isl_total
+    lookup_table_config.num_slots = 1
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
+
+    # just create atm for demo purposes, don't actually use it
+    lookup_table = create_kv_chunk_address_table(
+        config=lookup_table_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=isl_total,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
+    )
+
     # --- Shard token_ids to device ---
     # Reshape [1, isl_total] -> [sp_factor, 1, isl_per_chip] for SP sharding
+    if is_balanced == True:
+        chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
+        token_ids = (
+            reorder_tensor_chunks(token_ids.unsqueeze(1).unsqueeze(-1), chunk_order, seq_dim=2).squeeze(1).squeeze(-1)
+        )
+
     token_ids_reshaped = token_ids.reshape(sp_factor, 1, isl_per_chip)
 
     tt_tokens = ttnn.from_torch(
@@ -355,49 +450,52 @@ def test_prefill_transformer(
     do_return_kv = pcc_validation and return_kv_cache
     for i in range(num_iterations):
         logger.info(f"Starting iteration: {i}")
-        result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation, read_profiler=True)
+        first_token_id, first_token_prob, tt_intermediates = transformer(
+            tt_tokens,
+            tt_kvpe_cache,
+            number_of_non_padded_tokens=number_of_non_padded_tokens,
+            return_intermediates=pcc_validation,
+            read_profiler=True,
+            temperature=temperature,
+        )
         logger.info(f"Starting completion sync on iteration: {i}")
         ttnn.synchronize_device(mesh_device)
-
     profiler.end("tt_forward")
-    logger.info("Forward pass completed successfully")
+    logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
+
+    # --- Save intermediate outputs ---
 
     if pcc_validation:
-        tt_output, tt_snapshots = result
-    else:
-        tt_output = result
+        assert tt_intermediates is not None, "Expected intermediates dict"
+        test_params = {
+            "mesh_shape": mesh_shape,
+            "isl_total": isl_total,
+            "isl_per_chip": isl_per_chip,
+            "num_layers": num_layers,
+            "n_routed_experts": n_routed_experts,
+            "dispatch_buffer_capacity_factor": dispatch_buffer_capacity_factor,
+            "gate_fallback_mode": gate_fallback_mode,
+            "use_pretrained": use_pretrained,
+            "input_source": input_source,
+            "topology": str(topology),
+            "num_links": num_links,
+            "emb_dim": emb_dim,
+            "sp_factor": sp_factor,
+            "tp_factor": tp_factor,
+        }
 
-    # --- Validate output shape ---
-    expected_per_device_shape = [1, 1, isl_per_chip, emb_dim // tp_factor]
-    output_shape = list(tt_output.shape)
-    assert (
-        output_shape == expected_per_device_shape
-    ), f"Output shape mismatch: got {output_shape}, expected {expected_per_device_shape}"
-    logger.info(f"Output shape: {output_shape} (matches expected)")
+        assert "norm" in tt_intermediates, "Expected 'norm' in intermediates"
+        save_intermediate_output(
+            tensor=tt_intermediates["norm"],
+            name="norm",
+            test_params=test_params,
+        )
 
-    # --- Save final norm output ---
-    if pcc_validation:
-        final_norm_label, final_norm_tensor = tt_snapshots[-1]
-        assert final_norm_label == "norm", f"Expected last snapshot to be 'norm', got '{final_norm_label}'"
-
-        save_norm_output(
-            norm_tensor=final_norm_tensor,
-            test_params={
-                "mesh_shape": mesh_shape,
-                "isl_total": isl_total,
-                "isl_per_chip": isl_per_chip,
-                "num_layers": num_layers,
-                "n_routed_experts": n_routed_experts,
-                "capacity_factor": capacity_factor,
-                "gate_fallback_mode": gate_fallback_mode,
-                "use_pretrained": use_pretrained,
-                "input_source": input_source,
-                "topology": str(topology),
-                "num_links": num_links,
-                "emb_dim": emb_dim,
-                "sp_factor": sp_factor,
-                "tp_factor": tp_factor,
-            },
+        assert "lm_head" in tt_intermediates, "Expected 'lm_head' in intermediates"
+        save_intermediate_output(
+            tensor=tt_intermediates["lm_head"],
+            name="lm_head",
+            test_params=test_params,
         )
 
     # --- PCC check ---
@@ -420,10 +518,22 @@ def test_prefill_transformer(
         # else: already computed by load_and_compute_layer_by_layer()
 
         # Per-stage PCC comparison
+        # ref_snapshots is a list of tensors: [embed, layer_0, ..., layer_N, norm, lm_head]
+        # tt_intermediates is a dict with keys: "embed", "layer_0", ..., "layer_N", "norm", "lm_head", "first_token"
         pcc_results = []
-        for (label, tt_host), ref_host in zip(tt_snapshots, ref_snapshots):
+        ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
+        for label, ref_host in zip(ref_labels, ref_snapshots):
+            if label not in tt_intermediates:
+                logger.error(f"{label:<20s}  Missing from TT intermediates")
+                pcc_results.append((label, -1.0))
+                continue
+            tt_host = tt_intermediates[label]
             try:
-                _, pcc = comp_pcc(ref_host.float(), tt_host.float())
+                # ignore padded tokens in comparison
+                _, pcc = comp_pcc(
+                    slice_non_padded(ref_host, number_of_non_padded_tokens, padding_side).float(),
+                    slice_non_padded(tt_host, number_of_non_padded_tokens, padding_side).float(),
+                )
                 logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
                 pcc_results.append((label, pcc))
             except Exception as e:
@@ -437,18 +547,31 @@ def test_prefill_transformer(
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             ).to(torch.bfloat16)
             # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
+            tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
+            if is_balanced:
+                tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
             kv_lora_rank = config.kv_lora_rank
             for i, ref_kvpe in enumerate(ref_kvpe_list):
-                tt_kvpe_layer = tt_kvpe_all[i : i + 1, :1, :, :]
+                tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
                 label = f"layer_{i}_kvpe"
                 try:
+                    # ignore padded tokens in comparison
                     _, kv_pcc = comp_pcc(
-                        ref_kvpe[:, :, :, :kv_lora_rank].float(),
-                        tt_kvpe_layer[:, :, :, :kv_lora_rank].float(),
+                        slice_non_padded(
+                            ref_kvpe[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
+                        ).float(),
+                        slice_non_padded(
+                            tt_kvpe_layer[..., :kv_lora_rank], number_of_non_padded_tokens, padding_side
+                        ).float(),
                     )
+                    # ignore padded tokens in comparison
                     _, pe_pcc = comp_pcc(
-                        ref_kvpe[:, :, :, kv_lora_rank:].float(),
-                        tt_kvpe_layer[:, :, :, kv_lora_rank:].float(),
+                        slice_non_padded(
+                            ref_kvpe[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
+                        ).float(),
+                        slice_non_padded(
+                            tt_kvpe_layer[..., kv_lora_rank:], number_of_non_padded_tokens, padding_side
+                        ).float(),
                     )
                     logger.info(f"{label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
                     pcc_results.append((f"{label}_kv", kv_pcc))
@@ -472,6 +595,32 @@ def test_prefill_transformer(
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
 
+        # Log first token info (returned value is for first temperature in list)
+        tok = tokenizer
+
+        # Decode token to string
+        token_text = tok.decode([first_token_id]) if tok else "N/A"
+        first_temp = temperature[0] if isinstance(temperature, list) else temperature
+        logger.info(
+            f"First Token: ID={first_token_id} [{repr(token_text)}] prob={first_token_prob*100:.1f}% temp={first_temp}"
+        )
+
+        # Log all temperature results from intermediates
+        if tt_intermediates and "first_token" in tt_intermediates:
+            for result in tt_intermediates["first_token"]:
+                tid = result["token_id"]
+                tprob = result["probability"]
+                ttemp = result["temperature"]
+                ttext = tok.decode([tid]) if tok else "N/A"
+                logger.debug(f"First Token: ID={tid} [{repr(ttext)}] prob={tprob*100:.1f}% temp={ttemp}")
+                # Print top5
+                if "top5" in result:
+                    for i, t5 in enumerate(result["top5"]):
+                        t5_id = t5["token_id"]
+                        t5_prob = t5["probability"]
+                        t5_text = tok.decode([t5_id]) if tok else "N/A"
+                        logger.debug(f"  top{i+1}: ID={t5_id} [{repr(t5_text)}] prob={t5_prob*100:.1f}%")
+
         # Store failures for deferred check (after timing report)
         has_pcc_failures = len(failures) > 0
 
@@ -479,7 +628,7 @@ def test_prefill_transformer(
             logger.success(
                 f"TtPrefillTransformer PCC test passed "
                 f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-                f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+                f"gate_fallback_mode={gate_fallback_mode}, "
                 f"weights={weight_type})"
             )
         else:
@@ -491,7 +640,7 @@ def test_prefill_transformer(
         logger.success(
             f"TtPrefillTransformer smoke test passed "
             f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-            f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+            f"gate_fallback_mode={gate_fallback_mode}, "
             f"weights={weight_type})"
         )
 

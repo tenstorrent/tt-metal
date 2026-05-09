@@ -21,6 +21,13 @@ struct ReduceParams {
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     bool negate{false};
+    // For min/max with a non-unity scalar, the GMPOOL hardware path (reduce_tile LLK) only
+    // respects the exponent of the scaler. To produce numerically correct results for any
+    // scalar, the host instead requests reduction with `scaler=1.0` and applies the user
+    // scalar afterwards via SFPU post-multiplication (mul_unary_tile) inside the compute
+    // kernel, gated by the REDUCE_POST_MUL define. When `post_mul_scaler == 1.0f`, the
+    // post-multiplication path is disabled and the existing reduce-only flow runs unchanged.
+    float post_mul_scaler{1.0f};
 };
 
 }  // namespace ttnn::prim

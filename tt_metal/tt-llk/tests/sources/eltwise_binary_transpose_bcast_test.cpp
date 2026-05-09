@@ -33,11 +33,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
 
     // Initialize unpack with column broadcast on srcB and transpose on srcA
-    _llk_unpack_AB_init_<BROADCAST_TYPE>(
-        FACE_R_DIM,
-        4 /* num_faces */,
-        false,                          // narrow_tile
-        params.UNPACK_TRANSPOSE_FACES); // Enable face rearrangement for srcA
+    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+    _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, params.UNPACK_TRANSPOSE_FACES ? ckernel::Transpose::Both : ckernel::Transpose::None);
 
     // Unpack tiles: srcA will be transposed, srcB will be column broadcasted
     for (int i = 0; i < params.TILE_CNT; ++i)
@@ -83,6 +80,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -98,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();

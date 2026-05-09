@@ -6,6 +6,7 @@
 #include <span>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include <map>
 #include <string>
 #include <variant>
@@ -28,6 +29,7 @@
 #include "device/device_manager.hpp"
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
+#include "hostdev/realtime_profiler_msgs.h"
 
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/dprint_server.hpp"
@@ -36,6 +38,54 @@
 #include "hostdevcommon/dprint_common.h"
 
 using namespace tt::tt_metal;
+
+namespace {
+
+// Zeros selected realtime_profiler_msg_t fields on dispatch_s L1 (REALTIME_PROFILER_MSG carve); order matches
+// former cq_dispatch_subordinate kernel_main init (signalling fields before FIFO, then timestamp .id words).
+void zero_dispatch_s_realtime_profiler_msg_fields(
+    IDevice* device, const CoreCoord& logical_core, tt::CoreType core_type, const Hal& hal, uint32_t msg_base_l1_addr) {
+    const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    // WriteToDeviceL1(..., vector<uint32_t>&) requires a mutable vector (non-const ref overload).
+    std::vector<uint32_t> zero_word = {0u};
+    const uint32_t ts_id_byte_off = offsetof(realtime_profiler_timestamp_t, id);
+
+    auto write_u32 = [&](uint32_t addr) {
+        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, addr, zero_word, core_type);
+    };
+
+    const uint32_t base = msg_base_l1_addr;
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_start));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_end));
+
+    const uint32_t ksa = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
+    const uint32_t kea = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_a);
+    const uint32_t ksb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
+    const uint32_t keb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_b);
+    write_u32(base + ksa + ts_id_byte_off);
+    write_u32(base + kea + ts_id_byte_off);
+    write_u32(base + ksb + ts_id_byte_off);
+    write_u32(base + keb + ts_id_byte_off);
+}
+
+}  // namespace
 
 DispatchSKernel::DispatchSKernel(
     int node_id,
@@ -90,6 +140,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.cb_size = my_dispatch_constants.dispatch_s_buffer_size();
     // used by dispatch_s to sync with prefetch
     static_config_.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    // used by dispatch_d to signal that its shutdown handoff is ready
+    static_config_.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     static_config_.dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     // used by dispatch_d to signal that dispatch_s can send go signal
@@ -104,6 +156,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+    static_config_.realtime_profiler_msg_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
@@ -223,6 +277,7 @@ void DispatchSKernel::CreateKernel() {
         {"CB_LOG_PAGE_SIZE", std::to_string(static_config_.cb_log_page_size.value())},
         {"CB_SIZE", std::to_string(static_config_.cb_size.value())},
         {"MY_DISPATCH_CB_SEM_ID", std::to_string(static_config_.my_dispatch_cb_sem_id.value())},
+        {"DISPATCH_D_SHUTDOWN_SEM_ID", std::to_string(static_config_.dispatch_d_shutdown_sem_id.value())},
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
@@ -238,6 +293,7 @@ void DispatchSKernel::CreateKernel() {
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
+        {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
         {"DEVICE_PRINT_DISPATCH_ENABLED", std::to_string(static_config_.device_print_dispatch_enabled.value_or(0))},
         // For each per-device dispatch_s build, MaxNocLocations equals the actual print-core count
         // for that device — passed as a compile-time #define so DevicePrintDispatch<>'s LDM arrays
@@ -260,9 +316,31 @@ void DispatchSKernel::CreateKernel() {
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
+
+    if (GetCoreType() == CoreType::WORKER) {
+        const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
+        std::map<std::string, std::string> compute_defines = {
+            {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
+            {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
+            {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        };
+        tt::tt_metal::ComputeConfig compute_config;
+        compute_config.defines = compute_defines;
+        tt::tt_metal::CreateKernel(*program_, compute_kernel_path, logical_core_, compute_config);
+    }
 }
 
 void DispatchSKernel::ConfigureCore() {
+    if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
+        TT_ASSERT(static_config_.realtime_profiler_msg_addr.has_value());
+        zero_dispatch_s_realtime_profiler_msg_fields(
+            device_,
+            logical_core_,
+            GetCoreType(),
+            descriptor_.hal(),
+            static_config_.realtime_profiler_msg_addr.value());
+    }
+
     if (get_dispatch_query_manager_ref().distributed_dispatcher()) {
         // Just need to clear the dispatch message
         std::vector<uint32_t> zero = {0x0};

@@ -150,9 +150,19 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
 }
 
 // TODO(PGK): remove soft reset when fw is downloaded at init
-inline bool debug_valid_reg_addr(uint64_t addr, uint64_t len) {
+inline bool debug_valid_reg_addr(
+    uint64_t addr, uint64_t len, AddressableCoreType core_type = AddressableCoreType::TENSIX) {
+    uint32_t num_streams;
+    switch (core_type) {
+        case AddressableCoreType::ETH: num_streams = ETH_NOC_NUM_STREAMS; break;
+#if defined(ARCH_BLACKHOLE)
+        // DRISCs are an addressable core only on BH
+        case AddressableCoreType::DRAM: num_streams = DRAM_NOC_NUM_STREAMS; break;
+#endif
+        default: num_streams = NOC_NUM_STREAMS; break;
+    }
     return (((addr >= NOC_OVERLAY_START_ADDR) &&
-             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
+             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * num_streams)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0)) &&
            (len == 4);
 }
@@ -227,7 +237,28 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     return DebugSanitizeOK;
 }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_DRISC)
+inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) {
+    if (addr + len <= addr) {
+        return DebugSanitizeNocAddrZeroLength;
+    }
+    if (addr < MEM_DRISC_L1_BASE) {
+        return DebugSanitizeNocAddrUnderflow;
+    }
+    if (addr + len > MEM_DRISC_L1_BASE + MEM_DRISC_L1_SIZE) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+#if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
+    if (write && (addr < MEM_DRISC_MAILBOX_END)) {
+        return DebugSanitizeNocAddrMailbox;
+    }
+#endif
+    return DebugSanitizeOK;
+}
+#endif
+
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
 // Check whether an L1 address range [l1_addr, l1_addr+len) that falls within a
 // circular buffer stays within that buffer's allocated region.  Only runs on
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
@@ -255,7 +286,7 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     // Address is not inside any known CB; other checks will validate it.
     return DebugSanitizeOK;
 }
-#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC && !COMPILE_FOR_IDLE_ERISC && !COMPILE_FOR_DRISC
 
 // Note:
 //  - this isn't racy w/ the host so long as return_code is written last
@@ -434,7 +465,13 @@ uint32_t debug_sanitize_noc_addr(
     uint32_t alignment_mask =
         (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) -
         1;  // Default alignment, only override in certain cases.
-    if (core_type == AddressableCoreType::PCIE) {
+    // Reg-space targets (on DRAM/ETH/TENSIX overlay) bypass the type specific addr validator and
+    // use reg alignment instead
+    if ((core_type == AddressableCoreType::DRAM || core_type == AddressableCoreType::ETH ||
+         core_type == AddressableCoreType::TENSIX) &&
+        debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
+        alignment_mask = NOC_REG_ALIGNMENT_BYTES - 1;
+    } else if (core_type == AddressableCoreType::PCIE) {
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
         debug_sanitize_post_addr_and_hang(
@@ -459,29 +496,25 @@ uint32_t debug_sanitize_noc_addr(
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_dram_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::ETH) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_addr_and_hang(
-                noc_id,
-                noc_addr,
-                l1_addr,
-                noc_len,
-                multicast,
-                dir,
-                DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-        }
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            noc_len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_TARGET,
+            debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
     } else if (core_type == AddressableCoreType::TENSIX) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_addr_and_hang(
-                noc_id,
-                noc_addr,
-                l1_addr,
-                noc_len,
-                multicast,
-                dir,
-                DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-        }
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            noc_len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_TARGET,
+            debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
     } else {
         // Bad XY
         debug_sanitize_post_addr_and_hang(
@@ -511,9 +544,11 @@ void debug_sanitize_noc_and_worker_addr(
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
-        // Local addr needs to be checked depending on whether we're on eth or tensix.
+        // Local addr needs to be checked depending on core type.
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#elif defined(COMPILE_FOR_DRISC)
+        uint16_t return_code = debug_valid_drisc_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
         uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #endif
@@ -533,7 +568,8 @@ void debug_sanitize_noc_and_worker_addr(
         }
     }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
     // Check local L1 address against CB bounds (both read and write directions).
     debug_sanitize_post_addr_and_hang(
         noc_id,
@@ -553,6 +589,11 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
     bool is_virtual_coord = true;
     AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
     if (core_type == AddressableCoreType::DRAM) {
+        // DRISC overlay stream-reg space is a valid DRAM target; skip the throw.
+        uint64_t noc_local_addr = NOC_LOCAL_ADDR(addr);
+        if (debug_valid_reg_addr(noc_local_addr, len, core_type)) {
+            return;
+        }
         debug_sanitize_post_addr_and_hang(
             noc_id,
             addr,
@@ -568,6 +609,8 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #if defined(COMPILE_FOR_ERISC)
     constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
+#elif defined(COMPILE_FOR_DRISC)
+    constexpr uint64_t l1_overflow_addr = MEM_DRISC_L1_SIZE;
 #else
     constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #endif
