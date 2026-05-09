@@ -107,7 +107,11 @@ void DispatchSKernel::GenerateStaticConfigs() {
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
-    if (get_dispatch_query_manager_ref().dispatch_s_enabled() && descriptor_.metal_context().dprint_server()) {
+    // With multiple CQs there is one dispatch_s per CQ, but they all read the same per-core
+    // DEVICE_PRINT L1 buffers. Only enable the DRAM-aggregation work on cq_id 0 so the buffers
+    // aren't drained twice (which would race the host's rpos updates and reorder/drop messages).
+    if (cq_id_ == 0 && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
+        descriptor_.metal_context().dprint_server()) {
         auto print_cores = descriptor_.metal_context().dprint_server()->get_print_cores(device_->id());
         if (!print_cores.empty()) {
             const auto& hal = descriptor_.hal();
