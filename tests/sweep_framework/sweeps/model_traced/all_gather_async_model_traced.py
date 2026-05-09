@@ -462,6 +462,7 @@ def run(
         # Coerce numeric params to correct types
         if dim is not None:
             dim = int(dim)
+        _cluster_axis_from_vector = cluster_axis is not None
         if cluster_axis is not None:
             cluster_axis = int(cluster_axis)
         if num_links is not None:
@@ -723,20 +724,28 @@ def run(
 
                         tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
-                        tt_out_tensor = ttnn.experimental.all_gather_async(
-                            tt_input,
-                            persistent_output_buffer,  # None is valid (optional persistent buffer)
-                            dim,
-                            ccl_semaphore_handles[i],
+                        _ag_kwargs = dict(
                             num_links=num_links,
                             memory_config=output_memory_config,
                             topology=topology,
-                            subdevice_id=worker_sub_device_id,
+                            subdevice_id=(
+                                subdevice_id
+                                if subdevice_id is not None or "subdevice_id" not in absent_keys
+                                else worker_sub_device_id
+                            ),
                             barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
-                            cluster_axis=cluster_axis,
                             chunks_per_sync=chunks_per_sync,
                             num_workers_per_link=num_workers_per_link,
                             num_buffers_per_channel=num_buffers_per_channel,
+                        )
+                        if _cluster_axis_from_vector:
+                            _ag_kwargs["cluster_axis"] = cluster_axis
+                        tt_out_tensor = ttnn.experimental.all_gather_async(
+                            tt_input,
+                            persistent_output_buffer,
+                            dim,
+                            ccl_semaphore_handles[i],
+                            **_ag_kwargs,
                         )
 
                     ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
