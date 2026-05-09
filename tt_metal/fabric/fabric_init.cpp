@@ -144,28 +144,87 @@ FabricCoresHealth configure_fabric_cores(
     std::unordered_set<uint32_t> newly_dead_channels;
     if (!pre_known_dead_channels.empty()) {
         all_channels_healthy = false;
-        log_warning(
-            tt::LogMetal,
-            "configure_fabric_cores: Device {} skipping assert_risc_reset_at_core for {} "
-            "pre-confirmed problematic channels (probe timed out or L1 corrupt in "
-            "terminate_stale_erisc_routers). This avoids the indefinite hang in read_non_mmio "
-            "when the 4-slot relay ETH queue fills after dead channels exhaust UMD timeouts.",
-            device->id(),
-            pre_known_dead_channels.size());
+        if (device->is_mmio_capable()) {
+            // FIX RR (#42429): MMIO devices have PCIe-direct access — the relay-queue-fill
+            // concern that motivates skipping assert_risc_reset_at_core for non-MMIO channels
+            // does NOT apply here.  ROM-postcode channels (0x49705180) that timed out in FIX RP
+            // are still accessible via PCIe; a soft reset kicks them out of ROM phase so they
+            // boot to base firmware instead of persisting as permanently degraded every session.
+            // We attempt the reset and catch failures — if PCIe truly is broken for a channel
+            // we mark it newly_dead; otherwise we clear it from dead_channels so the L1 write
+            // loop below can zero its sync addresses and normal firmware launch can proceed.
+            log_info(
+                tt::LogMetal,
+                "configure_fabric_cores: Device {} (MMIO) — attempting PCIe-direct soft reset "
+                "for {} pre-confirmed problematic channels (FIX RR #42429). "
+                "ROM-postcode channels that timed out in FIX RP can be recovered this way.",
+                device->id(),
+                pre_known_dead_channels.size());
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "configure_fabric_cores: Device {} skipping assert_risc_reset_at_core for {} "
+                "pre-confirmed problematic channels (probe timed out or L1 corrupt in "
+                "terminate_stale_erisc_routers). This avoids the indefinite hang in read_non_mmio "
+                "when the 4-slot relay ETH queue fills after dead channels exhaust UMD timeouts.",
+                device->id(),
+                pre_known_dead_channels.size());
+        }
     }
     {
         const auto chip_id = device->id();
         for (const auto& [router_chan, _] : router_chans_and_direction) {
             // Skip channels already confirmed dead by terminate_stale_erisc_routers().
-            // Calling assert_risc_reset_at_core() on these channels can hang indefinitely
-            // even though the UMD 5 s timeout is supposed to fire (see comment above).
+            // For non-MMIO devices, calling assert_risc_reset_at_core() on dead channels can
+            // hang indefinitely because the UMD relay queue fills after the channel exhausts
+            // its retry budget.  For MMIO devices, PCIe-direct access is available so we
+            // attempt the reset below (FIX RR) and only skip on genuine PCIe failure.
             if (dead_channels.count(router_chan)) {
-                log_debug(
-                    tt::LogMetal,
-                    "configure_fabric_cores: device {} channel {} is pre-confirmed dead — "
-                    "skipping soft reset",
-                    chip_id,
-                    router_chan);
+                if (!device->is_mmio_capable()) {
+                    log_debug(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} is pre-confirmed dead "
+                        "(non-MMIO) — skipping soft reset to avoid relay queue fill",
+                        chip_id,
+                        router_chan);
+                    continue;
+                }
+                // FIX RR (#42429): MMIO device — attempt PCIe-direct soft reset.
+                // If the channel is truly dead (PCIe error) the catch block marks it
+                // newly_dead; otherwise remove it from dead_channels so L1 write proceeds.
+                try {
+                    auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, router_chan);
+                    tt_cxy_pair core_loc(chip_id, virtual_core);
+                    cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                    cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                    // Success — channel responded to PCIe-direct reset; clear from dead set
+                    // so the L1 clear loop below zeroes sync addresses and firmware can start.
+                    dead_channels.erase(router_chan);
+                    log_info(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} FIX RR — PCIe-direct "
+                        "soft reset succeeded (was pre-confirmed dead/ROM-postcode). "
+                        "Channel cleared from dead_channels; L1 init will proceed.",
+                        chip_id,
+                        router_chan);
+                } catch (const std::exception& e) {
+                    newly_dead_channels.insert(router_chan);
+                    log_warning(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} FIX RR — PCIe-direct "
+                        "soft reset FAILED ({}). Channel remains dead.",
+                        chip_id,
+                        router_chan,
+                        e.what());
+                } catch (...) {
+                    newly_dead_channels.insert(router_chan);
+                    log_warning(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} FIX RR — PCIe-direct "
+                        "soft reset FAILED (unknown exception). Channel remains dead.",
+                        chip_id,
+                        router_chan);
+                }
                 continue;
             }
 
