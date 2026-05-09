@@ -58,9 +58,7 @@ constexpr uint32_t device_print_dram_buf_size = DEVICE_PRINT_DRAM_BUF_SIZE;
 constexpr uint64_t device_print_cycles_for_stall = DEVICE_PRINT_CYCLES_FOR_STALL;
 constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
 
-// TODO: If all inputs will remain compile time constants, consider providing more template arguments instead of using
-// defaults that are max values for architecture.
-static DevicePrintDispatch<true> device_print_dispatcher;
+static DevicePrintDispatch<true, DEVICE_PRINT_MAX_NOC_LOCATIONS> device_print_dispatcher;
 #endif
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));

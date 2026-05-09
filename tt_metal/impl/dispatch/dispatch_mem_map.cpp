@@ -117,6 +117,14 @@ DispatchMemMap::DispatchMemMap(
 
     TT_ASSERT(dispatch_cb_end < l1_size);
 
+    const uint32_t dispatch_s_buffer_base = (core_type == CoreType::WORKER) ? dispatch_cb_end : dispatch_buffer_base_;
+    dispatch_s_buffer_end_ = dispatch_s_buffer_base + settings.dispatch_s_buffer_size_;
+    TT_FATAL(
+        dispatch_s_buffer_end_ <= l1_size,
+        "dispatch_s buffer end ({}) extends past L1 end (size {})",
+        dispatch_s_buffer_end_,
+        l1_size);
+
     // Per-arch defaults for the dispatch_s DEVICE_PRINT L1 cache buffer. Lives here (rather than
     // on Hal) because this is a dispatch-side memory layout decision, and callers should reach
     // it through DispatchMemMap. A non-zero rtoptions override replaces the per-arch default.
@@ -131,6 +139,13 @@ DispatchMemMap::DispatchMemMap(
             default:                    dispatch_s_device_print_l1_cache_size_ = 0; break;
         }
     }
+
+    TT_FATAL(
+        dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ <= l1_size,
+        "DEVICE_PRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}) exceeds L1 size {}.",
+        dispatch_s_device_print_l1_cache_size_,
+        dispatch_s_buffer_end_,
+        l1_size);
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
@@ -168,6 +183,10 @@ uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
 uint32_t DispatchMemMap::dispatch_s_device_print_l1_cache_size() const {
     return dispatch_s_device_print_l1_cache_size_;
 }
+
+uint32_t DispatchMemMap::device_print_dispatch_noc_locations_addr() const { return dispatch_s_buffer_end_; }
+
+uint32_t DispatchMemMap::device_print_dispatch_l1_cache_addr() const { return dispatch_s_buffer_end_; }
 
 uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
     uint32_t index = ttsl::as_underlying_type<CommandQueueDeviceAddrType>(device_addr_type);

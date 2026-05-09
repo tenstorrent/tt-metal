@@ -115,13 +115,21 @@ void DispatchSKernel::GenerateStaticConfigs() {
         auto print_cores = descriptor_.metal_context().dprint_server()->get_print_cores(device_->id());
         if (!print_cores.empty()) {
             const auto& hal = descriptor_.hal();
-            const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-            const uint32_t noc_locations_addr = static_config_.cb_base.value() + static_config_.cb_size.value();
+            const uint32_t num_print_cores = static_cast<uint32_t>(print_cores.size());
+
+            // Overlay constraint: noc_locations and l1_cache share the same L1 bytes (the kernel
+            // copies noc_locations into LDM at init then reuses the L1 region as l1_cache). The
+            // initial noc_locations data must fit within the overlaid l1_cache region.
             const uint32_t noc_locations_size =
-                sizeof(device_print_dispatch::NocLocationInputInfo) * print_cores.size();
-            const uint32_t l1_cache_addr =
-                (noc_locations_addr + noc_locations_size + l1_alignment - 1) & ~(l1_alignment - 1);
+                static_cast<uint32_t>(sizeof(device_print_dispatch::NocLocationInputInfo)) * num_print_cores;
             const uint32_t l1_cache_size = my_dispatch_constants.dispatch_s_device_print_l1_cache_size();
+            TT_FATAL(
+                noc_locations_size <= l1_cache_size,
+                "DEVICE_PRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
+                "({} bytes). Bump TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES.",
+                noc_locations_size,
+                num_print_cores,
+                l1_cache_size);
 
             const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             const uint64_t dram_base = hal.get_dev_addr(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
@@ -136,9 +144,10 @@ void DispatchSKernel::GenerateStaticConfigs() {
             const uint64_t clock_mhz = static_cast<uint64_t>(device_->get_clock_rate_mhz());
 
             static_config_.device_print_dispatch_enabled = 1;
-            static_config_.device_print_noc_locations_addr = noc_locations_addr;
-            static_config_.device_print_noc_locations_count = static_cast<uint32_t>(print_cores.size());
-            static_config_.device_print_l1_cache_addr = l1_cache_addr;
+            static_config_.device_print_noc_locations_addr =
+                my_dispatch_constants.device_print_dispatch_noc_locations_addr();
+            static_config_.device_print_noc_locations_count = num_print_cores;
+            static_config_.device_print_l1_cache_addr = my_dispatch_constants.device_print_dispatch_l1_cache_addr();
             static_config_.device_print_l1_cache_size = l1_cache_size;
             static_config_.device_print_dram_x = dram_noc.x;
             static_config_.device_print_dram_y = dram_noc.y;
@@ -230,6 +239,11 @@ void DispatchSKernel::CreateKernel() {
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"DEVICE_PRINT_DISPATCH_ENABLED", std::to_string(static_config_.device_print_dispatch_enabled.value_or(0))},
+        // For each per-device dispatch_s build, MaxNocLocations equals the actual print-core count
+        // for that device — passed as a compile-time #define so DevicePrintDispatch<>'s LDM arrays
+        // (rw_noc_addresses, cache_buffer_offsets, cache_buffer_sizes, noc_locations_to_process)
+        // are sized to actual usage instead of device_print_dispatch::DEFAULT_MAX_NOC_LOCATIONS.
+        {"DEVICE_PRINT_MAX_NOC_LOCATIONS", std::to_string(static_config_.device_print_noc_locations_count.value_or(0))},
         {"DEVICE_PRINT_NOC_LOCATIONS_ADDR", std::to_string(static_config_.device_print_noc_locations_addr.value_or(0))},
         {"DEVICE_PRINT_NOC_LOCATIONS_COUNT",
          std::to_string(static_config_.device_print_noc_locations_count.value_or(0))},
