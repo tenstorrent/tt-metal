@@ -16,7 +16,7 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 TEST_PADDING_VALUE = -42
 
