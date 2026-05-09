@@ -226,11 +226,7 @@ def run_demo(
         model_pipeline.terminate()
 
 
-def main(argv: list[str] | None = None) -> int:
-    ttnn.init_distributed_context()
-    parser = create_parser()
-    args = parser.parse_args(argv)
-
+def validate_args(args):
     if args.weights == "real":
         if args.cache_path is None:
             parser.error("--cache-path is required when --weights real")
@@ -247,6 +243,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.launch_only and io_socket_descriptor_prefix is None:
         io_socket_descriptor_prefix = "deepseek"
 
+
+def main(argv: list[str] | None = None) -> int:
+    ttnn.init_distributed_context()
+    parser = create_parser()
+    args = parser.parse_args(argv)
+
+    validate_args(args)
+
     run_demo(
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
@@ -259,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
-        io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+        io_socket_descriptor_prefix=args.io_socket_descriptor_prefix,
         num_slots=args.num_slots,
         relaxed_acceptance_delta=args.relaxed_acceptance_delta,
         top_k=args.top_k,
