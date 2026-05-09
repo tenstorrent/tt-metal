@@ -72,11 +72,12 @@ namespace tt::tt_metal::distributed::test {
 // ---------------------------------------------------------------------------
 class AsyncTeardownRaceFixture : public MeshDeviceFixtureBase {
 protected:
-    AsyncTeardownRaceFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .test_budget_ms = 30000,  // 30s hard kill — never wait 5 minutes
-          }) {}
+    AsyncTeardownRaceFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .test_budget_ms = 30000,  // 30s hard kill — never wait 5 minutes
+            }) {}
 };
 
 // Helper: create a Program with 3 blank kernels (BRISC, NCRISC, compute) on a
@@ -174,9 +175,8 @@ TEST_F(AsyncTeardownRaceFixture, AsyncDispatchThenImmediateTeardown) {
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
         auto shard_shape = Shape2D{1, 1};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -197,8 +197,7 @@ TEST_F(AsyncTeardownRaceFixture, AsyncDispatchThenImmediateTeardown) {
 
         ASSERT_EQ(dst.size(), src.size()) << "Buffer readback size mismatch after device re-init";
         for (size_t i = 0; i < src.size(); i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "Buffer corruption at index " << i << " after async teardown + re-init";
+            ASSERT_EQ(dst[i], src[i]) << "Buffer corruption at index " << i << " after async teardown + re-init";
         }
         log_info(tt::LogTest, "[Scenario A] Buffer round-trip verified — no data corruption");
     }
@@ -269,11 +268,12 @@ TEST_F(AsyncTeardownRaceFixture, RepeatedAsyncTeardownCycles) {
 // ---------------------------------------------------------------------------
 class AsyncTeardownMultiCQFixture : public MeshDeviceFixtureBase {
 protected:
-    AsyncTeardownMultiCQFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 2,
-              .test_budget_ms = 30000,
-          }) {}
+    AsyncTeardownMultiCQFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 2,
+                .test_budget_ms = 30000,
+            }) {}
 };
 
 TEST_F(AsyncTeardownMultiCQFixture, MultiCQAsyncDispatchThenTeardown) {
@@ -312,9 +312,8 @@ TEST_F(AsyncTeardownMultiCQFixture, MultiCQAsyncDispatchThenTeardown) {
     log_info(tt::LogTest, "[Scenario C] Re-opening mesh device");
     {
         auto cluster_type = MetalContext::instance().get_cluster().get_cluster_type();
-        bool need_eth = (config_.num_cqs >= 2) &&
-                        (cluster_type == tt::tt_metal::ClusterType::T3K ||
-                         cluster_type == tt::tt_metal::ClusterType::N300);
+        bool need_eth = (config_.num_cqs >= 2) && (cluster_type == tt::tt_metal::ClusterType::T3K ||
+                                                   cluster_type == tt::tt_metal::ClusterType::N300);
         auto core_type = need_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(mesh_shape),
@@ -363,12 +362,13 @@ TEST_F(AsyncTeardownMultiCQFixture, MultiCQAsyncDispatchThenTeardown) {
 // ---------------------------------------------------------------------------
 class AsyncTeardownFabric2DFixture : public MeshDeviceFixtureBase {
 protected:
-    AsyncTeardownFabric2DFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
-              .test_budget_ms = 30000,
-          }) {}
+    AsyncTeardownFabric2DFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+                .test_budget_ms = 30000,
+            }) {}
 
     void SetUp() override {
         // FABRIC_2D requires >= 2 devices; skip gracefully on single-chip CI runners.
@@ -425,8 +425,7 @@ TEST_F(AsyncTeardownFabric2DFixture, Fabric2DAsyncDispatchThenReinit) {
     //   → wait_for_fabric_router_sync() full handshake verification.
     log_info(tt::LogTest, "[Scenario D] Re-opening FABRIC_2D mesh device");
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     mesh_device_ = MeshDevice::create(
         MeshDeviceConfig(mesh_shape),
         config_.l1_small_size,
@@ -457,12 +456,13 @@ TEST_F(AsyncTeardownFabric2DFixture, Fabric2DAsyncDispatchThenReinit) {
 // ---------------------------------------------------------------------------
 class AsyncTeardownFabric2DRepeatFixture : public MeshDeviceFixtureBase {
 protected:
-    AsyncTeardownFabric2DRepeatFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
-              .test_budget_ms = 90000,  // 90s for multi-cycle FABRIC_2D stress
-          }) {}
+    AsyncTeardownFabric2DRepeatFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+                .test_budget_ms = 90000,  // 90s for multi-cycle FABRIC_2D stress
+            }) {}
 
     void SetUp() override {
         const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
@@ -529,8 +529,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RepeatedFabric2DTeardownCycles) {
         // already reset it to DISABLED so we must set it again here.
         log_info(tt::LogTest, "[Scenario E] Re-opening FABRIC_2D mesh device (cycle {})", cycle + 1);
         tt_fabric::SetFabricConfig(
-            tt_fabric::FabricConfig::FABRIC_2D,
-            tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(mesh_shape),
             config_.l1_small_size,
@@ -557,9 +556,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RepeatedFabric2DTeardownCycles) {
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto shard_shape = Shape2D{1, 1};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
@@ -580,8 +578,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RepeatedFabric2DTeardownCycles) {
 
         ASSERT_EQ(dst.size(), src.size()) << "Buffer size mismatch after " << kCycles << " FABRIC_2D cycles";
         for (size_t i = 0; i < src.size(); i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "Corruption at index " << i << " after " << kCycles << " FABRIC_2D async teardown cycles";
+            ASSERT_EQ(dst[i], src[i]) << "Corruption at index " << i << " after " << kCycles
+                                      << " FABRIC_2D async teardown cycles";
         }
         log_info(
             tt::LogTest,
@@ -672,9 +670,8 @@ TEST_F(AsyncTeardownRaceFixture, SlowKernelAsyncTeardownRace) {
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -763,9 +760,8 @@ TEST_F(AsyncTeardownRaceFixture, WorkerDispatchEventRecordingDoesNotHang) {
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -873,9 +869,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesExercisesPhase25ERISCTe
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -890,11 +885,10 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesExercisesPhase25ERISCTe
         EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
         std::vector<uint32_t> dst;
         EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
-        ASSERT_EQ(dst.size(), src.size())
-            << "[Scenario H] Buffer size mismatch after " << kCycles << " quiesce cycles";
+        ASSERT_EQ(dst.size(), src.size()) << "[Scenario H] Buffer size mismatch after " << kCycles << " quiesce cycles";
         for (size_t i = 0; i < n_words; i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "[Scenario H] Data corruption at index " << i << " after " << kCycles << " quiesce cycles";
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario H] Data corruption at index " << i << " after " << kCycles
+                                      << " quiesce cycles";
         }
         log_info(
             tt::LogTest,
@@ -953,9 +947,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesTimingBoundStressTest) 
             elapsed_ms,
             kMaxCycleMs);
 
-        ASSERT_LT(elapsed_ms, kMaxCycleMs)
-            << "[Scenario I] Cycle " << (cycle + 1) << "/" << kCycles
-            << " exceeded " << kMaxCycleMs << "ms — Phase 2.5 ERISC poll may be hanging";
+        ASSERT_LT(elapsed_ms, kMaxCycleMs) << "[Scenario I] Cycle " << (cycle + 1) << "/" << kCycles << " exceeded "
+                                           << kMaxCycleMs << "ms — Phase 2.5 ERISC poll may be hanging";
     }
 
     // Final blocking dispatch must succeed after 8 quiesce cycles.
@@ -975,9 +968,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesTimingBoundStressTest) 
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -991,11 +983,10 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesTimingBoundStressTest) 
         EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
         std::vector<uint32_t> dst;
         EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
-        ASSERT_EQ(dst.size(), src.size())
-            << "[Scenario I] Buffer size mismatch after " << kCycles << " quiesce cycles";
+        ASSERT_EQ(dst.size(), src.size()) << "[Scenario I] Buffer size mismatch after " << kCycles << " quiesce cycles";
         for (size_t i = 0; i < n_words; i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "[Scenario I] Data corruption at index " << i << " after " << kCycles << " quiesce cycles";
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario I] Data corruption at index " << i << " after " << kCycles
+                                      << " quiesce cycles";
         }
         log_info(
             tt::LogTest,
@@ -1028,12 +1019,13 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesTimingBoundStressTest) 
 // ---------------------------------------------------------------------------
 class AsyncTeardownFabric1DQuiesceFixture : public MeshDeviceFixtureBase {
 protected:
-    AsyncTeardownFabric1DQuiesceFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
-              .test_budget_ms = 90000,  // 90s: FABRIC_1D init ~5-10s, 5 cycles max ~60s
-          }) {}
+    AsyncTeardownFabric1DQuiesceFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
+                .test_budget_ms = 90000,  // 90s: FABRIC_1D init ~5-10s, 5 cycles max ~60s
+            }) {}
 
     void SetUp() override {
         const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
@@ -1120,9 +1112,8 @@ TEST_F(AsyncTeardownFabric1DQuiesceFixture, QuiesceDevicesPhase25ERISCTerminatio
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -1140,9 +1131,8 @@ TEST_F(AsyncTeardownFabric1DQuiesceFixture, QuiesceDevicesPhase25ERISCTerminatio
         ASSERT_EQ(dst.size(), src.size())
             << "[Scenario J] Buffer size mismatch after " << kCycles << " FABRIC_1D quiesce cycles";
         for (size_t i = 0; i < n_words; i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "[Scenario J] Data corruption at index " << i << " after " << kCycles
-                << " FABRIC_1D quiesce cycles — stale ERISC NOC write corrupted DRAM";
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario J] Data corruption at index " << i << " after " << kCycles
+                                      << " FABRIC_1D quiesce cycles — stale ERISC NOC write corrupted DRAM";
         }
         log_info(
             tt::LogTest,
@@ -1203,9 +1193,8 @@ TEST_F(AsyncTeardownFabric1DQuiesceFixture, QuiesceDevicesTimingBoundFabric1D) {
             elapsed_ms,
             kMaxCycleMs);
 
-        ASSERT_LT(elapsed_ms, kMaxCycleMs)
-            << "[Scenario K] Cycle " << (cycle + 1) << "/" << kCycles
-            << " exceeded " << kMaxCycleMs << "ms — FABRIC_1D Phase 2.5 ERISC poll may be hanging";
+        ASSERT_LT(elapsed_ms, kMaxCycleMs) << "[Scenario K] Cycle " << (cycle + 1) << "/" << kCycles << " exceeded "
+                                           << kMaxCycleMs << "ms — FABRIC_1D Phase 2.5 ERISC poll may be hanging";
     }
 
     // Final blocking dispatch must succeed after 5 FABRIC_1D quiesce cycles.
@@ -1225,9 +1214,8 @@ TEST_F(AsyncTeardownFabric1DQuiesceFixture, QuiesceDevicesTimingBoundFabric1D) {
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -1244,9 +1232,8 @@ TEST_F(AsyncTeardownFabric1DQuiesceFixture, QuiesceDevicesTimingBoundFabric1D) {
         ASSERT_EQ(dst.size(), src.size())
             << "[Scenario K] Buffer size mismatch after " << kCycles << " FABRIC_1D quiesce cycles";
         for (size_t i = 0; i < n_words; i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "[Scenario K] Data corruption at index " << i << " after " << kCycles
-                << " FABRIC_1D quiesce cycles";
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario K] Data corruption at index " << i << " after " << kCycles
+                                      << " FABRIC_1D quiesce cycles";
         }
         log_info(
             tt::LogTest,
@@ -1311,8 +1298,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, Fabric2DSlowKernelTeardownRace) {
     // Phase 3: re-open FABRIC_2D — terminate_stale_erisc_routers() + wait_for_fabric_router_sync().
     log_info(tt::LogTest, "[Scenario L] Re-opening FABRIC_2D mesh device after slow-kernel race");
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     mesh_device_ = MeshDevice::create(
         MeshDeviceConfig(mesh_shape),
         config_.l1_small_size,
@@ -1339,9 +1325,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, Fabric2DSlowKernelTeardownRace) {
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -1357,9 +1342,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, Fabric2DSlowKernelTeardownRace) {
         EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
         ASSERT_EQ(dst.size(), src.size()) << "[Scenario L] Buffer size mismatch after FABRIC_2D slow-kernel race";
         for (size_t i = 0; i < n_words; i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "[Scenario L] Corruption at index " << i
-                << " — stale ERISC NOC write during BRISC-active teardown";
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario L] Corruption at index " << i
+                                      << " — stale ERISC NOC write during BRISC-active teardown";
         }
         log_info(tt::LogTest, "[Scenario L] Buffer round-trip clean — FABRIC_2D slow-kernel teardown race OK");
     }
@@ -1396,12 +1380,13 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, Fabric2DSlowKernelTeardownRace) {
 // ---------------------------------------------------------------------------
 class AsyncTeardownKillPredecessorFixture : public MeshDeviceFixtureBase {
 protected:
-    AsyncTeardownKillPredecessorFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
-              .test_budget_ms = 120000,  // 15s wait + 13s child-init + 13s parent-reinit + margin
-          }) {}
+    AsyncTeardownKillPredecessorFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+                .test_budget_ms = 120000,  // 15s wait + 13s child-init + 13s parent-reinit + margin
+            }) {}
 
     void SetUp() override {
         const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
@@ -1432,8 +1417,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
         // corrupt parent address space (fork gives copy-on-write pages).
         try {
             tt_fabric::SetFabricConfig(
-                tt_fabric::FabricConfig::FABRIC_2D,
-                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+                tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
             auto child_device = MeshDevice::create(
                 MeshDeviceConfig(mesh_shape),
                 config_.l1_small_size,
@@ -1469,7 +1453,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
     // ---- PARENT: wait for child to reach ACTIVE ERISC state, then SIGKILL ---
     // Fabric router sync timeout = 10s; add 5s margin for dispatch latency.
     log_info(
-        tt::LogTest, "[Scenario M] Waiting 15s for child (pid={}) to complete FABRIC_2D init + ACTIVE ERISCs",
+        tt::LogTest,
+        "[Scenario M] Waiting 15s for child (pid={}) to complete FABRIC_2D init + ACTIVE ERISCs",
         child_pid);
     std::this_thread::sleep_for(std::chrono::seconds(15));
 
@@ -1478,7 +1463,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
     int wstatus = 0;
     ::waitpid(child_pid, &wstatus, 0);
     log_info(
-        tt::LogTest, "[Scenario M] Child exited (status=0x{:08x}) — proceeding to re-open",
+        tt::LogTest,
+        "[Scenario M] Child exited (status=0x{:08x}) — proceeding to re-open",
         static_cast<uint32_t>(wstatus));
 
     // Step 3: re-open FABRIC_2D. compile_and_configure_fabric() calls
@@ -1486,8 +1472,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
     // TERMINATE, poll for TERMINATED, then load fresh EDM firmware.
     log_info(tt::LogTest, "[Scenario M] Re-opening FABRIC_2D (terminate_stale_erisc_routers should warn+recover)");
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     mesh_device_ = MeshDevice::create(
         MeshDeviceConfig(mesh_shape),
         config_.l1_small_size,
@@ -1516,9 +1501,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -1539,8 +1523,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
                 << " — stale ERISC NOC write after SIGKILL + terminate_stale_erisc_routers recovery";
         }
         log_info(
-            tt::LogTest,
-            "[Scenario M] Buffer round-trip clean — terminate_stale_erisc_routers() ACTIVE path verified");
+            tt::LogTest, "[Scenario M] Buffer round-trip clean — terminate_stale_erisc_routers() ACTIVE path verified");
     }
 }
 
@@ -1596,8 +1579,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorMidHandshakeCorrup
         // ---- CHILD: set flag, then start FABRIC_2D init (will be killed mid-handshake) ----
         try {
             tt_fabric::SetFabricConfig(
-                tt_fabric::FabricConfig::FABRIC_2D,
-                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+                tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
             // Signal parent: we are about to call MeshDevice::create() — firmware loading begins.
             *child_started = 1;
             auto child_device = MeshDevice::create(
@@ -1629,9 +1611,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorMidHandshakeCorrup
         ::kill(child_pid, SIGKILL);
         ::waitpid(child_pid, nullptr, 0);
         ::munmap(const_cast<int*>(child_started), sizeof(int));
-        GTEST_SKIP()
-            << "[Scenario M2] Child never set child_started flag within 10s — "
-               "MeshDevice::create() never started.  Skipping mid-handshake kill test.";
+        GTEST_SKIP() << "[Scenario M2] Child never set child_started flag within 10s — "
+                        "MeshDevice::create() never started.  Skipping mid-handshake kill test.";
     }
 
     // Kill 2s after firmware loading starts — targets the ETH handshake window
@@ -1659,8 +1640,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorMidHandshakeCorrup
     // handle this: best-effort TERMINATE, add to probe_dead_channels, continue.
     log_info(tt::LogTest, "[Scenario M2] Re-opening FABRIC_2D after mid-handshake SIGKILL");
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_NO_THROW({
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(mesh_shape),
@@ -1681,15 +1661,11 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorMidHandshakeCorrup
         auto workload = MeshWorkload();
         workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
         auto& cq = mesh_device_->mesh_command_queue();
-        log_info(
-            tt::LogTest,
-            "[Scenario M2] Verification blocking dispatch after mid-handshake SIGKILL recovery");
+        log_info(tt::LogTest, "[Scenario M2] Verification blocking dispatch after mid-handshake SIGKILL recovery");
         ASSERT_NO_THROW(EnqueueMeshWorkload(cq, workload, /*blocking=*/true))
             << "[Scenario M2] Blocking dispatch failed after mid-handshake SIGKILL recovery — "
                "fabric channel may have been left in probe_dead state without recovery.";
-        log_info(
-            tt::LogTest,
-            "[Scenario M2] Dispatch completed — mid-handshake ERISC corrupt-state recovery verified");
+        log_info(tt::LogTest, "[Scenario M2] Dispatch completed — mid-handshake ERISC corrupt-state recovery verified");
     }
 }
 
@@ -1725,9 +1701,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorMidHandshakeCorrup
 TEST_F(AsyncTeardownKillPredecessorFixture, MmioDeadPeerDispatchNotSkipped) {
     const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
     if (num_devices < 4) {
-        GTEST_SKIP()
-            << "[Scenario M3] MMIO dead-peer test requires >= 4 devices (T3K / N300 multi-chip) "
-               "to produce dead-relay non-MMIO devices that create an MMIO dead-peer scenario.";
+        GTEST_SKIP() << "[Scenario M3] MMIO dead-peer test requires >= 4 devices (T3K / N300 multi-chip) "
+                        "to produce dead-relay non-MMIO devices that create an MMIO dead-peer scenario.";
     }
 
     auto mesh_shape = mesh_device_->shape();
@@ -1741,8 +1716,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, MmioDeadPeerDispatchNotSkipped) {
     if (child_pid == 0) {
         try {
             tt_fabric::SetFabricConfig(
-                tt_fabric::FabricConfig::FABRIC_2D,
-                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+                tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
             auto child_device = MeshDevice::create(
                 MeshDeviceConfig(mesh_shape),
                 config_.l1_small_size,
@@ -1757,8 +1731,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, MmioDeadPeerDispatchNotSkipped) {
                 program,
                 "tt_metal/kernels/dataflow/busy_spin.cpp",
                 cores,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
             SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {1'000'000u});
             auto workload = MeshWorkload();
             workload.add_program(MeshCoordinateRange(child_device->shape()), std::move(program));
@@ -1789,8 +1762,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, MmioDeadPeerDispatchNotSkipped) {
         static_cast<uint32_t>(wstatus));
 
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_NO_THROW({
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(mesh_shape),
@@ -1881,9 +1853,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, MmioDeadPeerDispatchNotSkipped) {
 TEST_F(AsyncTeardownKillPredecessorFixture, ProbeTimeBound_CreateCompletesWithinBudget) {
     const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
     if (num_devices < 4) {
-        GTEST_SKIP()
-            << "[Scenario MB] Probe time bound test requires >= 4 devices (T3K) to exercise "
-               "FIX H multi-device relay short-circuit.  Single/dual-chip has no relay path.";
+        GTEST_SKIP() << "[Scenario MB] Probe time bound test requires >= 4 devices (T3K) to exercise "
+                        "FIX H multi-device relay short-circuit.  Single/dual-chip has no relay path.";
     }
 
     auto mesh_shape = mesh_device_->shape();
@@ -1897,8 +1868,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, ProbeTimeBound_CreateCompletesWithin
     if (child_pid == 0) {
         try {
             tt_fabric::SetFabricConfig(
-                tt_fabric::FabricConfig::FABRIC_2D,
-                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+                tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
             auto child_device = MeshDevice::create(
                 MeshDeviceConfig(mesh_shape),
                 config_.l1_small_size,
@@ -1913,8 +1883,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, ProbeTimeBound_CreateCompletesWithin
                 program,
                 "tt_metal/kernels/dataflow/busy_spin.cpp",
                 cores,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
             SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {1'000'000u});
             auto workload = MeshWorkload();
             workload.add_program(MeshCoordinateRange(child_device->shape()), std::move(program));
@@ -1948,8 +1917,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, ProbeTimeBound_CreateCompletesWithin
     // FIX H guarantees at most one non-MMIO device pays the 3×15s probe cost.
     // Total expected: ~45s + overhead.  Bound = 60s (15s margin).
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     const auto t0 = std::chrono::steady_clock::now();
     ASSERT_NO_THROW({
         mesh_device_ = MeshDevice::create(
@@ -1964,10 +1932,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, ProbeTimeBound_CreateCompletesWithin
     const auto elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
 
-    log_info(
-        tt::LogTest,
-        "[Scenario MB] MeshDevice::create() completed in {}ms (bound = 60000ms)",
-        elapsed_ms);
+    log_info(tt::LogTest, "[Scenario MB] MeshDevice::create() completed in {}ms (bound = 60000ms)", elapsed_ms);
 
     // The primary regression guard: if FIX H's any_relay_broken short-circuit
     // is reverted, re-open on T3K takes ~180s (4 non-MMIO × 45s) → this fails.
@@ -2035,7 +2000,8 @@ TEST(FabricFirmwareInitializer, EdmStatusEnumCountMatchesSwitchCoverage) {
         EDMStatus::INITIALIZATION_COMPLETE,
     };
     constexpr size_t kExpectedCount = 15;
-    static_assert(std::size(kAllStatuses) == kExpectedCount,
+    static_assert(
+        std::size(kAllStatuses) == kExpectedCount,
         "Update kAllStatuses here, is_known_edm_status() in fabric_firmware_initializer.cpp, "
         "AND edm_status_str() in device.cpp");
 
@@ -2051,9 +2017,8 @@ TEST(FabricFirmwareInitializer, EdmStatusEnumCountMatchesSwitchCoverage) {
     constexpr uint32_t kGarbageValues[] = {0x49705180u, 0xDEADBEEFu, 0x00000001u, 0xFFFFFFFFu};
     for (uint32_t garbage : kGarbageValues) {
         bool collides = seen.count(garbage) > 0;
-        EXPECT_FALSE(collides)
-            << "Garbage value 0x" << std::hex << garbage
-            << " unexpectedly collides with a valid EDMStatus enumerator";
+        EXPECT_FALSE(collides) << "Garbage value 0x" << std::hex << garbage
+                               << " unexpectedly collides with a valid EDMStatus enumerator";
     }
 }
 
@@ -2213,9 +2178,8 @@ TEST_F(AsyncTeardownFabric2DFixture, ChipNotInClusterGuardReturnsFalse) {
         "[Scenario N] is_physical_chip_in_fabric_cluster({}) = {} (expect false)",
         kBogusChipId,
         bogus_result);
-    EXPECT_FALSE(bogus_result)
-        << "[Scenario N] Bogus chip ID " << kBogusChipId
-        << " should NOT be in the fabric cluster";
+    EXPECT_FALSE(bogus_result) << "[Scenario N] Bogus chip ID " << kBogusChipId
+                               << " should NOT be in the fabric cluster";
 
     // First real chip must be in the cluster.
     auto real_device = mesh_device_->get_device(MeshCoordinate(0, 0));
@@ -2226,9 +2190,7 @@ TEST_F(AsyncTeardownFabric2DFixture, ChipNotInClusterGuardReturnsFalse) {
         "[Scenario N] is_physical_chip_in_fabric_cluster({}) = {} (expect true)",
         real_chip_id,
         real_result);
-    EXPECT_TRUE(real_result)
-        << "[Scenario N] Real chip ID " << real_chip_id
-        << " should be in the fabric cluster";
+    EXPECT_TRUE(real_result) << "[Scenario N] Real chip ID " << real_chip_id << " should be in the fabric cluster";
 
     log_info(tt::LogTest, "[Scenario N] Chip-not-in-cluster guard verified — no crash, correct results");
 }
@@ -2272,8 +2234,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, ConfigureFabricCoresCompletesOnReopen
     // every device, exercising the try/catch dead-channel path (even though no
     // channels are dead on healthy hardware).
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     mesh_device_ = MeshDevice::create(
         MeshDeviceConfig(mesh_shape),
         config_.l1_small_size,
@@ -2285,12 +2246,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, ConfigureFabricCoresCompletesOnReopen
 
     size_t new_device_count = mesh_device_->num_devices();
     log_info(
-        tt::LogTest,
-        "[Scenario O] Reopened — device count: {} (expected {})",
-        new_device_count,
-        original_device_count);
-    EXPECT_EQ(new_device_count, original_device_count)
-        << "[Scenario O] Device count mismatch after FABRIC_2D reopen";
+        tt::LogTest, "[Scenario O] Reopened — device count: {} (expected {})", new_device_count, original_device_count);
+    EXPECT_EQ(new_device_count, original_device_count) << "[Scenario O] Device count mismatch after FABRIC_2D reopen";
 
     // Phase 3: dispatch a blocking workload to confirm the reconfigured fabric is functional.
     {
@@ -2341,9 +2298,8 @@ TEST_F(AsyncTeardownFabric2DFixture, AllRealChipsInClusterBogusRejected) {
             coord[0],
             coord[1],
             in_cluster);
-        EXPECT_TRUE(in_cluster)
-            << "[Scenario P] Real chip_id " << chip_id << " at ("
-            << coord[0] << "," << coord[1] << ") should be in cluster";
+        EXPECT_TRUE(in_cluster) << "[Scenario P] Real chip_id " << chip_id << " at (" << coord[0] << "," << coord[1]
+                                << ") should be in cluster";
         chip_count++;
     }
     log_info(tt::LogTest, "[Scenario P] Verified {} real chips — all in cluster", chip_count);
@@ -2351,12 +2307,8 @@ TEST_F(AsyncTeardownFabric2DFixture, AllRealChipsInClusterBogusRejected) {
     // Bogus chip ID 0xDEAD — distinct from Scenario N's 99999.
     constexpr ChipId kDeadChipId = 0xDEAD;
     bool dead_result = control_plane.is_physical_chip_in_fabric_cluster(kDeadChipId);
-    log_info(
-        tt::LogTest,
-        "[Scenario P] is_physical_chip_in_fabric_cluster(0xDEAD) = {} (expect false)",
-        dead_result);
-    EXPECT_FALSE(dead_result)
-        << "[Scenario P] Bogus chip 0xDEAD should NOT be in fabric cluster";
+    log_info(tt::LogTest, "[Scenario P] is_physical_chip_in_fabric_cluster(0xDEAD) = {} (expect false)", dead_result);
+    EXPECT_FALSE(dead_result) << "[Scenario P] Bogus chip 0xDEAD should NOT be in fabric cluster";
 
     log_info(
         tt::LogTest,
@@ -2421,8 +2373,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, Fabric2DRescueStuckDispatchCores) {
     // Phase 3: re-open with FABRIC_2D — fresh ERISC firmware load.
     log_info(tt::LogTest, "[Scenario R] Re-opening FABRIC_2D mesh after rescue-stuck-dispatch race");
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     mesh_device_ = MeshDevice::create(
         MeshDeviceConfig(mesh_shape),
         config_.l1_small_size,
@@ -2477,8 +2428,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RapidFabric2DInitTeardownStress) {
 
         log_info(tt::LogTest, "[Scenario S] Cycle {}/{} — reopening FABRIC_2D mesh", cycle + 1, kCycles);
         tt_fabric::SetFabricConfig(
-            tt_fabric::FabricConfig::FABRIC_2D,
-            tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(mesh_shape),
             config_.l1_small_size,
@@ -2488,7 +2438,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RapidFabric2DInitTeardownStress) {
             {},
             config_.worker_l1_size);
 
-        log_info(tt::LogTest, "[Scenario S] Cycle {}/{} — reopened, verifying with blocking dispatch", cycle + 1, kCycles);
+        log_info(
+            tt::LogTest, "[Scenario S] Cycle {}/{} — reopened, verifying with blocking dispatch", cycle + 1, kCycles);
         {
             auto program = create_blank_program(cores);
             auto workload = MeshWorkload();
@@ -2563,7 +2514,8 @@ TEST_F(AsyncTeardownFabric2DFixture, DispatchSWaitWithoutClearPreservesCounter) 
             tt::LogTest,
             "[Scenario T] Round {}/{}: blocking dispatch — verifying dispatch_s "
             "stream counter is preserved (not cleared) after WAIT-without-CLEAR",
-            round, kRounds);
+            round,
+            kRounds);
         // blocking=true: dispatch_d stalls at CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM
         // (no CLEAR) until dispatch_s signals completion.  Counter increments to
         // `round` on each iteration; if dispatch_s zeroed the counter, the stall
@@ -2578,9 +2530,8 @@ TEST_F(AsyncTeardownFabric2DFixture, DispatchSWaitWithoutClearPreservesCounter) 
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -2596,9 +2547,8 @@ TEST_F(AsyncTeardownFabric2DFixture, DispatchSWaitWithoutClearPreservesCounter) 
         EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
         ASSERT_EQ(dst.size(), src.size()) << "[Scenario T] Buffer size mismatch";
         for (size_t i = 0; i < src.size(); i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "[Scenario T] Data corruption at index " << i
-                << " — indicates dispatch_s stream counter was erroneously cleared";
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario T] Data corruption at index " << i
+                                      << " — indicates dispatch_s stream counter was erroneously cleared";
         }
         log_info(
             tt::LogTest,
@@ -2761,7 +2711,8 @@ TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_DegradedModeOnAllPreK
 
     EXPECT_FALSE(threw)
         << "[Scenario V] Device::configure_fabric() threw unexpectedly when all channels were pre-known-dead "
-           "(FIX B: should continue in degraded mode, not throw). Exception: " << caught_what;
+           "(FIX B: should continue in degraded mode, not throw). Exception: "
+        << caught_what;
 
     log_info(
         tt::LogTest,
@@ -2814,15 +2765,13 @@ TEST_F(AsyncTeardownFabric2DFixture, ConfigureFabricCores_CatchesResetExceptionA
     // Install the inject seam: throw only on target_chan, succeed on all others.
     // This exercises the catch block (lines ~200-213 in fabric_init.cpp) without
     // touching hardware.
-    tt::tt_fabric::set_configure_cores_inject_fn(
-        [target_chan](tt::tt_metal::IDevice* /*dev*/, uint32_t chan) {
-            if (chan == target_chan) {
-                throw std::runtime_error(
-                    "[Scenario W] injected fault on assert_risc_reset_at_core for chan=" +
-                    std::to_string(chan));
-            }
-            // Non-target channels: return without throwing (simulates success).
-        });
+    tt::tt_fabric::set_configure_cores_inject_fn([target_chan](tt::tt_metal::IDevice* /*dev*/, uint32_t chan) {
+        if (chan == target_chan) {
+            throw std::runtime_error(
+                "[Scenario W] injected fault on assert_risc_reset_at_core for chan=" + std::to_string(chan));
+        }
+        // Non-target channels: return without throwing (simulates success).
+    });
 
     tt::tt_fabric::FabricCoresHealth health;
     bool threw = false;
@@ -2839,14 +2788,12 @@ TEST_F(AsyncTeardownFabric2DFixture, ConfigureFabricCores_CatchesResetExceptionA
     // Clear the seam regardless of test outcome.
     tt::tt_fabric::clear_configure_cores_inject_fn();
 
-    ASSERT_FALSE(threw)
-        << "[Scenario W] configure_fabric_cores() threw unexpectedly: " << caught_what;
+    ASSERT_FALSE(threw) << "[Scenario W] configure_fabric_cores() threw unexpectedly: " << caught_what;
 
     // With the injected fault on target_chan, configure_fabric_cores() must:
     //   1. Return all_channels_healthy == false (at least one channel failed).
     EXPECT_FALSE(health.all_channels_healthy)
-        << "[Scenario W] Expected all_channels_healthy == false after injecting exception on chan="
-        << target_chan;
+        << "[Scenario W] Expected all_channels_healthy == false after injecting exception on chan=" << target_chan;
 
     //   2. Report target_chan in newly_dead_channels (catch block inserts it).
     EXPECT_TRUE(health.newly_dead_channels.count(target_chan))
@@ -2919,8 +2866,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, TerminateStaleEriscRouters_CorruptSta
     bool threw = false;
     std::string caught_what;
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     try {
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{mesh_shape},
@@ -2939,11 +2885,13 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, TerminateStaleEriscRouters_CorruptSta
     // Verify: corrupt-but-reachable path must NOT prevent mesh open.
     // (Fix #42429: corrupt channels are not added to probe_dead_channels; they
     //  proceed through normal configure_fabric_cores soft-reset and recover.)
-    EXPECT_FALSE(threw)
-        << "[Scenario X] MeshDevice::create() threw unexpectedly after injecting corrupt "
-           "EDMStatus on chan=" << target_chan << ". "
-           "Expected graceful recovery (corrupt-but-reachable path). "
-           "Exception: " << caught_what;
+    EXPECT_FALSE(threw) << "[Scenario X] MeshDevice::create() threw unexpectedly after injecting corrupt "
+                           "EDMStatus on chan="
+                        << target_chan
+                        << ". "
+                           "Expected graceful recovery (corrupt-but-reachable path). "
+                           "Exception: "
+                        << caught_what;
 
     if (!threw && mesh_device_) {
         log_info(
@@ -3008,20 +2956,18 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     // The asymmetric timing creates a window where device 1+ tasks are still running
     // (inside their 500ms sleep) when device 0's future throws.  The join-before-rethrow
     // fix ensures we wait for all 500ms tasks to finish before propagating the exception.
-    FabricFirmwareInitializer::set_compile_fn_for_testing(
-        [done_count](Device* dev) -> bool {
-            const int idx = done_count->fetch_add(1);
-            if (idx == 0) {
-                // First device reached: simulate a compile failure after a short delay.
-                // Other devices are launched concurrently and have NOT finished yet.
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                throw std::runtime_error(
-                    "[Scenario Y] injected compile failure on device index 0");
-            }
-            // All other devices: succeed, but slowly — still running when device 0 throws.
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            return true;
-        });
+    FabricFirmwareInitializer::set_compile_fn_for_testing([done_count](Device* dev) -> bool {
+        const int idx = done_count->fetch_add(1);
+        if (idx == 0) {
+            // First device reached: simulate a compile failure after a short delay.
+            // Other devices are launched concurrently and have NOT finished yet.
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            throw std::runtime_error("[Scenario Y] injected compile failure on device index 0");
+        }
+        // All other devices: succeed, but slowly — still running when device 0 throws.
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        return true;
+    });
 
     // Attempt re-open.  This MUST throw (device 0 fails), and MUST complete (not hang).
     // If the join-before-rethrow fix is broken, device 1+ tasks run as orphans after
@@ -3029,8 +2975,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     std::string caught_message;
     bool threw = false;
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     try {
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{mesh_shape},
@@ -3047,12 +2992,12 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     FabricFirmwareInitializer::clear_compile_fn_for_testing();
 
     // Verify: the injected exception propagated.
-    EXPECT_TRUE(threw)
-        << "[Scenario Y] Expected MeshDevice::create() to throw (seam injects failure on "
-           "device index 0) but it did not throw.";
+    EXPECT_TRUE(threw) << "[Scenario Y] Expected MeshDevice::create() to throw (seam injects failure on "
+                          "device index 0) but it did not throw.";
     EXPECT_NE(caught_message.find("[Scenario Y]"), std::string::npos)
         << "[Scenario Y] Exception message does not contain the injected marker string. "
-           "Got: " << caught_message;
+           "Got: "
+        << caught_message;
 
     // Verify: ALL device seam functions were called before create() returned.
     // (With join-before-rethrow, all futures are drained before rethrowing —
@@ -3065,7 +3010,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     // incremented by the time create() returns (join-before-rethrow waits for them).
     EXPECT_EQ(done_count->load(), expected_device_count)
         << "[Scenario Y] Not all compile seam functions completed before MeshDevice::create() "
-           "returned. Expected " << expected_device_count << " calls, got " << done_count->load()
+           "returned. Expected "
+        << expected_device_count << " calls, got " << done_count->load()
         << ". This indicates orphaned async tasks (join-before-rethrow fix may have regressed).";
 
     log_info(
@@ -3079,8 +3025,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     // If the mesh device was partially initialized by the failed create(), it will be
     // cleaned up by the exception path.  A fresh create() with real compile_fabric() should work.
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_NO_THROW(
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{mesh_shape},
@@ -3163,14 +3108,11 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RelayBrokenGuardInvariantAfterCleanTe
     // Phase 1: Confirm we have a multi-device topology (relay path is active).
     const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
     if (num_devices < 2) {
-        GTEST_SKIP()
-            << "[Scenario Z] Relay guard test requires >= 2 devices; "
-               "single-chip has no non-MMIO relay path";
+        GTEST_SKIP() << "[Scenario Z] Relay guard test requires >= 2 devices; "
+                        "single-chip has no non-MMIO relay path";
     }
     log_info(
-        tt::LogTest,
-        "[Scenario Z] {} devices available — relay path is exercised on non-MMIO device",
-        num_devices);
+        tt::LogTest, "[Scenario Z] {} devices available — relay path is exercised on non-MMIO device", num_devices);
 
     // Phase 2: Clean open/dispatch/close cycle.
     // This exercises the full teardown path including the TERMINATED poll.
@@ -3195,13 +3137,9 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RelayBrokenGuardInvariantAfterCleanTe
     mesh_device_->close();
     log_info(tt::LogTest, "[Scenario Z] Closed — re-opening (terminate_stale_erisc_routers runs here)");
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     mesh_device_ = MeshDevice::create(
-        MeshDeviceConfig{mesh_device_->shape()},
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1);
+        MeshDeviceConfig{mesh_device_->shape()}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
     log_info(tt::LogTest, "[Scenario Z] Re-open complete — relay_broken guard did not deadlock");
 
     // Phase 3: Verify the relay_broken invariant at the EDMStatus level.
@@ -3216,8 +3154,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RelayBrokenGuardInvariantAfterCleanTe
     // through verify_all_fabric_channels_healthy's retry window.
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
-    const auto [router_sync_address, expected_status] =
-        builder_context.get_fabric_router_sync_address_and_status();
+    const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
 
     // expected_status from builder_context is LOCAL_HANDSHAKE_COMPLETE (the
     // intermediate sync sentinel).  After full init, all channels should be
@@ -3241,9 +3178,10 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RelayBrokenGuardInvariantAfterCleanTe
 
         for (const auto& [chan_id, direction] : active_channels) {
             channels_checked++;
-            const auto eth_logical_core =
-                MetalContext::instance().get_cluster().get_soc_desc(idev->id())
-                    .get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+            const auto eth_logical_core = MetalContext::instance()
+                                              .get_cluster()
+                                              .get_soc_desc(idev->id())
+                                              .get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
             std::vector<uint32_t> status_buf(1, 0);
             try {
                 ::tt::tt_metal::detail::ReadFromDeviceL1(
@@ -3286,11 +3224,10 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RelayBrokenGuardInvariantAfterCleanTe
         channels_healthy,
         channels_checked - channels_healthy);
 
-    EXPECT_FALSE(any_garbage)
-        << "[Scenario Z] At least one channel has unexpected edm_status after clean re-open. "
-           "This indicates the cascade prevention (zero edm_status_address on corrupt detection) "
-           "failed, or a channel that should have been at READY_FOR_TRAFFIC was not — "
-           "the relay_broken guard would mask this on the next cycle.";
+    EXPECT_FALSE(any_garbage) << "[Scenario Z] At least one channel has unexpected edm_status after clean re-open. "
+                                 "This indicates the cascade prevention (zero edm_status_address on corrupt detection) "
+                                 "failed, or a channel that should have been at READY_FOR_TRAFFIC was not — "
+                                 "the relay_broken guard would mask this on the next cycle.";
 
     // Phase 4: Verify the device is still usable after the re-open cycle.
     {
@@ -3369,9 +3306,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, ForceResetChannels_ClassifiedAsDegrad
     // This test requires >= 2 devices (FABRIC_2D needs inter-chip ETH links).
     const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
     if (num_devices < 2) {
-        GTEST_SKIP()
-            << "[Scenario AA] Force-reset channel test requires >= 2 devices. "
-               "Single-chip has no ETH fabric channels to force-reset.";
+        GTEST_SKIP() << "[Scenario AA] Force-reset channel test requires >= 2 devices. "
+                        "Single-chip has no ETH fabric channels to force-reset.";
     }
 
     log_info(
@@ -3412,14 +3348,10 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, ForceResetChannels_ClassifiedAsDegrad
     // → verify_all_fabric_channels_healthy().  If any channel is DEGRADED or CORRUPT,
     // TT_THROW propagates up through create() and this EXPECT_NO_THROW catches it.
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_NO_THROW({
         mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig{mesh_device_->shape()},
-            DEFAULT_L1_SMALL_SIZE,
-            DEFAULT_TRACE_REGION_SIZE,
-            1);
+            MeshDeviceConfig{mesh_device_->shape()}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
     }) << "[Scenario AA] MeshDevice::create threw after a clean close/reopen — "
           "verify_all_fabric_channels_healthy() found CORRUPT or DEGRADED channels "
           "that should not exist after a clean teardown. "
@@ -3504,12 +3436,13 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, ForceResetChannels_ClassifiedAsDegrad
 
 class QuiesceStressFixture : public MeshDeviceFixtureBase {
 protected:
-    QuiesceStressFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
-              .test_budget_ms = 300000,  // 5 minutes: worst-case quiesce × 5 cycles
-          }) {}
+    QuiesceStressFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+                .test_budget_ms = 300000,  // 5 minutes: worst-case quiesce × 5 cycles
+            }) {}
 
     void SetUp() override {
         const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
@@ -3553,9 +3486,7 @@ TEST_F(QuiesceStressFixture, MultiIterationQuiesceCycles) {
             workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
             auto& cq = mesh_device_->mesh_command_queue();
             log_info(
-                tt::LogTest,
-                "[Scenario AB] Post-quiesce verification dispatch (blocking=true) — cycle {}",
-                cycle + 1);
+                tt::LogTest, "[Scenario AB] Post-quiesce verification dispatch (blocking=true) — cycle {}", cycle + 1);
             ASSERT_NO_THROW(EnqueueMeshWorkload(cq, workload, /*blocking=*/true))
                 << "[Scenario AB] Post-quiesce dispatch threw on cycle " << (cycle + 1);
         }
@@ -3568,9 +3499,8 @@ TEST_F(QuiesceStressFixture, MultiIterationQuiesceCycles) {
         uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -3589,8 +3519,8 @@ TEST_F(QuiesceStressFixture, MultiIterationQuiesceCycles) {
         ASSERT_EQ(dst.size(), src.size())
             << "[Scenario AB] Buffer size mismatch after " << kCycles << " quiesce cycles";
         for (size_t i = 0; i < src.size(); i++) {
-            ASSERT_EQ(dst[i], src[i])
-                << "[Scenario AB] Corruption at index " << i << " after " << kCycles << " quiesce cycles";
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario AB] Corruption at index " << i << " after " << kCycles
+                                      << " quiesce cycles";
         }
         log_info(
             tt::LogTest,
@@ -3637,12 +3567,13 @@ TEST_F(QuiesceStressFixture, MultiIterationQuiesceCycles) {
 // ---------------------------------------------------------------------------
 class PhaseWFixture : public MeshDeviceFixtureBase {
 protected:
-    PhaseWFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
-              .test_budget_ms = 60000,  // 60s: FABRIC_2D init + quiesce + teardown
-          }) {}
+    PhaseWFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+                .test_budget_ms = 60000,  // 60s: FABRIC_2D init + quiesce + teardown
+            }) {}
 
     void SetUp() override {
         const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
@@ -3674,8 +3605,7 @@ TEST_F(PhaseWFixture, PhaseW_AllDeadMMIOCleanReturn) {
     }
 
     // On any multi-device topology there must be at least one MMIO device.
-    ASSERT_TRUE(found_mmio)
-        << "[FIX W] No MMIO-capable device found in mesh — topology assumption violated";
+    ASSERT_TRUE(found_mmio) << "[FIX W] No MMIO-capable device found in mesh — topology assumption violated";
 
     log_info(
         tt::LogTest,
@@ -3771,11 +3701,12 @@ TEST_F(PhaseWFixture, PhaseW_AllDeadMMIOCleanReturn) {
 // ---------------------------------------------------------------------------
 class PhaseZFixture : public MeshDeviceFixtureBase {
 protected:
-    PhaseZFixture()
-        : MeshDeviceFixtureBase(Config{
-              .num_cqs = 1,
-              .test_budget_ms = 30000,  // 30s — no fabric, no quiesce, just accessor checks
-          }) {}
+    PhaseZFixture() :
+        MeshDeviceFixtureBase(
+            Config{
+                .num_cqs = 1,
+                .test_budget_ms = 30000,  // 30s — no fabric, no quiesce, just accessor checks
+            }) {}
 };
 
 TEST_F(PhaseZFixture, PhaseZ_RelayBrokenCQFastThrow) {
@@ -3802,8 +3733,7 @@ TEST_F(PhaseZFixture, PhaseZ_RelayBrokenCQFastThrow) {
         }
     }
 
-    ASSERT_NE(mmio_device, nullptr)
-        << "[FIX Z] No MMIO device found — topology assumption violated";
+    ASSERT_NE(mmio_device, nullptr) << "[FIX Z] No MMIO device found — topology assumption violated";
 
     log_info(
         tt::LogTest,
@@ -3901,7 +3831,9 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
     const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
     if (num_devices < 4) {
         GTEST_SKIP() << "AllGatherQuiesceLoop requires >= 4 devices (T3K ring topology). "
-                        "Found " << num_devices << " device(s). "
+                        "Found "
+                     << num_devices
+                     << " device(s). "
                         "The original AllGather-quiesce hang only manifests on non-MMIO "
                         "forwarding ERISCs present in a 4+ device mesh.";
     }
@@ -3911,8 +3843,7 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
     // Small tensor: enough data to exercise all ERISC channels, small enough
     // that each iteration completes quickly within the 5-minute test budget.
     TensorSpec tensor_spec(
-        ttnn::Shape({1, 1, 32, 128}),
-        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+        ttnn::Shape({1, 1, 32, 128}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
 
     // Build 1x4 submesh views for per-device tensor placement and readback.
     // mesh_device_ is the full system mesh opened by QuiesceStressFixture.
@@ -3920,16 +3851,11 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
     std::vector<std::shared_ptr<distributed::MeshDevice>> submeshes;
     constexpr int kNumRingDevices = 4;
     for (int col = 0; col < kNumRingDevices; col++) {
-        submeshes.push_back(
-            mesh_device_->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(0, col)));
+        submeshes.push_back(mesh_device_->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(0, col)));
     }
 
     for (int iter = 0; iter < kIterations; iter++) {
-        log_info(
-            tt::LogTest,
-            "[AllGatherQuiesceLoop] Iteration {}/{}: building input tensors",
-            iter + 1,
-            kIterations);
+        log_info(tt::LogTest, "[AllGatherQuiesceLoop] Iteration {}/{}: building input tensors", iter + 1, kIterations);
 
         // Step 1: create per-device input tensors.
         // Device i holds a tensor filled with float(i) so the gathered result
@@ -3938,11 +3864,8 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
         // stale ERISC NOC writes.
         std::vector<ttnn::Tensor> tensors;
         for (int dev_idx = 0; dev_idx < kNumRingDevices; dev_idx++) {
-            std::vector<bfloat16> data(
-                tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
-            tensors.push_back(
-                Tensor::from_vector(std::move(data), tensor_spec)
-                    .to_device(submeshes[dev_idx].get()));
+            std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+            tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(submeshes[dev_idx].get()));
         }
 
         // Step 2: aggregate into a single multi-device tensor on the parent mesh,
@@ -3950,11 +3873,7 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
         auto aggregated = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
         mesh_device_->quiesce_devices();
 
-        log_info(
-            tt::LogTest,
-            "[AllGatherQuiesceLoop] Iteration {}/{}: launching all_gather()",
-            iter + 1,
-            kIterations);
+        log_info(tt::LogTest, "[AllGatherQuiesceLoop] Iteration {}/{}: launching all_gather()", iter + 1, kIterations);
 
         // Step 3: AllGather along dim=0 — routes packets through non-MMIO
         // forwarding ERISCs.  Without the quiesce fixes this hangs on iter 2+.
@@ -3967,10 +3886,7 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
         //   Phase 4:   wait for ERISC READY_FOR_TRAFFIC
         // Pre-fix: Phase 3 ran without Phase 2.5 guard, corrupting mid-send ERISCs.
         log_info(
-            tt::LogTest,
-            "[AllGatherQuiesceLoop] Iteration {}/{}: calling quiesce_devices()",
-            iter + 1,
-            kIterations);
+            tt::LogTest, "[AllGatherQuiesceLoop] Iteration {}/{}: calling quiesce_devices()", iter + 1, kIterations);
         ASSERT_NO_THROW(mesh_device_->quiesce_devices())
             << "[AllGatherQuiesceLoop] quiesce_devices() threw on iteration " << (iter + 1);
 
@@ -3983,33 +3899,29 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
 
         for (int dev_idx = 0; dev_idx < kNumRingDevices; dev_idx++) {
             auto data = disaggregated[dev_idx].to_vector<bfloat16>();
-            ASSERT_FALSE(data.empty())
-                << "[AllGatherQuiesceLoop] Empty readback at dev_idx=" << dev_idx
-                << " iteration=" << (iter + 1);
+            ASSERT_FALSE(data.empty()) << "[AllGatherQuiesceLoop] Empty readback at dev_idx=" << dev_idx
+                                       << " iteration=" << (iter + 1);
             // Each shard should contain all kNumRingDevices slices concatenated along dim=0.
             // Element at logical position p came from device (p / per_device_vol).
             const size_t per_device_vol = tensor_spec.logical_shape().volume();
             ASSERT_EQ(data.size(), per_device_vol * kNumRingDevices)
-                << "[AllGatherQuiesceLoop] Output size mismatch at dev_idx=" << dev_idx
-                << " iteration=" << (iter + 1);
+                << "[AllGatherQuiesceLoop] Output size mismatch at dev_idx=" << dev_idx << " iteration=" << (iter + 1);
             for (size_t i = 0; i < data.size(); i++) {
                 float expected = static_cast<float>(i / per_device_vol);
                 EXPECT_EQ(static_cast<float>(data[i]), expected)
-                    << "[AllGatherQuiesceLoop] Data corruption at element " << i
-                    << " dev_idx=" << dev_idx << " iteration=" << (iter + 1)
-                    << " (expected=" << expected << " got=" << static_cast<float>(data[i]) << ")";
+                    << "[AllGatherQuiesceLoop] Data corruption at element " << i << " dev_idx=" << dev_idx
+                    << " iteration=" << (iter + 1) << " (expected=" << expected
+                    << " got=" << static_cast<float>(data[i]) << ")";
             }
         }
 
         // Step 6: destroy tensors cleanly — exercises wait_for_pending_events().
         disaggregated.clear();
-        { auto tmp = std::move(gathered); }
+        {
+            auto tmp = std::move(gathered);
+        }
 
-        log_info(
-            tt::LogTest,
-            "[AllGatherQuiesceLoop] Iteration {}/{}: PASSED",
-            iter + 1,
-            kIterations);
+        log_info(tt::LogTest, "[AllGatherQuiesceLoop] Iteration {}/{}: PASSED", iter + 1, kIterations);
     }
 
     log_info(
@@ -4076,8 +3988,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, TeardownTimeoutRecovery) {
         // Use _exit() — never run C++ destructors that could corrupt parent pages.
         try {
             tt_fabric::SetFabricConfig(
-                tt_fabric::FabricConfig::FABRIC_2D,
-                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+                tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
             auto child_device = MeshDevice::create(
                 MeshDeviceConfig(mesh_shape),
                 config_.l1_small_size,
@@ -4143,7 +4054,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, TeardownTimeoutRecovery) {
     ::munmap(const_cast<int*>(child_tearing_down), sizeof(int));
 
     log_info(
-        tt::LogTest, "[F5a] Child exited (status=0x{:08x}) — proceeding to re-open FABRIC_2D",
+        tt::LogTest,
+        "[F5a] Child exited (status=0x{:08x}) — proceeding to re-open FABRIC_2D",
         static_cast<uint32_t>(wstatus));
 
     // Re-open FABRIC_2D.  terminate_stale_erisc_routers() must handle ERISCs
@@ -4152,8 +4064,7 @@ TEST_F(AsyncTeardownKillPredecessorFixture, TeardownTimeoutRecovery) {
     // In all cases, the re-open must succeed without hanging.
     log_info(tt::LogTest, "[F5a] Re-opening FABRIC_2D after teardown-timeout SIGKILL");
     tt_fabric::SetFabricConfig(
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_NO_THROW(
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(mesh_shape),
@@ -4186,9 +4097,8 @@ TEST_F(AsyncTeardownKillPredecessorFixture, TeardownTimeoutRecovery) {
         constexpr uint32_t page_size = 1024;
         auto local_config =
             DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(mesh_device_->num_rows()),
-            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
         auto dist_config = ShardedBufferConfig{
             .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
             .global_buffer_shape = global_shape,
@@ -4210,6 +4120,112 @@ TEST_F(AsyncTeardownKillPredecessorFixture, TeardownTimeoutRecovery) {
         }
         log_info(tt::LogTest, "[F5a] Buffer round-trip clean — F5a teardown-timeout force-reset path verified");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: Stale-state accumulation across fabric init/teardown cycles.
+//
+// FIX BE (#42429) clears per-cycle state (external_umd_channels_map_,
+// has_base_umd_channels_, timeout_on_base_umd_devices_, ring_sync_already_timed_out_)
+// at the start of each compile_and_configure_fabric() call.  Without this fix,
+// base-UMD channel counts grew 2->4->6+ across cycles, causing progressively
+// longer ring-sync timeouts and stale health-check skips.
+//
+// This test verifies that 3 consecutive fabric init+teardown cycles succeed
+// without degradation.  If stale state accumulates, the third cycle will
+// either hang (extended timeout), throw (stale channel mismatch), or produce
+// buffer corruption (stale relay path marking).
+//
+// Pass = all 3 cycles complete + final buffer round-trip clean.
+// Fail = hang, throw, or data corruption from accumulated stale state.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, StaleStateAccumulation_FIX_BE) {
+    constexpr int kCycles = 3;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        log_info(tt::LogTest, "[FIX BE] Stale-state cycle {}/{} — init + dispatch + teardown", cycle + 1, kCycles);
+        auto mesh_shape = mesh_device_->shape();
+
+        // Dispatch a blocking workload so ERISC firmware is fully exercised.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        }
+
+        // Teardown: close resets fabric, channels return to base-UMD state.
+        mesh_device_->close();
+        mesh_device_.reset();
+
+        // Re-open for next cycle.  If stale state accumulated, this will either
+        // hang (ring-sync timeout extended by ghost has_base_umd_channels_) or
+        // throw (stale external_umd_channels_map_ mismatch).
+        log_info(tt::LogTest, "[FIX BE] Re-opening FABRIC_2D mesh device (cycle {} of {})", cycle + 1, kCycles);
+        tt_fabric::SetFabricConfig(
+            tt_fabric::FabricConfig::FABRIC_2D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(mesh_shape),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            DispatchCoreConfig{},
+            {},
+            config_.worker_l1_size);
+    }
+
+    // Final verification: buffer round-trip to detect corruption from stale
+    // relay-path or dead-channel bookkeeping.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        constexpr uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape =
+            Shape2D{static_cast<uint32_t>(mesh_device_->num_rows()), static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xBE420000 | (i & 0xFFFF));  // "BE42" = FIX BE + #42429
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size()) << "[FIX BE] Buffer size mismatch after " << kCycles << " stale-state cycles";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i]) << "[FIX BE] Corruption at index " << i << " after " << kCycles
+                                      << " stale-state accumulation cycles";
+        }
+        log_info(
+            tt::LogTest,
+            "[FIX BE] Buffer round-trip clean after {} stale-state cycles — "
+            "FIX BE per-cycle clearing verified",
+            kCycles);
+    }
+}
+
+// TODO(#42429 Q2-C): Enable once FIX AO timing seam is plumbed
+TEST_F(AsyncTeardownFabric2DRepeatFixture, DISABLED_Phase5Timeout_FIX_AO) {
+    // Test that FIX AO kStartedEarlyExitMs=1000 fires and allows clean continuation
+    // Requires: ability to freeze an ETH channel at STARTED state for >1s
+    // Set up: mock or override EDMStatus poll to return STARTED indefinitely on one channel
+    // Assert: test completes without hanging (FIX AO triggers early exit)
+    // Assert: FIX AM fires (channels_not_ready_for_traffic_ set)
+    GTEST_SKIP() << "Test stub — FIX AO timing seam not yet plumbed (#42429 Q2-C)";
+}
+
+// TODO(#42429 Q2-D): Enable once FIX TJ ring-sync cascade seam is plumbed
+TEST_F(AsyncTeardownFabric2DRepeatFixture, DISABLED_RingSyncCascadeFastSkip_FIX_TJ) {
+    // Test that once one device's ring-sync times out, FIX TJ skips remaining devices
+    // Assert: total wait time is ~1x timeout, not N-devices x timeout
+    GTEST_SKIP() << "Test stub — FIX TJ cascade seam not yet plumbed (#42429 Q2-D)";
 }
 
 }  // namespace tt::tt_metal::distributed::test
