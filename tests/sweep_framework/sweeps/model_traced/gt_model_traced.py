@@ -164,15 +164,24 @@ def run(
             ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
             if isinstance(ot_dtype, dict):
                 ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+            elif isinstance(ot_dtype, str):
+                ot_dtype = parse_dict_value("dtype", {"type": "DataType", "repr": ot_dtype}) or input_a_dtype
             ot_layout = output_tensor_info.get("layout") or input_a_layout
             if isinstance(ot_layout, dict):
                 ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+            elif isinstance(ot_layout, str):
+                ot_layout = parse_dict_value("layout", {"type": "Layout", "repr": ot_layout}) or input_a_layout
             ot_mem_cfg_raw = output_tensor_info.get("memory_config")
-            ot_mem_cfg = (
-                parse_dict_value("memory_config", ot_mem_cfg_raw)
-                if isinstance(ot_mem_cfg_raw, dict)
-                else (ot_mem_cfg_raw or input_a_memory_config)
-            )
+            if isinstance(ot_mem_cfg_raw, dict):
+                from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+                ot_mem_cfg = (
+                    dict_to_memory_config(ot_mem_cfg_raw)
+                    or parse_dict_value("memory_config", ot_mem_cfg_raw)
+                    or input_a_memory_config
+                )
+            else:
+                ot_mem_cfg = ot_mem_cfg_raw or input_a_memory_config
             ot_placement = output_tensor_info.get("tensor_placement")
             import torch as _torch_ot
 

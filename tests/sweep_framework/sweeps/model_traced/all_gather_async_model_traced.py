@@ -612,6 +612,14 @@ def run(
                 # Move from DRAM to the traced sharded layout if applicable
                 if target_sharded_config is not None:
                     tt_input = ttnn.to_memory_config(tt_input, target_sharded_config)
+                    # to_memory_config may reset topology; re-apply from vector
+                    if input_a_tensor_placement:
+                        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+                        try:
+                            apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
+                        except Exception:
+                            pass
 
             else:
                 # Use _get_tensors helper for generality format
