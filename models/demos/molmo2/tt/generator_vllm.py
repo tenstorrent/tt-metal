@@ -33,18 +33,36 @@ try:
 
     class _TT_Molmo2ProcessingInfo(Molmo2ProcessingInfo):
         def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-            # Video only — adding "image": 1 causes vllm to generate image dummy
-            # inputs during server init that our _get_mm_fields_config does not
-            # handle, leading to IndexError in _merge_mm_kwargs. Image inference
-            # works via the video path (pixel_values in prefill_forward), but
-            # the server-side dummy input generation for "image" modality needs
-            # additional processor work to enable.
-            return {"video": 1}
+            # Both image and video supported.
+            # Image is treated as a 1-frame video by _TT_Molmo2DummyInputsBuilder
+            # so that _get_mm_fields_config (which maps pixel_values_videos) works.
+            return {"video": 1, "image": 1}
+
+    class _TT_Molmo2DummyInputsBuilder(Molmo2DummyInputsBuilder):
+        """Redirects image dummy inputs as 1-frame videos for vLLM init.
+
+        _get_mm_fields_config only handles pixel_values_videos (video path).
+        Since Molmo2 treats images and videos identically (same ViT + pooling),
+        we redirect image dummy inputs to 1-frame video format so the HF
+        processor produces pixel_values_videos and _get_mm_fields_config works.
+        Real image inference still uses the pixel_values path in prefill_forward.
+        """
+
+        def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
+            # Each image uses the same <|video|> placeholder as a video.
+            total = mm_counts.get("video", 0) + mm_counts.get("image", 0)
+            return "<|video|>" * total
+
+        def get_dummy_mm_data(self, seq_len, mm_counts, mm_options=None):
+            # Redirect images → 1-frame videos so HF processor produces pixel_values_videos.
+            combined = {**mm_counts, "video": mm_counts.get("video", 0) + mm_counts.get("image", 0)}
+            combined.pop("image", None)
+            return super().get_dummy_mm_data(seq_len, combined, mm_options)
 
     _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
         Molmo2MultiModalProcessor,
         info=_TT_Molmo2ProcessingInfo,
-        dummy_inputs=Molmo2DummyInputsBuilder,
+        dummy_inputs=_TT_Molmo2DummyInputsBuilder,
     )
 except ImportError:
     _registry_decorator = lambda cls: cls  # no-op for reference vllm
