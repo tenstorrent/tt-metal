@@ -1047,6 +1047,12 @@ FIX_UP_INFRA_ERROR=$(grep -cE '\[FIX UP\] INFRA_ERROR' "$CLEAN" 2>/dev/null; :)
 # FIX UP2 (#42429): pre-test-loop ring-sync health gate — retry after ring-sync timeout in initial/TM warm-up.
 FIX_UP2_FIRES=$(grep -cE '\[FIX UP2\]' "$CLEAN" 2>/dev/null; :)
 FIX_UP2_INFRA_ERROR=$(grep -cE '\[FIX UP2\] INFRA_ERROR' "$CLEAN" 2>/dev/null; :)
+# FIX UP3 (#42429): dispatch-ERISC timeout loop detected in FIX UP2 warm-up.
+# The warm-up itself triggers the rescue_stuck_dispatch_cores loop (base-UMD ERISCs
+# interfere with dispatch FW during open/close → go_msg=0x02 stale → next warm-up same issue).
+# FIX UP3: do final tt-smi -r and skip further warm-ups; tests use FIX SC + FIX M/RZ2 to handle state.
+# Log: "LOG_METAL: [FIX UP3] dispatch-ERISC timeout loop detected — running final tt-smi -r to clear rescue_stuck stale state, then proceeding to tests without warm-up."
+FIX_UP3_FIRES=$(grep -cE '\[FIX UP3\] dispatch-ERISC timeout loop detected' "$CLEAN" 2>/dev/null; :)
 # FIX TM2 (#42429): ring-sync timeout detected in post-TL (FIX TM) warm-up.
 FIX_TM2_FIRES=$(grep -cE '\[FIX TM2\] ring-sync timeout' "$CLEAN" 2>/dev/null; :)
 # Aggregate counters: ring-sync timeouts, base-UMD channel occurrences, channels_not_ready events
@@ -1747,6 +1753,14 @@ if [ "${FIX_UP2_FIRES:-0}" -gt 0 ]; then
         echo "     => INFRA_ERROR: ring-sync timeout persisted after 2 reset+warm-up cycles — run aborted."
     fi
 fi
+if [ "${FIX_UP3_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX UP3] Dispatch-ERISC timeout loop detected in FIX UP2 warm-up (${FIX_UP3_FIRES} occurrence(s))."
+    echo "     base-UMD ERISCs interfere with dispatch FW during warm-up open/close:"
+    echo "     rescue_stuck_dispatch_cores fires → go_msg=0x02 stale → next warm-up triggers same loop."
+    echo "     FIX UP3: final tt-smi -r + skip further warm-ups; tests use FIX SC + FIX M/RZ2 for state."
+    echo "     This means first test session starts WITHOUT a fabric warm-up — AllGather relies on"
+    echo "     FIX SC (stale go_msg clear) and FIX M base-UMD channel transition to complete cleanly."
+fi
 # ─── FABRIC TELEMETRY DUMP (from dump_fabric_telemetry_on_failure in multi_device_fixture.hpp) ───
 echo ""
 echo "=== FABRIC TELEMETRY AT FAILURE ==="
@@ -1810,7 +1824,10 @@ echo "  BASE_UMD_CHAN_COUNT:        ${BASE_UMD_CHAN_COUNT:-0}  (0x49706550 occur
 echo "  CHANNELS_NOT_READY_COUNT:   ${CHANNELS_NOT_READY_COUNT:-0}"
 echo "  FIX_DT1_FIRES:             ${FIX_DT1_FIRES:-0}  (dispatch ERISC teardown timeout → rescue_stuck_dispatch in warm-up)"
 echo "  FIX_UP_FIRES:              ${FIX_UP_FIRES:-0}  (ring-sync/dispatch timeout in warm-up → remedial tt-smi -r)"
+echo "  FIX_UP_INFRA_ERROR:        ${FIX_UP_INFRA_ERROR:-0}  (3+ consecutive ring-sync timeouts in warm-up → INFRA_ERROR abort)"
 echo "  FIX_UP2_FIRES:             ${FIX_UP2_FIRES:-0}  (pre-test-loop ring-sync health gate)"
+echo "  FIX_UP2_INFRA_ERROR:       ${FIX_UP2_INFRA_ERROR:-0}  (ring-sync persisted after 2 reset+warm-up cycles → run aborted)"
+echo "  FIX_UP3_FIRES:             ${FIX_UP3_FIRES:-0}  (dispatch-ERISC loop in UP2 warm-up → final tt-smi -r + skip warm-up)"
 echo "  FIX_TM2_FIRES:             ${FIX_TM2_FIRES:-0}  (ring-sync timeout in post-TL warm-up)"
 echo "  FIX_TH3_FIRES:             ${FIX_TH3_FIRES:-0}  (120s/12x ring-sync timeout extension)"
 echo "  FIX_TG2_SYNC_CLEARS:       ${FIX_TG2_SYNC_CLEARS:-0}  (stale sync-address clears for base-UMD channels)"
