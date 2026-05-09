@@ -110,19 +110,46 @@ void FabricBuilder::create_routers() {
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
     if (!routers_.empty()) {
-        // FIX BD (#42429): Deterministic master channel selection.
-        // Previously used routers_.begin()->first which is non-deterministic for
-        // std::unordered_map — different runs could pick different master channels
-        // depending on hash bucket layout.  An out-of-mesh master channel (e.g.
-        // chan 15 on Device 0 connecting to a non-MMIO device in base-UMD mode)
-        // wastes 10s+ in Phase 5 ETH handshake per device per quiesce cycle.
-        // On T3K with 4 affected devices this was 40s+ per cycle.
-        // Fix: deterministically select the lowest channel ID.  Channel IDs are
-        // uint8_t and the map has 2-8 entries — min_element is trivial.
-        auto min_it = std::min_element(
+        // FIX BF (#42429): Topology-aware master channel selection.
+        //
+        // FIX BD selected the deterministic lowest channel ID, eliminating the
+        // non-determinism from unordered_map iteration.  But the lowest channel
+        // may connect to a non-MMIO peer device that is in base-UMD state or has
+        // a broken relay.  Phase 5 (wait_for_fabric_workers_ready) polls the
+        // master channel for LOCAL_HANDSHAKE_COMPLETE — if the peer is an
+        // unreachable non-MMIO device, the poll times out (kStartedTimeoutMs=1s)
+        // and sets channels_not_ready_for_traffic_=true, degrading the mesh.
+        //
+        // Fix: prefer channels whose peer is an MMIO device (directly reachable
+        // via PCIe, always responsive).  Among equal-priority peers, use lowest
+        // channel ID for determinism (preserving FIX BD's guarantee).
+        //
+        // Selection priority:
+        //   1. Channels connecting to MMIO peers (peer_is_mmio=true), lowest chan ID
+        //   2. Channels connecting to non-MMIO peers, lowest chan ID
+        //
+        // This does NOT use device numbers — it reasons by the MMIO characteristic
+        // of the peer, which determines reachability.
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& ctrl_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto best_it = std::min_element(
             routers_.begin(), routers_.end(),
-            [](const auto& a, const auto& b) { return a.first < b.first; });
-        master_router_chan_ = min_it->first;
+            [&cluster, &ctrl_plane](const auto& a, const auto& b) {
+                // Resolve peer physical chip IDs
+                const auto peer_a_chip = ctrl_plane.get_physical_chip_id_from_fabric_node_id(
+                    a.second->get_peer_fabric_node_id());
+                const auto peer_b_chip = ctrl_plane.get_physical_chip_id_from_fabric_node_id(
+                    b.second->get_peer_fabric_node_id());
+                // MMIO peers are preferred (directly reachable, no relay dependency)
+                const bool a_mmio = (cluster.get_associated_mmio_device(peer_a_chip) == peer_a_chip);
+                const bool b_mmio = (cluster.get_associated_mmio_device(peer_b_chip) == peer_b_chip);
+                if (a_mmio != b_mmio) {
+                    return a_mmio;  // MMIO peer wins
+                }
+                // Equal priority: lowest channel ID for determinism (FIX BD)
+                return a.first < b.first;
+            });
+        master_router_chan_ = best_it->first;
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
     }
 }
