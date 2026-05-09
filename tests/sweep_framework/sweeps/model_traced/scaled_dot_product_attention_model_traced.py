@@ -237,7 +237,23 @@ def run(
                     )
             elif not isinstance(raw_pc, dict):
                 op_kwargs["program_config"] = raw_pc
-    # Keep program_config as-is (no grid clamping) to match master trace
+    # Clamp program_config grid to device if it doesn't fit
+    pc = op_kwargs.get("program_config")
+    if pc is not None:
+        try:
+            device_grid = device.compute_with_storage_grid_size()
+            pc_grid = pc.compute_with_storage_grid_size
+            if pc_grid.x > device_grid.x or pc_grid.y > device_grid.y:
+                clamped_x = min(pc_grid.x, device_grid.x)
+                clamped_y = min(pc_grid.y, device_grid.y)
+                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(clamped_x, clamped_y),
+                    q_chunk_size=pc.q_chunk_size,
+                    k_chunk_size=pc.k_chunk_size,
+                    exp_approx_mode=pc.exp_approx_mode,
+                )
+        except Exception:
+            pass
     elif "program_config" not in absent_keys and "program_config" not in op_kwargs:
         # Master had program_config (possibly None) but build_op_kwargs didn't include it
         traced_pc = kwargs.get("program_config")
