@@ -297,8 +297,9 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
-                "Device {}: Exception waiting for dispatch cores to finish during teardown. "
-                "Attempting rescue of stuck dispatch cores. Error: {}",
+                "[FIX DT-1 (#42429)] Device {}: dispatch ERISC teardown timeout (1000ms) — "
+                "rescue_stuck_dispatch_cores firing. ERISCs may be left with stale go_msg=0x02. "
+                "Warm-up will detect this and trigger remedial tt-smi -r. Error: {}",
                 dev->id(),
                 e.what());
             rescue_stuck_dispatch_cores(dev);
