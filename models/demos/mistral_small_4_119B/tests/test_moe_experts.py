@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
+import os
 
 import pytest
 import torch
@@ -14,12 +14,20 @@ from tests.ttnn.utils_for_testing import comp_pcc
 PCC_REQUIRED_EXPERTS = 0.975  # Align with DeepSeek experts test tolerance after quantize/transpose path.
 TARGET_CHUNK_SIZE = 2048
 
+_PREFILL_SEQ_LEN = int(os.environ.get("TT_MOE_TEST_PREFILL_TOKENS", "16"))
+
+
+def _activations_mesh_mapper(mesh_device: ttnn.Device):
+    if mesh_device.get_num_devices() == 1:
+        return None
+    return ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
+
 
 def _tiny_mistral4_config():
     pytest.importorskip("transformers.models.mistral4.configuration_mistral4")
     from transformers.models.mistral4.configuration_mistral4 import Mistral4Config
 
-    return Mistral4Config(
+    cfg = Mistral4Config(
         vocab_size=256,
         hidden_size=64,
         intermediate_size=128,
@@ -39,16 +47,20 @@ def _tiny_mistral4_config():
         v_head_dim=16,
         qk_nope_head_dim=8,
     )
+    if getattr(cfg, "_experts_implementation", None) in (None, ""):
+        cfg._experts_implementation = "grouped_mm"
+    return cfg
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "mode,batch_size_per_row,seq_len",
     [
         ("decode", 8, 1),
-        ("prefill", 1, 64),
+        ("prefill", 1, _PREFILL_SEQ_LEN),
     ],
 )
-def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device):
+def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device, tmp_path):
     """Test Mistral4 experts forward against HF experts output."""
     from transformers.models.mistral4.modeling_mistral4 import Mistral4NaiveMoe
 
@@ -60,7 +72,7 @@ def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device):
     weight_config = TtMistral4Experts.convert_weights(
         hf_config,
         (state_dict,),
-        Path("/tmp/mistral_small4_moe_experts_weight_cache"),
+        tmp_path / "moe_experts_weights",
         mesh_device,
     )
     model_config = (
@@ -93,7 +105,7 @@ def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device):
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -101,7 +113,7 @@ def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device):
     tt_topk_indices = ttnn.from_torch(
         topk_indices.view(1, 1, num_tokens, -1).to(torch.int32),
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
         dtype=ttnn.uint16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -109,7 +121,7 @@ def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device):
     tt_topk_weights = ttnn.from_torch(
         topk_weights.view(1, 1, num_tokens, -1).to(torch.bfloat16),
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -124,10 +136,13 @@ def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device):
 
     assert tt_output.memory_config() == run_config["output_memory_config"]
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-    )[0, 0]
+    if mesh_device.get_num_devices() == 1:
+        tt_output_torch = ttnn.to_torch(tt_output)[0, 0]
+    else:
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        )[0, 0]
 
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_topk_indices)

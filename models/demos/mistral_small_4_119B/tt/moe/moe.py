@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -270,13 +271,17 @@ class TtMistral4MoE(Mistral4MoE):
         out: dict[str, Any] = {"bridge_torch_state_dict": bridge}
         if "gate.weight" in state_dict:
             w = state_dict["gate.weight"].to(torch.bfloat16)
+            if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() == 1:
+                weight_mapper = None
+            else:
+                weight_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
             out["gate_weight_ttnn"] = ttnn.from_torch(
                 w,
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=weight_mapper,
             )
         return out
 
@@ -356,28 +361,46 @@ class TtMistral4MoE(Mistral4MoE):
         assert isinstance(hf_cfg, Mistral4Config)
         state_dict = cfg["bridge_torch_state_dict"]
 
-        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
-        x_torch = ttnn.to_torch(x, mesh_composer=composer)
+        logger.info("TtMistral4MoE bridge: to_torch(activations) from device …")
+        # Single-device mesh: tensor was created without mesh_mapper so plain to_torch works.
+        # Using mesh_mapper (even ReplicateTensorToMesh) creates distributed tensors that hang on to_torch.
+        if mesh_device.get_num_devices() == 1:
+            x_torch = ttnn.to_torch(x)
+        else:
+            composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
+            x_torch = ttnn.to_torch(x, mesh_composer=composer)
 
         while x_torch.dim() > 3 and x_torch.shape[1] == 1:
             x_torch = x_torch.squeeze(1)
 
-        mcfg = deepcopy(hf_cfg)
-        _experts_impl_config(mcfg)
-        ref = Mistral4MoE(mcfg).eval()
-        ref.load_state_dict(state_dict, strict=False)
-        # Host MoE with ``grouped_mm`` must not mix bf16 weights with fp32 activations (router softmax /
-        # top-k weights are often fp32). Run the reference in fp32, then cast back to bf16 for mesh I/O.
-        ref = ref.to(dtype=torch.float32)
         x_in = x_torch.to(dtype=torch.float32)
+        ref = cfg.get("bridge_host_hf_model")
+        if ref is not None:
+            # Tests / callers may pass an already-built ``Mistral4MoE`` matching ``bridge_torch_state_dict``
+            # to skip a second grouped_mm host rebuild + forward (very slow on CPU).
+            logger.info("TtMistral4MoE bridge: reusing cfg['bridge_host_hf_model'] for host forward …")
+        else:
+            mcfg = deepcopy(hf_cfg)
+            _experts_impl_config(mcfg)
+            ref = Mistral4MoE(mcfg).eval()
+            ref.load_state_dict(state_dict, strict=False)
+            # Host MoE with ``grouped_mm`` must not mix bf16 weights with fp32 activations (router softmax /
+            # top-k weights are often fp32). Run the reference in fp32, then cast back to bf16 for mesh I/O.
+            ref = ref.to(dtype=torch.float32)
+            logger.info("TtMistral4MoE bridge: built host Mistral4MoE; running ref(x) (grouped_mm) …")
         with torch.no_grad():
             y = ref(x_in)
         y = y.to(torch.bfloat16)
+        logger.info("TtMistral4MoE bridge: host forward done; from_torch(result) to device …")
 
+        if mesh_device.get_num_devices() == 1:
+            out_mapper = None
+        else:
+            out_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
         return ttnn.from_torch(
             y.unsqueeze(1),
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=out_mapper,
             dtype=ttnn.bfloat16,
             memory_config=cfg["output_memory_config"],
             layout=ttnn.TILE_LAYOUT,

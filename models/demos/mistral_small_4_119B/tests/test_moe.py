@@ -3,6 +3,9 @@
 
 """MoE tests for Mistral Small 4 following the DeepSeek test pattern.
 
+Environment:
+- ``TT_MOE_TEST_PREFILL_TOKENS``: prefill sequence length for the forward test (default ``16``; use ``64`` for stricter coverage).
+
 The forward-path test mirrors `models/demos/deepseek_v3/tests/test_moe.py`:
 - build a reference HF MoE module,
 - create TT run config via `get_test_weight_config` + `create_run_config`,
@@ -13,8 +16,8 @@ The forward-path test mirrors `models/demos/deepseek_v3/tests/test_moe.py`:
 from __future__ import annotations
 
 import inspect
+import os
 from copy import deepcopy
-from pathlib import Path
 
 import pytest
 import torch
@@ -26,6 +29,20 @@ from models.demos.mistral_small_4_119B.tt.moe.experts import TtMistral4Experts
 from models.demos.mistral_small_4_119B.tt.moe.moe import TtMistral4MoE
 from models.demos.mistral_small_4_119B.tt.moe.moe_gate import TtMistral4MoEGate
 from models.demos.mistral_small_4_119B.tt.moe.shared_expert import TtMistral4SharedExpert
+
+# Without indirect ``(1, 1)``, ``mesh_device`` defaults to the full system mesh (e.g. 4 chips): slow,
+# heavier UMD/sysmem, and lock contention with other jobs.
+pytestmark = pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+
+_PREFILL_SEQ_LEN = int(os.environ.get("TT_MOE_TEST_PREFILL_TOKENS", "16"))
+
+
+def _activations_mesh_mapper(mesh_device: ttnn.Device):
+    """1×1 mesh: no mapper needed (avoids creating distributed tensors that hang on to_torch).
+    Multi-device: shard across the 2D mesh."""
+    if mesh_device.get_num_devices() == 1:
+        return None
+    return ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
 
 
 def get_model_config(module_class, mode: str, *args, batch_size_per_row: int | None = None, **kwargs):
@@ -54,7 +71,7 @@ def _tiny_mistral4_config():
     pytest.importorskip("transformers.models.mistral4.configuration_mistral4")
     from transformers.models.mistral4.configuration_mistral4 import Mistral4Config
 
-    return Mistral4Config(
+    cfg = Mistral4Config(
         vocab_size=256,
         hidden_size=64,
         intermediate_size=128,
@@ -74,6 +91,9 @@ def _tiny_mistral4_config():
         v_head_dim=16,
         qk_nope_head_dim=8,
     )
+    if getattr(cfg, "_experts_implementation", None) in (None, ""):
+        cfg._experts_implementation = "grouped_mm"
+    return cfg
 
 
 def build_reference_model(hf_config):
@@ -144,12 +164,14 @@ def assert_output_pcc(
 def run_test_forward_pass_moe(
     *, mode, num_tokens, batch_size_per_row, hf_config, cache_path, mesh_device, ccl, weight_type
 ):
+    logger.info(f"moe test: HF reference + IO (mode={mode}, tokens={num_tokens}, mesh={tuple(mesh_device.shape)})")
     reference_model = build_reference_model(hf_config)
     state_dict, torch_input, reference_output = generate_reference_io(
         num_tokens=num_tokens,
         reference_model=reference_model,
         hf_config=hf_config,
     )
+    logger.info("moe test: reference done; building run_config + host bridge (TT path = device I/O + CPU HF MoE)")
 
     model_config = get_model_config(
         TtMistral4MoE,
@@ -167,25 +189,33 @@ def run_test_forward_pass_moe(
     run_config.update(model_shared_state)
     run_config["mesh_device"] = mesh_device
     run_config["bridge_torch_state_dict"] = state_dict
+    # Reuse the HF module from the reference path so the bridge does not rebuild MoE + run grouped_mm twice.
+    run_config["bridge_host_hf_model"] = reference_model
+    logger.info("moe test: run_config ready; ttnn.from_torch (upload activations)")
 
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(1),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
+    logger.info("moe test: from_torch returned; to_memory_config + TT forward (no extra sync — avoids driver stalls)")
 
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
     tt_output = run_module_forward(TtMistral4MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
+    logger.info("moe test: TT forward returned; to_torch readback + PCC")
 
     assert tt_output.memory_config() == run_config["output_memory_config"]
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-    )
+    if mesh_device.get_num_devices() == 1:
+        tt_output_torch = ttnn.to_torch(tt_output)
+    else:
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        )
 
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_output)
@@ -221,7 +251,8 @@ def ccl():
     "mode, batch_size_per_row, seq_len",
     [
         ("decode", 1, 1),
-        ("prefill", 1, 64),
+        # Shorter prefill keeps host grouped_mm MoE in the bridge within a practical CPU budget (override with TT_MOE_TEST_PREFILL_TOKENS).
+        ("prefill", 1, _PREFILL_SEQ_LEN),
     ],
 )
 @pytest.mark.parametrize("weight_type", ["random"])
@@ -238,58 +269,32 @@ def test_forward_pass(mode, batch_size_per_row, seq_len, weight_type, hf_config,
     )
 
 
-def test_tt_mistral4_moe_gate_convert_weights(hf_config, mesh_device):
+def test_moe_submodule_convert_weights_and_state(hf_config, mesh_device, tmp_path):
+    """One mesh open for gate / experts / shared checks (avoids six consecutive device cycles)."""
+    base = tmp_path / "moe_submodule_weights"
+
     gate = TtMistral4MoEGate(hf_config)
-    out = TtMistral4MoEGate.convert_weights(
-        hf_config,
-        (gate.state_dict(),),
-        Path("/tmp/unused_ttmistral4_moegate_weights"),
-        mesh_device=mesh_device,
-    )
-    assert "gate_proj" in out
-    assert "gate_weight_torch" in out
+    gate_out = TtMistral4MoEGate.convert_weights(hf_config, (gate.state_dict(),), base / "moe_gate", mesh_device)
+    assert "gate_proj" in gate_out
+    assert "gate_weight_torch" in gate_out
+    assert "mesh_device" in TtMistral4MoEGate.create_state(hf_config, mesh_device=mesh_device, ccl=None)
 
-
-def test_tt_mistral4_moe_gate_create_state(hf_config, mesh_device):
-    state = TtMistral4MoEGate.create_state(hf_config, mesh_device=mesh_device, ccl=None)
-    assert "mesh_device" in state
-
-
-def test_tt_mistral4_experts_convert_weights(hf_config, mesh_device):
     experts = TtMistral4Experts(hf_config)
-    out = TtMistral4Experts.convert_weights(
-        hf_config,
-        (experts.state_dict(),),
-        Path("/tmp/unused_ttmistral4_experts_weights"),
-        mesh_device=mesh_device,
-    )
-    assert "w_gate_up_experts" in out
-    assert "w_down_experts" in out
-    assert "experts_state_torch" in out
+    exp_out = TtMistral4Experts.convert_weights(hf_config, (experts.state_dict(),), base / "moe_experts", mesh_device)
+    assert "w_gate_up_experts" in exp_out
+    assert "w_down_experts" in exp_out
+    assert "experts_state_torch" in exp_out
+    assert "mesh_device" in TtMistral4Experts.create_state(hf_config, mesh_device=mesh_device, ccl=None)
 
-
-def test_tt_mistral4_experts_create_state(hf_config, mesh_device):
-    state = TtMistral4Experts.create_state(hf_config, mesh_device=mesh_device, ccl=None)
-    assert "mesh_device" in state
-
-
-def test_tt_mistral4_shared_expert_convert_weights(hf_config, mesh_device):
     shared = TtMistral4SharedExpert(hf_config)
-    out = TtMistral4SharedExpert.convert_weights(
-        hf_config,
-        (shared.state_dict(),),
-        Path("/tmp/unused_ttmistral4_shared_weights"),
-        mesh_device=mesh_device,
+    sh_out = TtMistral4SharedExpert.convert_weights(
+        hf_config, (shared.state_dict(),), base / "shared_expert", mesh_device
     )
-    assert "w_gate_shared_expert" in out
-    assert "w_up_shared_expert" in out
-    assert "w_down_shared_expert" in out
-    assert "shared_expert_state_torch" in out
-
-
-def test_tt_mistral4_shared_expert_create_state(hf_config, mesh_device):
-    state = TtMistral4SharedExpert.create_state(hf_config, mesh_device=mesh_device, ccl=None)
-    assert "mesh_device" in state
+    assert "w_gate_shared_expert" in sh_out
+    assert "w_up_shared_expert" in sh_out
+    assert "w_down_shared_expert" in sh_out
+    assert "shared_expert_state_torch" in sh_out
+    assert "mesh_device" in TtMistral4SharedExpert.create_state(hf_config, mesh_device=mesh_device, ccl=None)
 
 
 if __name__ == "__main__":

@@ -159,3 +159,6 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# Local Mistral Small 4 checkpoint snapshot (safetensors); keep out of git
+models/demos/mistral_small_4_119B/models/

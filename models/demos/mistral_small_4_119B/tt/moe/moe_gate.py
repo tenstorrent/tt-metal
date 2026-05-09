@@ -39,10 +39,14 @@ class TtMistral4MoEGate(Mistral4TopkRouter):
         output_path.mkdir(parents=True, exist_ok=True)
 
         gate_weight = state_dict[f"{prefix}weight"].detach().cpu()
+        if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() == 1:
+            weight_mapper = None
+        else:
+            weight_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         gate_weight_ttnn = ttnn.from_torch(
             gate_weight.unsqueeze(0).unsqueeze(0).contiguous(),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=weight_mapper,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -143,15 +147,24 @@ class TtMistral4MoEGate(Mistral4TopkRouter):
         largest: bool = True,
         sorted: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        torch_input = ttnn.to_torch(
-            input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-        )
+        if mesh_device.get_num_devices() == 1:
+            torch_input = ttnn.to_torch(input)
+        else:
+            torch_input = ttnn.to_torch(
+                input,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
         torch_scores, torch_indices = torch.topk(torch_input, k=k, dim=dim, largest=largest, sorted=sorted)
+        if mesh_device.get_num_devices() == 1:
+            mapper = None
+        else:
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
         tt_scores = ttnn.from_torch(
             torch_scores,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=mapper,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -159,7 +172,7 @@ class TtMistral4MoEGate(Mistral4TopkRouter):
         tt_indices = ttnn.from_torch(
             torch_indices.to(torch.int32),
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=mapper,
             dtype=ttnn.uint16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -177,23 +190,33 @@ class TtMistral4MoEGate(Mistral4TopkRouter):
         memory_config: ttnn.MemoryConfig,
         transpose_b: bool = True,
     ) -> ttnn.Tensor:
-        torch_input = ttnn.to_torch(
-            input_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-        )
-        torch_weight = ttnn.to_torch(
-            input_tensor_b,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0, 0]
+        if mesh_device.get_num_devices() == 1:
+            torch_input = ttnn.to_torch(input_tensor)
+            torch_weight = ttnn.to_torch(input_tensor_b)[0, 0]
+        else:
+            torch_input = ttnn.to_torch(
+                input_tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            torch_weight = ttnn.to_torch(
+                input_tensor_b,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=tuple(mesh_device.shape)),
+            )[0, 0]
         torch_input_2d = torch_input.view(-1, torch_input.shape[-1])
         torch_weight_2d = torch_weight if transpose_b else torch_weight.T
         torch_output_2d = F.linear(torch_input_2d, torch_weight_2d)
         torch_output = torch_output_2d.view(*torch_input.shape[:-1], torch_output_2d.shape[-1])
 
+        if mesh_device.get_num_devices() == 1:
+            out_mapper = None
+        else:
+            out_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
         return ttnn.from_torch(
             torch_output,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=out_mapper,
             dtype=dtype,
             memory_config=memory_config,
             layout=ttnn.TILE_LAYOUT,
@@ -205,10 +228,15 @@ class TtMistral4MoEGate(Mistral4TopkRouter):
         mesh_device = cfg["mesh_device"]
         weight = cfg["gate_weight_torch"]
 
-        x_torch = ttnn.to_torch(
-            x,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-        )
+        if mesh_device.get_num_devices() == 1:
+            x_torch = ttnn.to_torch(x)
+        else:
+            x_torch = ttnn.to_torch(
+                x,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
         while x_torch.dim() > 3 and x_torch.shape[1] == 1:
             x_torch = x_torch.squeeze(1)
         x_flat = x_torch.reshape(-1, x_torch.shape[-1]).to(torch.float32)
@@ -218,10 +246,14 @@ class TtMistral4MoEGate(Mistral4TopkRouter):
         topk_weights_torch = topk_weights_torch.to(torch.bfloat16).view(1, 1, x_flat.shape[0], -1)
         topk_indices_torch = topk_indices_torch.to(torch.int32).view(1, 1, x_flat.shape[0], -1)
 
+        if mesh_device.get_num_devices() == 1:
+            mapper = None
+        else:
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape))
         topk_weights = ttnn.from_torch(
             topk_weights_torch,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=mapper,
             dtype=ttnn.bfloat16,
             memory_config=cfg["output_memory_config"],
             layout=ttnn.TILE_LAYOUT,
@@ -229,7 +261,7 @@ class TtMistral4MoEGate(Mistral4TopkRouter):
         topk_indices = ttnn.from_torch(
             topk_indices_torch,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=mapper,
             dtype=ttnn.uint16,
             memory_config=cfg["output_memory_config"],
             layout=ttnn.TILE_LAYOUT,

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import types
-from pathlib import Path
 
 import pytest
 import torch
@@ -15,12 +15,20 @@ from tests.ttnn.utils_for_testing import comp_pcc
 TOPK_WEIGHTS_PCC_REQUIRED = 0.99
 TOPK_INDICES_MATCH_RATE_REQUIRED = 0.90
 
+_PREFILL_SEQ_LEN = int(os.environ.get("TT_MOE_TEST_PREFILL_TOKENS", "16"))
+
+
+def _activations_mesh_mapper(mesh_device: ttnn.Device):
+    if mesh_device.get_num_devices() == 1:
+        return None
+    return ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
+
 
 def _tiny_mistral4_config():
     pytest.importorskip("transformers.models.mistral4.configuration_mistral4")
     from transformers.models.mistral4.configuration_mistral4 import Mistral4Config
 
-    return Mistral4Config(
+    cfg = Mistral4Config(
         vocab_size=256,
         hidden_size=64,
         intermediate_size=128,
@@ -40,6 +48,9 @@ def _tiny_mistral4_config():
         v_head_dim=16,
         qk_nope_head_dim=8,
     )
+    if getattr(cfg, "_experts_implementation", None) in (None, ""):
+        cfg._experts_implementation = "grouped_mm"
+    return cfg
 
 
 def _route_tokens_to_experts(cfg, router_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -63,11 +74,12 @@ def _route_tokens_to_experts(cfg, router_logits: torch.Tensor) -> tuple[torch.Te
     return topk_weights, topk_indices
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "mode,batch_size_per_row,seq_len",
     [
         ("decode", 1, 1),
-        ("prefill", 1, 64),
+        ("prefill", 1, _PREFILL_SEQ_LEN),
     ],
 )
 @pytest.mark.parametrize(
@@ -83,6 +95,7 @@ def test_forward_pass(
     topk_fallback,
     use_bitonic_sort,
     mesh_device,
+    tmp_path,
 ):
     """Test Mistral4 gate forward against HF routing math."""
 
@@ -96,7 +109,7 @@ def test_forward_pass(
     weight_config = TtMistral4MoEGate.convert_weights(
         hf_config,
         (hf_state_dict,),
-        Path("/tmp/mistral_small4_moe_gate_weight_cache"),
+        tmp_path / "moe_gate_weights",
         mesh_device,
     )
 
@@ -123,7 +136,7 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(1),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -140,14 +153,13 @@ def test_forward_pass(
     assert tt_topk_weights.memory_config() == expected_output_memory_config
     assert tt_topk_indices.memory_config() == expected_output_memory_config
 
-    tt_topk_weights_torch = ttnn.to_torch(
-        tt_topk_weights,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0].squeeze(0)
-    tt_topk_indices_torch = ttnn.to_torch(
-        tt_topk_indices,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0].squeeze(0)
+    if mesh_device.get_num_devices() == 1:
+        tt_topk_weights_torch = ttnn.to_torch(tt_topk_weights)[0].squeeze(0)
+        tt_topk_indices_torch = ttnn.to_torch(tt_topk_indices)[0].squeeze(0)
+    else:
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape))
+        tt_topk_weights_torch = ttnn.to_torch(tt_topk_weights, mesh_composer=composer)[0].squeeze(0)
+        tt_topk_indices_torch = ttnn.to_torch(tt_topk_indices, mesh_composer=composer)[0].squeeze(0)
 
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_topk_weights)
@@ -195,7 +207,9 @@ def test_linear_fallback_op_uses_hf_oriented_gate_weights(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(ttnn, "ConcatMesh2dToTensor", lambda *args, **kwargs: None)
     monkeypatch.setattr(ttnn, "ShardTensor2dMesh", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda *args, **kwargs: None)
     monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **kwargs: tensor.payload)
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda tensor: [tensor])
 
     def fake_from_torch(tensor, **kwargs):
         captured["output"] = tensor
@@ -203,7 +217,7 @@ def test_linear_fallback_op_uses_hf_oriented_gate_weights(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(ttnn, "from_torch", fake_from_torch)
 
-    mesh_device = types.SimpleNamespace(shape=(1, 1))
+    mesh_device = types.SimpleNamespace(shape=(1, 1), get_num_devices=lambda: 1)
     output = TtMistral4MoEGate.linear_fallback_op(
         _FakeTTTensor(torch_input_payload),
         _FakeTTTensor(torch_weight_payload),

@@ -46,10 +46,14 @@ class TtMistral4SharedExpert(Mistral4MLP):
         up = state_dict["up_proj.weight"].detach().cpu()
         down = state_dict["down_proj.weight"].detach().cpu()
 
+        if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() == 1:
+            weight_mapper = None
+        else:
+            weight_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         gate_ttnn = ttnn.from_torch(
             gate.unsqueeze(0).contiguous(),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=weight_mapper,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -57,7 +61,7 @@ class TtMistral4SharedExpert(Mistral4MLP):
         up_ttnn = ttnn.from_torch(
             up.unsqueeze(0).contiguous(),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=weight_mapper,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -65,7 +69,7 @@ class TtMistral4SharedExpert(Mistral4MLP):
         down_ttnn = ttnn.from_torch(
             down.unsqueeze(0).contiguous(),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=weight_mapper,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -125,10 +129,15 @@ class TtMistral4SharedExpert(Mistral4MLP):
         assert isinstance(hf_cfg, Mistral4Config)
         mlp_state = cfg["shared_expert_state_torch"]
 
-        x_torch = ttnn.to_torch(
-            x,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-        )
+        if mesh_device.get_num_devices() == 1:
+            x_torch = ttnn.to_torch(x)
+        else:
+            x_torch = ttnn.to_torch(
+                x,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
         while x_torch.dim() > 3 and x_torch.shape[1] == 1:
             x_torch = x_torch.squeeze(1)
         x_flat = x_torch.reshape(-1, x_torch.shape[-1]).to(torch.float32)
@@ -140,10 +149,14 @@ class TtMistral4SharedExpert(Mistral4MLP):
             y = ref(x_flat)
         y = y.to(torch.bfloat16).view(1, 1, x_flat.shape[0], y.shape[-1])
 
+        if mesh_device.get_num_devices() == 1:
+            out_mapper = None
+        else:
+            out_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
         return ttnn.from_torch(
             y,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=out_mapper,
             dtype=ttnn.bfloat16,
             memory_config=cfg["output_memory_config"],
             layout=ttnn.TILE_LAYOUT,

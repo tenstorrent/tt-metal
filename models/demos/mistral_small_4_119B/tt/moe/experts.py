@@ -63,10 +63,14 @@ class TtMistral4Experts(Mistral4NaiveMoe):
         gate_up = state_dict["gate_up_proj"].detach().cpu()
         down = state_dict["down_proj"].detach().cpu()
 
+        if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() == 1:
+            weight_mapper = None
+        else:
+            weight_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         gate_up_ttnn = ttnn.from_torch(
             gate_up.unsqueeze(0).contiguous(),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=weight_mapper,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -74,7 +78,7 @@ class TtMistral4Experts(Mistral4NaiveMoe):
         down_ttnn = ttnn.from_torch(
             down.unsqueeze(0).contiguous(),
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=weight_mapper,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
@@ -134,15 +138,29 @@ class TtMistral4Experts(Mistral4NaiveMoe):
         assert isinstance(hf_cfg, Mistral4Config)
         experts_state = cfg["experts_state_torch"]
 
-        x_torch = ttnn.to_torch(
-            x, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
-        )
-        topk_idx_torch = ttnn.to_torch(
-            ttnn.get_device_tensors(top_k_index)[0] if mesh_device.get_num_devices() > 1 else top_k_index
-        )
-        topk_w_torch = ttnn.to_torch(
-            ttnn.get_device_tensors(top_k_weights)[0] if mesh_device.get_num_devices() > 1 else top_k_weights
-        )
+        if mesh_device.get_num_devices() == 1:
+            x_torch = ttnn.to_torch(x)
+            topk_idx_torch = ttnn.to_torch(top_k_index)
+            topk_w_torch = ttnn.to_torch(top_k_weights)
+        else:
+            x_torch = ttnn.to_torch(
+                x,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            topk_idx_torch = ttnn.to_torch(
+                top_k_index,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            topk_w_torch = ttnn.to_torch(
+                top_k_weights,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
 
         while x_torch.dim() > 3 and x_torch.shape[1] == 1:
             x_torch = x_torch.squeeze(1)
@@ -163,10 +181,14 @@ class TtMistral4Experts(Mistral4NaiveMoe):
             y = ref(x_flat, idx_flat, w_flat)
         y = y.to(torch.bfloat16).view(1, 1, x_flat.shape[0], y.shape[-1])
 
+        if mesh_device.get_num_devices() == 1:
+            out_mapper = None
+        else:
+            out_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
         return ttnn.from_torch(
             y,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=out_mapper,
             dtype=ttnn.bfloat16,
             memory_config=cfg["output_memory_config"],
             layout=ttnn.TILE_LAYOUT,
