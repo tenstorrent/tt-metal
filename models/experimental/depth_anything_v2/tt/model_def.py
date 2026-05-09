@@ -570,14 +570,13 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
     # ---- SDPA (FlashAttention) -----------------------------------------
     # Uses chunked attention to stay within L1 budget.
     # Never materializes the full (seqL × seqL) attention map.
-    # Attention mask is handled internally by SDPA.
+    # ViT uses full attention (no mask) -- all tokens attend to all tokens.
     context_layer = ttnn.transformer.scaled_dot_product_attention(
         query,
         key,
         value,
         is_causal=False,
         scale=1.0 / (head_size ** 0.5),
-        attn_mask=attention_mask,
         program_config=pconfigs["sdpa_program_config"],
         compute_kernel_config=pconfigs["compute_kernel_config"],
     )
