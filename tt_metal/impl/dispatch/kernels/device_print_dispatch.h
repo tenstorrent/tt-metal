@@ -146,13 +146,13 @@ public:
         noc_async_write_barrier();
     }
 
-    void execute() {
+    void execute(bool force_stall = false) {
         if (!enabled) {
             return;
         }
 
         // Execute stall detection if needed
-        if (get_timestamp() >= next_stall_detection_timestamp) {
+        if (force_stall || (get_timestamp() >= next_stall_detection_timestamp)) {
             read_rw_pointers();
             find_noc_locations_to_process<true>();
             process_noc_locations();

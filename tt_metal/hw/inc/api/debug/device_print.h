@@ -1417,6 +1417,14 @@ void initialize_lock() {
 }
 
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size) {
+#if DEVICE_PRINT_DISPATCH_ENABLED
+    // Hook used by wait_for_space when DEVICE_PRINT itself runs on the dispatch_s kernel: that
+    // kernel is the only thing draining the per-core L1 print buffers, so a busy-wait for space
+    // would deadlock unless dispatch_s drives its own DEVICE_PRINT dispatcher inside the wait.
+    // Defined in cq_dispatch_subordinate.cpp (where the dispatcher global lives).
+    void ::device_print_dispatcher_execute_hook();
+#endif
+
     // Read pointers
     auto write_position = device_print_buffer->aux.wpos;
     auto read_position = device_print_buffer->aux.rpos;
@@ -1449,6 +1457,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
                 invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
                 internal_::risc_context_switch();
+#endif
+#if DEVICE_PRINT_DISPATCH_ENABLED
+                device_print_dispatcher_execute_hook();
 #endif
                 // If we've closed the device, we've now disabled printing on it, don't hang.
                 if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -1483,6 +1494,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
                 invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
                 internal_::risc_context_switch();
+#endif
+#if DEVICE_PRINT_DISPATCH_ENABLED
+                device_print_dispatcher_execute_hook();
 #endif
                 // If we've closed the device, we've now disabled printing on it, don't hang.
                 if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -1537,6 +1551,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
+#endif
+#if DEVICE_PRINT_DISPATCH_ENABLED
+            device_print_dispatcher_execute_hook();
 #endif
             // If we've closed the device, we've now disabled printing on it, don't hang.
             if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {

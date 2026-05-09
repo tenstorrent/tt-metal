@@ -63,6 +63,15 @@ constexpr uint64_t device_print_cycles_for_stall = DEVICE_PRINT_CYCLES_FOR_STALL
 constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
 
 static DevicePrintDispatch<true, DEVICE_PRINT_MAX_NOC_LOCATIONS> device_print_dispatcher;
+
+void device_print_dispatcher_execute_hook() {
+    // This function shouldn't be called unless there are lots of DEVICE_PRINT
+    // calls inside dispatch_s kernel. We are not optimizing this path as it is
+    // fairly unlikely to be hit. When DEVICE_PRINT buffer is full, dispatcher
+    // will be executed to drain this buffer and check for all others as well.
+    // Here we force stall detection execution to avoid waiting for timer.
+    ::device_print_dispatcher.execute(true);
+}
 #endif
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
