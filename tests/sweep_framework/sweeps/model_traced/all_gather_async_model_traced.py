@@ -688,8 +688,8 @@ def run(
                             "num_links": num_links,
                             "topology": topology,
                         }
-                        # Only pass cluster_axis when the master trace had it.
-                        if "cluster_axis" not in absent_keys:
+                        # Only pass cluster_axis when the vector had it.
+                        if _cluster_axis_from_vector:
                             op_kwargs["cluster_axis"] = cluster_axis
 
                         if memory_config_was_traced:
@@ -722,6 +722,8 @@ def run(
                             # Master had `persistent_output_buffer=None` explicitly.
                             op_kwargs["persistent_output_buffer"] = None
 
+                        if subdevice_id is not None or "subdevice_id" not in absent_keys:
+                            op_kwargs["subdevice_id"] = subdevice_id
                         tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
                         _ag_kwargs = dict(

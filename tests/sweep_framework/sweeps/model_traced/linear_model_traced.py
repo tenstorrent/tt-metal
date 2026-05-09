@@ -555,6 +555,8 @@ def run(
 
         if core_grid is not None and core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
+        elif "core_grid" in _absent:
+            linear_kwargs["core_grid"] = None
 
         if activation is not None:
             linear_kwargs["activation"] = activation
