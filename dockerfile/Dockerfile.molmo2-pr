@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Thin overlay image: extends the dev base with Molmo2 PR changes.
+# Copies only the changed model files on top of the existing base.
+
+FROM ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.12.0-735b65d-7a07a97
+
+USER root
+
+# Copy all changed Molmo2 model files
+COPY --chown=container_app_user:container_app_user \
+    models/demos/molmo2/ \
+    /home/container_app_user/tt-metal/models/demos/molmo2/
+
+# Copy updated run_vllm_api_server.py (adds HF_HUB_OFFLINE=1 to prevent
+# downloading incompatible model code files when weights are served locally)
+COPY --chown=container_app_user:container_app_user \
+    tt-inference-server/vllm-tt-metal/src/run_vllm_api_server.py \
+    /home/container_app_user/app/src/run_vllm_api_server.py
+
+USER container_app_user
