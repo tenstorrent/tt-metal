@@ -20,6 +20,7 @@
 #include <ostream>
 #include <queue>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -2237,7 +2238,14 @@ void ControlPlane::print_ethernet_channels() const {
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
-    TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
+    // FIX BP (#42429): Changed from TT_FATAL to std::runtime_error so that
+    // teardown callers (FIX AQ) can catch and identify this specific failure
+    // without noisy "critical | TT_FATAL" log spam on every test teardown
+    // when fabric_context_ is already null (atexit / degraded-init path).
+    if (this->fabric_context_ == nullptr) {
+        throw std::runtime_error(
+            "FIX BP: fabric_context null — ControlPlane::get_fabric_context() called after teardown (#42429)");
+    }
     return *this->fabric_context_;
 }
 

@@ -725,20 +725,32 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         tt::LogAlways,
                         "teardown: FIX AQ — edm_status_address sentinel poll complete (Step 2 path).");
                 } catch (const std::exception& e) {
-                    // FIX AQ-fallback (#42429): fabric_context_ is null (atexit path).
-                    // We cannot query edm_status_address, so fall back to a time-based wait
-                    // long enough for FIX AC-reset ETH channels to complete ROM boot and
-                    // write the UMD relay sentinel (0x49706550) to edm_status_address.
-                    // Without this wait, ROM-postcode channels (0x49705180) appear as
-                    // probe_dead in the next session → channels_not_ready_for_traffic_ →
-                    // AllGather tests skipped and FIX RP timeouts.
-                    log_warning(
-                        tt::LogAlways,
-                        "teardown: FIX AQ — edm_status_address poll threw: {}; "
-                        "fabric_context null (atexit path) — adding 10s fallback wait for "
-                        "ROM-postcode channels to clear. (#42429)",
-                        e.what());
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10000));  // FIX AQ-fallback
+                    // FIX BP (#42429): If the exception is because fabric_context_ is already
+                    // null (teardown/atexit path), there is nothing to poll — skip the 10s
+                    // fallback wait entirely.  The previous code would sleep 10s here on every
+                    // test teardown when fabric_context_ was null, and since GTest keeps
+                    // running tests, this accumulated to 20+ cycles x ~40s = 13+ minutes of
+                    // hanging before CI timeout killed the t3k_ttmetal_tests job.
+                    const bool is_fabric_context_null =
+                        std::string(e.what()).find("FIX BP: fabric_context null") != std::string::npos;
+                    if (is_fabric_context_null) {
+                        log_debug(
+                            tt::LogMetal,
+                            "teardown: FIX AQ — fabric_context already torn down (FIX BP), "
+                            "skipping 10s fallback wait. ROM-postcode channels will be left "
+                            "for next init to clean up. (#42429 FIX BP)");
+                    } else {
+                        // FIX AQ-fallback (#42429): fabric_context_ exists but poll failed
+                        // for another reason.  Fall back to a time-based wait long enough for
+                        // FIX AC-reset ETH channels to complete ROM boot and write the UMD
+                        // relay sentinel (0x49706550) to edm_status_address.
+                        log_warning(
+                            tt::LogAlways,
+                            "teardown: FIX AQ — edm_status_address poll threw: {}; "
+                            "adding 10s fallback wait for ROM-postcode channels to clear. (#42429)",
+                            e.what());
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10000));  // FIX AQ-fallback
+                    }
                 } catch (...) {
                     log_warning(
                         tt::LogAlways,
