@@ -2961,14 +2961,15 @@ void Device::wait_for_fabric_workers_ready() {
         // 10s matches the fabric router sync timeout used at initial startup.
         constexpr uint32_t kSyncTimeoutMs = 10000;
         // FIX AL (#42429): When the ERISC is running (status=STARTED, not 0x0) but has not
-        // completed the ETH handshake after 3 seconds, the master channel's peer is almost
-        // certainly not responding — most commonly because the peer is an out-of-mesh device
+        // completed the ETH handshake after kStartedTimeoutMs, the master channel's peer is
+        // likely not responding — most commonly because the peer is an out-of-mesh device
         // that was never included in this quiesce set and remains in base-UMD mode.  In the
         // STARTED case we already know firmware booted (so the relay path is not broken), and
         // Phase 5b's FIX AK health-check will handle the non-fatal partial-mesh diagnosis.
-        // Using a 3s cap avoids the full 10s wait that accumulated across all devices
-        // (4 devices × ~12s = ~48s extra latency per quiesce call in t3k 2×4 configurations).
-        constexpr uint32_t kStartedTimeoutMs = 3000;
+        // NOTE: increased from 3000ms → 10000ms (#42429) to give slower fabric paths (e.g.
+        // post-BRISC-reset dispatch teardown) enough time to complete the ETH handshake before
+        // declaring the channel stuck at STARTED and setting channels_not_ready.
+        constexpr uint32_t kStartedTimeoutMs = 10000;
         constexpr uint32_t kSpinLimit = 64U;
         // Log intermediate status every 2.5s so we can see whether the ERISC is stuck at
         // STARTED (0xA0B0C0D0), 0x0 (never launched), or something unexpected.
