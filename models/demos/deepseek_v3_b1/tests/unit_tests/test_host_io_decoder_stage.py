@@ -2,21 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end test for HostIoDecoderStage.
+"""End-to-end test for HostIoDecoderStage with real DeepSeek V3 weights.
 
 Runs a single ``HostIoDecoderStage`` (combined H2D + multi-upstream D2H pipeline
 block) on a Blackhole 2D submesh, pushes tokens through the H2D socket, and reads
-the assembled D2H pages back to host. Verifies that the decoder MoE final output
-emerging from the multi-upstream D2H sender matches the standalone DecoderBlock
-golden reference.
+the assembled D2H pages back to host. The decoder is configured with the same
+shape the production ``MoEDecoderStage`` uses (``num_routed_experts=256``,
+``max_seq_len=128*1024``, ``num_slots=64``, ``persistent_mode=True``,
+``is_torus=True``) and consumes real weights via ``CacheWeightProvider``.
 
-Subsequent steps (token I/O loop, golden comparison, teardown) are added on top
-of the scaffolding in this file. Step 0 (this revision) only sets up fixtures /
-skip guards and confirms the test plumbing wires up the same way as
-``test_decoder_block.test_decoder``.
+The sweep covers a small subset of slots and positions (8 users x 32 token IDs)
+and asserts that the input metadata fields (slot_id, position_id, token_id,
+token_0_type) round-trip through the decoder to the D2H page tail.
 """
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 import torch
@@ -26,19 +28,25 @@ import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.decoder_stage import HostIoDecoderStage
 from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES, StageContext
+from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
 from models.demos.deepseek_v3_b1.model import InputField, TokenType, parse_output_page, to_spec_input
-from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
-from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import ROUTED_EXPERT_LAYER_IDX
-from models.demos.deepseek_v3_b1.weights.prepare import DeepSeekV3EmbeddingLayerWeights, prepare_moe_layer_weights
+from models.demos.deepseek_v3_b1.weights.prepare import NUM_ROUTED_EXPERTS
 
-# Embedding vocabulary used by this test. Kept small (well below D.VOCAB_SIZE = 129280)
-# so we don't spend time uploading a >1.8 GB embedding table on every test run.
-TEST_VOCAB_SIZE = 32
+# Sweep dimensions. Outer loop walks NUM_USERS_TO_SWEEP slots; inner loop walks
+# NUM_POSITIONS_PER_USER positions, with token_id == position_id. These are decoupled
+# from the production-shaped num_slots parametrize so the sweep stays fast even when
+# the KV cache is allocated for the full production slot count.
+NUM_USERS_TO_SWEEP = 8
+NUM_POSITIONS_PER_USER = 32
+
+# Default model + cache paths. Either env var overrides the corresponding default.
+_DEFAULT_HF_MODEL_PATH = "/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+_DEFAULT_CACHE_PATH = str(Path.home() / ".cache")
 
 
 @dataclass
@@ -57,7 +65,8 @@ class _SinglePipelineStage:
 
 
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
-@pytest.mark.parametrize("max_seq_len", [32 * 1024])
+# Production-shape decoder: max_seq_len=128*1024, num_slots=64 (matches MoEDecoderStage defaults).
+@pytest.mark.parametrize("max_seq_len", [128 * 1024])
 @pytest.mark.parametrize("position_id", [0])
 @pytest.mark.parametrize(
     "device_params",
@@ -70,16 +79,10 @@ class _SinglePipelineStage:
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "enable_routing, use_hardcoded_expert_index, num_routed_experts",
-    [
-        (True, False, 8),
-    ],
-    ids=["routing_8e"],
-)
 @pytest.mark.parametrize("decoder_layer_idx", [ROUTED_EXPERT_LAYER_IDX])
-@pytest.mark.parametrize("num_slots", [8])
+@pytest.mark.parametrize("num_slots", [64])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(15000)
 def test_host_io_decoder_stage(
     bh_2d_mesh_device,
     device_params,
@@ -87,12 +90,8 @@ def test_host_io_decoder_stage(
     mesh_cols,
     max_seq_len,
     position_id,
-    enable_routing,
-    use_hardcoded_expert_index,
-    num_routed_experts,
     decoder_layer_idx,
     num_slots,
-    get_reference_model_state_dict,
 ):
     """End-to-end test of HostIoDecoderStage: H2D → decoder → multi-upstream D2H."""
     torch.manual_seed(0)
@@ -111,41 +110,23 @@ def test_host_io_decoder_stage(
 
     ttnn.enable_asynchronous_slow_dispatch(submesh)
 
-    logger.info(f"Loading reference model state dict for layer {decoder_layer_idx} (random weights)...")
-    state_dict = get_reference_model_state_dict(
-        layer_idx=decoder_layer_idx,
-        is_moe=True,
-        seed=RoutedExpert.SEED,
-        num_routed_experts=num_routed_experts,
-        random_weights=True,
-    )
-    logger.info(f"Uploading MoE layer weights to submesh (num_routed_experts={num_routed_experts})...")
-    layer_weights = prepare_moe_layer_weights(
-        submesh,
-        state_dict,
-        ROUTED_EXPERT_LAYER_IDX,
-        num_routed_experts=num_routed_experts,
-        move_to_device=True,
-    )
-    logger.info("MoE layer weights uploaded")
+    # Real weights via CacheWeightProvider. Either env var overrides the default;
+    # if the resolved HF model path doesn't exist we skip rather than fail loudly.
+    hf_model_path = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", _DEFAULT_HF_MODEL_PATH))
+    cache_path = Path(os.getenv("DEEPSEEK_V3_CACHE_PATH", _DEFAULT_CACHE_PATH))
+    if not hf_model_path.exists():
+        pytest.skip(f"HF model path does not exist: {hf_model_path}")
+    logger.info(f"Using HF model path: {hf_model_path}")
+    logger.info(f"Using cache path: {cache_path}")
+    provider = CacheWeightProvider(cache_path=cache_path, model_path=hf_model_path)
 
-    # Bypass prepare_embedding_weights — it asserts the full D.VOCAB_SIZE x D.HIDDEN_SIZE
-    # shape, which would force a multi-GB upload. We only need a small token-id range here,
-    # so we build the same DRAM-interleaved row-major bf16 tensor that HostInterface expects
-    # directly and wrap it in DeepSeekV3EmbeddingLayerWeights.
-    logger.info(f"Building random {TEST_VOCAB_SIZE}x{D.HIDDEN_SIZE} bf16 embedding...")
-    torch_embedding = torch.randn(TEST_VOCAB_SIZE, D.HIDDEN_SIZE, dtype=torch.bfloat16)
-    logger.info("Uploading embedding to DRAM (replicated across submesh)...")
-    ttnn_embedding = ttnn.from_torch(
-        torch_embedding,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    embedding_weights = DeepSeekV3EmbeddingLayerWeights(embedding=ttnn_embedding)
-    logger.info("Embedding uploaded")
+    logger.info(f"Loading real MoE layer {decoder_layer_idx} weights via CacheWeightProvider...")
+    layer_weights = provider.load_moe_layer(layer_id=decoder_layer_idx, device=submesh)
+    logger.info("MoE layer weights ready")
+
+    logger.info("Loading real embedding via CacheWeightProvider (full VOCAB_SIZE x HIDDEN_SIZE)...")
+    embedding_weights = provider.load_embedding(device=submesh)
+    logger.info("Embedding ready")
 
     # Single-stage pipeline (num_procs == 1, no loopback). Coords match
     # test_decoder_block.test_decoder: broadcast source = (1, 0), reduce-to-one root = (1, 1).
@@ -164,7 +145,11 @@ def test_host_io_decoder_stage(
         stages_metadata=stages_metadata,
     )
 
-    logger.info("Instantiating HostIoDecoderStage")
+    # Production-shape decoder, matching MoEDecoderStage's defaults:
+    #   num_routed_experts = NUM_ROUTED_EXPERTS (256), enable_routing = True,
+    #   use_hardcoded_expert_index = False, persistent_mode = True, is_torus = True.
+    # max_seq_len and num_slots come from the parametrize (also production defaults).
+    logger.info("Instantiating HostIoDecoderStage with production-shape config")
     stage = HostIoDecoderStage(
         weights=layer_weights,
         embedding_weights=embedding_weights,
@@ -174,18 +159,12 @@ def test_host_io_decoder_stage(
         metadata=DeepseekMetadata(position_id=position_id),
         max_seq_len=max_seq_len,
         num_slots=num_slots,
-        # persistent_mode=True dispatches the decoder kernel once and advances per-token
-        # via the next_iter / termination semaphores managed by PersistentLoop. Teardown
-        # in step 11 will need a push_dummy_token + drain_dummy_output to wake the loop
-        # one last iteration so it observes the termination semaphore.
         persistent_mode=True,
-        # device_params["fabric_config"] is FABRIC_2D_TORUS_X for this test, matching the
-        # is_torus=True default the production MoE/Dense decoder stages use.
         is_torus=True,
         is_moe=True,
-        num_routed_experts=num_routed_experts,
-        use_hardcoded_expert_index=use_hardcoded_expert_index,
-        enable_routing=enable_routing,
+        num_routed_experts=NUM_ROUTED_EXPERTS,
+        use_hardcoded_expert_index=False,
+        enable_routing=True,
     )
 
     logger.info("Building PipelineBlock (combined H2D + multi-upstream D2H branch)")
@@ -200,20 +179,25 @@ def test_host_io_decoder_stage(
     stage.launch_compute(ctx, pipeline_block)
     logger.info("All persistent kernels dispatched")
 
-    # Sweep the test vocab for every slot. Outer loop = slot_id; inner loop = position_id
-    # restarting at 0 for each user. Each iteration uses token_id = position_id, mirroring
-    # decode-step inputs from demo/model_pipeline.py (TokenType.BASE, prefill_token_id=-1,
-    # temperature=0.6, top_k=1, probability_mass_threshold=1.0).
+    # Sweep a small subset of the (slot, position) space. Outer loop = slot_id; inner
+    # loop = position_id restarting at 0 for each user. Each iteration uses
+    # token_id = position_id, mirroring decode-step inputs from demo/model_pipeline.py
+    # (TokenType.BASE, prefill_token_id=-1, temperature=0.6, top_k=1,
+    # probability_mass_threshold=1.0). Sweep bounds are decoupled from the production
+    # num_slots so the iteration count stays small.
     metadata_bytes = DeepseekMetadata.aligned_size_bytes()  # 256
     page_size_datums = metadata_bytes // 4  # 64 uint32 words on the H2D page
     metadata_bf16_count = metadata_bytes // dtype_size(ttnn.bfloat16)  # 128 bf16 elems on D2H tail
     out_words = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES // dtype_size(ttnn.bfloat16)
+    assert (
+        NUM_USERS_TO_SWEEP <= num_slots
+    ), f"NUM_USERS_TO_SWEEP ({NUM_USERS_TO_SWEEP}) must be <= num_slots ({num_slots})"
     logger.info(
-        f"Starting sweep: {num_slots} slots x {TEST_VOCAB_SIZE} tokens "
+        f"Starting sweep: {NUM_USERS_TO_SWEEP} users x {NUM_POSITIONS_PER_USER} positions "
         f"(page_size_datums={page_size_datums}, out_words={out_words})"
     )
-    for slot_id in range(num_slots):
-        for pos_id in range(TEST_VOCAB_SIZE):
+    for slot_id in range(NUM_USERS_TO_SWEEP):
+        for pos_id in range(NUM_POSITIONS_PER_USER):
             token_id = pos_id
             input_tensor = to_spec_input(
                 token_id=token_id,
@@ -267,7 +251,9 @@ def test_host_io_decoder_stage(
             )
             logger.info(f"slot={slot_id} pos={pos_id} token_id={token_id} write/read/parse OK")
 
-    logger.info(f"HostIoDecoderStage sweep complete: {num_slots} slots x {TEST_VOCAB_SIZE} tokens")
+    logger.info(
+        f"HostIoDecoderStage sweep complete: " f"{NUM_USERS_TO_SWEEP} users x {NUM_POSITIONS_PER_USER} positions"
+    )
 
     # Teardown: matches Pipeline.terminate() in demo/pipeline.py minus the multi-process
     # distributed barriers (we're single-process here).
@@ -281,5 +267,3 @@ def test_host_io_decoder_stage(
     pipeline_block.terminate()
     ttnn.synchronize_device(submesh)
     logger.info("HostIoDecoderStage teardown complete")
-
-    # TODO(steps 10-11): golden comparison, teardown.
