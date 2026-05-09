@@ -12,6 +12,9 @@ using namespace tt::constants;
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.op_type == UpdateCacheOpType::FILL) {
+        if (args.update_idx % TILE_HEIGHT != 0) {
+            return FillCacheOffsetProgramFactory{};
+        }
         return FillCacheMultiCoreProgramFactory{};
     }
     return UpdateCacheMultiCoreProgramFactory{};
@@ -71,6 +74,15 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
 
+        if (args.update_idx % TILE_HEIGHT != 0) {
+            TT_FATAL(
+                !input_tensor.is_sharded(), "Non-tile-aligned update_idx requires interleaved (non-sharded) input");
+            TT_FATAL(
+                input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32,
+                "Non-tile-aligned update_idx requires BFLOAT16 or FLOAT32 dtype, got {}",
+                input_tensor.dtype());
+        }
+
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
@@ -93,8 +105,9 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             args.batch_idx,
             cache_tensor.padded_shape()[0]);
         TT_FATAL(
-            input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
-            "Input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx + input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
+            "update_idx ({}) + input seq len ({}) must be <= cache seq len ({})",
+            args.update_idx,
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
@@ -152,8 +165,9 @@ Tensor UpdateKVCacheOperation::create_output_tensors(
 
 tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    bool is_sub_tile_offset = (args.op_type == UpdateCacheOpType::FILL) && (args.update_idx % TILE_HEIGHT != 0);
     return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
-        args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
+        args.op_type, is_sub_tile_offset, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
 }
 
 Tensor update_cache(

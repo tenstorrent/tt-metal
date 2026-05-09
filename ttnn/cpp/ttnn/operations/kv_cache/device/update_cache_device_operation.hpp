@@ -12,6 +12,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "update_cache_device_operation_types.hpp"
 #include "fill_cache_multi_core_program_factory.hpp"
+#include "fill_cache_offset_program_factory.hpp"
 #include "update_cache_multi_core_program_factory.hpp"
 
 namespace ttnn::prim {
@@ -21,7 +22,8 @@ struct UpdateKVCacheOperation {
     using tensor_args_t = KvCacheInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<UpdateCacheMultiCoreProgramFactory, FillCacheMultiCoreProgramFactory>;
+    using program_factory_t = std::
+        variant<UpdateCacheMultiCoreProgramFactory, FillCacheMultiCoreProgramFactory, FillCacheOffsetProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
