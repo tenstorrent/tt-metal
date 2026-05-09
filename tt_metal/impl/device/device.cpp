@@ -875,12 +875,14 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             }
         }
         // Get the physical rows and cols  (y, x) in the worker grid
-        std::vector<uint32_t> worker_phy_y = std::vector<uint32_t>(num_cores_y);
+        std::vector<uint32_t> worker_phy_y;
+        worker_phy_y.reserve(num_cores_y);
         for (int i = 0; i < num_cores_y; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
-            worker_phy_y.at(i) = core_phy.y;
+            worker_phy_y.push_back(core_phy.y);
         }
-        std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
+        std::vector<uint32_t> worker_phy_x;
+        worker_phy_x.reserve(num_cores_x);
         for (int i = 0; i < num_cores_x; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
             worker_phy_x.push_back(core_phy.x);

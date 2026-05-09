@@ -139,7 +139,7 @@ inline void calculate_log1p() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

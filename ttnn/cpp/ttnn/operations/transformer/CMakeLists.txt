@@ -26,6 +26,13 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            sdpa_config.hpp
+            attention_softmax/attention_softmax.hpp
+            concatenate_heads/concatenate_heads.hpp
+            sdpa/sdpa.hpp
+            sdpa_decode/sdpa_decode.hpp
+            sdpa_windowed/sdpa_windowed.hpp
+            split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -35,12 +42,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_transformer
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_transformer PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -52,3 +54,4 @@ install(
 )
 
 install(TARGETS ttnn_op_transformer LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_transformer FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

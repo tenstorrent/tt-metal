@@ -216,7 +216,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
-    cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
@@ -407,13 +407,6 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
     cpp/ttnn/kernel/kernel_common_utils.hpp
     cpp/ttnn/kernel/kernel_utils.hpp
-    cpp/ttnn/kernel_lib/cb_helpers.hpp
-    cpp/ttnn/kernel_lib/cb_helpers.inl
-    cpp/ttnn/kernel_lib/dest_helpers.hpp
-    cpp/ttnn/kernel_lib/tilize_helpers.hpp
-    cpp/ttnn/kernel_lib/tilize_helpers.inl
-    cpp/ttnn/kernel_lib/untilize_helpers.hpp
-    cpp/ttnn/kernel_lib/untilize_helpers.inl
 )
 
 ####################################################################################################

@@ -9,7 +9,6 @@ from loguru import logger
 
 from models.common.utility_functions import (
     skip_for_wormhole_b0,
-    skip_with_llk_assert,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -298,7 +297,6 @@ def run_pre_allgather_layernorm(
     ],
 )
 @pytest.mark.parametrize(("fuse_residual", "max_atol_ex2"), [(False, 0.04), (True, 0.09)])
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41020")
 def test_pre_allgather_layernorm(
     device,
     input_width,
@@ -344,7 +342,6 @@ def test_pre_allgather_layernorm(
 @pytest.mark.parametrize("core_grid", ((1, 4),))
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
 @pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.986, 0.04)])
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41020")
 def test_pre_allgather_layernorm_1d_reduce(
     device,
     input_width,
@@ -388,7 +385,6 @@ def test_pre_allgather_layernorm_1d_reduce(
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((8, 2),))
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41020")
 def test_post_allgather_layernorm(
     device,
     input_width,
@@ -481,7 +477,6 @@ def test_post_allgather_layernorm(
         ((2, 4), ttnn.CoreCoord(0, 0), (4, 2)),
     ],
 )
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41020")
 def test_simulated_distributed_layernorm(
     device,
     input_width,

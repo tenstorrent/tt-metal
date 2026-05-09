@@ -32,6 +32,7 @@ blocking on socket_wait_for_pages() and cb_wait_front() operations.
 """
 
 import ttnn
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_tensor_accessor_args
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
@@ -52,6 +53,7 @@ class HostInterface:
         fabric_packet_header_cb_index=None,
         sender_mesh=None,
         receiver_mesh=None,
+        metadata_size_bytes=0,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -73,6 +75,7 @@ class HostInterface:
         self.embedding_tensor = embedding_tensor
         self.h2d_downstream_core = h2d_downstream_core
         self.d2h_upstream_core = d2h_upstream_core
+        self.metadata_size_bytes = metadata_size_bytes
 
         if self.h2d_socket:
             if len(self.h2d_socket.get_active_cores()) != 1:
@@ -168,9 +171,13 @@ class HostInterface:
 
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:
-            # For now, we assume that tokens will be passed in as 64 bytes packets to embedding.
-            # This allows us to add more information in the input packet as needed.
-            assert self.h2d_page_size == 64
+            # The fused H2D+embedding kernel reads `metadata_size_bytes` worth of bytes
+            # from each H2D socket page (after the token id) and forwards them downstream
+            # alongside the embedding lookup. To keep the read in-bounds, the H2D socket
+            # page must be at least the full DeepseekMetadata struct.
+            assert (
+                self.h2d_page_size == DeepseekMetadata.aligned_size_bytes()
+            ), f"H2D page size ({self.h2d_page_size}) must equal DeepseekMetadata.aligned_size_bytes() ({DeepseekMetadata.aligned_size_bytes()}) for the fused embedding path"
             assert (
                 self.embedding_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
                 and self.embedding_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
@@ -204,10 +211,9 @@ class HostInterface:
 
         if use_fabric:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-            if self.has_embedding:
-                page_size_per_link = self.embedding_page_size // self.num_fwd_links
-            else:
-                page_size_per_link = self.h2d_page_size // self.num_fwd_links
+            base_data_transfer_size = self.embedding_page_size if self.has_embedding else self.h2d_page_size
+            total_data_transfer_size = base_data_transfer_size + self.metadata_size_bytes
+            page_size_per_link = total_data_transfer_size // self.num_fwd_links
             num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
             partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
 
@@ -225,11 +231,16 @@ class HostInterface:
             num_whole_fabric_packets_per_link,
             partial_packet_size_per_link,
             use_fabric,
+            self.metadata_size_bytes,
         ]
         # Add CTAs for fused embedding op if needed
         if self.has_embedding:
             h2d_socket_kernel_ct_args.extend(
-                [self.embedding_cb_index, self.embedding_page_size, self.embedding_tensor.buffer_address()]
+                [
+                    self.embedding_cb_index,
+                    self.embedding_page_size,
+                    self.embedding_tensor.buffer_address(),
+                ]
             )
             h2d_socket_kernel_ct_args.extend(get_tensor_accessor_args(self.embedding_tensor))
 
@@ -298,13 +309,13 @@ class HostInterface:
         # CB for embedding DRAM reads
         if self.has_embedding:
             embedding_cb_desc = ttnn.CBDescriptor(
-                total_size=self.embedding_page_size,
+                total_size=self.embedding_page_size + self.metadata_size_bytes,
                 core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=self.embedding_cb_index,
                         data_format=ttnn.bfloat16,
-                        page_size=self.embedding_page_size,
+                        page_size=self.embedding_page_size + self.metadata_size_bytes,
                     )
                 ],
             )
@@ -467,19 +478,18 @@ class HostInterface:
 
     def run(self):
         entries = self._build_programs()
-
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
         )
-
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for device_coord, program in entries:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
-
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def get_downstream_socket(self):
-        if self.downstream_socket_pair is not None:
+        if self.downstream_mesh_socket is not None:
+            return self.downstream_mesh_socket
+        elif self.downstream_socket_pair is not None:
             return self.downstream_socket_pair[1]
         elif self.downstream_mesh_socket is not None:
             raise ValueError("Downstream receiver socket not available for inter-mesh configuration")

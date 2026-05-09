@@ -123,7 +123,6 @@ target_sources(
             gather/gather_nanobind.hpp
             gather/device/gather_device_operation.hpp
             gather/device/gather_device_operation_types.hpp
-            gather/device/gather_program_factory.hpp
             gather/tosa/gather_tosa.hpp
             gather/tosa/gather_tosa_nanobind.hpp
             # indexed_fill/
@@ -132,6 +131,7 @@ target_sources(
             indexed_fill/device/indexed_fill_device_operation.hpp
             indexed_fill/device/indexed_fill_device_operation_types.hpp
             indexed_fill/device/indexed_fill_program_factory.hpp
+            indexed_fill/device/indexed_fill_utils.hpp
             # moe_expert_token_remap/
             moe_expert_token_remap/moe_expert_token_remap.hpp
             moe_expert_token_remap/moe_expert_token_remap_nanobind.hpp
@@ -288,6 +288,7 @@ target_sources(
             transpose/device/transpose_hc_tiled_program_factory.hpp
             transpose/device/transpose_wh_program_factory.hpp
             transpose/device/transpose_wh_sharded_program_factory.hpp
+            transpose/device/transpose_utils.hpp
             transpose/device/transpose_wh_sharded_rm_program_factory.hpp
             # unsqueeze/
             unsqueeze/unsqueeze.hpp

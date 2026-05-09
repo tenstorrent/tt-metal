@@ -31,6 +31,7 @@ file(
     nlp_create_qkv_heads_vit/device/kernels/*
     nlp_kv_cache_load_slice/device/kernels/*
     rotary_embedding/device/kernels/*
+    rotary_embedding_hf/device/kernels/*
     rotary_embedding_llama/device/kernels/*
     rotary_embedding_llama_fused_qk/device/kernels/*
     rotate_half/device/kernels/*

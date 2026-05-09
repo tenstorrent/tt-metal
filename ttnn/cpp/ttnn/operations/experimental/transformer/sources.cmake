@@ -79,6 +79,10 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_device_operation.cpp
     split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_program_factory.cpp
     split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_sharded_program_factory.cpp
+    rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp
+    rotary_embedding_hf/device/rotary_embedding_hf_multi_core_program_factory.cpp
+    rotary_embedding_hf/device/rotary_embedding_hf_sharded_program_factory.cpp
+    rotary_embedding_hf/rotary_embedding_hf.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS

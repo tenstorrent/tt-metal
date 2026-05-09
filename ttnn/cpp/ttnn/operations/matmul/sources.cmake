@@ -23,4 +23,5 @@ set(TTNN_OP_MATMUL_API_HEADERS
     device/matmul_device_operation_types.hpp
     device/config/matmul_program_config.hpp
     device/config/matmul_program_config_types.hpp
+    shared_with_host/activation_type.hpp
 )

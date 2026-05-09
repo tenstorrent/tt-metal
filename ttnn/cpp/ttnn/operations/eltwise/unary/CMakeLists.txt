@@ -4,6 +4,7 @@ add_library(ttnn_op_eltwise_unary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Unary ALIAS ttnn_op_eltwise_unary)
 
 tt_reuse_precompile_headers(ttnn_op_eltwise_unary TTNN::PCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_unary)
 set_target_properties(
     ttnn_op_eltwise_unary
     PROPERTIES
@@ -33,9 +34,9 @@ target_link_libraries(
     ttnn_op_eltwise_unary
     PUBLIC
         TTNN::Core
-        TTNN::Ops::Eltwise::UnaryNG
     PRIVATE
         TT::Metalium
+        TTNN::Ops::Eltwise::Binary
 )
 
 install(

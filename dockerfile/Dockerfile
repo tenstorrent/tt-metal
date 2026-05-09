@@ -92,7 +92,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     uuid-runtime \
     wget \
     zstd \
-    libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install yq (YAML processor) for CI workflows
@@ -186,6 +185,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
     gdb \
+    gh \
     less \
     libmpfr-dev \
     nano \
