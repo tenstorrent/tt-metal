@@ -39,25 +39,36 @@ try:
             return {"video": 1, "image": 1}
 
     class _TT_Molmo2DummyInputsBuilder(Molmo2DummyInputsBuilder):
-        """Redirects image dummy inputs as 1-frame videos for vLLM init.
+        """Handles image dummy inputs for vLLM init by redirecting as 1-frame video.
 
         _get_mm_fields_config only handles pixel_values_videos (video path).
-        Since Molmo2 treats images and videos identically (same ViT + pooling),
-        we redirect image dummy inputs to 1-frame video format so the HF
-        processor produces pixel_values_videos and _get_mm_fields_config works.
-        Real image inference still uses the pixel_values path in prefill_forward.
+        The HF Molmo2Processor only supports 1 video at a time.
+        Three cases handled:
+          - image-only: redirect as 1-frame video for token budget computation
+          - video-only: unchanged
+          - combined (video+image): use video only (HF processor limitation)
+        Real image inference uses pixel_values in prefill_forward (unchanged).
         """
 
         def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
-            # Each image uses the same <|video|> placeholder as a video.
-            total = mm_counts.get("video", 0) + mm_counts.get("image", 0)
-            return "<|video|>" * total
+            num_v = mm_counts.get("video", 0)
+            num_i = mm_counts.get("image", 0)
+            if num_v > 0 and num_i > 0:
+                # Combined call: only video placeholders (HF processor supports 1 video)
+                return "<|video|>" * num_v
+            # image-only or video-only: treat each as a video placeholder
+            return "<|video|>" * (num_v + num_i)
 
         def get_dummy_mm_data(self, seq_len, mm_counts, mm_options=None):
-            # Redirect images → 1-frame videos so HF processor produces pixel_values_videos.
-            combined = {**mm_counts, "video": mm_counts.get("video", 0) + mm_counts.get("image", 0)}
-            combined.pop("image", None)
-            return super().get_dummy_mm_data(seq_len, combined, mm_options)
+            num_v = mm_counts.get("video", 0)
+            num_i = mm_counts.get("image", 0)
+            if num_v > 0 and num_i > 0:
+                # Combined: only process video (HF supports 1 video at a time)
+                return super().get_dummy_mm_data(seq_len, {"video": num_v}, mm_options)
+            elif num_i > 0:
+                # Image-only: redirect as 1-frame video for token budget
+                return super().get_dummy_mm_data(seq_len, {"video": num_i}, mm_options)
+            return super().get_dummy_mm_data(seq_len, mm_counts, mm_options)
 
     _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
         Molmo2MultiModalProcessor,
