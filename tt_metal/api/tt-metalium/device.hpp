@@ -229,6 +229,15 @@ public:
     // leaving the machine with only 4/8 chips visible.
     virtual bool is_fabric_ring_sync_timed_out() const { return false; }
     virtual void set_fabric_ring_sync_timed_out() {}
+    // FIX ST (#42429): Returns the effective (post-FIX-RR) set of pre-dead ETH channels for
+    // this device.  Unlike the probe_dead_channels_map used at init time, this set is updated
+    // after configure_fabric_cores() runs — channels recovered by FIX RR are removed.
+    // Used by FabricFirmwareInitializer to accurately determine whether the MMIO master router
+    // channel still lacks firmware (and should be added to mmio_dead_master_chan_devices_).
+    virtual const std::unordered_set<uint32_t>& get_fabric_pre_dead_channels() const {
+        static const std::unordered_set<uint32_t> kEmpty;
+        return kEmpty;
+    }
 
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.

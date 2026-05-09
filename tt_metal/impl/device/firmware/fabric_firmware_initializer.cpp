@@ -2319,6 +2319,14 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // device itself, not a peer relay. No firmware was loaded on that master channel, so
     // wait_for_fabric_router_sync() would spin for the full timeout (10s per device) with no
     // chance of success. Track them here so sync can be skipped.
+    //
+    // FIX ST (#42429): Use the device's effective fabric_pre_dead_channels_ (post-FIX-RR) rather
+    // than the original probe_dead_channels_map (pre-FIX-RR).  When FIX RR recovers the master
+    // channel via PCIe-direct soft reset, it is removed from fabric_pre_dead_channels_ and
+    // firmware IS loaded on it — the channel is no longer dead.  Using probe_dead_channels_map
+    // here caused mmio_dead_master_chan_devices_ to be populated even after recovery, making
+    // verify_all_fabric_channels_healthy() set channels_not_ready=true and skip AllGather every
+    // session (the same symptom FIX RS fixed for configure_fabric, now fixed here for FIX AN).
     for (auto* dev : compiled_devices) {
         if (!dev) {
             continue;
@@ -2332,14 +2340,25 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             continue;
         }
         const auto master_chan = builder_context.get_fabric_master_router_chan(dev->id());
-        if (probe_dead_channels_map.count(dev->id()) > 0 &&
-            probe_dead_channels_map.at(dev->id()).count(master_chan) > 0) {
+        // FIX ST: use effective (post-FIX-RR) pre-dead set from the device, not probe_dead_channels_map.
+        const auto& effective_pre_dead = dev->get_fabric_pre_dead_channels();
+        if (effective_pre_dead.count(master_chan) > 0) {
             mmio_dead_master_chan_devices_.insert(dev->id());
             log_warning(
                 tt::LogMetal,
                 "compile_and_configure_fabric: Device {} MMIO master router chan={} is pre-dead "
-                "(excluded from configure_fabric — L1 corrupt or unresponsive). "
-                "Sync will be skipped. (#42429 FIX AN)",
+                "(excluded from configure_fabric — L1 corrupt or unresponsive, and NOT recovered by FIX RR). "
+                "Sync will be skipped. (#42429 FIX AN / FIX ST)",
+                dev->id(),
+                master_chan);
+        } else if (probe_dead_channels_map.count(dev->id()) > 0 &&
+                   probe_dead_channels_map.at(dev->id()).count(master_chan) > 0) {
+            // Master chan was in probe_dead but FIX RR recovered it — firmware IS loaded.
+            log_info(
+                tt::LogMetal,
+                "compile_and_configure_fabric: Device {} MMIO master router chan={} was probe-dead "
+                "but recovered by FIX RR — NOT adding to mmio_dead_master_chan_devices_. "
+                "Firmware loaded; sync will proceed normally. (#42429 FIX ST)",
                 dev->id(),
                 master_chan);
         }

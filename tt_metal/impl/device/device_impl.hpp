@@ -228,6 +228,11 @@ public:
     }
     bool is_fabric_ring_sync_timed_out() const override { return fabric_ring_sync_timed_out_.load(); }
     void set_fabric_ring_sync_timed_out() override { fabric_ring_sync_timed_out_.store(true); }
+    // FIX ST (#42429): Returns the effective (post-FIX-RR) pre-dead ETH channel set.
+    // See device.hpp comment.
+    const std::unordered_set<uint32_t>& get_fabric_pre_dead_channels() const override {
+        return fabric_pre_dead_channels_;
+    }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
