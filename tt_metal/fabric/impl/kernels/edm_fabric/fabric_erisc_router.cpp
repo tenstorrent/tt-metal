@@ -2764,13 +2764,14 @@ void
             return;
         }
         uint32_t count = 0;
-        // Watchdog: on WH the termination signal check is compiled out — if the
-        // connection request never arrives this loop spins forever.  The watchdog
-        // fires WAYPOINT("SCRW") periodically to make such hangs diagnosable.
-        // FIX LT9-REV: Keep looping with WAYPOINT diagnostic; breaking out kills the router.
+        // Watchdog: on WH the termination signal check is compiled out of the main loop
+        // condition (#ifndef ARCH_WORMHOLE) for hardware reasons.  We check it in the
+        // periodic watchdog path using force-invalidate (<true>), which is safe on WH.
+        // Teardown is detected within ~kWatchdogIter iterations — kernel exits cleanly.
         // See: https://github.com/tenstorrent/tt-metal/issues/42429
         constexpr uint32_t kWatchdogIter = 100'000'000;
         uint32_t watchdog_count = 0;
+        bool timed_out = false;
         while (!connect_is_requested(*interface.connection_live_semaphore)
 #ifndef ARCH_WORMHOLE
                && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
@@ -2786,11 +2787,18 @@ void
             }
 #endif
             if (++watchdog_count >= kWatchdogIter) {
-                WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout — diagnostic only
+                WAYPOINT("SCRW");  // Static-Connection-Ready Wait — diagnostic
                 watchdog_count = 0;
+                // Use force-invalidate here — safe on WH unlike the inline condition above.
+                if (got_immediate_termination_signal<true>(termination_signal_ptr)) {
+                    timed_out = true;
+                    break;
+                }
             }
         }
-        establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        if (!timed_out) {
+            establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        }
     };
     if constexpr (multi_txq_enabled) {
         tuple_for_each_constexpr(

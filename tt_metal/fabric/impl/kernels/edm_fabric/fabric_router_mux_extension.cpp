@@ -112,12 +112,14 @@ using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>
 }  // namespace tt::tt_fabric
 
 template <uint8_t NUM_BUFFERS>
-void wait_for_static_connection_to_ready(
+bool wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    // Watchdog: on WH the termination signal check is compiled out — if the
-    // connection request never arrives this loop spins forever.
-    // FIX LT9-REV: Keep looping with WAYPOINT diagnostic; breaking out kills the mux.
+    // Watchdog: on WH the termination signal check is compiled out of the main loop
+    // condition (#ifndef ARCH_WORMHOLE) for hardware reasons.  We check it in the
+    // periodic watchdog path using force-invalidate (<true>), which is safe on WH.
+    // Teardown is detected within ~kWatchdogIter iterations (~1-2s) — kernel exits
+    // cleanly rather than hanging forever.
     // See: https://github.com/tenstorrent/tt-metal/issues/42429
     constexpr uint32_t kWatchdogIter = 100'000'000;
     uint32_t watchdog_count = 0;
@@ -129,12 +131,17 @@ void wait_for_static_connection_to_ready(
     ) {
         invalidate_l1_cache();
         if (++watchdog_count >= kWatchdogIter) {
-            WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout — diagnostic only
+            WAYPOINT("SCRW");  // Static-Connection-Ready Wait — diagnostic
             watchdog_count = 0;
+            // Use force-invalidate here — safe on WH unlike the inline condition above.
+            if (got_immediate_termination_signal<true>(termination_signal_ptr)) {
+                return false;  // Teardown requested — caller enters termination-wait
+            }
         }
     }
 
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
+    return true;
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -354,17 +361,29 @@ void kernel_main() {
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
-    // Wait for persistent channels to be ready
+    // Wait for persistent channels to be ready.
+    // Returns false only if teardown was requested during the wait — in that case
+    // skip READY_FOR_TRAFFIC and go straight to termination-wait.
+    bool teardown_during_wait = false;
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         if (worker_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr);
+            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr)) {
+                teardown_during_wait = true;
+            }
         }
     }
 
     for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
         if (router_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i], termination_signal_ptr);
+            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i], termination_signal_ptr)) {
+                teardown_during_wait = true;
+            }
         }
+    }
+
+    if (teardown_during_wait) {
+        while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {}
+        return;
     }
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
