@@ -280,6 +280,105 @@ def test_convert_weights_rejects_partial_stacked_expert_checkpoint(monkeypatch: 
         )
 
 
+def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _FakeMeshDevice:
+        shape = (16, 8)
+
+        def get_num_devices(self) -> int:
+            return 1
+
+    prepared_w0_w1 = torch.arange(12 * 1 * 2 * 3 * 4 * (4 * ttnn.TILE_SIZE), dtype=torch.bfloat16).reshape(
+        12, 1, 2, 3, 4, 4 * ttnn.TILE_SIZE
+    )
+    prepared_w2 = torch.arange(12 * 1 * 2 * 5 * 6 * (4 * ttnn.TILE_SIZE), dtype=torch.bfloat16).reshape(
+        12, 1, 2, 5, 6, 4 * ttnn.TILE_SIZE
+    )
+
+    state_dict = {
+        "experts_quad_ring.w0_w1.weight": prepared_w0_w1,
+        "experts_quad_ring.w2.weight": prepared_w2,
+    }
+
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_dequantized_tensor",
+        lambda state_dict, key, dtype=None: state_dict[key],
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.determine_compute_matmul_cores",
+        lambda mesh_device: ({"ring": "unused"}, "dram-core-range-set"),
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_w0_w1_memory_config",
+        lambda *args, **kwargs: "w0_w1_mem_config",
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_w2_memory_config",
+        lambda *args, **kwargs: "w2_mem_config",
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.prepare_w0_w1_tensor",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prepare_w0_w1_tensor should not run")),
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.prepare_w2_tensor",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prepare_w2_tensor should not run")),
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.shard_and_save",
+        lambda path, tensor, *args, **kwargs: tensor,
+    )
+
+    converted = TTExperts.convert_weights(
+        SimpleNamespace(
+            n_routed_experts=2,
+            hidden_size=4,
+            moe_intermediate_size=6,
+        ),
+        (state_dict,),
+        tmp_path,
+        _FakeMeshDevice(),
+    )
+
+    assert set(converted) == {"quad_ring_w0_w1_experts", "quad_ring_w2_experts"}
+    assert torch.equal(converted["quad_ring_w0_w1_experts"]["input_tensor_b"], prepared_w0_w1)
+    assert torch.equal(converted["quad_ring_w2_experts"]["input_tensor_b"], prepared_w2)
+
+
+def test_convert_weights_quad_ring_rejects_partial_prepared_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _FakeMeshDevice:
+        shape = (16, 8)
+
+        def get_num_devices(self) -> int:
+            return 1
+
+    state_dict = {
+        "experts_quad_ring.w0_w1.weight": torch.zeros((12, 1, 2, 3, 4, 4 * ttnn.TILE_SIZE), dtype=torch.bfloat16),
+    }
+
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+
+    with pytest.raises(ValueError, match="partial quad-ring prepared"):
+        TTExperts.convert_weights(
+            SimpleNamespace(
+                n_routed_experts=2,
+                hidden_size=4,
+                moe_intermediate_size=6,
+            ),
+            (state_dict,),
+            tmp_path,
+            _FakeMeshDevice(),
+        )
+
+
 def test_create_combined_state_dict_uses_stacked_expert_weights():
     class _ViewableStateDict(dict):
         def view_with_prefix(self, prefix: str, num_layers: int | None = None):
