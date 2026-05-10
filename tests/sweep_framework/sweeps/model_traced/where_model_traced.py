@@ -210,7 +210,11 @@ def run(
         e2e_perf = stop_measuring_time(start_time)
     elif is_tensor_scalar:
         # Mixed: tensor true_value + scalar false_value
-        shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (tuple, list)) else shape_a
+        shape_b = (
+            tuple(kwargs.get("input_b_shape", shape_a))
+            if kwargs.get("input_b_shape") and isinstance(kwargs.get("input_b_shape"), (tuple, list))
+            else shape_a
+        )
         if isinstance(shape_b, str):
             import ast as _ast_wb
 
