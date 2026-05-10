@@ -286,6 +286,8 @@ def run(
         output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
 
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import reconcile_golden_to_actual
+
         if is_mesh_device:
             torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
 
