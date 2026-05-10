@@ -7,6 +7,7 @@
 
 #include <cstdint>
 
+#include "api/compute/add_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
@@ -33,8 +34,13 @@ ALWI void sfpu_reduce_pack_mask_config() {
 
 ALWI void sfpu_reduce_pack_mask_clear() { PACK((llk_pack_reduce_mask_clear())); }
 
-// Cross-tile fold primitives: pick MAX or MIN based on pool_type.  Format-aware
-// dispatch is done at the helper level (Phase 1 = Int32 only).
+// Cross-tile fold primitives: pick MAX / MIN / SUM based on pool_type.
+// Format-aware dispatch is done at the helper level (Int32 only today).
+//
+// For SUM the cross-tile fold is element-wise add (`add_int_tile<Int32>`) on
+// full tiles, since `sum(sum(a, b), c) == sum(a, b, c)`.  This mirrors the
+// MAX/MIN folds: the within-tile sfpu_reduce runs once on the final
+// accumulator at the end.
 //
 // Note: `DataFormat` is at global scope (defined in tensix_types.h, no namespace),
 // while `PoolType` lives in `namespace ckernel`.  Keep the spelling consistent with
@@ -44,12 +50,15 @@ template <ckernel::PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_binary_fold_init() {
     static_assert(
         format == DataFormat::Int32,
-        "Phase 1 of issue #43736 only implements DataFormat::Int32 -- other formats are reserved for "
-        "follow-up phases.  Add the matching binary fold primitive when extending.");
+        "Issue #43736 currently only implements DataFormat::Int32 here -- other formats are reserved "
+        "for follow-up phases.  Add the matching binary fold primitive when extending.");
     if constexpr (pool_type == ckernel::PoolType::MAX) {
         binary_max_int32_tile_init();
-    } else {
+    } else if constexpr (pool_type == ckernel::PoolType::MIN) {
         binary_min_int32_tile_init();
+    } else {
+        // pool_type == SUM (the entry helper's static_assert restricts to MAX/MIN/SUM).
+        add_int_tile_init();
     }
 }
 
@@ -57,12 +66,15 @@ template <ckernel::PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_binary_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     static_assert(
         format == DataFormat::Int32,
-        "Phase 1 of issue #43736 only implements DataFormat::Int32 -- other formats are reserved for "
-        "follow-up phases.  Add the matching binary fold primitive when extending.");
+        "Issue #43736 currently only implements DataFormat::Int32 here -- other formats are reserved "
+        "for follow-up phases.  Add the matching binary fold primitive when extending.");
     if constexpr (pool_type == ckernel::PoolType::MAX) {
         binary_max_int32_tile(a, b, out);
-    } else {
+    } else if constexpr (pool_type == ckernel::PoolType::MIN) {
         binary_min_int32_tile(a, b, out);
+    } else {
+        // pool_type == SUM: element-wise int32 add on the full DST tile.
+        add_int_tile<format>(a, b, out);
     }
 }
 
@@ -95,19 +107,20 @@ ALWI void reduce_sfpu(
     uint32_t output_cb_id,
     ReduceInputBlockShape input_block_shape) {
     // =============================================================================
-    // Static assertions (Phase 1 scope)
+    // Static assertions (current scope of issue #43736 / #26724)
     // =============================================================================
     static_assert(
-        pool_type == ckernel::PoolType::MAX || pool_type == ckernel::PoolType::MIN,
-        "Phase 1 of issue #43736 only implements MAX and MIN.  SUM/AVG are reserved for follow-up "
-        "phases (would also need an INT32 binary-add tile primitive for the cross-tile fold).");
+        pool_type == ckernel::PoolType::MAX || pool_type == ckernel::PoolType::MIN ||
+            pool_type == ckernel::PoolType::SUM,
+        "reduce_sfpu currently implements MAX, MIN, and SUM.  AVG is reserved for a follow-up phase "
+        "and is lowered to SUM with a host-side post-multiply by 1/N.");
     static_assert(
         reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL,
         "reduce_sfpu only supports REDUCE_ROW (W axis) and REDUCE_COL (H axis); REDUCE_SCALAR is not "
-        "needed for Phase 1 -- the W-then-H multi-core HW path goes through reduce_sfpu twice.");
+        "implemented -- the host's W-then-H multi-axis path runs reduce_sfpu twice instead.");
     static_assert(
         format == DataFormat::Int32,
-        "Phase 1 of issue #43736 only implements DataFormat::Int32.  UInt32/UInt16/Float32/Float16_b "
+        "Issue #43736 currently only implements DataFormat::Int32.  UInt32/UInt16/Float32/Float16_b "
         "are reserved for follow-up phases (the SFPU LLK supports them but the binary fold and pad "
         "sentinel paths still need to be wired in).");
     // The LLK only implements REDUCE_ROW for SUM and MAX (see _calculate_reduce_max_min in
@@ -117,13 +130,20 @@ ALWI void reduce_sfpu(
         !(pool_type == ckernel::PoolType::MIN && reduce_dim == ckernel::ReduceDim::REDUCE_ROW),
         "INT32 MIN with REDUCE_ROW (W axis) is not supported: sfpu_reduce<MIN, *, REDUCE_ROW> is "
         "not implemented in the LLK.  Host dispatch must gate this combination.");
+    // The negate trick (-pool(-x)) is only meaningful for MAX/MIN duality; SUM with negate=true
+    // would just compute -SUM(-x) == SUM(x) at the cost of two extra negate passes.  Reject it
+    // so the host doesn't accidentally request it.
+    static_assert(
+        !(pool_type == ckernel::PoolType::SUM && negate),
+        "negate=true is only meaningful for MAX/MIN duality; SUM has no use for the negate path.");
 
     constexpr uint32_t onetile = 1;
 
     // Two DST registers used per output tile:
-    //   acc_dst  - running max/min (initialised from the first input tile)
-    //   work_dst - holds each subsequent input tile while binary_*_int32_tile
-    //              folds it into acc_dst element-wise.
+    //   acc_dst  - running max/min/sum (initialised from the first input tile)
+    //   work_dst - holds each subsequent input tile while the binary fold
+    //              (binary_max_int32_tile / binary_min_int32_tile / add_int_tile)
+    //              merges it into acc_dst element-wise.
     constexpr uint32_t acc_dst = 0;
     constexpr uint32_t work_dst = 1;
 

@@ -16,27 +16,31 @@
  * This is the SFPU sibling of `compute_kernel_lib::reduce` (in
  * reduce_helpers_compute.hpp), which targets the FPU's GMPOOL primitive via
  * `reduce_tile`. GMPOOL silently produces zeros for INT32 inputs (issue
- * #26726), so this helper instead routes through the SFPU primitives
+ * #26726, ttnn.sum repro in #26724), so this helper instead routes through
+ * the SFPU primitives
  *  - `sfpu_reduce<OP, FMT, DIM>(...)` for the within-tile reduction
  *    (32 lanes -> 1 lane along the chosen axis), and
- *  - `binary_max_int32_tile` / `binary_min_int32_tile` for the cross-tile
- *    accumulator fold (Wt or Ht tiles -> 1 tile of element-wise max/min).
+ *  - `binary_max_int32_tile` / `binary_min_int32_tile` / `add_int_tile` for
+ *    the cross-tile accumulator fold (Wt or Ht tiles -> 1 tile of
+ *    element-wise max/min/sum).
  *
- * Phase 1 of issue #43736 (SUM and MAX on Int32, REDUCE_W and REDUCE_H)
- * implements:
- *   - pool_type in {MAX, MIN}, format = Int32, reduce_dim in {REDUCE_ROW,
- *     REDUCE_COL}
+ * Issue #43736 phases implemented here (Int32 only):
+ *   - Phase 1: pool_type in {MAX, MIN}, reduce_dim in {REDUCE_ROW, REDUCE_COL}.
+ *   - SUM extension (#26724): pool_type = SUM, reduce_dim in {REDUCE_ROW,
+ *     REDUCE_COL}.  Cross-tile fold uses `add_int_tile<Int32>` (full-tile
+ *     add) since `sum(sum(a, b), c) == sum(a, b, c)`; within-tile reduction
+ *     still uses `sfpu_reduce<SUM, Int32, DIM>`.
  *
  * LLK gap (statically rejected): `sfpu_reduce<MIN, *, REDUCE_ROW>` is not in
  * the LLK, so MIN with REDUCE_ROW is rejected at compile time and the host
  * dispatch must gate it before reaching this helper.  The host can still
  * compute MIN via the negate-trick (`-MAX(-x)`) by passing `negate=true`
  * and `pool_type=MAX` -- the negate path mirrors the FPU's reduce_w_neg /
- * reduce_h_neg kernels.
+ * reduce_h_neg kernels.  The negate trick is meaningful only for MAX/MIN;
+ * SUM with `negate=true` is statically rejected.
  *
- * Out of Phase 1 scope (reserved for follow-up phases):
- *   - SUM (cross-tile accumulator would need INT32 add tile; the path here
- *     uses binary max/min only).
+ * Out of scope (reserved for follow-up phases):
+ *   - AVG (will be lowered to SUM with a post-multiply by 1/N at the host).
  *   - UInt32, UInt16, Float32, Float16_b formats.
  *
  * Pre-conditions identical to compute_kernel_lib::reduce:
@@ -70,8 +74,9 @@ namespace compute_kernel_lib {
 /**
  * @brief SFPU-based reduce parameterised by op x dim x format.
  *
- * @tparam pool_type   PoolType::MAX or PoolType::MIN.  SUM/AVG are reserved
- *                     for a later phase and statically rejected here.
+ * @tparam pool_type   PoolType::MAX, PoolType::MIN, or PoolType::SUM.  AVG is
+ *                     reserved for a later phase (lowered to SUM at the host)
+ *                     and statically rejected here.
  * @tparam reduce_dim  ReduceDim::REDUCE_ROW (W axis) or REDUCE_COL (H axis).
  *                     Note: pool_type MIN with REDUCE_ROW is not in the LLK
  *                     and is statically rejected.
@@ -81,6 +86,8 @@ namespace compute_kernel_lib {
  *                     the within-tile sfpu_reduce, and the result is negated
  *                     before pack.  The host uses this to lower MIN to MAX
  *                     (mirrors the FPU reduce_w_neg / reduce_h_neg path).
+ *                     Only valid for MAX/MIN; SUM with negate=true is
+ *                     statically rejected (sum negate-trick has no use case).
  *
  * @param input_cb_id    Input CB containing the tiles to reduce.
  * @param scaler_cb_id   Scaler CB pushed by the reader (drained but unused).

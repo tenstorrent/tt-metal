@@ -111,10 +111,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
 
     // INT32 inputs go through the SFPU compute kernel because the FPU's GMPOOL primitive
     // (used by reduce.cpp / reduce_w_neg.cpp) silently produces zeros for INT32 -- see
-    // issue #26726.  Phase 1 of #43736 covers MAX (negate=false) and MIN (lowered to
-    // MAX with negate=true at the prim layer); both go through reduce_sfpu.cpp.  The
-    // device-op validation rejects every other INT32 combination before reaching here.
-    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+    // issues #26726 (max/min) and #26724 (sum).  The SFPU path covers:
+    //   - MAX (negate=false) and MIN (lowered to MAX with negate=true at the prim layer
+    //     in reduce_op.cpp), both via reduce_sfpu.cpp's REDUCE_NEGATE compile flag.
+    //   - SUM (negate is always false -- ttnn.sum has no negate-trick lowering).
+    // The device-op validation rejects every other INT32 combination before reaching here.
+    const bool use_sfpu_int32_path =
+        a.dtype() == DataType::INT32 &&
+        (operation_attributes.math_op == ReduceOpMath::MAX || operation_attributes.math_op == ReduceOpMath::SUM);
 
     if (operation_attributes.negate && !use_sfpu_int32_path) {
         // FPU's reduce_w_neg.cpp uses cb_acc / cb_ineg as scratch CBs to stage the

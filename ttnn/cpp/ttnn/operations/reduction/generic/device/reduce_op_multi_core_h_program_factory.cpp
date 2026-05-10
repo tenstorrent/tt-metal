@@ -115,9 +115,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         // negated/reducing pipeline; the SFPU INT32 path (selected below via
         // use_sfpu_int32_path) reads one tile at a time and keeps the
         // accumulator in DST, so the ordinary 2-tile double-buffered CB sizing
-        // is fine for it even when negate=true.
-        const bool fpu_negate_cbs = operation_attributes.negate && !(a.dtype() == DataType::INT32 &&
-                                                                     operation_attributes.math_op == ReduceOpMath::MAX);
+        // is fine for it even when negate=true.  The SFPU path covers MAX/MIN
+        // (issue #26726) and SUM (issue #26724); for SUM negate is always
+        // false, but the check is written symmetrically to match the W-factory
+        // gate.
+        const bool sfpu_int32_op = a.dtype() == DataType::INT32 && (operation_attributes.math_op == ReduceOpMath::MAX ||
+                                                                    operation_attributes.math_op == ReduceOpMath::SUM);
+        const bool fpu_negate_cbs = operation_attributes.negate && !sfpu_int32_op;
         uint32_t num_input_tiles = fpu_negate_cbs ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_input_tiles * src0_single_tile_size,
@@ -155,11 +159,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .buffer = output.buffer(),
         });
     } else {
-        // Same reasoning as the input CB above: the SFPU INT32 negate path packs
-        // one output tile at a time, so it does not need the FPU-style
-        // chunk_size double-buffer.
-        const bool fpu_negate_cbs = operation_attributes.negate && !(a.dtype() == DataType::INT32 &&
-                                                                     operation_attributes.math_op == ReduceOpMath::MAX);
+        // Same reasoning as the input CB above: the SFPU INT32 path (MAX/MIN
+        // via #26726 and SUM via #26724) packs one output tile at a time, so
+        // it does not need the FPU-style chunk_size double-buffer.
+        const bool sfpu_int32_op = a.dtype() == DataType::INT32 && (operation_attributes.math_op == ReduceOpMath::MAX ||
+                                                                    operation_attributes.math_op == ReduceOpMath::SUM);
+        const bool fpu_negate_cbs = operation_attributes.negate && !sfpu_int32_op;
         uint32_t num_output_tiles = fpu_negate_cbs ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_tiles * dst_single_tile_size,
@@ -176,13 +181,16 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    // INT32 + MAX (with or without the negate-trick lowering for MIN) goes through
-    // the SFPU compute kernel below.  That kernel keeps the cross-tile accumulator
-    // in the DST register and folds via binary_max_int32_tile, so it does not need
-    // the cb_acc / cb_ineg scratch CBs that reduce_h_neg.cpp uses.  We therefore
-    // skip the FPU-only neg CB allocation for the SFPU INT32 path.
-    const bool use_fpu_negate_cbs = operation_attributes.negate && !(a.dtype() == DataType::INT32 &&
-                                                                     operation_attributes.math_op == ReduceOpMath::MAX);
+    // INT32 + {MAX, MIN, SUM} goes through the SFPU compute kernel below
+    // (issues #26726, #26724).  That kernel keeps the cross-tile accumulator
+    // in the DST register and folds via binary_max_int32_tile / binary_min_int32_tile
+    // / add_int_tile, so it does not need the cb_acc / cb_ineg scratch CBs that
+    // reduce_h_neg.cpp uses.  We therefore skip the FPU-only neg CB allocation
+    // for any SFPU INT32 path.  (For SUM negate is always false here, but the
+    // gate is written uniformly to make intent clear.)
+    const bool sfpu_int32_op = a.dtype() == DataType::INT32 && (operation_attributes.math_op == ReduceOpMath::MAX ||
+                                                                operation_attributes.math_op == ReduceOpMath::SUM);
+    const bool use_fpu_negate_cbs = operation_attributes.negate && !sfpu_int32_op;
     if (use_fpu_negate_cbs) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
         // via push_back(ntiles).  The CB FIFO write pointer only wraps when
@@ -281,14 +289,17 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     // INT32 inputs go through the SFPU compute kernel because the FPU's GMPOOL primitive
     // (used by reduce_h_neg.cpp / reduce.cpp) silently produces zeros for INT32 -- see
-    // issue #26726.  Phase 1 of #43736 covers MAX (negate=false) and MIN (lowered to MAX
-    // with negate=true at the prim layer); both go through reduce_sfpu.cpp.  The
-    // device-op validation rejects every other INT32 combination before reaching here.
+    // issues #26726 (max/min) and #26724 (sum).  The SFPU path covers:
+    //   - MAX (negate=false) and MIN (lowered to MAX with negate=true at the prim layer
+    //     in reduce_op.cpp), both via reduce_sfpu.cpp's REDUCE_NEGATE compile flag.
+    //   - SUM (negate is always false -- ttnn.sum has no negate-trick lowering).
+    // The device-op validation rejects every other INT32 combination before reaching here.
     //
-    // The SFPU H kernel folds Ht tiles per output via binary_max_int32_tile, so it requires
-    // the reader to deliver tiles column-by-column (single_col_chunk).  We share the
-    // welford-style single-column reader path below by setting that compile-time flag.
-    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+    // The SFPU H kernel folds Ht tiles per output via binary_max_int32_tile / add_int_tile,
+    // so it requires the reader to deliver tiles column-by-column (single_col_chunk).  We
+    // share the welford-style single-column reader path below by setting that compile-time
+    // flag.
+    const bool use_sfpu_int32_path = sfpu_int32_op;
     if (use_sfpu_int32_path) {
         // Note: `DataFormat` lives at global scope (defined in tensix_types.h, no namespace),
         // unlike `ckernel::PoolType` and `ckernel::ReduceDim`.  Functions in `namespace ckernel`
