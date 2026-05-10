@@ -20,6 +20,38 @@ import ttnn
 # ======================================================================================
 
 
+def trim_torch_compose_to_reference_shape(y: torch.Tensor, reference_shape: tuple[int, ...]) -> torch.Tensor:
+    """
+    When :func:`to_torch_auto_compose` concatenates **replicated** mesh shards onto a tensor axis (see
+    :func:`_infer_mesh_composer_from_topology`), the composed torch tensor can have a leading dimension
+    larger than the logical global shape. Trim or reshape so the result matches ``reference_shape``.
+
+    Typical use: composed ``[mesh_batch_concat, 1, seq, hidden]`` vs logical ``[batch, 1, seq, hidden]``.
+
+    Args:
+        y: Composed torch tensor (often from :func:`to_torch_auto_compose`).
+        reference_shape: Target shape (same rank as ``y``).
+
+    Returns:
+        Tensor with shape ``reference_shape`` (contiguous).
+
+    Raises:
+        ValueError: If ``y.numel()`` is not a multiple of the reference numel and cannot be reshaped.
+    """
+    if y.shape == reference_shape:
+        return y.contiguous()
+    ref_numel = int(torch.Size(reference_shape).numel())
+    y_numel = int(y.numel())
+    if y_numel == ref_numel:
+        return y.reshape(reference_shape).contiguous()
+    if y_numel % ref_numel != 0:
+        raise ValueError(
+            f"Composed tensor numel {y_numel} is not a multiple of reference numel {ref_numel}; "
+            f"shape={tuple(y.shape)} reference_shape={reference_shape}"
+        )
+    return y.flatten()[:ref_numel].view(reference_shape).contiguous()
+
+
 def to_torch_auto_compose(tensor: ttnn.Tensor, device: Optional[ttnn.MeshDevice] = None) -> torch.Tensor:
     """
     Convert a (possibly multi-device) TTNN tensor to torch, automatically

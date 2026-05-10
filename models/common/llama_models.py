@@ -9,7 +9,13 @@ from typing import Dict, List, Optional, Union
 import torch
 from PIL import Image
 from pydantic import BaseModel, validator
-from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
+from transformers import AutoProcessor, pipeline
+
+try:
+    from transformers import AutoModelForVision2Seq as _AutoModelForMultimodal
+except ImportError:
+    # transformers 5.x dev: Vision2Seq removed; Llama/Mistral vision registers on ImageTextToText.
+    from transformers import AutoModelForImageTextToText as _AutoModelForMultimodal
 
 
 class Role(Enum):
@@ -185,7 +191,7 @@ class GeneratorChat:
 class GeneratorText:
     def __init__(self, model_name):
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name)
+        self.model = _AutoModelForMultimodal.from_pretrained(model_name)
 
     def text_completion(
         self,

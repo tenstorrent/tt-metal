@@ -9,7 +9,7 @@ This pipeline constructs the vision tower from vision model architecture.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt
+from models.tt_transformers.tt.common import position_ids_for_patch_grids
 from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_conv2d import TtMistralConv2dPatch
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_transformer import TtPixtralTransformer
@@ -115,6 +115,15 @@ class MistralVisionTower(LightweightModule):
         """
         input_tensor shape: (B, C, H, W)
         """
+        if not image_sizes:
+            raise ValueError("image_sizes must be provided and non-empty")
+        patch_grid_hw = [(size[0] // self.patch_size, size[1] // self.patch_size) for size in image_sizes]
+        position_ids = position_ids_for_patch_grids(
+            patch_grid_hw,
+            max_width=self.config.vision_image_size // self.config.vision_patch_size,
+            device=self.mesh_device,
+        )
+
         patch_embeds = self.patch_conv(input_tensor)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
         height, width = image_sizes[0]
@@ -143,13 +152,6 @@ class MistralVisionTower(LightweightModule):
         # ln_pre RMS Norm
         mode = "prefill"
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
-
-        # # positional embeddings
-        position_ids = position_ids_in_meshgrid_tt(
-            patch_embeds_list,
-            max_width=self.config.vision_image_size // self.config.vision_patch_size,
-            device=self.mesh_device,
-        )
 
         torch_position_ids = ttnn.to_torch(
             position_ids, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)

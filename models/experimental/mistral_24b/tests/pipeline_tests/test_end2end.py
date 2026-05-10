@@ -25,9 +25,20 @@ from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVi
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
 from models.tt_transformers.tt.model_config import ModelArgs
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor
 
 import re
+
+
+def _hf_multimodal_model_cls():
+    try:
+        from transformers import AutoModelForVision2Seq
+
+        return AutoModelForVision2Seq
+    except ImportError:
+        from transformers import AutoModelForImageTextToText
+
+        return AutoModelForImageTextToText
 
 
 def run_reference_demo_pipeline(messages, model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503"):
@@ -37,7 +48,7 @@ def run_reference_demo_pipeline(messages, model_id="mistralai/Mistral-Small-3.1-
     logger.info("Running reference HF vision-text model...")
 
     processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = _hf_multimodal_model_cls().from_pretrained(
         model_id,
         device_map="auto",
         torch_dtype=torch.bfloat16,

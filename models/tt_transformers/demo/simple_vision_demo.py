@@ -28,6 +28,7 @@ from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 
 _MISTRAL_SMALL_31_24B_BASE = "Mistral-Small-3.1-24B"
+_MISTRAL_SMALL_4_119B_BASE = "Mistral-Small-4-119B"
 _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
 _BERTSCORE_MODEL_TYPE = "microsoft/deberta-xlarge-mnli"
 _BERTSCORE_MIN_F1 = 0.55
@@ -158,6 +159,124 @@ def trim_generated_text(generated_text, tokenizer):
     return generated_text.strip()
 
 
+def _mistral_image_size_list_from_batch_entry(model_input):
+    """Turn processor ``image_sizes`` into ``[(H, W), ...]`` for Pixtral."""
+    raw = model_input.get("image_sizes", None)
+    if raw is None:
+        return None
+    if isinstance(raw, torch.Tensor):
+        raw = raw.squeeze().tolist()
+    if not raw:
+        return None
+    if isinstance(raw[0], int):
+        if len(raw) == 2:
+            return [(raw[0], raw[1])]
+        return [tuple(raw[j : j + 2]) for j in range(0, len(raw), 2)]
+    return [tuple(int(x) for x in pair) for pair in raw]
+
+
+def run_mistral_small_4_vision_only_demo(
+    mesh_device,
+    ckpt_dir: str,
+    max_batch_size: int,
+    max_seq_len: int,
+    input_prompts,
+    warmup_iters: int,
+    profiler,
+):
+    """
+    Vision tower + multimodal projector on TTNN vs HF reference (no text generation).
+
+    Mistral Small 4 language weights are FP8 / Mistral4; full ``MistralTransformer`` is not wired yet.
+    """
+    from models.common.utility_functions import comp_allclose, comp_pcc
+    from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
+    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    def hf_image_features(vision_tower, projector, pixel_values, image_sizes):
+        out = vision_tower(pixel_values.float(), image_sizes=image_sizes)
+        tok = out.last_hidden_state.squeeze(0)
+        return projector(tok, image_sizes)
+
+    model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    state_dict = model_args.load_state_dict()
+
+    processor = AutoProcessor.from_pretrained(
+        ckpt_dir,
+        trust_remote_code=True,
+        local_files_only=os.getenv("CI") == "true",
+    )
+
+    ref_vision = model_args.reference_vision_model()
+    ref_vision.load_state_dict(
+        {k[len("vision_tower.") :]: v for k, v in state_dict.items() if k.startswith("vision_tower.")},
+        strict=True,
+    )
+    ref_mmp = model_args.reference_vision_multi_modal()
+    ref_mmp.load_state_dict(
+        {
+            k[len("multi_modal_projector.") :]: v
+            for k, v in state_dict.items()
+            if k.startswith("multi_modal_projector.")
+        },
+        strict=True,
+    )
+
+    tt_ccl = TT_CCL(mesh_device)
+    dtype = ttnn.bfloat8_b
+    tt_vision = TtMistralVisionTransformer(
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        state_dict=state_dict,
+        state_dict_prefix="vision_tower.",
+        dtype=dtype,
+        model_args=model_args,
+    )
+
+    dialogs, _ = load_inputs(input_prompts, max_batch_size)
+    assert len(dialogs) % max_batch_size == 0
+    num_batches = len(dialogs) // max_batch_size
+    pcc_required = 0.97
+
+    for iter_num in range(warmup_iters + 1):
+        logger.info(f"Mistral Small 4 vision-only demo iteration {iter_num}")
+        for batch_idx in range(num_batches):
+            batch_dialogs = dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
+            batch_inputs = [
+                processor.apply_chat_template(
+                    messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+                )
+                for messages in batch_dialogs
+            ]
+            for sample_i, model_input in enumerate(batch_inputs):
+                pixel_values = model_input.get("pixel_values", None)
+                if pixel_values is None:
+                    logger.warning("Skipping sample with no pixel_values")
+                    continue
+                image_sizes = _mistral_image_size_list_from_batch_entry(model_input)
+                if not image_sizes:
+                    logger.warning("Skipping sample with no image_sizes")
+                    continue
+
+                reference_output = hf_image_features(ref_vision, ref_mmp, pixel_values, image_sizes=image_sizes)
+
+                with profiler("inference_vision", iteration=batch_idx * max_batch_size + sample_i):
+                    tt_out = tt_vision(pixel_values.float(), image_sizes=image_sizes)
+                tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+                    :, : tt_out.shape[-1]
+                ]
+                nz = tt_torch.ne(0).nonzero(as_tuple=True)
+                tt_s = tt_torch[nz]
+                ref_s = reference_output[nz]
+                passing, pcc_msg = comp_pcc(ref_s, tt_s, pcc_required)
+                logger.info(comp_allclose(ref_s, tt_s))
+                logger.info(f"Batch {batch_idx} sample {sample_i} vision+MMP PCC: {pcc_msg}")
+                assert passing, f"PCC below {pcc_required}: {pcc_msg}"
+
+    logger.info("Mistral Small 4 vision-only demo finished successfully.")
+
+
 def create_multimodal_model(
     mesh_device,
     max_batch_size,
@@ -171,7 +290,8 @@ def create_multimodal_model(
     from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
 
     hf_tail = os.environ.get("HF_MODEL", "").strip("/").split("/")[-1]
-    if get_base_model_name(hf_tail) == _MISTRAL_SMALL_31_24B_BASE:
+    hf_base = get_base_model_name(hf_tail)
+    if hf_base in (_MISTRAL_SMALL_31_24B_BASE, _MISTRAL_SMALL_4_119B_BASE):
         max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
@@ -184,6 +304,13 @@ def create_multimodal_model(
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
+
+    if tt_model_args.base_model_name == _MISTRAL_SMALL_4_119B_BASE:
+        raise RuntimeError(
+            "Mistral Small 4 119B: the dense MistralTransformer text path is not implemented (Mistral4 MLA + MoE). "
+            "With HF_MODEL pointing at this checkpoint, pytest runs ``test_multimodal_demo_text`` in a vision-only "
+            "mode (Pixtral + multimodal projector on TTNN). See ``run_mistral_small_4_vision_only_demo``."
+        )
 
     if tt_model_args.base_model_name == _MISTRAL_SMALL_31_24B_BASE:
         model = MistralTransformer(
@@ -354,6 +481,21 @@ def test_multimodal_demo_text(
     profiler.start("run")
 
     ckpt_dir = os.environ["HF_MODEL"]
+    input_prompts = request.config.getoption("--input_prompts") or input_prompts
+    hf_base = get_base_model_name(ckpt_dir.strip("/").split("/")[-1])
+    if hf_base == _MISTRAL_SMALL_4_119B_BASE:
+        max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
+        run_mistral_small_4_vision_only_demo(
+            mesh_device=mesh_device,
+            ckpt_dir=ckpt_dir,
+            max_batch_size=max_batch_size,
+            max_seq_len=max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR),
+            input_prompts=input_prompts,
+            warmup_iters=warmup_iters,
+            profiler=profiler,
+        )
+        profiler.end("run")
+        return
 
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
@@ -378,8 +520,6 @@ def test_multimodal_demo_text(
         for i, model in enumerate(generator.model)
     ]
 
-    # Override parameters from command line if they are provided
-    input_prompts = request.config.getoption("--input_prompts") or input_prompts
     dialogs, num_trace_batches = load_inputs(input_prompts, max_batch_size)
 
     assert len(dialogs) % max_batch_size == 0

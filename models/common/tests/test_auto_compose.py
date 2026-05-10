@@ -17,7 +17,11 @@ import pytest
 import torch
 
 import ttnn
-from models.common.auto_compose import _infer_mesh_composer_from_topology, to_torch_auto_compose
+from models.common.auto_compose import (
+    _infer_mesh_composer_from_topology,
+    to_torch_auto_compose,
+    trim_torch_compose_to_reference_shape,
+)
 
 # ======================================================================================
 # Test Parameters (for device-dependent tests)
@@ -351,6 +355,16 @@ def test_sharded_shape_thresholds(
 # --------------------------------------------------------------------------------------
 # Test coverage for auto_compose
 # --------------------------------------------------------------------------------------
+
+
+def test_trim_torch_compose_to_reference_shape_replicated_batch_concat():
+    """Mimic ND mesh compose stacking identical batch replicas on dim 0; keep logical (1,1,S,H)."""
+    s, h = 2, 8
+    logical = torch.randn(1, 1, s, h)
+    y = torch.cat([logical, logical, logical, logical], dim=0)
+    got = trim_torch_compose_to_reference_shape(y, (1, 1, s, h))
+    assert got.shape == (1, 1, s, h)
+    assert torch.equal(got, logical)
 
 
 def test_to_torch_auto_compose_exception_handler():

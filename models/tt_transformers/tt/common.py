@@ -152,11 +152,16 @@ def rope_scaling_model_factory(
 
 
 # Minimal addition for Mistral vision support
-def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
+def position_ids_for_patch_grids(patch_hw_list, max_width, device):
+    """
+    Build concatenated 1D position id tensors on ``device`` from patch grid sizes.
+
+    ``patch_hw_list`` is a list of ``(height, width)`` in **patch cells** per image (ints), matching
+    ``ttnn.slice`` extents used in the Pixtral patch path. Prefer this over reading shapes from device
+    tensors after reshape/concat, which can leave views unallocated on some silicon (e.g. Blackhole).
+    """
     position_ids_tt = []
-    for tt_patch in tt_patch_embeds_list:
-        shape = tt_patch.shape
-        height, width = shape[-2], shape[-1]
+    for height, width in patch_hw_list:
         mesh = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
         h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
         ids = h_grid * max_width + v_grid
@@ -170,6 +175,11 @@ def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
         )
         position_ids_tt.append(tt_ids[:, 0])
     return ttnn.concat(position_ids_tt, dim=0)
+
+
+def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
+    patch_hw_list = [(int(tt_patch.shape[-2]), int(tt_patch.shape[-1])) for tt_patch in tt_patch_embeds_list]
+    return position_ids_for_patch_grids(patch_hw_list, max_width, device)
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):

@@ -320,12 +320,20 @@ class ModelArgs(TTModelArgs):
         return layer
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+        multimodal_auto_classes = [AutoModelForImageTextToText]
+        try:
+            from transformers import AutoModelForVision2Seq
+
+            multimodal_auto_classes.insert(0, AutoModelForVision2Seq)
+        except ImportError:
+            pass
+
+        for model_cls in multimodal_auto_classes:
             if type(self.hf_config) == dict:
                 return model_cls
 

@@ -928,6 +928,7 @@ def map_vision_meta_to_hf_keys(loaded_weights):
     """
     Map vision model Meta checkpoint keys to HuggingFace checkpoint keys.
     Added for Mistral-Small-3.1-24B-Instruct-2503 vision support.
+    Also applies to Mistral-Small-4-119B-2603 (same Pixtral + Mistral3MultiModalProjector stack).
     """
     base_mapping = [
         ("w1", "gate_proj"),
