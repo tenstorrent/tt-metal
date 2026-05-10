@@ -896,11 +896,27 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
 
     has_shard = any(_is_shard(p) for p in placements)
 
+    device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+
     if not has_shard:
-        device_tensors = ttnn.get_device_tensors(ttnn_tensor)
         if device_tensors:
             return _to_torch_safe(device_tensors[0])
         return _to_torch_safe(ttnn_tensor)
+
+    # Validate shard dims against per-device tensor rank. A reshape may reduce
+    # rank below the topology's shard dim (e.g. 4D->2D with PlacementShard(dim=2)).
+    # When that happens the shard axis no longer exists, so each device already
+    # holds a full copy along that axis -- treat as replicated.
+    per_dev_ndim = None
+    if device_tensors:
+        try:
+            per_dev_ndim = len(device_tensors[0].shape)
+        except Exception:
+            pass
+
+    if per_dev_ndim is not None:
+        if any(_is_shard(p) and p.dim >= per_dev_ndim for p in placements):
+            return _to_torch_safe(device_tensors[0])
 
     if len(placements) == 2 and len(dist_dims) == 2 and all(_is_shard(p) for p in placements):
         try:
@@ -913,7 +929,6 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
         except Exception:
             pass
 
-    device_tensors = ttnn.get_device_tensors(ttnn_tensor)
     if len(placements) == 2 and len(dist_dims) == 2:
         rows, cols = dist_dims[0], dist_dims[1]
         if _is_shard(placements[0]) and not _is_shard(placements[1]):
