@@ -88,18 +88,14 @@ def run(
     absent_keys = kwargs.get("__absent_keys__")
     has_absent_info = absent_keys is not None
     absent_keys = set(absent_keys or [])
-    if has_absent_info and "dtype" not in absent_keys and "dtype" not in op_kwargs:
+    if "output_dtype" not in op_kwargs:
         traced_dtype = kwargs.get("dtype")
         if traced_dtype is not None and traced_dtype != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
             parsed_dt = parse_dict_value("dtype", traced_dtype) if isinstance(traced_dtype, dict) else traced_dtype
             if parsed_dt is not None:
-                op_kwargs["dtype"] = parsed_dt
-            else:
-                op_kwargs["dtype"] = None
-        else:
-            op_kwargs["dtype"] = None
+                op_kwargs["output_dtype"] = parsed_dt
 
     pos_args = extract_positional_args(kwargs)
     traced_output_mem_config = pos_args.get(1, None)
