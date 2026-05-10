@@ -1554,9 +1554,28 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         const uint32_t fw_launch_addr_pd = hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
                         env_impl.get_cluster().write_core_immediate(
                             this->id(), phys_core_0, std::vector<uint32_t>{0}, fw_launch_addr_pd);
+                    } catch (const std::exception& ex_pd) {
+                        // Best-effort: non-MMIO dead relay may throw — FIX PA in reset_cores()
+                        // handles the one-time fallback.
+                        // GAP-B (#42429): Log warning for MMIO devices where PCIe writes should
+                        // never fail. Silent failure masks HAL/hardware bugs → 500ms cascade
+                        // persists with no diagnostic.
+                        if (this->is_mmio_capable()) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX PD (GAP-B): MMIO device {} fw_launch_addr clear FAILED "
+                                "(PCIe write should not fail): {}",
+                                this->id(),
+                                ex_pd.what());
+                        }
                     } catch (...) {
-                        // Best-effort: MMIO devices succeed via PCIe; non-MMIO dead relay may
-                        // throw — FIX PA in reset_cores() handles the one-time fallback.
+                        if (this->is_mmio_capable()) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX PD (GAP-B): MMIO device {} fw_launch_addr clear FAILED "
+                                "(non-std exception on PCIe write)",
+                                this->id());
+                        }
                     }
                     deasserted_lcs_inline.push_back(lc0);
                 } catch (const std::exception& e) {
@@ -1981,8 +2000,25 @@ void Device::launch_eth_cores_for_quiesce() {
                         const uint32_t fw_launch_addr_pd = hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
                         env_impl.get_cluster().write_core_immediate(
                             this->id(), phys_core_0, std::vector<uint32_t>{0}, fw_launch_addr_pd);
+                    } catch (const std::exception& ex_pd) {
+                        // Best-effort: non-MMIO dead relay may throw.
+                        // GAP-B (#42429): Log warning for MMIO devices — PCIe writes should not fail.
+                        if (this->is_mmio_capable()) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX PD (GAP-B): MMIO device {} fw_launch_addr clear FAILED "
+                                "(launch_eth_cores_for_quiesce path, PCIe write should not fail): {}",
+                                this->id(),
+                                ex_pd.what());
+                        }
                     } catch (...) {
-                        // Best-effort: MMIO succeeds via PCIe; non-MMIO dead relay may throw.
+                        if (this->is_mmio_capable()) {
+                            log_warning(
+                                tt::LogMetal,
+                                "FIX PD (GAP-B): MMIO device {} fw_launch_addr clear FAILED "
+                                "(launch_eth_cores_for_quiesce path, non-std exception)",
+                                this->id());
+                        }
                     }
                     deasserted_lcs.push_back(lc0);
                 } catch (const std::exception& e) {

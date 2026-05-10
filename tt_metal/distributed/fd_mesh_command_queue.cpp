@@ -879,6 +879,23 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
+        // GAP-C (#42429): Guard against reading from non-MMIO devices with degraded fabric.
+        // Same rationale as FIX Z / GAP-A in read_completion_queue_event: the UMD relay read
+        // inside copy_completion_queue_data_into_user_space will hang for 5s then throw an
+        // opaque exception. Fail fast with clear diagnostic instead.
+        if (!device->is_mmio_capable() &&
+            (device->is_fabric_relay_path_broken() ||
+             device->is_fabric_channels_not_ready_for_traffic() ||
+             device->is_fabric_stale_base_umd_channels())) {
+            TT_THROW(
+                "GAP-C: Fabric degraded on non-MMIO device {} — cannot read buffer data from "
+                "completion queue (UMD relay would time out). relay_path_broken={} "
+                "channels_not_ready={} stale_base_umd={}. Aborting immediately.",
+                device->id(),
+                device->is_fabric_relay_path_broken(),
+                device->is_fabric_channels_not_ready_for_traffic(),
+                device->is_fabric_stale_base_umd_channels());
+        }
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
         const auto cid = this->mesh_device_->impl().get_context_id();
         ChipId mmio_device_id =
@@ -939,11 +956,26 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         // "Timeout waiting for Ethernet core service remote IO request."  Since the relay path
         // is already confirmed dead (fabric_relay_path_broken_ was set by prior quiesce Phase 5),
         // there is no point waiting — throw immediately with a clear diagnostic instead.
-        if (!device->is_mmio_capable() && device->is_fabric_relay_path_broken()) {
+        //
+        // GAP-A (#42429): Also check channels_not_ready_for_traffic and stale_base_umd_channels.
+        // Both flags indicate non-functional fabric on this non-MMIO device:
+        //   - channels_not_ready: Phase 5 handshake incomplete (FIX AM/AK path)
+        //   - stale_base_umd: FIX M transitioned base-UMD channels via launch_msg but dispatch
+        //     firmware never fully initialized (FIX RZ detection)
+        // Without these checks, completion_queue_wait_front hangs for 5s per device on the UMD
+        // relay timeout, then throws an opaque exception instead of a clear diagnostic.
+        if (!device->is_mmio_capable() &&
+            (device->is_fabric_relay_path_broken() ||
+             device->is_fabric_channels_not_ready_for_traffic() ||
+             device->is_fabric_stale_base_umd_channels())) {
             TT_THROW(
-                "FIX Z: Fabric relay path broken on non-MMIO device {} — cannot read completion "
-                "queue event (UMD relay would time out). Aborting immediately.",
-                device->id());
+                "FIX Z/GAP-A: Fabric degraded on non-MMIO device {} — cannot read completion "
+                "queue event (UMD relay would time out). relay_path_broken={} "
+                "channels_not_ready={} stale_base_umd={}. Aborting immediately.",
+                device->id(),
+                device->is_fabric_relay_path_broken(),
+                device->is_fabric_channels_not_ready_for_traffic(),
+                device->is_fabric_stale_base_umd_channels());
         }
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
         log_info(LogMetal, "[read_completion_queue_event] cq={} completion_queue_wait_front returned device={}", id_, device->id());

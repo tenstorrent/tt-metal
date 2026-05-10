@@ -1280,6 +1280,29 @@ FIX_GS3_WARN=$(grep -cE '\[FIX GS-3\] WARNING.*warm-up failed' "$CLEAN" 2>/dev/n
 # Log: "[conftest] FIX GS-3b (#42429): warm-up failed with fatal FW init error"
 # pytest.exit message: "FIX GS-3b: hardware FW init failed after tt-smi -r — board needs physical reset"
 FIX_GS3B_FIRES=$(grep -cE 'FIX GS-3b.*warm-up failed.*fatal FW init|FIX GS-3b.*hardware FW init failed' "$CLEAN" 2>/dev/null; :)
+# FIX XZ (#42429): heartbeat poll after teardown force-reset — waits for ERISC to restart before
+# proceeding with Phase 3.  Without FIX XZ: Phase 3 firmware launch races with ERISC restart.
+# Log: "FIX XZ: heartbeat poll" or "FIX XZ: MMIO ETH heartbeat"
+FIX_XZ_FIRES=$(grep -cE 'FIX XZ.*heartbeat|heartbeat.*FIX XZ' "$CLEAN" 2>/dev/null; :)
+# FIX BY (#42429): quiesce probe in Python conftest/test — calls quiesce_devices() once as a
+# pre-flight check before AllGather.  If relay path is dead, quiesce throws/sets degraded flag.
+# Log: "FIX BY (#42429): fabric degraded after quiesce probe"
+FIX_BY_FIRES=$(grep -cE 'FIX BY.*fabric degraded after quiesce probe|FIX BY.*quiesce probe' "$CLEAN" 2>/dev/null; :)
+# FIX XX (#42429): deassert guard — prevents deassert_risc_reset on channels that were never
+# asserted.  Without FIX XX: deassert on non-asserted channel causes undefined ERISC behavior.
+# Log: "FIX XX: deassert guard" or "FIX XX (#42429)"
+FIX_XX_FIRES=$(grep -cE 'FIX XX.*deassert guard|FIX XX \(#42429\)' "$CLEAN" 2>/dev/null; :)
+# GAP-A (audit): FIX Z guard in read_completion_queue_event extended to check channels_not_ready
+# and stale_base_umd in addition to relay_path_broken.  TT_THROW fires immediately.
+# Log: "FIX Z/GAP-A: Fabric degraded on non-MMIO device"
+GAP_A_FIRES=$(grep -cE 'FIX Z/GAP-A.*Fabric degraded on non-MMIO device' "$CLEAN" 2>/dev/null; :)
+# GAP-B (audit): FIX PD catch block now logs MMIO PCIe write failure instead of swallowing.
+# Log: "FIX PD (GAP-B): MMIO device"
+GAP_B_FIRES=$(grep -cE 'FIX PD \(GAP-B\).*MMIO device' "$CLEAN" 2>/dev/null; :)
+# GAP-C (audit): copy_buffer_data_to_user_space relay guard — prevents hang on broken relay
+# when reading buffer data (distinct from completion queue event).
+# Log: "GAP-C: Fabric degraded on non-MMIO device"
+GAP_C_FIRES=$(grep -cE 'GAP-C.*Fabric degraded on non-MMIO device' "$CLEAN" 2>/dev/null; :)
 
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
@@ -1990,6 +2013,12 @@ echo "  TELEMETRY_UNHEALTHY_CHANS: ${TELEMETRY_UNHEALTHY:-0}  (channels with rou
 echo "  TELEMETRY_READ_ERRORS:     ${TELEMETRY_THREW:-0}  (telemetry reads that threw exceptions)"
 echo "  BASELINE_DEGRADED_CHANS:   ${BASELINE_DEGRADED:-0}  (channels degraded between SetUp and TearDown)"
 echo "  BASELINE_HB_STALLED:       ${BASELINE_HB_STALLED:-0}  (degraded channels with stalled heartbeats)"
+echo "  FIX_XZ_FIRES:              ${FIX_XZ_FIRES:-0}  (heartbeat poll after teardown force-reset — ERISC restart wait)"
+echo "  FIX_BY_FIRES:              ${FIX_BY_FIRES:-0}  (quiesce probe detected degraded fabric — test skipped)"
+echo "  FIX_XX_FIRES:              ${FIX_XX_FIRES:-0}  (deassert guard — prevented deassert on non-asserted channel)"
+echo "  GAP_A_FIRES:               ${GAP_A_FIRES:-0}  (extended FIX Z guard — read_completion_queue_event rejected degraded non-MMIO)"
+echo "  GAP_B_FIRES:               ${GAP_B_FIRES:-0}  (FIX PD catch logged MMIO PCIe write failure — was silently swallowed)"
+echo "  GAP_C_FIRES:               ${GAP_C_FIRES:-0}  (copy_buffer_data relay guard — buffer read rejected on degraded non-MMIO)"
 echo ""
 if [ "${FIX_TH3_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH3] fabric_router_sync_timeout extended from 10s to 120s (12x) (${FIX_TH3_FIRES} occurrence(s))."
@@ -2150,6 +2179,38 @@ if [ "${MISSING_DIRS_NO_CORES:-0}" -gt 0 ] || [ "${MISSING_DIRS_PARTIAL:-0}" -gt
     echo "           Devices with 'zero cores' have NO UDM forwarding for their uncovered direction(s)."
     echo "           This is UNEXPECTED if the missing direction should have a live ETH neighbor (degraded channel case)."
     echo "           Cross-check: degraded/dead channel count per device should explain missing direction count."
+fi
+
+if [ "${FIX_XZ_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX XZ] ERISC heartbeat poll after teardown force-reset (${FIX_XZ_FIRES} occurrence(s))."
+    echo "     Waits for ERISC to restart after assert_risc_reset before proceeding with firmware launch."
+    echo "     Without FIX XZ: Phase 3 firmware launch races with ERISC restart → stale L1 state."
+fi
+if [ "${FIX_BY_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX BY] Quiesce probe detected degraded fabric (${FIX_BY_FIRES} occurrence(s))."
+    echo "     Pre-flight quiesce_devices() call set fabric_relay_path_broken on relay-dead devices."
+    echo "     Test skipped via is_fabric_degraded() instead of hanging in AllGather."
+    echo "     Without FIX BY: AllGather hangs in read_completion_queue_event on silent relay failure."
+fi
+if [ "${FIX_XX_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX XX] Deassert guard fired (${FIX_XX_FIRES} occurrence(s))."
+    echo "     Prevented deassert_risc_reset on channels that were never asserted."
+    echo "     Without FIX XX: deassert on non-asserted ERISC → undefined behavior."
+fi
+if [ "${GAP_A_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-A] Extended FIX Z guard: read_completion_queue_event rejected non-MMIO device (${GAP_A_FIRES} occurrence(s))."
+    echo "     Caught by channels_not_ready_for_traffic or stale_base_umd_channels flag (not just relay_path_broken)."
+    echo "     Without GAP-A: FIX Z only checked relay_path_broken — other degraded states caused hang."
+fi
+if [ "${GAP_B_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-B] FIX PD catch block logged MMIO PCIe write failure (${GAP_B_FIRES} occurrence(s))."
+    echo "     fw_launch_addr clear FAILED on an MMIO device (PCIe write should not fail)."
+    echo "     Indicates HAL or driver-level issue. Without GAP-B: exception silently swallowed."
+fi
+if [ "${GAP_C_FIRES:-0}" -gt 0 ]; then
+    echo "  => [GAP-C] copy_buffer_data_to_user_space relay guard fired (${GAP_C_FIRES} occurrence(s))."
+    echo "     Buffer read rejected for non-MMIO device with degraded fabric."
+    echo "     Without GAP-C: UMD relay timeout (~5s) hangs the buffer read path."
 fi
 
 # ─── FIX TF (test_tt_fabric degraded skip) ───
