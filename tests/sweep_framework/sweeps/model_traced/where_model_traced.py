@@ -248,4 +248,8 @@ def run(
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison
+    if is_mesh_device:
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import reconcile_golden_to_actual
+
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]
