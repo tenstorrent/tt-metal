@@ -305,24 +305,18 @@ def run(
     torch_k_for_golden = torch_k
     torch_v_for_golden = torch_v
 
-    # Handle GQA (Grouped Query Attention) - if K/V have fewer heads, replicate for golden
+    # Handle GQA (Grouped Query Attention) - interleaved repeat matching ttnn layout
     if num_heads_k < num_heads_q:
         repeat_factor = num_heads_q // num_heads_k
-        torch_k_for_golden = torch_k_for_golden.repeat(1, repeat_factor, 1, 1)
-        if num_heads_q % num_heads_k != 0:
-            remaining = num_heads_q - (repeat_factor * num_heads_k)
-            torch_k_for_golden = torch.cat(
-                [torch_k_for_golden, torch_k_for_golden[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1
-            )
+        torch_k_for_golden = torch.cat(
+            [torch_k_for_golden[:, i : i + 1, :, :].repeat(1, repeat_factor, 1, 1) for i in range(num_heads_k)], dim=1
+        )
 
     if num_heads_v < num_heads_q:
         repeat_factor = num_heads_q // num_heads_v
-        torch_v_for_golden = torch_v_for_golden.repeat(1, repeat_factor, 1, 1)
-        if num_heads_q % num_heads_v != 0:
-            remaining = num_heads_q - (repeat_factor * num_heads_v)
-            torch_v_for_golden = torch.cat(
-                [torch_v_for_golden, torch_v_for_golden[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1
-            )
+        torch_v_for_golden = torch.cat(
+            [torch_v_for_golden[:, i : i + 1, :, :].repeat(1, repeat_factor, 1, 1) for i in range(num_heads_v)], dim=1
+        )
 
     # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
     # Always use DRAM interleaved for the round-trip (safe on any device).
@@ -442,30 +436,24 @@ def run(
         v_tensor = ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.transformer.scaled_dot_product_attention(
+    ttnn_output = ttnn.transformer.scaled_dot_product_attention(
         q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs
     )
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+    output_tensor = mesh_tensor_to_torch(ttnn_output, device if is_mesh_device else None)
+    if is_mesh_device and output_tensor.shape != torch_output_golden.shape:
+        dev_tensors = ttnn.get_device_tensors(ttnn_output)
+        output_tensor = ttnn.to_torch(dev_tensors[0])
     e2e_perf = stop_measuring_time(start_time)
 
-    # Compare raw golden (float32) against TTNN output.
-    # Do NOT requantize the golden — that introduces double-quantization error.
-    # LoFi compute kernels have lower precision — use relaxed threshold.
     ckc = op_kwargs.get("compute_kernel_config")
     is_lofi = False
     if ckc is not None:
         try:
             is_lofi = ckc.math_fidelity == ttnn.MathFidelity.LoFi
         except Exception:
-            pass  # math_fidelity attr may not exist on all config types
+            pass
     pcc_threshold = 0.98 if is_lofi else 0.99
-    # The slice-then-concat golden already mirrors the runtime sharded
-    # semantics; the residual gap (~0.02) is bfloat16 dest-acc rounding plus
-    # the unmodeled attention_sink scalar. Cap at 0.95 to flag regressions
-    # without rejecting that noise. TODO: model attention_sink in the golden.
-    pcc_threshold = min(pcc_threshold, 0.95)
-    if is_mesh_device:
+    if is_mesh_device and output_tensor.shape != torch_output_golden.shape:
         torch_output_golden = reconcile_golden_to_actual(
             torch_output_golden, output_tensor, input_a_tensor_placement, input_b_tensor_placement
         )

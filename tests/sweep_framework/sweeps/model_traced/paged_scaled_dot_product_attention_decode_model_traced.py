@@ -537,7 +537,7 @@ def run(
 
         op_kwargs.setdefault("memory_config", parse_dict_value("memory_config", v2_memory_config))
 
-    output_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+    ttnn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q
         tensor_b,  # K
         tensor_c,  # V
@@ -545,10 +545,13 @@ def run(
         cur_pos_tensor=tensor_e,
         **op_kwargs,
     )
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(ttnn_output, device if is_mesh_device else None)
+    if is_mesh_device and output_tensor.shape != torch_output_tensor.shape:
+        dev_tensors = ttnn.get_device_tensors(ttnn_output)
+        output_tensor = ttnn.to_torch(dev_tensors[0])
     e2e_perf = stop_measuring_time(start_time)
 
-    if is_mesh_device:
+    if is_mesh_device and output_tensor.shape != torch_output_tensor.shape:
         torch_output_tensor = reconcile_golden_to_actual(
             torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
         )
