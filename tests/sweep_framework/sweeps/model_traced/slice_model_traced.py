@@ -234,6 +234,30 @@ def run(
                 torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
             )
 
+    # When master used tensor starts/ends (num_devices/slice_dim present),
+    # convert list starts/ends to device tensors to match signature 1.
+    if "num_devices" in op_kwargs or "slice_dim" in op_kwargs:
+        import torch as _torch_s
+
+        if isinstance(slice_start, list):
+            slice_start = ttnn.from_torch(
+                _torch_s.tensor(slice_start, dtype=_torch_s.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            )
+        if isinstance(slice_end, list):
+            slice_end = ttnn.from_torch(
+                _torch_s.tensor(slice_end, dtype=_torch_s.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            )
+
     start_time = start_measuring_time()
     if use_named_kwargs:
         if has_explicit_step:
