@@ -157,10 +157,23 @@ def _paged_sdpa_decode_chip_attn(
             k_seq = k_seq.repeat_interleave(rep, dim=0)
             v_seq = v_seq.repeat_interleave(rep, dim=0)
         q_u = q_chip[0, :, u, :]  # (H_q, D)
-        # scores: (H_q, n_active)
-        scores = torch.einsum("hd,htd->ht", q_u.float(), k_seq.float()) / (D**0.5)
-        attn = torch.softmax(scores, dim=-1)
-        out_u = torch.einsum("ht,htd->hd", attn, v_seq.float())  # (H_q, D)
+        # Multi-head attention: when H_q != H_kv, handle GQA/MQA
+        H_k = k_seq.shape[0]
+        H_q_local = q_u.shape[0]
+        if H_q_local < H_k:
+            # MQA: each Q head attends to all K/V heads independently
+            # Expand Q to match K, compute attention, then average per Q head group
+            q_expanded = q_u.repeat_interleave(H_k // max(H_q_local, 1), dim=0)[:H_k]
+            scores = torch.einsum("hd,htd->ht", q_expanded.float(), k_seq.float()) / (D**0.5)
+            attn = torch.softmax(scores, dim=-1)
+            out_expanded = torch.einsum("ht,htd->hd", attn, v_seq.float())
+            # Reduce back: average groups of H_k/H_q heads
+            group = H_k // max(H_q_local, 1)
+            out_u = out_expanded.view(H_q_local, group, D).mean(dim=1)
+        else:
+            scores = torch.einsum("hd,htd->ht", q_u.float(), k_seq.float()) / (D**0.5)
+            attn = torch.softmax(scores, dim=-1)
+            out_u = torch.einsum("ht,htd->hd", attn, v_seq.float())
         out[0, :, u, :] = out_u
     return out
 
