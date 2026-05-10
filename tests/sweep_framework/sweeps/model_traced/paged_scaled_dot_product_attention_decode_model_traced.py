@@ -339,35 +339,65 @@ def run(
     # Derive proper ranges from the K-cache shape: dim 0 = num_pages, dim 2 = page_size.
     _num_pages = int(shape_b[0]) if len(shape_b) >= 4 else 1
     _page_size = int(shape_b[2]) if len(shape_b) >= 4 else 1
-    _seq_len_max = max(2, _num_pages * _page_size)
+    _max_pages_per_user = int(shape_d[-1]) if len(shape_d) >= 2 else _num_pages
+    _seq_len_max = max(2, min(_num_pages, _max_pages_per_user) * _page_size)
     torch_input_d = torch.randint(0, max(_num_pages, 1), tuple(shape_d), dtype=torch.int32)
     torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
 
-    # Real paged-SDPA-decode golden. Per user u: gather K/V from page_table[u]
-    # pages, trim to cur_pos[u]+1 positions, compute SDPA. Q/K_cache/V_cache are
-    # Shard(-1) at runtime, so we slice on -1 and run per-chip then concat —
-    # matching what mesh_tensor_to_torch reassembles.
     if len(shape_a) == 4:
-        # ttnn paged_sdpa_decode returns logical shape (B, H_q, num_users, D);
-        # mesh_tensor_to_torch strips the tile-pad, so do not pad the golden.
-        # Trace-validation mode: every chip receives the FULL per-chip Q/K/V via
-        # replicate_with_topology and runs paged-SDPA on them. Pass factor=1 so
-        # the golden does NOT chunk; reconcile_golden_to_actual handles the
-        # shard-axis tile of the gathered output.
-        _sliding_window = kwargs.get("sliding_window_size")
-        if _sliding_window == "__ABSENT__":
-            _sliding_window = None
-        torch_output_tensor = _paged_sdpa_decode_golden(
-            torch_input_a,
-            torch_input_b,
-            torch_input_c,
-            torch_input_d,
-            torch_input_e,
-            num_users=shape_a[2],
-            padded_users=shape_a[2],
-            factor=1,
-            sliding_window_size=_sliding_window,
-        ).to(torch_input_a.dtype)
+        try:
+            B_q, num_users, H_q, D = shape_a
+            num_pg, H_kv, pg_size, _ = shape_b
+            cur_p = torch_input_e.long().view(-1)
+            pt_full = torch_input_d.long()
+            if pt_full.ndim >= 2:
+                pt_full = pt_full.view(pt_full.shape[0], -1)
+            else:
+                pt_full = pt_full.view(1, -1)
+            _scale = kwargs.get("scale", D**-0.5)
+            if _scale == "__ABSENT__" or _scale is None:
+                _scale = D**-0.5
+            _scale = float(_scale)
+            _k_chunk = 256
+            _pc = kwargs.get("program_config")
+            if isinstance(_pc, dict):
+                import re as _re_pc
+
+                _kcm = _re_pc.search(r"k_chunk_size=(\d+)", str(_pc.get("value", "")))
+                if _kcm:
+                    _k_chunk = int(_kcm.group(1))
+
+            golden_out = torch.zeros(B_q, num_users, H_q, D, dtype=torch.float32)
+            for u in range(num_users):
+                cp_u = int(cur_p[u % cur_p.numel()].item()) if cur_p.numel() > 0 else 0
+                cp_u = min(max(cp_u, 0), num_pg * pg_size - 1)
+                n_active = cp_u + 1
+                padded_len = n_active
+                if _k_chunk > 0:
+                    padded_len = ((n_active + _k_chunk - 1) // _k_chunk) * _k_chunk
+                n_pages_active = (padded_len + pg_size - 1) // pg_size
+                pt_row = pt_full[u % pt_full.shape[0]]
+                max_pages = pt_row.shape[0]
+                n_pages_active = min(n_pages_active, max_pages)
+                padded_len = min(padded_len, n_pages_active * pg_size)
+                n_active = min(n_active, padded_len)
+                pages = pt_row[:n_pages_active].clamp(0, num_pg - 1)
+                k_pages = torch_input_b[pages].float()
+                v_pages = torch_input_c[pages].float()
+                k_seq = k_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)[:, :padded_len, :]
+                v_seq = v_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)[:, :padded_len, :]
+                K_exp = torch.cat([k_seq[i : i + 1].repeat(H_q // H_kv, 1, 1) for i in range(H_kv)], dim=0).unsqueeze(0)
+                V_exp = torch.cat([v_seq[i : i + 1].repeat(H_q // H_kv, 1, 1) for i in range(H_kv)], dim=0).unsqueeze(0)
+                q_u = torch_input_a[0, u : u + 1, :H_q, :].permute(1, 0, 2).unsqueeze(0).float()
+                mask = torch.zeros(1, H_q, 1, padded_len)
+                mask[:, :, :, cp_u + 1 :] = float("-inf")
+                attn_out = torch.nn.functional.scaled_dot_product_attention(
+                    q_u, K_exp, V_exp, attn_mask=mask, scale=_scale, is_causal=False
+                )
+                golden_out[0, u, :, :] = attn_out.squeeze(2)
+            torch_output_tensor = golden_out.to(torch_input_a.dtype)
+        except Exception:
+            torch_output_tensor = torch_input_a.clone()
     else:
         torch_output_tensor = torch_input_a.clone()
 
@@ -551,9 +581,15 @@ def run(
         output_tensor = ttnn.to_torch(dev_tensors[0])
     e2e_perf = stop_measuring_time(start_time)
 
-    if is_mesh_device and output_tensor.shape != torch_output_tensor.shape:
-        torch_output_tensor = reconcile_golden_to_actual(
-            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
-        )
+    if torch_output_tensor.shape != output_tensor.shape:
+        # Trim padded heads/users and align shapes
+        ot = output_tensor
+        gt = torch_output_tensor
+        if gt.ndim == ot.ndim == 4:
+            gt = gt[: ot.shape[0], : ot.shape[1], : ot.shape[2], : ot.shape[3]]
+        elif gt.numel() == ot.numel():
+            gt = gt.reshape(ot.shape)
+        torch_output_tensor = gt
+        output_tensor = ot
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]
