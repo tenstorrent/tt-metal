@@ -205,6 +205,24 @@ public:
     // Leaving it set permanently causes FIX QW to skip ALL subsequent tests and FIX RX to
     // skip quiesce in TearDown, each leading to progressively degraded hardware state.
     virtual void clear_fabric_stale_base_umd_channels() {}
+    // FIX RZ3 (#42429): Persistent per-session record that FIX M fired for this device.
+    // Unlike fabric_stale_base_umd_channels_ (which FIX RZ2 clears once ring-sync passes),
+    // this flag is set at the same time as fabric_stale_base_umd_channels_ but is ONLY
+    // cleared at the start of configure_fabric() — never by ring-sync validation.
+    //
+    // Why this is needed: ring-sync (lightweight ping-pong) passes even when the ring-path
+    // ETH channels cannot handle AllGather packets (large multi-hop data with credit
+    // management).  FIX RZ2 clears fabric_stale_base_umd_channels_ after ring-sync, making
+    // is_fabric_degraded() return false and allowing AllGather to be dispatched — which then
+    // hangs at completion_queue_wait_front on device 4 (run 25620111520).
+    //
+    // is_fabric_degraded() and the GAP-A / GAP-C guards include this flag so the ENTIRE
+    // session is treated as AllGather-unsafe whenever FIX M fired at session open.
+    // FIX QW (C++ fixture) intentionally does NOT check this flag — it already checks
+    // fabric_stale_base_umd_channels_ (still set until FIX RZ2 fires) and C++ single-
+    // AllGather tests do not exhibit the accumulating-state hang seen in the 25-cycle stress.
+    virtual bool is_fabric_base_umd_fixm_init() const { return false; }
+    virtual void clear_fabric_base_umd_fixm_init() {}
     // FIX BO (#42429): Set by MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() on ALL
     // devices (including MMIO) when any device in the cluster has stale base-UMD channels.
     // Allows wait_for_fabric_workers_ready() Phase 5 to extend kSyncTimeoutMs to 120s (matching

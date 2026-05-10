@@ -219,6 +219,9 @@ public:
     bool is_fabric_stale_base_umd_channels() const override { return fabric_stale_base_umd_channels_.load(); }
     void clear_fabric_stale_base_umd_channels() override { fabric_stale_base_umd_channels_.store(false); }
     void set_fabric_stale_base_umd_channels() override { fabric_stale_base_umd_channels_.store(true); }
+    // FIX RZ3 (#42429): Persistent flag — set when FIX M fires, never cleared by ring-sync.
+    bool is_fabric_base_umd_fixm_init() const override { return fabric_base_umd_fixm_init_.load(); }
+    void clear_fabric_base_umd_fixm_init() override { fabric_base_umd_fixm_init_.store(false); }
     bool is_fabric_teardown_timed_out() const override { return fabric_teardown_timed_out_.load(); }
     // Called by FabricFirmwareInitializer::post_teardown() after teardown_fabric_config() records
     // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
@@ -426,6 +429,12 @@ private:
     // is_fabric_degraded() guard checks this flag to skip AllGather in such clusters.
     // Cleared unconditionally at the top of configure_fabric() alongside the other flags.
     std::atomic<bool> fabric_stale_base_umd_channels_{false};
+    // FIX RZ3 (#42429): Persistent companion to fabric_stale_base_umd_channels_.
+    // Set whenever fabric_stale_base_umd_channels_ is set (FIX M fires at configure_fabric).
+    // Cleared only at the start of configure_fabric() — NOT by FIX RZ2's ring-sync clear.
+    // Checked by is_fabric_degraded() and GAP-A/GAP-C to prevent AllGather dispatch for
+    // the entire session when base-UMD channels were present at session open.
+    std::atomic<bool> fabric_base_umd_fixm_init_{false};
 
     // FIX AE (#42429): State for deferred ETH ERISC launch during quiesce.
     // (See SERIALIZATION INVARIANT block above — these fields are non-atomic/non-mutex.)

@@ -272,7 +272,18 @@ void py_module(nb::module_& mod) {
                         // via FIX M's launch_msg path appear healthy at init but hang during
                         // AllGather (completion CQ on non-MMIO never signals).  Treat these as
                         // degraded so Python tests skip AllGather on such clusters.
-                        dev->is_fabric_stale_base_umd_channels()) {
+                        dev->is_fabric_stale_base_umd_channels() ||
+                        // FIX RZ3 (#42429): Persistent companion to is_fabric_stale_base_umd_channels().
+                        // FIX RZ2 clears fabric_stale_base_umd_channels_ after ring-sync passes so
+                        // FIX QW (C++ fixture) doesn't permanently skip all tests.  But ring-sync
+                        // is NOT a valid proxy for AllGather capacity — the ring-path ETH channels
+                        // can pass a lightweight ping-pong while still hanging on large multi-hop
+                        // data transfers.  fabric_base_umd_fixm_init_ is set alongside the stale
+                        // flag but is never cleared by ring-sync, so is_fabric_degraded() remains
+                        // True for the entire session when FIX M fired at session open, preventing
+                        // the 25-cycle GAP-21 stress test from dispatching AllGather and hanging at
+                        // completion_queue_wait_front (device 4, run 25620111520).
+                        dev->is_fabric_base_umd_fixm_init()) {
                         return true;
                     }
                 }

@@ -883,6 +883,11 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
         // Same rationale as FIX Z / GAP-A in read_completion_queue_event: the UMD relay read
         // inside copy_completion_queue_data_into_user_space will hang for 5s then throw an
         // opaque exception. Fail fast with clear diagnostic instead.
+        // NOTE: We intentionally do NOT check is_fabric_base_umd_fixm_init() here (FIX RZ3).
+        // That persistent flag is used only in is_fabric_degraded() to skip Python multi-cycle
+        // stress tests.  Single-operation C++ AllGather tests work correctly after ring-sync
+        // passes (empirically — no C++ AllGather hang in run 25620111520), so blocking them
+        // here would cause false failures.
         if (!device->is_mmio_capable() &&
             (device->is_fabric_relay_path_broken() ||
              device->is_fabric_channels_not_ready_for_traffic() ||
@@ -962,6 +967,10 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         //   - channels_not_ready: Phase 5 handshake incomplete (FIX AM/AK path)
         //   - stale_base_umd: FIX M transitioned base-UMD channels via launch_msg but dispatch
         //     firmware never fully initialized (FIX RZ detection)
+        // NOTE: We intentionally do NOT check is_fabric_base_umd_fixm_init() here (FIX RZ3).
+        // That persistent flag is checked only in is_fabric_degraded() to skip Python multi-cycle
+        // stress tests (GAP-21).  C++ single-operation AllGather tests work after ring-sync
+        // (empirically from run 25620111520), so blocking them here would be a regression.
         // Without these checks, completion_queue_wait_front hangs for 5s per device on the UMD
         // relay timeout, then throws an opaque exception instead of a clear diagnostic.
         if (!device->is_mmio_capable() &&

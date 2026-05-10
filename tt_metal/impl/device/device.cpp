@@ -432,6 +432,9 @@ void Device::configure_fabric(
     // FIX RZ (#42429): Clear stale-base-UMD flag unconditionally at configure_fabric() start;
     // re-set below if skip_soft_reset_channels is non-empty on a non-MMIO device.
     fabric_stale_base_umd_channels_ = false;
+    // FIX RZ3 (#42429): Clear the persistent companion flag at session start.
+    // This is the ONLY place it is cleared — FIX RZ2 does not clear it.
+    fabric_base_umd_fixm_init_ = false;
     // Clear accumulated soft-reset failures from the prior quiesce cycle.  A channel that was
     // force-reset and recovered should not be permanently excluded from Phase 5 health checks
     // in subsequent cycles — the set is repopulated by this configure_fabric() call below.
@@ -718,11 +721,16 @@ void Device::configure_fabric(
     // via launch_msg but cannot handle AllGather traffic reliably.
     if (!skip_soft_reset_channels.empty() && !this->is_mmio_capable()) {
         fabric_stale_base_umd_channels_ = true;
+        // FIX RZ3 (#42429): Also set the persistent companion — ring-sync passing later
+        // (FIX RZ2) must NOT clear this.  is_fabric_degraded() and GAP-A/GAP-C will check
+        // it to block AllGather dispatch for the entire session.
+        fabric_base_umd_fixm_init_ = true;
         log_warning(
             tt::LogMetal,
             "configure_fabric: Device {} (non-MMIO) has {} base-UMD channel(s) transitioned "
-            "via launch_msg (FIX M).  Setting fabric_stale_base_umd_channels_=true — "
-            "AllGather on this cluster may hang.  FIX RZ skips the Python stress test. (#42429)",
+            "via launch_msg (FIX M).  Setting fabric_stale_base_umd_channels_=true and "
+            "fabric_base_umd_fixm_init_=true — AllGather on this cluster may hang.  "
+            "FIX RZ skips the Python stress test; FIX RZ3 persists the guard past ring-sync. (#42429)",
             this->id_,
             skip_soft_reset_channels.size());
     }
