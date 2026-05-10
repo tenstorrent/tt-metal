@@ -246,7 +246,10 @@ def run(
     except RuntimeError:
         torch_output = torch_input  # placeholder; trace still captured even if PCC fails
 
-    is_host = storage_type and "HOST" in str(storage_type)
+    _st = kwargs.get("input_a_storage_type", storage_type)
+    if _st == "__ABSENT__":
+        _st = storage_type
+    is_host = _st and "HOST" in str(_st)
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
