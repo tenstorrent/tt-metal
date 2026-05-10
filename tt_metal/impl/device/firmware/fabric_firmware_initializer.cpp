@@ -802,24 +802,28 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // is no point spending 5 s per channel confirming it.  RiscFirmwareInitializer::
             // teardown (FIX AC) will PCIe-reset the MMIO ETH cores, which restores the ETH PHY
             // link and lets non-MMIO ERISCs boot into base firmware in the next session.  We
-            // still register the channel in force_reset_channels_ (done above) and
-            // reset_failed_channels (below) so the next session's diagnostics are correct.
-            // FIX AX-2 (#42429): The original FIX AX skipped assert_risc_reset_at_core entirely
-            // for non-MMIO channels with dead relay, which left ERISCs running stale firmware
-            // and contaminated subsequent CI jobs.  Now we ATTEMPT the reset for all channels
-            // and catch failures — cleanup must always be attempted, never silently skipped.
+            // still register the channel in force_reset_channels_ (done above) so the next
+            // session's diagnostics are correct.
+            // FIX BU (#42429) supersedes FIX AX-2: confirmed-dead relay channels skip the assert
+            // entirely (saves 5s UMD timeout per channel); MMIO/live channels still attempt assert.
             const bool is_non_mmio_relay_dead = cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
                                                 relay_dead_devices.count(ch.dev->id()) > 0;
             if (is_non_mmio_relay_dead) {
-                log_warning(
+                // FIX BU (#42429): The relay is confirmed dead — assert_risc_reset_at_core goes
+                // through read_non_mmio which costs 5s per channel (UMD relay timeout). With 4
+                // dead channels on each of Devices 4 and 7, this was ~40s of pure timeout per test.
+                // RiscFirmwareInitializer::teardown (FIX AC) will PCIe-reset the MMIO ETH channels
+                // that serve as relay, restoring the ETH PHY link so non-MMIO ERISCs can reboot
+                // into base firmware on the next session. The channel is already registered in
+                // force_reset_channels_ above, so next-session diagnostics remain correct.
+                log_info(
                     tt::LogMetal,
-                    "FIX AX-2 (#42429): Device {} chan={} relay confirmed dead — "
-                    "attempting assert_risc_reset_at_core anyway (was previously skipped). "
-                    "Failure will be caught and logged.",
+                    "FIX BU (#42429): Device {} chan={} relay confirmed dead — "
+                    "skipping assert_risc_reset_at_core (saves 5s relay timeout). "
+                    "RiscFirmwareInitializer::teardown (FIX AC) will PCIe-reset via MMIO relay channels.",
                     ch.dev->id(),
                     ch.eth_chan_id);
-            }
-            {
+            } else {
                 // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
                 //
                 // Previously this only called assert_risc_reset_at_core(ALL) without deassert,
