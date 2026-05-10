@@ -47,6 +47,18 @@ FORCE_INLINE void fabric_sender_side_handshake(
         }
         invalidate_l1_cache();
     }
+    // FIX HS2 (#42429): Post-loop final send to handle simultaneous-sender race.
+    // Same fix as FIX HS1 in sender_side_handshake() — if both sides call
+    // fabric_sender_side_handshake() concurrently, the early-exiting side must
+    // send one final packet after the loop to unblock the peer whose
+    // init_handshake_info() may have erased all prior sends.
+#ifndef ARCH_WORMHOLE
+    if (!tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
+        internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+    }
+#else
+    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+#endif
 }
 
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
