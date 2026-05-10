@@ -196,8 +196,8 @@ FabricCoresHealth configure_fabric_cores(
                     continue;
                 }
                 // FIX RR (#42429): MMIO device — attempt PCIe-direct soft reset.
-                // If the channel is truly dead (PCIe error) the catch block marks it
-                // newly_dead; otherwise remove it from dead_channels so L1 write proceeds.
+                // If soft reset or ROM boot succeeds, remove from dead_channels so L1 write proceeds.
+                // If it fails, channel stays in dead_channels for degraded mode (FIX BH-DEGRADE).
                 try {
                     auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, router_chan);
                     tt_cxy_pair core_loc(chip_id, virtual_core);
@@ -214,8 +214,8 @@ FabricCoresHealth configure_fabric_cores(
                     // We poll edm_status_address via PCIe-direct cluster.read_core until the
                     // value transitions away from the ROM postcode (kRomPostcode = 0x49705180).
                     // If it transitions within kFIX_BH_BootWaitMs (500ms) we declare recovery.
-                    // If it does not, the channel is irrecoverable this session and is moved to
-                    // newly_dead_channels to prevent a downstream launch-message race.
+                    // If it does not, the channel was pre-confirmed dead and stays in dead_channels
+                    // for degraded mode (FIX BH-DEGRADE) — not promoted to newly_dead_channels.
                     {
                         constexpr uint32_t kRomPostcode_BH = 0x49705180u;
                         constexpr uint32_t kFIX_BH_BootWaitMs = 500;
@@ -256,36 +256,39 @@ FabricCoresHealth configure_fabric_cores(
                                 chip_id,
                                 router_chan);
                         } else {
-                            // ROM boot did not complete within 500ms — channel irrecoverable.
-                            // Leave dead_channels intact so the L1 write loop below skips it
-                            // (preventing a hang on the non-functional relay path).
-                            newly_dead_channels.insert(router_chan);
+                            // FIX BH-DEGRADE (#42429): ROM boot did not complete within 500ms.
+                            // This channel was pre-confirmed dead by FIX BT — it was already in
+                            // dead_channels before FIX RR attempted recovery.  Staying dead after
+                            // a failed recovery attempt is NOT an unexpected new failure; it is
+                            // "still dead".  Leave dead_channels intact (degraded mode) rather
+                            // than promoting to newly_dead_channels (which triggers TT_THROW).
                             log_warning(
                                 tt::LogMetal,
                                 "configure_fabric_cores: device {} channel {} FIX BH — "
                                 "ERISC did not exit ROM phase within {}ms "
                                 "(still at 0x49705180 after FIX RR deassert). "
-                                "Channel remains dead; skipping L1 init.",
+                                "Channel remains in dead_channels; continuing in degraded mode.",
                                 chip_id,
                                 router_chan,
                                 kFIX_BH_BootWaitMs);
                         }
                     }
                 } catch (const std::exception& e) {
-                    newly_dead_channels.insert(router_chan);
+                    // FIX BH-DEGRADE: Channel was pre-confirmed dead; soft reset failure keeps it
+                    // dead (degraded mode), not newly_dead (TT_THROW).
                     log_warning(
                         tt::LogMetal,
                         "configure_fabric_cores: device {} channel {} FIX RR — PCIe-direct "
-                        "soft reset FAILED ({}). Channel remains dead.",
+                        "soft reset FAILED ({}). Channel remains in dead_channels (degraded mode).",
                         chip_id,
                         router_chan,
                         e.what());
                 } catch (...) {
-                    newly_dead_channels.insert(router_chan);
+                    // FIX BH-DEGRADE: same as above.
                     log_warning(
                         tt::LogMetal,
                         "configure_fabric_cores: device {} channel {} FIX RR — PCIe-direct "
-                        "soft reset FAILED (unknown exception). Channel remains dead.",
+                        "soft reset FAILED (unknown exception). Channel remains in dead_channels (degraded mode).",
                         chip_id,
                         router_chan);
                 }

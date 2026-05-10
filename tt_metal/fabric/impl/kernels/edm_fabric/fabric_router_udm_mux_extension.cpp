@@ -174,12 +174,12 @@ using FabricMuxToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_BUFFERS_MUX_
 static_assert(noc_index == 0, "Mux kernel requires noc_index to be 0 so relay kernel can use 1");
 
 template <uint8_t NUM_BUFFERS>
-bool wait_for_static_connection_to_ready(
+void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // Watchdog: on WH the termination signal check is compiled out — if the
     // connection request never arrives this loop spins forever.
-    // FIX LT9: After watchdog fires, break out and return false to skip setup.
+    // FIX LT9-REV: Keep looping with WAYPOINT diagnostic; breaking out kills the mux.
     // See: https://github.com/tenstorrent/tt-metal/issues/42429
     constexpr uint32_t kWatchdogIter = 100'000'000;
     uint32_t watchdog_count = 0;
@@ -191,13 +191,12 @@ bool wait_for_static_connection_to_ready(
     ) {
         invalidate_l1_cache();
         if (++watchdog_count >= kWatchdogIter) {
-            WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout
-            return false;
+            WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout — diagnostic only
+            watchdog_count = 0;
         }
     }
 
     worker_interface.template cache_producer_noc_addr<true>();
-    return true;
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -536,35 +535,22 @@ void kernel_main() {
     }
 
     // Wait for persistent channels to be ready
-    // FIX LT9: If any static connection times out, skip to termination wait.
-    bool any_timed_out = false;
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         if (worker_is_persistent[i] == 1) {
-            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr)) {
-                any_timed_out = true;
-            }
+            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr);
         }
     }
 
     for (uint32_t i = 0; i < NUM_RELAY_TO_MUX_CHANNELS; i++) {
         if (relay_to_mux_is_persistent[i] == 1) {
-            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_RELAY_TO_MUX>(relay_to_mux_channel_interfaces[i], termination_signal_ptr)) {
-                any_timed_out = true;
-            }
+            wait_for_static_connection_to_ready<NUM_BUFFERS_RELAY_TO_MUX>(relay_to_mux_channel_interfaces[i], termination_signal_ptr);
         }
     }
 
     for (uint32_t i = 0; i < NUM_MUX_TO_MUX_CHANNELS; i++) {
         if (mux_to_mux_is_persistent[i] == 1) {
-            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_MUX_TO_MUX>(mux_to_mux_channel_interfaces[i], termination_signal_ptr)) {
-                any_timed_out = true;
-            }
+            wait_for_static_connection_to_ready<NUM_BUFFERS_MUX_TO_MUX>(mux_to_mux_channel_interfaces[i], termination_signal_ptr);
         }
-    }
-
-    if (any_timed_out) {
-        while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {}
-        return;
     }
 
     while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
