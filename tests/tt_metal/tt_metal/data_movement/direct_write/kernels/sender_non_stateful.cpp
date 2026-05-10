@@ -3,23 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#ifdef ARCH_QUASAR
-#include "experimental/kernel_args.h"
-#endif
 
 void kernel_main() {
-#ifdef ARCH_QUASAR
-    constexpr uint32_t test_id = get_arg(args::test_id);
-    constexpr uint32_t num_writes = get_arg(args::num_writes);
-    constexpr uint32_t write_value_base = get_arg(args::write_val_base);
-    constexpr uint32_t use_posted_writes = get_arg(args::use_posted);
-    constexpr uint32_t same_destination = get_arg(args::same_dest);
-    constexpr uint32_t same_value = get_arg(args::same_value);
-    constexpr uint32_t dest_l1_addr = get_arg(args::dest_l1_addr);
-    constexpr uint32_t addr_stride = get_arg(args::addr_stride);
-    constexpr uint32_t packed_receiver_coords = get_arg(args::receiver_coords);
-    constexpr uint32_t noc_id = get_arg(args::noc_id);
-#else
     constexpr uint32_t test_id = get_compile_time_arg_val(0);
     constexpr uint32_t num_writes = get_compile_time_arg_val(1);
     constexpr uint32_t write_value_base = get_compile_time_arg_val(2);
@@ -30,7 +15,6 @@ void kernel_main() {
     constexpr uint32_t addr_stride = get_compile_time_arg_val(7);
     constexpr uint32_t packed_receiver_coords = get_compile_time_arg_val(8);
     constexpr uint32_t noc_id = get_compile_time_arg_val(9);
-#endif
 
     // Extract receiver coordinates
     uint32_t receiver_x = (packed_receiver_coords >> 16) & 0xFFFF;

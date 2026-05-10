@@ -6,7 +6,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -34,7 +33,6 @@ struct OneFromAllConfig {
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::RISCV_1_default;
     uint32_t num_virtual_channels = 1;
-    bool use_2_0_api = false;  // Use Metal 2.0 API on both host and device
 
     // TODO: Add the following parameters
     //  1. Virtual Channel
@@ -48,7 +46,8 @@ struct OneFromAllConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFromAllConfig& test_config) {
     IDevice* device = mesh_device->impl().get_device(0);
-    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    // Program
+    Program program = CreateProgram();
 
     // Sharded L1 buffers
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
@@ -98,80 +97,34 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     };
 
     // Kernels
-    std::string gatherer_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer";
-    if (test_config.use_2_0_api || is_quasar) {
-        gatherer_kernel_path += "_2_0";
-    }
-    gatherer_kernel_path += ".cpp";
-
-    // Runtime Arguments (positional: pairs of physical x, y for each subordinate core)
-    vector<uint32_t> master_runtime_args;
-    for (auto& core : sub_core_list) {
-        CoreCoord physical_core = device->worker_core_from_logical_core(core);
-        master_runtime_args.push_back(physical_core.x);
-        master_runtime_args.push_back(physical_core.y);
-    }
-
-    Program program;
-    KernelHandle gatherer_kernel = 0;
-    if (test_config.use_2_0_api || is_quasar) {
-        constexpr const char* DM_KERNEL = "one_from_all_gatherer";
-        experimental::metal2_host_api::KernelSpec dm_kernel_spec{
-            .unique_id = DM_KERNEL,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{gatherer_kernel_path},
-            .num_threads = 1,
-            .compile_time_arg_bindings =
-                {{"l1_addr", (uint32_t)l1_base_address},
-                 {"num_transactions", (uint32_t)test_config.num_of_transactions},
-                 {"tx_size", (uint32_t)transaction_size_bytes},
-                 {"test_id", (uint32_t)test_config.test_id},
-                 {"num_subordinates", (uint32_t)total_subordinate_cores},
-                 {"num_vc", (uint32_t)test_config.num_virtual_channels}},
-            .runtime_arguments_schema = {.num_runtime_varargs = master_runtime_args.size()},
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen1_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                            .processor = DataMovementProcessor::RISCV_1, .noc = test_config.noc_id},
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
-        };
-
-        experimental::metal2_host_api::WorkUnitSpec main_wu{
-            .unique_id = "main",
-            .kernels = {DM_KERNEL},
-            .target_nodes = master_core_set,
-        };
-
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "one_from_all",
-            .kernels = {dm_kernel_spec},
-            .work_units = {main_wu},
-        };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
-
-        experimental::metal2_host_api::ProgramRunParams params;
-        std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeVarargs> per_node_args;
-        for (const auto& core : corerange_to_cores(master_core_set)) {
-            per_node_args.push_back({experimental::metal2_host_api::NodeCoord{core.x, core.y}, master_runtime_args});
-        }
-        params.kernel_run_params = {{
-            .kernel_spec_name = DM_KERNEL,
-            .runtime_varargs = std::move(per_node_args),
-        }};
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    KernelHandle gatherer_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        gatherer_kernel = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
+            master_core_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = gatherer_compile_args});
     } else {
-        program = CreateProgram();
         gatherer_kernel = CreateKernel(
             program,
-            gatherer_kernel_path,
+            "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
             master_core_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = test_config.noc_id,
                 .compile_args = gatherer_compile_args});
-        SetRuntimeArgs(program, gatherer_kernel, master_core_set, master_runtime_args);
     }
+
+    // Runtime Arguments
+    vector<uint32_t> master_runtime_args;
+
+    for (auto& core : sub_core_list) {
+        CoreCoord physical_core = device->worker_core_from_logical_core(core);
+        master_runtime_args.push_back(physical_core.x);
+        master_runtime_args.push_back(physical_core.y);
+    }
+    SetRuntimeArgs(program, gatherer_kernel, master_core_set, master_runtime_args);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

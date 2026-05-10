@@ -10,7 +10,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -28,7 +27,7 @@ struct OnePacketConfig {
     uint32_t num_packets = 0;
     uint32_t packet_size_bytes = 0;
     bool read = true;
-    bool use_2_0_api = false;  // Use Metal 2.0 API on both host and device
+    bool use_2_0 = false;
 };
 
 /// @brief Does OneToOne or OneFromOne but with one_packet read/write
@@ -38,7 +37,8 @@ struct OnePacketConfig {
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePacketConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->impl().get_device(0);
-    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    // Program
+    Program program = CreateProgram();
 
     // (Logical) Core Coordinates and ranges
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
@@ -77,68 +77,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     } else {
         kernels_dir += write_kernel_filename;
     }
-    if (test_config.use_2_0_api || is_quasar) {
+    if (test_config.use_2_0) {
         kernels_dir += "_2_0";
     }
     kernels_dir += ".cpp";
 
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
-
-    Program program;
-    tt::tt_metal::KernelHandle kernel = 0;
-    if (test_config.use_2_0_api || is_quasar) {
-        constexpr const char* DM_KERNEL = "one_packet_dm";
-        const auto gen1_processor = test_config.read ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
-        const auto gen1_noc = test_config.read ? NOC::RISCV_1_default : NOC::RISCV_0_default;
-        experimental::metal2_host_api::KernelSpec dm_kernel_spec{
-            .unique_id = DM_KERNEL,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernels_dir},
-            .num_threads = 1,
-            .compile_time_arg_bindings =
-                {{"num_packets", (uint32_t)test_config.num_packets},
-                 {"packet_size", (uint32_t)test_config.packet_size_bytes},
-                 {"test_id", (uint32_t)test_config.test_id}},
-            .runtime_arguments_schema = {.num_runtime_varargs = 4},
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen1_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                            .processor = gen1_processor, .noc = gen1_noc},
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
-        };
-
-        experimental::metal2_host_api::WorkUnitSpec main_wu{
-            .unique_id = "main",
-            .kernels = {DM_KERNEL},
-            .target_nodes = master_core_set,
-        };
-
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "one_packet",
-            .kernels = {dm_kernel_spec},
-            .work_units = {main_wu},
-        };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
-
-        experimental::metal2_host_api::ProgramRunParams params;
-        std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeVarargs> per_node_args;
-        for (const auto& core : corerange_to_cores(master_core_set)) {
-            per_node_args.push_back(
-                {experimental::metal2_host_api::NodeCoord{core.x, core.y},
-                 {master_l1_address,
-                  subordinate_l1_address,
-                  (uint32_t)physical_subordinate_core.x,
-                  (uint32_t)physical_subordinate_core.y}});
-        }
-        params.kernel_run_params = {{
-            .kernel_spec_name = DM_KERNEL,
-            .runtime_varargs = std::move(per_node_args),
-        }};
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
-    } else {
-        program = CreateProgram();
-        if (test_config.read) {
+    // Kernel
+    tt::tt_metal::KernelHandle kernel;
+    if (test_config.read) {
+        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+            kernel = experimental::quasar::CreateKernel(
+                program,
+                kernels_dir,
+                master_core_set,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = compile_args});
+        } else {
             kernel = CreateKernel(
                 program,
                 kernels_dir,
@@ -147,6 +101,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
                     .processor = DataMovementProcessor::RISCV_1,
                     .noc = NOC::RISCV_1_default,
                     .compile_args = compile_args});
+        }
+    } else {
+        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+            kernel = experimental::quasar::CreateKernel(
+                program,
+                kernels_dir,
+                master_core_set,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = compile_args});
         } else {
             kernel = CreateKernel(
                 program,
@@ -157,12 +120,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
                     .noc = NOC::RISCV_0_default,
                     .compile_args = compile_args});
         }
-        SetRuntimeArgs(
-            program,
-            kernel,
-            master_core_set,
-            {master_l1_address, subordinate_l1_address, physical_subordinate_core.x, physical_subordinate_core.y});
     }
+
+    // Runtime Arguments
+    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    SetRuntimeArgs(
+        program,
+        kernel,
+        master_core_set,
+        {master_l1_address, subordinate_l1_address, physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -396,7 +362,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
                 .num_packets = num_packets,
                 .packet_size_bytes = packet_size_bytes,
                 .read = true,
-                .use_2_0_api = true,
+                .use_2_0 = true,
             };
 
             // Run
@@ -432,7 +398,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
                 .num_packets = num_packets,
                 .packet_size_bytes = packet_size_bytes,
                 .read = false,
-                .use_2_0_api = true,
+                .use_2_0 = true,
             };
 
             // Run

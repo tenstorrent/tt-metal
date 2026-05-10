@@ -8,7 +8,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -44,7 +43,9 @@ bool run_dm(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, const DirectWriteConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->impl().get_device(0);
-    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+
+    // Program
+    Program program = CreateProgram();
 
     // Get Sender L1 Address info
     L1AddressInfo sender_l1_info =
@@ -72,8 +73,7 @@ bool run_dm(
     uint32_t l1_base_address = sender_l1_info.base_address;
 
     // Compile-time arguments for sender kernel
-    std::vector<uint32_t> sender_compile_args;
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings;
+    vector<uint32_t> sender_compile_args;
 
     if (test_config.use_multicast) {
         CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(test_config.receiver_core_coords[0]);
@@ -89,25 +89,10 @@ bool run_dm(
             test_config.addr_stride,
             static_cast<uint32_t>(test_config.noc_id),
             test_config.num_subordinates,
-            (uint32_t)sub_worker_start_coord.x,
-            (uint32_t)sub_worker_start_coord.y,
-            (uint32_t)sub_worker_end_coord.x,
-            (uint32_t)sub_worker_end_coord.y,
-        };
-
-        cta_bindings = {
-            {"test_id", test_config.test_id},
-            {"num_writes", test_config.num_writes},
-            {"sub_base_addr", l1_base_address},
-            {"write_val_base", test_config.write_value_base},
-            {"same_dest", test_config.same_destination ? 1u : 0u},
-            {"addr_stride", test_config.addr_stride},
-            {"noc_id", static_cast<uint32_t>(test_config.noc_id)},
-            {"num_subordinates", test_config.num_subordinates},
-            {"start_x", (uint32_t)sub_worker_start_coord.x},
-            {"start_y", (uint32_t)sub_worker_start_coord.y},
-            {"end_x", (uint32_t)sub_worker_end_coord.x},
-            {"end_y", (uint32_t)sub_worker_end_coord.y},
+            (uint32_t)sub_worker_start_coord.x,  // start_x
+            (uint32_t)sub_worker_start_coord.y,  // start_y
+            (uint32_t)sub_worker_end_coord.x,    // end_x
+            (uint32_t)sub_worker_end_coord.y     // end_y
         };
 
     } else {
@@ -126,21 +111,7 @@ bool run_dm(
             l1_base_address,
             test_config.addr_stride,
             packed_receiver_core_coordinates,
-            static_cast<uint32_t>(test_config.noc_id),
-        };
-
-        cta_bindings = {
-            {"test_id", test_config.test_id},
-            {"num_writes", test_config.num_writes},
-            {"write_val_base", test_config.write_value_base},
-            {"use_posted", test_config.use_posted_writes ? 1u : 0u},
-            {"same_dest", test_config.same_destination ? 1u : 0u},
-            {"same_value", test_config.same_value ? 1u : 0u},
-            {"dest_l1_addr", l1_base_address},
-            {"addr_stride", test_config.addr_stride},
-            {"receiver_coords", packed_receiver_core_coordinates},
-            {"noc_id", static_cast<uint32_t>(test_config.noc_id)},
-        };
+            static_cast<uint32_t>(test_config.noc_id)};
     }
 
     // Choose kernel based on approach
@@ -159,34 +130,17 @@ bool run_dm(
 
     std::string sender_kernel_path = kernels_dir + sender_kernel_filename;
 
-    Program program;
-    if (is_quasar) {
-        constexpr const char* SENDER_KERNEL = "direct_write_sender";
-        experimental::metal2_host_api::KernelSpec sender_spec{
-            .unique_id = SENDER_KERNEL,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{sender_kernel_path},
-            .num_threads = 1,
-            .compile_time_arg_bindings = cta_bindings,
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
-        };
-
-        experimental::metal2_host_api::WorkUnitSpec main_wu{
-            .unique_id = "main",
-            .kernels = {SENDER_KERNEL},
-            .target_nodes = CoreRangeSet({CoreRange(test_config.sender_core_coord)}),
-        };
-
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "direct_write",
-            .kernels = {sender_spec},
-            .work_units = {main_wu},
-        };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    // Create kernel on sender core - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program,
+            sender_kernel_path,
+            test_config.sender_core_coord,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
     } else {
-        program = CreateProgram();
+        // WH/BH path: Use legacy API with processor selection
         CreateKernel(
             program,
             sender_kernel_path,

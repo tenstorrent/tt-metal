@@ -6,7 +6,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -30,7 +29,7 @@ struct DramConfig {
     CoreCoord core_coord = {0, 0};
     uint32_t dram_channel = 0;
     uint32_t virtual_channel = 0;
-    bool use_2_0_api = false;  // Use Metal 2.0 API on both host and device
+    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
@@ -40,7 +39,10 @@ struct DramConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramConfig& test_config) {
     IDevice* device = mesh_device->impl().get_device(0);
-    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    // SETUP
+
+    // Program
+    Program program = CreateProgram();
 
     const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
@@ -55,126 +57,61 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     uint32_t l1_address = l1_info.base_address;
 
-    CoreRangeSet core_range_set = CoreRangeSet({CoreRange(test_config.core_coord)});
+    // Redundant but as an extra measure add a check to ensure both addresses are within DRAM bounds
+    // Checks also needed for L1 maybe
 
-    // Kernel paths
+    // Initialize semaphore ID
+    CoreRangeSet core_range_set = CoreRangeSet({CoreRange(test_config.core_coord)});
+    const uint32_t sem_id = CreateSemaphore(program, core_range_set, 0);
+
+    // Compile-time arguments for kernels
+    vector<uint32_t> reader_compile_args = {
+        (uint32_t)test_config.test_id,
+        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.pages_per_transaction,
+        (uint32_t)test_config.bytes_per_page,
+        (uint32_t)input_dram_address,
+        (uint32_t)test_config.dram_channel,
+        (uint32_t)l1_address,
+        (uint32_t)sem_id};
+
+    vector<uint32_t> writer_compile_args = {
+        (uint32_t)test_config.test_id,
+        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.pages_per_transaction,
+        (uint32_t)test_config.bytes_per_page,
+        (uint32_t)output_dram_address,
+        (uint32_t)test_config.dram_channel,
+        (uint32_t)l1_address,
+        (uint32_t)sem_id,
+        (uint32_t)test_config.virtual_channel};
+
+    // Kernels
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/";
     std::string reader_kernel_filename = "reader_unary";
     std::string writer_kernel_filename = "writer_unary";
-    if (test_config.use_2_0_api || is_quasar) {
+    if (test_config.use_2_0_api) {
         reader_kernel_filename += "_2_0";
         writer_kernel_filename += "_2_0";
     }
     std::string reader_kernel_path = kernels_dir + reader_kernel_filename + ".cpp";
     std::string writer_kernel_path = kernels_dir + writer_kernel_filename + ".cpp";
 
-    Program program;
-    if (test_config.use_2_0_api || is_quasar) {
-        constexpr const char* READER_KERNEL = "dram_reader";
-        constexpr const char* WRITER_KERNEL = "dram_writer";
-        constexpr const char* SYNC_SEM = "sync_sem";
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        experimental::quasar::CreateKernel(
+            program,
+            reader_kernel_path,
+            test_config.core_coord,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
 
-        experimental::metal2_host_api::SemaphoreSpec sync_semaphore{
-            .unique_id = SYNC_SEM,
-            .target_nodes = core_range_set,
-            .initial_value = 0,
-        };
-
-        experimental::metal2_host_api::KernelSpec::SemaphoreBinding sem_binding{
-            .semaphore_spec_name = SYNC_SEM,
-            .accessor_name = "sync_sem",
-        };
-
-        experimental::metal2_host_api::KernelSpec reader_spec{
-            .unique_id = READER_KERNEL,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{reader_kernel_path},
-            .num_threads = 1,
-            .semaphore_bindings = {sem_binding},
-            .compile_time_arg_bindings =
-                {{"test_id", (uint32_t)test_config.test_id},
-                 {"num_transactions", (uint32_t)test_config.num_of_transactions},
-                 {"pages_per_tx", (uint32_t)test_config.pages_per_transaction},
-                 {"bytes_per_page", (uint32_t)test_config.bytes_per_page},
-                 {"dram_addr", (uint32_t)input_dram_address},
-                 {"dram_channel", (uint32_t)test_config.dram_channel},
-                 {"l1_addr", (uint32_t)l1_address}},
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen1_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
-        };
-
-        experimental::metal2_host_api::KernelSpec writer_spec{
-            .unique_id = WRITER_KERNEL,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{writer_kernel_path},
-            .num_threads = 1,
-            .semaphore_bindings = {sem_binding},
-            .compile_time_arg_bindings =
-                {{"test_id", (uint32_t)test_config.test_id},
-                 {"num_transactions", (uint32_t)test_config.num_of_transactions},
-                 {"pages_per_tx", (uint32_t)test_config.pages_per_transaction},
-                 {"bytes_per_page", (uint32_t)test_config.bytes_per_page},
-                 {"dram_addr", (uint32_t)output_dram_address},
-                 {"dram_channel", (uint32_t)test_config.dram_channel},
-                 {"l1_addr", (uint32_t)l1_address},
-                 {"vc", (uint32_t)test_config.virtual_channel}},
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen1_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
-        };
-
-        experimental::metal2_host_api::WorkUnitSpec main_wu{
-            .unique_id = "main",
-            .kernels = {READER_KERNEL, WRITER_KERNEL},
-            .target_nodes = core_range_set,
-        };
-
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "dram_unary",
-            .kernels = {reader_spec, writer_spec},
-            .semaphores = {sync_semaphore},
-            .work_units = {main_wu},
-        };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
-
-        experimental::metal2_host_api::ProgramRunParams params;
-        params.kernel_run_params = {
-            {.kernel_spec_name = READER_KERNEL},
-            {.kernel_spec_name = WRITER_KERNEL},
-        };
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::quasar::CreateKernel(
+            program,
+            writer_kernel_path,
+            test_config.core_coord,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
     } else {
-        program = CreateProgram();
-        const uint32_t sem_id = CreateSemaphore(program, core_range_set, 0);
-
-        vector<uint32_t> reader_compile_args = {
-            (uint32_t)test_config.test_id,
-            (uint32_t)test_config.num_of_transactions,
-            (uint32_t)test_config.pages_per_transaction,
-            (uint32_t)test_config.bytes_per_page,
-            (uint32_t)input_dram_address,
-            (uint32_t)test_config.dram_channel,
-            (uint32_t)l1_address,
-            (uint32_t)sem_id};
-
-        vector<uint32_t> writer_compile_args = {
-            (uint32_t)test_config.test_id,
-            (uint32_t)test_config.num_of_transactions,
-            (uint32_t)test_config.pages_per_transaction,
-            (uint32_t)test_config.bytes_per_page,
-            (uint32_t)output_dram_address,
-            (uint32_t)test_config.dram_channel,
-            (uint32_t)l1_address,
-            (uint32_t)sem_id,
-            (uint32_t)test_config.virtual_channel};
-
         CreateKernel(
             program,
             reader_kernel_path,
