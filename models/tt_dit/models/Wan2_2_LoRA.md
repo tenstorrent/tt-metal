@@ -17,9 +17,11 @@ See [Wan2_2.md](Wan2_2.md) for the base model architecture.
   Optional per-module alpha scaling is applied when present.
 - **L2 norm verification:** after fusion, the pipeline checks that fused weights
   differ from base weights (catches silent load failures from key mismatches).
-- **Key format auto-detection:** supports both diffusers-style keys
-  (`transformer.blocks.0.attn1.to_q.lora_A.weight`) and kohya/A1111-style keys
-  (`lora_unet_blocks_0_cross_attn_k.lora_down.weight`).
+- **Key format auto-detection:** supports Wan/lightx2v-style module keys under
+  `blocks.<i>...`, including checkpoints that prefix those keys with
+  `diffusion_model.`, `transformer.`, `unet.`, or `model.`, as well as
+  kohya/A1111-style keys such as
+  `lora_unet_blocks_0_cross_attn_k.lora_down.weight`.
 - **Two LoRA modes:**
   - **Split LoRA** — separate adapters for high-noise and low-noise experts
     (set both `LORA_HIGH_PATH` and `LORA_LOW_PATH`)
@@ -134,11 +136,11 @@ pytest models/tt_dit/tests/models/wan2_2/test_pipeline_lora.py \
 | `LORA_HIGH_PATH` | Yes | — | Path to high-noise expert LoRA `.safetensors` |
 | `LORA_LOW_PATH` | No | None | Path to low-noise expert LoRA (omit for single-file LoRAs) |
 | `LORA_SCALE` | No | 1.0 | Blend strength (0.0 = no effect, 1.0 = full effect) |
-| `NUM_STEPS` | No | 4 | Inference steps (4 for distill LoRAs, 40 for camera/style) |
-| `GUIDANCE_SCALE` | No | 1.0 | CFG scale (1.0 for distill, 3.5 for camera/style) |
-| `BOUNDARY_RATIO` | No | 0.5 | High/low expert split ratio (0.875 for camera, 0.5 for distill) |
+| `NUM_STEPS` | No | 40 | Inference steps (40 for camera/style LoRAs, 4 for distill) |
+| `GUIDANCE_SCALE` | No | 3.5 | CFG scale (3.5 for camera/style, 1.0 for distill) |
+| `BOUNDARY_RATIO` | No | 0.875 | High/low expert split ratio (0.875 for camera, 0.5 for distill) |
 | `PROMPT_IMAGE` | No | `./prompt_image.png` | Seed image path |
-| `PROMPT` | No | anime default | Text prompt |
+| `PROMPT` | No | golden retriever prompt | Text prompt |
 
 ## Limitations / open items
 

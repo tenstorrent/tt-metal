@@ -168,11 +168,10 @@ class WanDistillPipelineI2V(WanPipelineI2V):
 
     @staticmethod
     def create_pipeline(*args, random_weights: bool | None = None, **kwargs):
-        # Base WanPipeline.create_pipeline doesn't forward arbitrary kwargs to
-        # the constructor, so we hand random_weights through the env var that
-        # __init__ already reads. Don't restore — pytest test boundaries
-        # provide adequate isolation.
+        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or WanDistillPipelineI2V.BASE_DIFFUSERS_REPO
         if random_weights:
             os.environ["TT_DIT_RANDOM_WEIGHTS"] = "1"
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or WanDistillPipelineI2V.BASE_DIFFUSERS_REPO
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanDistillPipelineI2V, **kwargs)
+        try:
+            return WanPipeline.create_pipeline(*args, pipeline_class=WanDistillPipelineI2V, **kwargs)
+        finally:
+            os.environ.pop("TT_DIT_RANDOM_WEIGHTS", None)

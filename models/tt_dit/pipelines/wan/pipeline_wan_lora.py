@@ -33,9 +33,14 @@ from ...utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
 from .pipeline_wan import WanPipeline
 from .pipeline_wan_i2v import WanPipelineI2V
 
+_STRIP_PREFIXES = ("diffusion_model.", "transformer.", "unet.", "model.")
 
-def _strip_diffusion_model_prefix(key: str) -> str:
-    return key[len("diffusion_model.") :] if key.startswith("diffusion_model.") else key
+
+def _strip_known_prefixes(key: str) -> str:
+    for prefix in _STRIP_PREFIXES:
+        if key.startswith(prefix):
+            return key[len(prefix) :]
+    return key
 
 
 def _kohya_to_lightx2v(key: str) -> str:
@@ -68,11 +73,6 @@ def _kohya_to_lightx2v(key: str) -> str:
 
     logger.warning(f"Unrecognized kohya key structure: {key}")
     return key
-
-
-def _lora_base_path_to_diffusers_weight_key(lightx2v_base_path: str) -> str:
-    """``blocks.0.self_attn.q`` -> ``blocks.0.attn1.to_q.weight``."""
-    return wan_lightx2v_to_diffusers_key(f"{lightx2v_base_path}.weight")
 
 
 def _diffusers_target(lightx2v_base_path: str, suffix: str) -> str:
@@ -130,7 +130,7 @@ def fuse_lora_state_dict(
     alphas: dict[str, float] = {}
 
     for raw_key, tensor in lora_state_dict.items():
-        key = _strip_diffusion_model_prefix(raw_key)
+        key = _strip_known_prefixes(raw_key)
         key = _kohya_to_lightx2v(key)
         matched = False
         for suffix, slot in LOW_RANK_SUFFIXES.items():

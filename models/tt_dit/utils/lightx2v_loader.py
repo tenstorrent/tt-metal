@@ -127,7 +127,7 @@ def _resolve_path(
 
     repo_cache = _hf_cache_root() / "hub" / f"models--{repo_id.replace('/', '--')}" / "snapshots"
     if repo_cache.is_dir():
-        for snap in sorted(repo_cache.iterdir()):
+        for snap in sorted(repo_cache.iterdir(), reverse=True):
             cand = snap / filename
             if cand.is_file():
                 return cand
