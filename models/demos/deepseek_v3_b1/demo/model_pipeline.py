@@ -120,7 +120,11 @@ class ModelPipeline:
 
         if on_kv_cache_ready is not None:
             logger.info("enter on_kv_cache_ready")
-            on_kv_cache_ready(self.mesh_device, self.pipeline.kv_cache())
+            on_kv_cache_ready(
+                self.mesh_device,
+                self.pipeline.kv_cache(),
+                self.pipeline.layer_idx(),
+            )
             logger.info("exit on_kv_cache_ready")
 
         self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES

@@ -547,6 +547,17 @@ class Pipeline:
         """Return the KV cache tensor if this rank's stage exposes one, else None."""
         return getattr(self._stage_kind, "kv_cache", None)
 
+    def layer_idx(self) -> int | None:
+        """Return this rank's decoder layer index, or None if the stage isn't a decoder.
+
+        Decoder stages (DenseDecoderStage / MoEDecoderStage) store _layer_idx in
+        __init__; embedding / LM-head / sampling stages don't. Used by external
+        coordination (e.g. the migration layer's chunk-address table) to build a
+        layer_id → mesh_id map without hard-coding the sp4 / single-galaxy /
+        single-pod stage layouts.
+        """
+        return getattr(self._stage_kind, "_layer_idx", None)
+
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
         self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
