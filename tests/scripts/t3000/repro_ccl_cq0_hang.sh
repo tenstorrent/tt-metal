@@ -84,6 +84,10 @@ if [[ "${MODE}" == "full" || "${MODE}" == "predecessor" ]]; then
     sleep 2
 fi
 if [[ "${MODE}" == "full" || "${MODE}" == "solo" ]]; then
+    # FIX BV-SKIP: Set GTEST_OUTPUT so the caller's record_test() can detect
+    # all-SKIPPED exits (GTest exits 0 when all tests skip, not 1).
+    # The env var is inherited through run_step → timeout → binary.
+    GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" \
     run_step async_cq0 ./build/test/ttnn/test_ccl_multi_cq_multi_device \
         --gtest_filter="MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0" \
         || fail=$((fail + 1))

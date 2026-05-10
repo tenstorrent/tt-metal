@@ -348,7 +348,7 @@ except Exception as e:
   # GTEST_SKIP() rather than hang. If the env var is ever removed this is the
   # canary that catches the regression immediately.
   # See tests/scripts/t3000/repro_ccl_cq0_hang.sh for full repro instructions.
-  ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
 
   # CCL operation binaries — AllGather, ReduceScatter, and multi-tensor CCL.
   GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
