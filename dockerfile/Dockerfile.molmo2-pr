@@ -13,6 +13,11 @@ COPY --chown=container_app_user:container_app_user \
     models/demos/molmo2/ \
     /home/container_app_user/tt-metal/models/demos/molmo2/
 
+# Copy updated vLLM Molmo2 multimodal processor (adds native image path)
+COPY --chown=container_app_user:container_app_user \
+    vllm/vllm/model_executor/models/molmo2.py \
+    /home/container_app_user/vllm/vllm/model_executor/models/molmo2.py
+
 # Copy updated run_vllm_api_server.py (adds HF_HUB_OFFLINE=1 to prevent
 # downloading incompatible model code files when weights are served locally)
 COPY --chown=container_app_user:container_app_user \

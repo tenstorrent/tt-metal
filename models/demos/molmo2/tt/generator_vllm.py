@@ -48,24 +48,25 @@ try:
         def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
             num_v = mm_counts.get("video", 0)
             num_i = mm_counts.get("image", 0)
+            # Video and image cannot be mixed — prefer video if both present.
+            if num_v > 0:
+                return "<|video|>" * num_v
             if num_i == 1:
-                img_text = "<|image|>"
-            elif num_i > 1:
-                img_text = "".join(f"Image {i + 1}<|image|>" for i in range(num_i))
-            else:
-                img_text = ""
-            return img_text + "<|video|>" * num_v
+                return "<|image|>"
+            if num_i > 1:
+                return "".join(f"Image {i + 1}<|image|>" for i in range(num_i))
+            return ""
 
         def get_dummy_mm_data(self, seq_len, mm_counts, mm_options=None):
             num_v = mm_counts.get("video", 0)
             num_i = mm_counts.get("image", 0)
-            result = {}
-            if num_v:
-                result.update(super().get_dummy_mm_data(seq_len, {"video": num_v}, mm_options))
-            if num_i:
-                # Native image path — NOT redirected to video
-                result.update(super().get_dummy_mm_data(seq_len, {"image": num_i}, mm_options))
-            return result
+            # Video and image cannot be mixed: HF Molmo2Processor only handles one
+            # modality at a time. When both are requested (budget sizing), prefer video.
+            if num_v > 0:
+                return super().get_dummy_mm_data(seq_len, {"video": num_v}, mm_options)
+            if num_i > 0:
+                return super().get_dummy_mm_data(seq_len, {"image": num_i}, mm_options)
+            return {}
 
     _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
         Molmo2MultiModalProcessor,
@@ -208,27 +209,39 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
         # Vision-integrated prefill: warms the ttnn.add delta-injection path used by
         # forward_prefill when pixel_values is not None (not covered by text-only warmup).
-        logger.info("Pre-compiling vision-integrated prefill for all buckets...")
-        _n_patches, _k_pool, _n_pooled = 729, 9, 81  # 1 frame: 81 pooled positions
-        _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max ViT batch)
-        _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
-        for _S_warmup in PREFILL_BUCKETS:
-            if _S_warmup < _n_pooled:
-                continue
-            _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
-            _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
-            _dummy_tti = None
-            if _S_warmup <= 8192:
-                _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
-                _dummy_tti[0, :_n_pooled] = 1
-            logger.info(f"  vision-integrated prefill bucket {_S_warmup}...")
-            _ = model.forward_prefill(
-                input_ids=_dummy_ids,
-                pixel_values=_dummy_pv,
-                pooled_patches_idx=_dummy_pool_idx,
-                token_type_ids=_dummy_tti,
-                user_id=0,
-            )
+        #
+        # Two passes required:
+        #   1. Video pass  (k_pool=9, n_pooled=81)   — 81 image tokens, matches video frames
+        #   2. Image pass  (k_pool=4, n_pooled=392)  — 392 image tokens = 2 crops × 196
+        #      The mask pattern difference (81 vs 392 nonzero token_type_ids) triggers a
+        #      separate JIT compile of the decoder. Without this, the first image request
+        #      hits a 6-7s JIT stall that causes a TT Metal dispatch timeout.
+        for _pass_name, _k_pool, _n_pooled_per_crop, _n_crops_warmup in [
+            ("video", 9, 81, 8),  # video: k_pool=9, 81 pooled/frame, 8 frames/chunk
+            ("image", 4, 196, 2),  # image: k_pool=4, 196 pooled/crop, 2 crops (typical)
+        ]:
+            _n_pooled = _n_pooled_per_crop * _n_crops_warmup
+            _n_patches = 729
+            _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max ViT batch)
+            _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
+            logger.info(f"Pre-compiling vision-integrated prefill ({_pass_name}, n_pooled={_n_pooled})...")
+            for _S_warmup in PREFILL_BUCKETS:
+                if _S_warmup < _n_pooled:
+                    continue
+                _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
+                _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
+                _dummy_tti = None
+                if _S_warmup <= 8192:
+                    _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
+                    _dummy_tti[0, :_n_pooled] = 1
+                logger.info(f"  {_pass_name} vision-integrated prefill bucket {_S_warmup}...")
+                _ = model.forward_prefill(
+                    input_ids=_dummy_ids,
+                    pixel_values=_dummy_pv,
+                    pooled_patches_idx=_dummy_pool_idx,
+                    token_type_ids=_dummy_tti,
+                    user_id=0,
+                )
 
         # Capture decode trace — matches demo step 4.
         logger.info("Capturing decode trace (matches demo warmup step 4)...")
