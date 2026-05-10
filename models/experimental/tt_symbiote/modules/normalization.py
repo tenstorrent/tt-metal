@@ -214,6 +214,17 @@ class TTNNDistributedRMSNorm(TTNNModule):
             inp = ttnn.unsqueeze(inp, 1)  # Add batch dimension for RMSNorm
         if inp.layout != ttnn.TILE_LAYOUT:
             inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if getattr(self.device, "shape", [1, 1])[-1] == 1:
+            eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
+            tt_out = ttnn.rms_norm(
+                inp,
+                weight=self.weight_distributed,
+                epsilon=eps,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            if len(original_shape) == 3 and len(tt_out.shape) == 4:
+                tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+            return tt_out
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(
             inp, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config

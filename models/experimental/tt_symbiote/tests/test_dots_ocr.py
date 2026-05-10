@@ -28,6 +28,21 @@ MESH_DEVICE_MAP = {
     "BHGLX": (8, 4),
 }
 
+DOTS_OCR_DP_MESH_DEVICE_MAP = {
+    "N300": (2, 1),
+    "T3K": (8, 1),
+}
+
+
+def _resolve_mesh_device_shape():
+    mesh_device = os.environ.get("MESH_DEVICE")
+    if os.environ.get("DOTS_OCR_PARALLELISM", "").upper() == "DP":
+        return DOTS_OCR_DP_MESH_DEVICE_MAP.get(
+            mesh_device, MESH_DEVICE_MAP.get(mesh_device, len(ttnn.get_device_ids()))
+        )
+    return MESH_DEVICE_MAP.get(mesh_device, len(ttnn.get_device_ids()))
+
+
 DOTS_OCR_MODEL_ID = "rednote-hilab/dots.ocr"
 
 
@@ -54,7 +69,7 @@ DOTS_OCR_LOCAL_PATH = _resolve_model_path()
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [MESH_DEVICE_MAP.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [_resolve_mesh_device_shape()],
     indirect=True,
 )
 def test_dots_ocr_text(mesh_device):
@@ -116,7 +131,7 @@ def test_dots_ocr_text(mesh_device):
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [MESH_DEVICE_MAP.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [_resolve_mesh_device_shape()],
     indirect=True,
 )
 @pytest.mark.parametrize(

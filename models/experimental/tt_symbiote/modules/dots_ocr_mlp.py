@@ -8,11 +8,16 @@ from models.experimental.tt_symbiote.core.module import DeviceArch, TTNNModule, 
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
+    _tp_requires_ccl,
+    _tp_mesh_mapper,
 )
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
     def move_weights_to_device_impl(self):
+        if not _tp_requires_ccl(self.device):
+            return super().move_weights_to_device_impl()
+
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
         intermediate = self._gate_weight_torch.shape[0]
         shard = intermediate // num_devices
@@ -41,7 +46,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             weight,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+            weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
         )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
 
@@ -51,7 +56,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
                 bias,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
             )
             self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device)
         else:
@@ -81,14 +86,15 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        tt_output = ttnn.reduce_scatter(
-            tt_output,
-            dim=3,
-            num_links=1,
-            cluster_axis=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
-        )
+        if _tp_requires_ccl(self.device):
+            tt_output = ttnn.reduce_scatter(
+                tt_output,
+                dim=3,
+                num_links=1,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
         return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
@@ -101,14 +107,14 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
                 self.tt_weight_host,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )
         if isinstance(self.tt_bias_host, torch.Tensor):
             self.tt_bias_host = preprocess_linear_bias(
                 self.tt_bias_host,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
@@ -134,14 +140,15 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        tt_output = ttnn.reduce_scatter(
-            tt_output,
-            dim=3,
-            num_links=1,
-            cluster_axis=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
-        )
+        if _tp_requires_ccl(self.device):
+            tt_output = ttnn.reduce_scatter(
+                tt_output,
+                dim=3,
+                num_links=1,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
         return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
