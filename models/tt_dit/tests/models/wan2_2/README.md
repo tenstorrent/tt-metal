@@ -9,8 +9,6 @@ This directory contains:
 | `test_pipeline_wan.py` | Base Wan2.2 T2V inference |
 | `test_pipeline_wan_i2v.py` | Base Wan2.2 I2V inference |
 | `test_pipeline_wan_distill_i2v.py` | Wan2.2-Distill (lightx2v 4-step) I2V inference |
-| `test_pipeline_anisora.py` | Index-AniSora V3.2 I2V inference |
-| `test_pipeline_lora.py` | LoRA-on-base inference |
 | `test_performance_wan.py` | Per-stage perf tests for all of the above |
 | `test_transformer_wan.py`, `test_attention_wan.py`, `test_vae_wan2_1.py`, `test_rope.py`, … | Sub-module unit tests |
 
@@ -18,7 +16,7 @@ The instructions below cover the **inference** and **perf** entry points. Sub-mo
 
 ## Hardware
 
-Canonical config: **Blackhole Galaxy, 4×8 ring** (`bh_4x8sp1tp0_ring` for distill / AniSora, `ring_bh_4x8_sp1tp0` for the base perf test — yes, the parametrize ids use different orderings; pytest `-k` filters are not interchangeable across tests).
+Canonical config: **Blackhole Galaxy, 4×8 ring** (`bh_4x8sp1tp0_ring` for distill, `ring_bh_4x8_sp1tp0` for the base perf test — yes, the parametrize ids use different orderings; pytest `-k` filters are not interchangeable across tests).
 
 Smaller meshes (2×2, 2×4) are available in the parametrize lists but treat them as dev-only.
 
@@ -103,34 +101,6 @@ Output frames are garbage by design.
 
 ---
 
-## Generate a new video — Index-AniSora V3.2 I2V (anime domain, 40 steps)
-
-Anime-domain Wan-derived model: subclass of `WanPipelineI2V` that swaps in `IndexTeam/Index-anisora` V3.2 weights. Same architecture, same parameter count, anime-style training data. Uses 40 inference steps by default but `NUM_STEPS` is configurable.
-
-```bash
-export PROMPT_IMAGE=$TT_METAL_HOME/some_anime_frame.png
-export PROMPT="An anime girl smiling, soft lighting, cinematic"
-# Optional: shorten for faster preview (16 or 8 is common for quick iteration)
-export NUM_STEPS=40
-
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_anisora.py \
-  -v -k "bh_4x8sp1tp0_ring and resolution_480p and not random_weights" \
-  --timeout 1800 -s
-# Output: ./wan_anisora_i2v_832x480_0.mp4
-```
-
-| Knob | How |
-|---|---|
-| Inference steps | `export NUM_STEPS=16` (or 8 for very fast previews; quality drops) |
-| Weights from a custom location (skip HF cache) | `export ANISORA_LOCAL_DIR=/path/to/weights` containing `high_noise_model/diffusion_pytorch_model.safetensors` and `low_noise_model/diffusion_pytorch_model.safetensors` |
-| Random-weights smoke test | `pytest models/tt_dit/tests/models/wan2_2/test_pipeline_anisora.py::test_pipeline_inference_random_weights -v --timeout 1500 -s` |
-
-The AniSora weights are at `IndexTeam/Index-anisora` on HF (V3.2 subfolder, ~28 GB BF16 per expert). First-time download adds ~57 GB on top of the base diffusers cache.
-
-`boundary_ratio` for AniSora is **0.9** (vs 0.5 for distill, 0.5 for base) — most of the trajectory uses the high-noise expert, with the low-noise expert kicking in only at the end. This is hardcoded in `AniSoraPipeline.ANISORA_BOUNDARY_RATIO` and not overridden by env vars.
-
----
-
 ## Per-stage performance test
 
 Same code path as inference but wraps the pipeline in `BenchmarkProfiler` and prints encoder / image-encode / denoising / VAE-decode / total timings, plus runs an explicit warmup iteration so the timed run is steady-state.
@@ -145,14 +115,9 @@ pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py::test_pipeline_
 pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py::test_pipeline_performance \
   -v -k "i2v and ring_bh_4x8_sp1tp0 and resolution_480p" \
   --timeout 1800 -s
-
-# AniSora perf (40-step anime, similar wall-time to base)
-pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py::test_pipeline_performance_anisora \
-  -v -k "bh_4x8sp1tp0_ring and resolution_480p" \
-  --timeout 1800 -s
 ```
 
-The base perf test exports a video to the cwd (`wan_output_video_i2v.mp4`). Distill / AniSora perf tests do not currently export video — use the corresponding inference test if you want frames.
+The base perf test exports a video to the cwd (`wan_output_video_i2v.mp4`). Distill perf test does not currently export video — use the corresponding inference test if you want frames.
 
 ---
 
@@ -176,7 +141,7 @@ Per-forward denoise cost is identical between base and distill at each resolutio
 ## Common gotchas
 
 - **Output filename collisions.** Base test always writes `wan_output_video_i2v.mp4` regardless of resolution — rename between runs or the 720p clobbers the 480p. Distill inference test includes resolution in the filename and doesn't collide.
-- **Different test-id naming.** Base test uses `ring_bh_4x8_sp1tp0`; distill / AniSora use `bh_4x8sp1tp0_ring`. Pytest `-k` filters cannot be reused across tests.
+- **Different test-id naming.** Base test uses `ring_bh_4x8_sp1tp0`; distill uses `bh_4x8sp1tp0_ring`. Pytest `-k` filters cannot be reused across tests.
 - **No warmup on the base perf test for 4×8 ring.** `if traced:` guard means base 4×8 numbers include first-time kernel compile (~3–5 s extra). Distill perf has an explicit warmup pass.
 - **Encoder perf gate fails harmlessly.** Base perf test asserts `encoder < 0.1 s`, measured is ~0.13–0.14 s. The pytest reports FAIL but all other numbers (denoising, total, etc.) are valid.
 - **`prompt_image.png` is the default seed.** If you don't set `PROMPT_IMAGE`, the inference tests open `./prompt_image.png` from the cwd. A 832×480 placeholder ships in the repo; the perf test falls back to a procedurally-generated fractal.
@@ -189,10 +154,9 @@ Per-forward denoise cost is identical between base and distill at each resolutio
 
 | Path | What's there |
 |---|---|
-| `models/tt_dit/pipelines/wan/pipeline_wan.py` | Base T2V pipeline (parent of i2v / distill / anisora subclasses) |
+| `models/tt_dit/pipelines/wan/pipeline_wan.py` | Base T2V pipeline (parent of i2v / distill subclasses) |
 | `models/tt_dit/pipelines/wan/pipeline_wan_i2v.py` | I2V subclass — the pattern to follow |
 | `models/tt_dit/pipelines/wan/pipeline_wan_distill.py` | Distill subclass: lightx2v weight load + CFG-off override |
-| `models/tt_dit/pipelines/wan/pipeline_anisora.py` | AniSora V3.2 subclass: anime-domain weight load, `boundary_ratio=0.9` |
-| `models/tt_dit/utils/lightx2v_loader.py` | lightx2v ↔ diffusers key remap (reused by AniSora) |
+| `models/tt_dit/utils/lightx2v_loader.py` | lightx2v ↔ diffusers key remap |
 | `models/tt_dit/models/Wan2_2.md` | Wan2.2 model card |
 | `models/tt_dit/models/Wan2_2_Distill.md` | Wan2.2-Distill model card |
