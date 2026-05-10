@@ -127,6 +127,7 @@ def run(
             )
 
     is_ternary_tensor = input_b_dtype is not None and input_c_dtype is not None
+    is_tensor_scalar = input_b_dtype is not None and input_c_dtype is None
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
