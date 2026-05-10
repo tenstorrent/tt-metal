@@ -2118,6 +2118,28 @@ if [ "${SIGBUS_COUNT:-0}" -eq 0 ] && [ "${SIGABRT_COUNT:-0}" -eq 0 ] && [ "${SIG
     echo "  (no crash signals detected)"
 fi
 
+# ─── MISSING DIRECTIONS (fabric_tensix_builder.cpp UDM core exhaustion) ───
+# "Missing directions" = a routing plane has no active ETH link in some direction on a boundary device.
+# Expected on corner/edge nodes in a healthy 2D mesh. Warnings indicate UDM inter-mux forwarding gaps.
+MISSING_DIRS_NO_CORES=$(grep -c "No remaining cores for missing directions" "$CLEAN" 2>/dev/null || true)
+MISSING_DIRS_PARTIAL=$(grep -c "Not enough cores for all missing directions" "$CLEAN" 2>/dev/null || true)
+MISSING_DIRS_TENSIX_BUILT=$(grep -c "Building missing direction tensix builder" "$CLEAN" 2>/dev/null || true)
+if [ "${MISSING_DIRS_NO_CORES:-0}" -gt 0 ] || [ "${MISSING_DIRS_PARTIAL:-0}" -gt 0 ]; then
+    echo ""
+    echo "  => [MISSING DIRECTIONS] UDM mux core exhaustion detected."
+    if [ "${MISSING_DIRS_NO_CORES:-0}" -gt 0 ]; then
+        echo "     ${MISSING_DIRS_NO_CORES} device(s): zero cores left — missing direction has NO tensix builder."
+        grep -m3 "No remaining cores for missing directions" "$CLEAN" | sed 's/^/     /' | cut -c1-160
+    fi
+    if [ "${MISSING_DIRS_PARTIAL:-0}" -gt 0 ]; then
+        echo "     ${MISSING_DIRS_PARTIAL} device(s): partial cores — adding some but not all missing directions."
+        grep -m3 "Not enough cores for all missing directions" "$CLEAN" | sed 's/^/     /' | cut -c1-160
+    fi
+    echo "     Tensix builders compiled for missing dirs: ${MISSING_DIRS_TENSIX_BUILT:-0}."
+    echo "     NOTE: This is expected for boundary devices in a healthy 2D mesh (corner=2 missing, edge=1 missing)."
+    echo "     It is NOT expected if the missing direction SHOULD have a live ETH neighbor (degraded channel case)."
+fi
+
 # ─── FIX TF (test_tt_fabric degraded skip) ───
 FIX_TF_SKIP=$(grep -cE 'Skipping Test Group.*degraded fabric detected' "$CLEAN" 2>/dev/null; :)
 if [ "${FIX_TF_SKIP:-0}" -gt 0 ]; then
