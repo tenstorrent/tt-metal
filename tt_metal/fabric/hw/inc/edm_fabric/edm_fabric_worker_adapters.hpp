@@ -303,7 +303,20 @@ struct WorkerToFabricEdmSenderBase {
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
-        while (!this->edm_has_space_for_packet<1>());
+        // Bounded spin: if downstream EDM never frees a buffer slot (dead, stalled,
+        // or credits lost) this loop hangs the calling core.  After kWatchdogIter
+        // iterations (~2-4 s on ERISC) we log a distinct WAYPOINT so the hang is
+        // diagnosable from a watcher dump, then continue spinning — the caller
+        // cannot proceed without a free slot.
+        // See: https://github.com/tenstorrent/tt-metal/issues/42429
+        constexpr uint32_t kWatchdogIter = 100'000'000;
+        uint32_t watchdog_count = 0;
+        while (!this->edm_has_space_for_packet<1>()) {
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("FWST");  // Write-Slot Timeout — still spinning
+                watchdog_count = 0;
+            }
+        }
         WAYPOINT("FWSD");
     }
 
