@@ -189,7 +189,13 @@ def run(
     if arg2 is not None and not isinstance(arg2, tuple):
         arg2 = None
 
-    in_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    import ast as _ast_r
+
+    in_shape = (
+        tuple(input_a_shape)
+        if isinstance(input_a_shape, (list, tuple))
+        else (tuple(_ast_r.literal_eval(input_a_shape)) if isinstance(input_a_shape, str) else input_a_shape)
+    )
 
     # Ensure shape is at least 2D for TILE_LAYOUT compatibility
     if len(in_shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
