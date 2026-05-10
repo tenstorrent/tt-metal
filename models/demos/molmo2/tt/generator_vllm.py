@@ -191,14 +191,14 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         logger.info(f"Pre-compiling prefill JIT kernels for buckets {PREFILL_BUCKETS}...")
         model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
 
-        # Capture prefill traces — matches demo step 2.
-        # The trace capture runs the decoder twice per bucket with ttnn.synchronize_device
-        # between passes, which fully finalizes TTNN op compilation. Without this, the
-        # first vision inference still triggers a ~6s JIT stall even after step 1.
-        # vLLM never executes these traces (vision uses eager path), but the side-effect
-        # of fully compiling the decoder for each bucket is what we need.
-        logger.info("Capturing prefill traces (matches demo warmup step 2)...")
-        model.warmup_all_buckets(use_trace=True)
+        # NOTE: warmup_all_buckets(use_trace=True) is intentionally SKIPPED here.
+        # Prefill traces (is_causal=True) + decode trace cannot coexist with
+        # bidirectional image/video eager prefill — _capture_prefill_trace docstring:
+        # "is_causal=False with explicit mask SDPA cannot coexist with the decode trace".
+        # With prefill traces captured, image prefills (S≤4096, bidirectional) hang
+        # permanently after the decode trace is also captured. Skipping prefill traces
+        # avoids this conflict. The text-only decoder path still benefits from the
+        # JIT compilation in warmup_all_buckets(use_trace=False) above.
 
         # After warmup_all_buckets, KV cache is filled by the last bucket's forward_prefill.
         # Run one decode step to JIT-compile the decode kernel.
