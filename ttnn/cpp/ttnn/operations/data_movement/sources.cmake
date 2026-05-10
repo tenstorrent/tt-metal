@@ -194,6 +194,7 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     fill_pad/device/fill_pad_device_operation.hpp
     fill_rm/fill_rm.hpp
     fill_rm/device/fill_rm_device_operation.hpp
+    flip/flip.hpp
     move/device/move_device_operation.hpp
     pad/pad.hpp
     permute/permute.hpp
