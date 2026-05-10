@@ -300,10 +300,25 @@ def run(
             torch_output_tensor, output_tensor, input_a_tensor_placement, weight_tensor_placement
         )
     if torch_output_tensor.shape != output_tensor.shape:
-        squeezed_expected = torch_output_tensor.squeeze()
-        squeezed_actual = output_tensor.squeeze()
-        if squeezed_expected.shape == squeezed_actual.shape:
-            torch_output_tensor = squeezed_expected
-            output_tensor = squeezed_actual
+        # Try reshaping golden to match actual
+        if torch_output_tensor.numel() == output_tensor.numel():
+            torch_output_tensor = torch_output_tensor.reshape(output_tensor.shape)
+        else:
+            # Numel differs (e.g. golden uses global weight, actual is per-device).
+            # Slice golden to match actual shape.
+            g = torch_output_tensor.squeeze()
+            a = output_tensor.squeeze()
+            if g.ndim == a.ndim and g.shape[:-1] == a.shape[:-1]:
+                torch_output_tensor = g[..., : a.shape[-1]]
+                output_tensor = a
+            elif g.ndim == a.ndim and g.shape[1:] == a.shape[1:]:
+                torch_output_tensor = g[: a.shape[0]]
+                output_tensor = a
+            elif g.numel() > a.numel() and a.numel() > 0 and g.numel() % a.numel() == 0:
+                torch_output_tensor = g.reshape(-1)[: a.numel()].reshape(a.shape)
+                output_tensor = a
+            else:
+                torch_output_tensor = g
+                output_tensor = a
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

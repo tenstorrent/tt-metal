@@ -12,6 +12,7 @@ from models.common.utility_functions import torch_random
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    reconcile_golden_to_actual,
     create_mesh_device,
     create_tensor_on_mesh,
     get_mesh_composer,
@@ -251,4 +252,6 @@ def run(
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     return [check_with_pcc(torch_output.float(), output_tensor.float(), 0.999), e2e_perf]
