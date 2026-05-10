@@ -1017,20 +1017,35 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     }
 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
 
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
-        // FIX AE (#42429): catch flush timeout so a dead relay doesn't hang the caller for 5s.
+        // FIX BW (#42429): catch both write_to_device_reg and wait_for_non_mmio_flush
+        // exceptions for remote chips.  Previously, FIX AE only caught wait_for_non_mmio_flush;
+        // if write_to_device_reg itself threw (write_to_non_mmio timeout — "Timeout waiting
+        // for Ethernet core service remote IO request"), the relay was not marked broken at
+        // the Cluster level (relay_broken_chips_) and the exception propagated unchecked into
+        // callers such as initialize_and_launch_firmware, causing test failures.
+        //
+        // Two gaps in the original FIX AE fixed here:
+        //   1. write_to_device_reg exceptions are now caught (not just wait_for_non_mmio_flush).
+        //   2. relay_broken_chips_ is updated so is_relay_broken() returns true for subsequent
+        //      FIX NZ pre-checks and FIX NY guards.
+        // The exception is re-thrown so run_launch_phase's FIX BX catch can handle it.
         try {
+            this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
             this->driver_->wait_for_non_mmio_flush(chip_id);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogDevice,
-                "FIX AE: wait_for_non_mmio_flush(chip {}) threw: {}. Marking relay broken.",
+                "FIX BW: write_core_immediate(chip {}) threw: {}. Marking relay broken.",
                 chip_id,
                 e.what());
             this->driver_->mark_relay_broken(chip_id);
+            this->relay_broken_chips_.insert(chip_id);
+            throw;
         }
+    } else {
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     }
 }
 

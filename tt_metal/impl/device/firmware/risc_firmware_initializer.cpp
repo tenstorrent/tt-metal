@@ -212,7 +212,29 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                     device_id);
                 continue;
             }
-            initialize_and_launch_firmware(device_id);
+            // FIX BX (#42429): belt-and-suspenders over FIX NZ. If the relay was NOT yet broken
+            // at the FIX NZ check above but becomes broken DURING initialize_and_launch_firmware
+            // (e.g. write_to_non_mmio times out → FIX BW marks relay_broken_chips_ and re-throws),
+            // catch that exception here for non-MMIO devices and continue without crashing.
+            // Root cause: write_core_immediate's FIX AE previously only marked relay broken at
+            // the UMD driver level, not in relay_broken_chips_, so FIX NZ never saw the broken
+            // state. FIX BW fixes the gap; FIX BX is the outer safety net for any remaining
+            // window between the FIX NZ pre-check and the first write in initialize_and_launch_firmware.
+            if (!mmio_ids_set.count(device_id)) {
+                try {
+                    initialize_and_launch_firmware(device_id);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogAlways,
+                        "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
+                        "non-MMIO device {} (relay likely broken mid-init): {}. "
+                        "Skipping — fabric init will handle on next session. (#42429)",
+                        device_id,
+                        e.what());
+                }
+            } else {
+                initialize_and_launch_firmware(device_id);
+            }
         }
 
         // FIX TV (#42429): Wait for MMIO ETH channels to complete rebooting to base-UMD
