@@ -99,6 +99,17 @@ def run(
 
     pos_args = extract_positional_args(kwargs)
     traced_output_mem_config = pos_args.get(1, None)
+    traced_output_dtype = pos_args.get(2, None)
+    if traced_output_dtype is not None and "output_dtype" not in op_kwargs:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        parsed_dt = (
+            parse_dict_value("dtype", traced_output_dtype)
+            if isinstance(traced_output_dtype, dict)
+            else traced_output_dtype
+        )
+        if parsed_dt is not None:
+            op_kwargs["output_dtype"] = parsed_dt
 
     # Determine the output memory config: prefer traced arg1 (positional), then explicit param
     if traced_output_mem_config is not None:
