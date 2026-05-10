@@ -141,6 +141,20 @@ class TTNNDotsOCRAttention(TTNNModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
+            self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
+        # Override QKV compute config: HiFi2 for decode
+        self.qkv_proj.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -247,7 +261,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             num_heads=self.num_attention_heads,
             num_kv_heads=self.num_key_value_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv_states)
 
@@ -365,7 +379,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             current_pos=cur_pos_tt,
             scale=self.scaling,
             program_config=getattr(self.sdpa, "decode_program_config", self.sdpa.program_config),
-            compute_kernel_config=self.sdpa.compute_kernel_config,
+            compute_kernel_config=getattr(self.sdpa, "decode_compute_kernel_config", self.sdpa.compute_kernel_config),
         )
 
         attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))

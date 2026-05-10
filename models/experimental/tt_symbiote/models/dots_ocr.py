@@ -37,6 +37,17 @@ from models.experimental.tt_symbiote.modules.normalization import TTNNDistribute
 from models.experimental.tt_symbiote.utils.device_management import timed_call
 
 
+def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
+    logits_rm = ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    token = ttnn.argmax(
+        logits_rm,
+        dim=-1,
+        keepdim=True,
+        use_multicore=True,
+    )
+    return ttnn.reshape(token, (1, 1))
+
+
 @trace_enabled
 class TTNNDotsOCRPrefillGraph(TTNNModule):
     def preprocess_weights_impl(self):
@@ -58,7 +69,8 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         if sl > 1:
             hd = int(h.shape[-1])
             h = ttnn.slice(h, [0, sl - 1, 0], [1, sl, hd])
-        return self._p_lm.forward(h)
+        logits = self._p_lm.forward(h)
+        return _argmax_token_on_device(logits)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
         past_key_value = func_kwargs.get("past_key_value")
@@ -89,7 +101,8 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
         emb = self._d_embed.forward(token_ids)
         h = self._d_stack.forward(emb, past_key_value=past_key_value, cache_position=cache_position)
         h = self._d_norm.forward(h)
-        return self._d_lm.forward(h)
+        logits = self._d_lm.forward(h)
+        return _argmax_token_on_device(logits)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
         past_key_value = func_kwargs.get("past_key_value")
@@ -195,6 +208,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         # Decode-loop buffer (allocated on first decode call, reused thereafter)
         self._decode_cache_position: Optional[ttnn.Tensor] = None
+        self._decode_token_buffer: Optional[ttnn.Tensor] = None
+        self._decode_token_host: Optional[ttnn.Tensor] = None
+        self._decode_cache_pos_host: Optional[ttnn.Tensor] = None
+        self._decode_seq_counter: int = 0
 
     # ------------------------------------------------------------------
     # Factory
@@ -306,6 +323,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
             module.preprocess_weights()
             module.move_weights_to_device()
 
+        # LM head: HiFi2 + packer_l1_acc for decode
+        self.lm_head.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def _collect_ttnn_modules(self) -> List[TTNNModule]:
         """Recursively collect all TTNNModule instances from pipeline components."""
         found: List[TTNNModule] = []
@@ -399,11 +424,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Traced prefill graph replaces decoder stack, final norm, and lm_head calls.
-        logits = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
-
-        # --- Argmax on device ---
-        token_id_tt = self._argmax_on_device(logits)
+        # Traced prefill graph includes decoder stack, final norm, lm_head, and argmax.
+        token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
 
         # --- Read to host ---
         token_id_torch = ttnn.to_torch(
@@ -421,6 +443,28 @@ class TTNNDotsOCRPipeline(TTNNModule):
     # Decode
     # ------------------------------------------------------------------
 
+    def _init_decode_buffers(self, prev_token_id: int):
+        """Allocate reusable device buffers for decode loop on first call."""
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+        self._decode_token_host = torch.tensor([[prev_token_id]], dtype=torch.int32)
+        self._decode_token_buffer = ttnn.from_torch(
+            self._decode_token_host,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+        )
+        self._decode_seq_counter = self.paged_cache.get_seq_length(layer_idx=0)
+        self._decode_cache_pos_host = torch.tensor([self._decode_seq_counter], dtype=torch.int32)
+        self._decode_cache_position = ttnn.from_torch(
+            self._decode_cache_pos_host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def decode_step(self, prev_token_id: int) -> int:
         """Execute one decode step entirely on device.
 
@@ -430,43 +474,29 @@ class TTNNDotsOCRPipeline(TTNNModule):
         Returns:
             Next predicted token ID (int).
         """
-        # --- Embedding ---
-        tt_token = ttnn.from_torch(
-            torch.tensor([[prev_token_id]], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
-
-        # --- Cache position management ---
-        # Follow the pattern from TTNNDotsOCRModel.call():
-        # Pre-allocate _decode_cache_position buffer on first decode,
-        # reuse via ttnn.copy on subsequent calls.
-        cur_seq_len = self.paged_cache.get_seq_length(layer_idx=0)
-        cache_pos_val = torch.tensor([cur_seq_len], dtype=torch.int32)
-        tt_cache_pos_new = ttnn.from_torch(
-            cache_pos_val,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        if self._decode_cache_position is not None:
-            ttnn.copy(tt_cache_pos_new, self._decode_cache_position)
-            ttnn.deallocate(tt_cache_pos_new)
-            tt_cache_position = self._decode_cache_position
+        if self._decode_token_buffer is None:
+            self._init_decode_buffers(prev_token_id)
         else:
-            self._decode_cache_position = tt_cache_pos_new
-            tt_cache_position = self._decode_cache_position
+            self._decode_token_host[0][0] = prev_token_id
+            token_host_tt = ttnn.from_torch(
+                self._decode_token_host,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(token_host_tt, self._decode_token_buffer)
 
-        # Traced decode graph replaces embedding, decoder stack, final norm, and lm_head calls.
-        logits = self.graph_decode(tt_token, tt_cache_position, past_key_value=self.paged_cache)
+            self._decode_seq_counter += 1
+            self._decode_cache_pos_host[0] = self._decode_seq_counter
+            cache_host_tt = ttnn.from_torch(
+                self._decode_cache_pos_host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
 
-        # --- Argmax on device ---
-        token_id_tt = self._argmax_on_device(logits)
+        token_id_tt = self.graph_decode(
+            self._decode_token_buffer, self._decode_cache_position, past_key_value=self.paged_cache
+        )
 
         # --- Read to host ---
         token_id_torch = ttnn.to_torch(
@@ -500,6 +530,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Reset cache for fresh generation
         self.paged_cache.reset()
         self._decode_cache_position = None
+        self._decode_token_buffer = None
+        self._decode_seq_counter = 0
 
         # Prefill
         first_token_id = self.prefill(input_ids, pixel_values, image_grid_thw)
@@ -652,14 +684,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         Returns:
             token_id tensor on device.
         """
-        logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
-        token_id = ttnn.argmax(
-            logits_rm,
-            dim=-1,
-            keepdim=True,
-            use_multicore=True,
-        )
-        return token_id
+        return _argmax_token_on_device(logits)
 
     # ------------------------------------------------------------------
     # Warmup / trace management

@@ -8,6 +8,7 @@ from models.experimental.tt_symbiote.core.module import DeviceArch, TTNNModule, 
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
+    _dp_prefill_matmul_program_config,
     _tp_requires_ccl,
     _tp_mesh_mapper,
 )
@@ -85,6 +86,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             self.tt_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
@@ -93,7 +95,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
                 num_links=1,
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Ring,
+                topology=ttnn.Topology.Linear,
             )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
@@ -139,6 +141,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             self.tt_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
@@ -147,7 +150,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
                 num_links=1,
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Ring,
+                topology=ttnn.Topology.Linear,
             )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
@@ -211,8 +214,9 @@ class TTNNDotsOCRMLP(TTNNModule):
         up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I])
         ttnn.deallocate(gate_up)
 
-        gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate_up_mul = ttnn.multiply(gate, up)
+        gate_up_mul = ttnn.mul(
+            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 

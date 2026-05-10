@@ -4,6 +4,8 @@
 
 """Linear layer implementations for TTNN."""
 
+import math
+
 from torch import nn
 import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -25,6 +27,62 @@ def _tp_mesh_mapper(device, dim):
 
 def _tp_requires_ccl(device):
     return not (hasattr(device, "shape") and list(device.shape)[-1] == 1)
+
+
+def _largest_divisor_at_most(value: int, limit: int) -> int:
+    for candidate in range(min(value, limit), 0, -1):
+        if value % candidate == 0:
+            return candidate
+    return 1
+
+
+def _out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
+    for candidate in range(4 // out_subblock_h, 0, -1):
+        if per_core_n % candidate == 0:
+            return candidate
+    return 1
+
+
+def _dp_prefill_matmul_program_config(device, input_shape, weight_shape):
+    if _tp_requires_ccl(device):
+        return None
+
+    seq_len = int(input_shape[2])
+    if seq_len <= 32:
+        return None
+
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    m_dim = int(input_shape[0]) * int(input_shape[1]) * seq_len
+    k_dim = int(weight_shape[-2])
+    n_dim = int(weight_shape[-1])
+
+    tile = 32
+    k_tiles = math.ceil(k_dim / tile)
+    per_core_m = math.ceil(m_dim / (tile * grid_y))
+    per_core_n = math.ceil(n_dim / (tile * grid_x))
+
+    if per_core_n > 24:
+        return None
+
+    if k_tiles % grid_y == 0:
+        k_tiles_per_grid_row = k_tiles // grid_y
+        in0_block_w = _largest_divisor_at_most(k_tiles_per_grid_row, 8)
+    else:
+        in0_block_w = 2 if k_tiles % 2 == 0 else 1
+
+    out_subblock_h = 1
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=_out_subblock_w(per_core_n, out_subblock_h),
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
 
 
 @trace_enabled
@@ -165,6 +223,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
             self.tt_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
@@ -173,7 +232,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
                 num_links=1,
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Ring,
+                topology=ttnn.Topology.Linear,
             )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
@@ -208,6 +267,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
             self.tt_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
         # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
