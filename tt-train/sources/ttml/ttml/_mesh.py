@@ -275,10 +275,4 @@ def _param_sharded_on_axis(param, axis_index: int) -> bool:
     """
     if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
         return True
-    try:
-        placements = param.get_value().tensor_topology().placements()
-    except Exception:
-        return False
-    if axis_index >= len(placements):
-        return False
-    return isinstance(placements[axis_index], ttnn.PlacementShard)
+    return False
