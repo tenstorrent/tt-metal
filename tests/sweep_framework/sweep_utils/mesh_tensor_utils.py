@@ -134,6 +134,20 @@ def create_mesh_device(
             # Fall through to auto-detect on error (e.g. axis unsupported on this mesh shape).
             pass
 
+    # Auto-discover master JSON if env var not set
+    if not os.environ.get("TTNN_MASTER_JSON_PATH"):
+        _auto_master = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "..",
+            "model_tracer",
+            "traced_operations",
+            "ttnn_operations_master.json",
+        )
+        if os.path.isfile(_auto_master):
+            os.environ["TTNN_MASTER_JSON_PATH"] = os.path.abspath(_auto_master)
+
     # 2. Auto-detect from master configs (legacy path).
     # ROW dispatch gives compute_with_storage_grid_size = (8, 9): valid y in [0, 8].
     # COL dispatch gives (7, 10): valid y in [0, 9], valid x in [0, 6].
@@ -185,6 +199,8 @@ def create_mesh_device(
                         continue
                     _ss = (_arg.get("memory_config") or {}).get("shard_spec")
                     if not isinstance(_ss, dict):
+                        _ss = _arg.get("shard_spec")
+                    if not isinstance(_ss, dict):
                         continue
                     for _g in _ss.get("grid", []):
                         for _key in ("start", "end"):
@@ -200,9 +216,18 @@ def create_mesh_device(
     # Default: COL (gives compute grid 7x10) since most lead_models traces use
     # cores in the 7-wide pattern with y up to 9. Switch to ROW only if any of
     # the op's master shard_specs uses x=7 (which COL excludes).
+    # When x=7 is needed, use ETH dispatch so all 8x8 compute cores are available.
+    if needs_row_only:
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+            )
+        except Exception:
+            pass
+
     use_axis = ttnn.DispatchCoreAxis.COL
-    if needs_row_only and not needs_col:
-        use_axis = ttnn.DispatchCoreAxis.ROW
 
     try:
         return ttnn.open_mesh_device(
