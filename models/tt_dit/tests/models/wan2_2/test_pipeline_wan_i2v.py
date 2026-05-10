@@ -69,12 +69,12 @@ def test_pipeline_inference(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    pil_image = PIL.Image.open("./prompt_image.png")
+    pil_image = PIL.Image.open(os.environ.get("PROMPT_IMAGE", "./prompt_image.png"))
     image_prompt = [ImagePrompt(image=pil_image, frame_pos=0)]
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "40"))
     guidance_scale = 3.5
     guidance_scale_2 = 3.5
 
@@ -91,7 +91,7 @@ def test_pipeline_inference(
         num_frames=num_frames,
     )
 
-    prompt = "The cat in the hat runs up the hill to the house."
+    prompt = os.environ.get("PROMPT") or "The cat in the hat runs up the hill to the house."
 
     def run(*, prompt, number, seed):
         logger.info(f"Running inference with prompt: '{prompt}'")

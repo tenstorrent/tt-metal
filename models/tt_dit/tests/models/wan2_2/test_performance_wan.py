@@ -13,6 +13,7 @@ from PIL import Image
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_dit.pipelines.wan.pipeline_anisora import AniSoraPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_distill import WanDistillPipelineI2V
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
@@ -108,6 +109,8 @@ def i2v_metrics(mesh_device, height):
 
 
 def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topology: ttnn.Topology):
+    import os
+
     if model_type == "t2v":
         pipeline_cls = WanPipeline
         expected_metrics = t2v_metrics(mesh_device, height)
@@ -115,7 +118,11 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = create_fractal_image(width, height)
+        prompt_image_path = os.environ.get("PROMPT_IMAGE")
+        if prompt_image_path:
+            image_prompt = Image.open(prompt_image_path).convert("RGB")
+        else:
+            image_prompt = create_fractal_image(width, height)
 
     # Only WH 4x8 uses ring; BH 4x8 linear is the distinct Linear case at this mesh shape.
     if tuple(mesh_device.shape) == (4, 8) and topology == ttnn.Topology.Linear:
@@ -213,8 +220,12 @@ def test_pipeline_performance(
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
     # Test prompts
+    import os as _os
+
+    _custom_prompt = _os.environ.get("PROMPT")
     prompts = [
-        """Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.""",
+        _custom_prompt
+        or """Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.""",
         """A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.""",
         """A neon-lit alley in a sprawling cyberpunk metropolis at night, rain-slick streets reflecting glowing holograms, dense atmosphere, flying cars in the sky, people in high-tech streetwear — ultra-detailed, cinematic lighting, 4K""",
         """A colossal whale floating through a desert sky like a blimp, casting a long shadow over sand dunes, people in ancient robes watching in awe, golden hour lighting, dreamlike color palette — surrealism, concept art, Greg Rutkowski style""",
@@ -272,8 +283,9 @@ def test_pipeline_performance(
     for i in range(num_perf_runs):
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-        # Run pipeline with different prompt
-        prompt_idx = (i + 1) % len(prompts)
+        # Use prompts[0] (PROMPT env var if set, else first default) so the
+        # measured run uses the prompt the caller intended.
+        prompt_idx = i % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
                 result = pipeline(
@@ -453,8 +465,12 @@ def test_pipeline_performance(
     "width, height",
     [
         (832, 480),
+        (1280, 720),
     ],
-    ids=["resolution_480p"],
+    ids=[
+        "resolution_480p",
+        "resolution_720p",
+    ],
 )
 def test_pipeline_performance_distill(
     *,
@@ -477,13 +493,23 @@ def test_pipeline_performance_distill(
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    image_prompt_pil = create_fractal_image(width, height)
+    # Honour PROMPT_IMAGE / PROMPT env vars for parity with the inference test;
+    # fall back to a procedurally-generated fractal so the perf test stays
+    # self-contained when the env vars are unset.
+    import os
+
+    prompt_image_path = os.environ.get("PROMPT_IMAGE")
+    if prompt_image_path:
+        image_prompt_pil = Image.open(prompt_image_path).convert("RGB")
+    else:
+        image_prompt_pil = create_fractal_image(width, height)
     from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
 
     image_prompt = [ImagePrompt(image=image_prompt_pil, frame_pos=0)]
 
     prompts = [
-        "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+        os.environ.get("PROMPT")
+        or "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
         "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
     ]
 
@@ -530,7 +556,8 @@ def test_pipeline_performance_distill(
     ttnn.distributed_context_barrier()
 
     for i in range(num_perf_runs):
-        prompt_idx = (i + 1) % len(prompts)
+        # Use prompts[0] so PROMPT env var (or its default) is what's measured.
+        prompt_idx = i % len(prompts)
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
@@ -596,3 +623,519 @@ def test_pipeline_performance_distill(
     print_stats("Total Pipeline", total_times)
     print("-" * 80)
     logger.info("Distill performance test completed.")
+
+
+# ---------------------------------------------------------------------------
+# Index-AniSora V3.2 (40-step I2V) per-stage perf
+# ---------------------------------------------------------------------------
+# Mirrors test_pipeline_performance_distill but for the AniSora subclass:
+#   - 40 inference steps with guidance_scale=3.5 / guidance_scale_2=3.5
+#   - 480p and 720p on BH Galaxy 4x8 Ring
+# Prints per-stage timings (encoder / prepare_latents / vae_encode / denoising /
+# vae / total). No perf-gate assert — numbers are still being characterised.
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+    ],
+    ids=["bh_4x8sp1tp0_ring"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (832, 480),
+        (1280, 720),
+    ],
+    ids=[
+        "resolution_480p",
+        "resolution_720p",
+    ],
+)
+def test_pipeline_performance_anisora(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    dynamic_load: dict,
+    topology: ttnn.Topology,
+    width: int,
+    height: int,
+    is_ci_env: bool,
+    is_fsdp: bool,
+) -> None:
+    benchmark_profiler = BenchmarkProfiler()
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    import os
+
+    import PIL
+
+    from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
+
+    pil_image = PIL.Image.open(os.environ.get("PROMPT_IMAGE", "./prompt_image.png"))
+    image_prompt = [ImagePrompt(image=pil_image, frame_pos=0)]
+
+    prompts = [
+        "An anime girl smiling, soft lighting, cinematic.",
+        "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
+    ]
+
+    num_frames = 81
+    num_inference_steps = 40
+    guidance_scale = 3.5
+    guidance_scale_2 = 3.5
+    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps (anisora)")
+
+    pipeline = AniSoraPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        height=height,
+        width=width,
+        num_frames=num_frames,
+    )
+
+    # Warmup (untimed but recorded).
+    logger.info("Running warmup iteration...")
+    with benchmark_profiler("run", iteration=0):
+        with torch.no_grad():
+            pipeline(
+                prompt=prompts[0],
+                image_prompt=image_prompt,
+                negative_prompt="",
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                seed=42,
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+                output_type="uint8",
+            )
+            ttnn.synchronize_device(mesh_device)
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
+
+    # Timed run.
+    num_perf_runs = 1
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
+    for i in range(num_perf_runs):
+        # Use prompts[0] so PROMPT env var (or its default) is what's measured.
+        prompt_idx = i % len(prompts)
+        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompts[prompt_idx],
+                    image_prompt=image_prompt,
+                    negative_prompt="",
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
+                    seed=42,
+                    guidance_scale=guidance_scale,
+                    guidance_scale_2=guidance_scale_2,
+                    output_type="uint8",
+                )
+                ttnn.synchronize_device(mesh_device)
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+
+    pipeline.release_traces()
+
+    text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    prepare_latents_times = [benchmark_profiler.get_duration("prepare_latents", i) for i in range(num_perf_runs)]
+    vae_encode_times = (
+        [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
+        if benchmark_profiler.contains_step("vae_encode")
+        else []
+    )
+    denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
+
+    print("\n" + "=" * 80)
+    print("ANISORA V3.2 PERFORMANCE RESULTS")
+    print("=" * 80)
+    print(f"Image Size: {width}x{height}")
+    print(f"Inference Steps: {num_inference_steps}")
+    print(f"Num Frames: {num_frames}")
+    print(f"Guidance: cfg={guidance_scale}, cfg_2={guidance_scale_2}")
+    print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
+    print(f"Mesh Shape: {mesh_device.shape}")
+    print(f"Topology: {topology}")
+    print("-" * 80)
+
+    def print_stats(name, times):
+        if not times:
+            print(f"{name:25} | No data available")
+            return
+        mean_time = statistics.mean(times)
+        std_time = statistics.stdev(times) if len(times) > 1 else 0
+        min_time = min(times)
+        max_time = max(times)
+        print(
+            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | Min: {min_time:8.4f}s | Max: {max_time:8.4f}s"
+        )
+
+    print_stats("Text Encoding", text_encoder_times)
+    print_stats("Image Encoding (total)", prepare_latents_times)
+    print_stats("  VAE Encoder only", vae_encode_times)
+    print_stats(f"Denoising ({num_inference_steps} steps)", denoising_times)
+    print_stats("VAE Decoding", vae_times)
+    print_stats("Total Pipeline", total_times)
+    print("-" * 80)
+    logger.info("AniSora performance test completed.")
+
+
+# ---------------------------------------------------------------------------
+# Base Wan2.2 I2V — configurable steps (default 4) for comparison runs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+    ],
+    ids=["bh_4x8sp1tp0_ring"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "width, height",
+    [(832, 480)],
+    ids=["resolution_480p"],
+)
+def test_pipeline_performance_base_few_steps(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    dynamic_load: dict,
+    topology: ttnn.Topology,
+    width: int,
+    height: int,
+    is_ci_env: bool,
+    is_fsdp: bool,
+) -> None:
+    """Base Wan2.2 I2V with few steps (default 4) for comparison against LoRA."""
+    import os
+
+    benchmark_profiler = BenchmarkProfiler()
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    prompt_image_path = os.environ.get("PROMPT_IMAGE")
+    if prompt_image_path:
+        image_prompt_pil = Image.open(prompt_image_path).convert("RGB")
+    else:
+        image_prompt_pil = create_fractal_image(width, height)
+    from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
+
+    image_prompt = [ImagePrompt(image=image_prompt_pil, frame_pos=0)]
+
+    prompt = os.environ.get("PROMPT") or "A golden retriever running on a sandy beach, waves in the background"
+
+    num_frames = 81
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "4"))
+    guidance_scale = float(os.environ.get("GUIDANCE_SCALE", "3.5"))
+    guidance_scale_2 = float(os.environ.get("GUIDANCE_SCALE_2", str(guidance_scale)))
+    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps (base, few-step)")
+
+    pipeline = WanPipelineI2V.create_pipeline(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        height=height,
+        width=width,
+        num_frames=num_frames,
+    )
+
+    logger.info("Running warmup iteration...")
+    with benchmark_profiler("run", iteration=0):
+        with torch.no_grad():
+            pipeline(
+                prompt=prompt,
+                image_prompt=image_prompt,
+                negative_prompt="",
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                seed=42,
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+                output_type="uint8",
+            )
+            ttnn.synchronize_device(mesh_device)
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
+
+    num_perf_runs = 1
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
+    for i in range(num_perf_runs):
+        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompt,
+                    image_prompt=image_prompt,
+                    negative_prompt="",
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
+                    seed=42,
+                    guidance_scale=guidance_scale,
+                    guidance_scale_2=guidance_scale_2,
+                    output_type="uint8",
+                )
+                ttnn.synchronize_device(mesh_device)
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+
+    pipeline.release_traces()
+
+    text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    prepare_latents_times = [benchmark_profiler.get_duration("prepare_latents", i) for i in range(num_perf_runs)]
+    vae_encode_times = (
+        [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
+        if benchmark_profiler.contains_step("vae_encode")
+        else []
+    )
+    denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
+
+    print("\n" + "=" * 80)
+    print(f"WAN2.2 BASE I2V PERFORMANCE RESULTS ({num_inference_steps} STEPS)")
+    print("=" * 80)
+    print(f"Image Size: {width}x{height}")
+    print(f"Inference Steps: {num_inference_steps}")
+    print(f"Guidance: cfg={guidance_scale}, cfg_2={guidance_scale_2}")
+    print(f"Num Frames: {num_frames}")
+    print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
+    print(f"Mesh Shape: {mesh_device.shape}")
+    print(f"Topology: {topology}")
+    print("-" * 80)
+
+    def print_stats(name, times):
+        if not times:
+            print(f"{name:25} | No data available")
+            return
+        mean_time = statistics.mean(times)
+        std_time = statistics.stdev(times) if len(times) > 1 else 0
+        min_time = min(times)
+        max_time = max(times)
+        print(
+            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | Min: {min_time:8.4f}s | Max: {max_time:8.4f}s"
+        )
+
+    print_stats("Text Encoding", text_encoder_times)
+    print_stats("Image Encoding (total)", prepare_latents_times)
+    print_stats("  VAE Encoder only", vae_encode_times)
+    print_stats(f"Denoising ({num_inference_steps} steps)", denoising_times)
+    print_stats("VAE Decoding", vae_times)
+    print_stats("Total Pipeline", total_times)
+    print("-" * 80)
+    logger.info("Base few-step performance test completed.")
+
+
+# ---------------------------------------------------------------------------
+# Wan2.2 I2V + LoRA — per-stage perf with BenchmarkProfiler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+    ],
+    ids=["bh_4x8sp1tp0_ring"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "width, height",
+    [(832, 480)],
+    ids=["resolution_480p"],
+)
+def test_pipeline_performance_lora(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    dynamic_load: dict,
+    topology: ttnn.Topology,
+    width: int,
+    height: int,
+    is_ci_env: bool,
+    is_fsdp: bool,
+) -> None:
+    """Wan2.2 I2V with distill LoRA fused — measures per-stage timing."""
+    import os
+
+    if not os.environ.get("LORA_HIGH_PATH") or not os.environ.get("LORA_LOW_PATH"):
+        pytest.skip("LORA_HIGH_PATH and LORA_LOW_PATH env vars are required.")
+
+    from models.tt_dit.pipelines.wan.pipeline_wan_lora import WanLoraPipelineI2V
+
+    benchmark_profiler = BenchmarkProfiler()
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    prompt_image_path = os.environ.get("PROMPT_IMAGE")
+    if prompt_image_path:
+        image_prompt_pil = Image.open(prompt_image_path).convert("RGB")
+    else:
+        image_prompt_pil = create_fractal_image(width, height)
+    from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
+
+    image_prompt = [ImagePrompt(image=image_prompt_pil, frame_pos=0)]
+
+    prompt = os.environ.get("PROMPT") or "A golden retriever running on a sandy beach, waves in the background"
+
+    num_frames = 81
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "4"))
+    lora_scale = float(os.environ.get("LORA_SCALE", "1.0"))
+    os.environ.setdefault("BOUNDARY_RATIO", "0.5")
+    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps (LoRA)")
+
+    pipeline = WanLoraPipelineI2V.create_pipeline(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        height=height,
+        width=width,
+        num_frames=num_frames,
+        lora_high_path=os.environ["LORA_HIGH_PATH"],
+        lora_low_path=os.environ["LORA_LOW_PATH"],
+        lora_scale=lora_scale,
+    )
+
+    logger.info("Running warmup iteration...")
+    with benchmark_profiler("run", iteration=0):
+        with torch.no_grad():
+            pipeline(
+                prompt=prompt,
+                image_prompt=image_prompt,
+                negative_prompt="",
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                seed=42,
+                guidance_scale=1.0,
+                guidance_scale_2=1.0,
+                output_type="uint8",
+            )
+            ttnn.synchronize_device(mesh_device)
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
+
+    num_perf_runs = 1
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
+    for i in range(num_perf_runs):
+        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompt,
+                    image_prompt=image_prompt,
+                    negative_prompt="",
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
+                    seed=42,
+                    guidance_scale=1.0,
+                    guidance_scale_2=1.0,
+                    output_type="uint8",
+                )
+                ttnn.synchronize_device(mesh_device)
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+
+    pipeline.release_traces()
+
+    text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    prepare_latents_times = [benchmark_profiler.get_duration("prepare_latents", i) for i in range(num_perf_runs)]
+    vae_encode_times = (
+        [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
+        if benchmark_profiler.contains_step("vae_encode")
+        else []
+    )
+    denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
+
+    print("\n" + "=" * 80)
+    print(f"WAN2.2 + DISTILL LORA PERFORMANCE RESULTS ({num_inference_steps} STEPS)")
+    print("=" * 80)
+    print(f"Image Size: {width}x{height}")
+    print(f"Inference Steps: {num_inference_steps}")
+    print(f"LoRA Scale: {lora_scale}")
+    print(f"Guidance: cfg=1.0, cfg_2=1.0 (baked in)")
+    print(f"Num Frames: {num_frames}")
+    print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
+    print(f"Mesh Shape: {mesh_device.shape}")
+    print(f"Topology: {topology}")
+    print("-" * 80)
+
+    def print_stats(name, times):
+        if not times:
+            print(f"{name:25} | No data available")
+            return
+        mean_time = statistics.mean(times)
+        std_time = statistics.stdev(times) if len(times) > 1 else 0
+        min_time = min(times)
+        max_time = max(times)
+        print(
+            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | Min: {min_time:8.4f}s | Max: {max_time:8.4f}s"
+        )
+
+    print_stats("Text Encoding", text_encoder_times)
+    print_stats("Image Encoding (total)", prepare_latents_times)
+    print_stats("  VAE Encoder only", vae_encode_times)
+    print_stats(f"Denoising ({num_inference_steps} steps)", denoising_times)
+    print_stats("VAE Decoding", vae_times)
+    print_stats("Total Pipeline", total_times)
+    print("-" * 80)
+    logger.info("LoRA performance test completed.")
