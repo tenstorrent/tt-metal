@@ -490,7 +490,7 @@ except Exception as e:
   #   relay_broken_chips_ so channels 2-6 return immediately (0ms). Primary check
   #   is TIMING (35s budget); FIX NX regression shows as exit non-zero.
   GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='Gap1ThreePassEthLaunchFixture.*:LaunchGateLiveEriscFixture.*:ERISCHeartbeatFixture.*:PartialMeshQuiesceFixture.*:RelayBrokenTeardownFixture.*:Phase25RelayBrokenCascadeFixture.*:MmioPhase5RelayBrokenFixture.*:InitRouterSyncDeadRelayFixture.*:ParallelHeartbeatPollFixture.*:ChannelsNotReadyLifecycleFixture.*:RelayTimeoutToleranceFixture.*:TeardownReopenEthOrderingFixture.*:AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*:ReadCoreRelayGuardFixture.*:FwLaunchAddrForceResetFixture.*:FwLaunchAddrRescueFixture.*:FwLaunchAddrQuiesceFixture.*:TeardownNullControlPlaneFixture.*:UmdHeartbeatSkipExitFixture.*:Phase25RelayRetryFixture.*:FixE2AyProbeDeadFayTriggerFixture.*:FixM2DeadPeerEriscResetFixture.*:FixPlBarrierGuardDeadRelayFixture.*:FixQcNonMmioResetCoresSkipFixture.*:FixQbResetLoopEarlyBreakFixture.*:FixPyPzPhase25TopologyTimeoutFixture.*:FixQdDeadRouterMmioSkipFixture.*:FixQuReassertFlagsFixture.*:FixNyRelayMuxClusterGuardFixture.*:FixTbTopologyMapperUnknownAsicFixture.*:FixQvPhase4SkipFixture.*:FixRzStaleBaseUmdFlagFixture.*:FixTf2dFabricHeaderArgsGuardFixture.*:FixTgControlPlaneHostRankGuardFixture.*:FixThRelayMuxNoLinksGuardFixture.*:FixTkDegradedClusterChipFilterFixture.*:FixTlDegradedClusterBailBeforeCreateMeshesFixture.*' ; record_test
+    --gtest_filter='Gap1ThreePassEthLaunchFixture.*:LaunchGateLiveEriscFixture.*:ERISCHeartbeatFixture.*:PartialMeshQuiesceFixture.*:RelayBrokenTeardownFixture.*:Phase25RelayBrokenCascadeFixture.*:MmioPhase5RelayBrokenFixture.*:InitRouterSyncDeadRelayFixture.*:ParallelHeartbeatPollFixture.*:ChannelsNotReadyLifecycleFixture.*:RelayTimeoutToleranceFixture.*:TeardownReopenEthOrderingFixture.*:AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*:ReadCoreRelayGuardFixture.*:FwLaunchAddrForceResetFixture.*:FwLaunchAddrRescueFixture.*:FwLaunchAddrQuiesceFixture.*:TeardownNullControlPlaneFixture.*:UmdHeartbeatSkipExitFixture.*:Phase25RelayRetryFixture.*:FixE2AyProbeDeadFayTriggerFixture.*:FixM2DeadPeerEriscResetFixture.*:FixPlBarrierGuardDeadRelayFixture.*:FixQcNonMmioResetCoresSkipFixture.*:FixQbResetLoopEarlyBreakFixture.*:FixPyPzPhase25TopologyTimeoutFixture.*:FixQdDeadRouterMmioSkipFixture.*:FixQuReassertFlagsFixture.*:FixNyRelayMuxClusterGuardFixture.*:FixTbTopologyMapperUnknownAsicFixture.*:FixQvPhase4SkipFixture.*:FixRzStaleBaseUmdFlagFixture.*:FixTf2dFabricHeaderArgsGuardFixture.*:FixTgControlPlaneHostRankGuardFixture.*:FixThRelayMuxNoLinksGuardFixture.*:FixTkDegradedClusterChipFilterFixture.*:FixTlDegradedClusterBailBeforeCreateMeshesFixture.*:FixTiRingSyncFastSkipFixture.*:Gap74BaseFixtureTeardownGuardFixture.*:FixQwbStaleBaseUmdSkipGuardFixture.*:FixTg2BaseUmdPartialL1ClearFixture.*' ; record_test
 
   # Remaining GAP regression tests — infrastructure / ETH hang fixes.
   # GAP-24: Rapid mesh close/reopen cycling under FABRIC_2D (FIX AD/AC/AL/AQ)
@@ -533,6 +533,38 @@ except Exception as e:
   # (2) no heap corruption from racing ~Cluster() + Cluster() UMD global state access
   # (FIX AE supersedes FIX AW background-thread approach).
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py::test_gap40_fixae_flush_timeout_catch ; record_test
+
+  # Additional GAP regression tests — previously added to tests/ but missing from runner.
+  # GAP-11: Phase 2.5 force-reset + Pass-0 canary chain validation (FIX AS/PG)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase25_force_reset_pass0_chain.py::test_phase25_force_reset_pass0_chain ; record_test
+  # GAP-12: Cross-device relay_broken race in Phase 5 concurrent quiesce (FIX AN)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_cross_device_relay_broken_race.py::test_cross_device_relay_broken_race ; record_test
+  # GAP-13: L1 corruption cascade across 3+ sequential sessions (FIX AE/AC)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_l1_corruption_cascade.py::test_l1_corruption_cascade_broken ; record_test
+  # GAP-14: Phase 4 MUX timeout force-reset does not leave device in bad state (FIX AC)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase4_mux_timeout_recovery.py::test_phase4_mux_timeout_recovery ; record_test
+  # GAP-15: ENTRY snapshot deadline false positive does not permanently degrade fabric
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_snapshot_deadline_false_positive.py::test_snapshot_deadline_false_positive ; record_test
+  # GAP-16: 3-pass ETH launch ordering prevents simultaneous handshake deadlock (FIX AE/AF)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_3pass_eth_launch_ordering.py::test_3pass_eth_launch_no_deadlock ; record_test
+  # GAP-17: Partial-mesh quiesce — FIX AK non-fatal REMOTE_HANDSHAKE_COMPLETE
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_partial_mesh_handshake_tolerance.py::test_partial_mesh_quiesce_nonfatal ; record_test
+  # GAP-18: Router sync graceful degradation on dead-relay neighbor (FIX AL)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_router_sync_graceful_degradation.py::test_router_sync_no_sigabrt ; record_test
+  # GAP-19: channels_not_ready_for_traffic_ flag cleared on re-init (FIX AM lifecycle)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_channels_not_ready_flag_lifecycle.py::test_channels_not_ready_cleared_on_reinit ; record_test
+  # GAP-20: Teardown parallel heartbeat poll converges within budget (FIX AD)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_teardown_parallel_heartbeat_poll.py::test_teardown_heartbeat_poll_parallel ; record_test
+  # GAP-79: FIX XY-2 — relay_broken cleared after ERISC force-reset → AllGather correctness
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap79_fixxy2_relay_broken_cleared_allgather.py::test_relay_broken_cleared_allgather_correctness ; record_test
+  # GAP-80: FIX DT-1 — dispatch ERISC teardown timeout in warm-up triggers remedial tt-smi -r
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather.py::test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather ; record_test
+  # GAP-81: FIX UP3 — dispatch-ERISC timeout loop in warm-up → skip warm-up path
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather.py::test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather ; record_test
+  # GAP-82: FIX SC-ADDR — ETH cores in not_done_cores use per-core-type go_msg address
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap82_fixscaddr_eth_not_done_cores_allgather.py::test_gap82_fixscaddr_eth_not_done_cores_allgather ; record_test
+  # GAP-83: FIX RR/RS — MMIO ROM-postcode channel recovery → recovered channels load firmware → AllGather succeeds
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather.py::test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather ; record_test
 
   # Record the end time
   end_time=$(date +%s)
