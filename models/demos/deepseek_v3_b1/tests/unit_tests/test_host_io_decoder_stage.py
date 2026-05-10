@@ -92,6 +92,7 @@ def test_host_io_decoder_stage(
     position_id,
     decoder_layer_idx,
     num_slots,
+    tmp_path,
 ):
     """End-to-end test of HostIoDecoderStage: H2D → decoder → multi-upstream D2H."""
     torch.manual_seed(0)
@@ -267,3 +268,13 @@ def test_host_io_decoder_stage(
     pipeline_block.terminate()
     ttnn.synchronize_device(submesh)
     logger.info("HostIoDecoderStage teardown complete")
+
+    # Dump on-device KV cache to a torch binary for inspection. Must run under a
+    # fast-dispatch context — slow-dispatch (used by H2D/D2H sockets above) doesn't
+    # support arbitrary on-device reads. Use DEEPSEEK_V3_KV_CACHE_DUMP_DIR if set,
+    # else dump under pytest's tmp_path so the file survives between test runs.
+    kv_cache_dump_dir = Path(os.getenv("DEEPSEEK_V3_KV_CACHE_DUMP_DIR", str(tmp_path)))
+    logger.info(f"Dumping KV cache to {kv_cache_dump_dir}")
+    with ttnn.device.setup_fast_dispatch(submesh):
+        stage.dump_kv_cache(out_dir=kv_cache_dump_dir, stage_idx=0)
+    logger.info("KV cache dump complete")
