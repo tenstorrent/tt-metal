@@ -48,6 +48,12 @@ namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
+// DEAD CODE — this function is defined but never called from kernel_main() or any
+// other function in this translation unit.  Unlike the versions in
+// fabric_router_mux_extension.cpp / fabric_router_relay_extension.cpp / fabric_erisc_router.cpp,
+// this version also lacks a got_immediate_termination_signal() check, making it an
+// unbounded spin if it were ever called.  Marked for removal.
+// See: https://github.com/tenstorrent/tt-metal/issues/42429
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
