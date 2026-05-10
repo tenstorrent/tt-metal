@@ -104,6 +104,7 @@ void deassert_trisc() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+volatile KernelBarrier g_kernel_barrier __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -167,12 +168,15 @@ inline void run_triscs(uint32_t enables) {
     }
 }
 
-inline void start_subordinate_kernel_run_early(uint32_t enables) {
+inline bool start_subordinate_kernel_run_early(uint32_t enables) {
+    bool subordinates_run_kernel = false;
     for (int i = 1; i < NUM_DM_CORES; i++) {  // start from 1 to skip DM0
         if (enables & (1u << i)) {
+            subordinates_run_kernel = true;
             *((volatile uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_GO;
         }
     }
+    return subordinates_run_kernel;
 }
 
 inline void wait_subordinates() {
@@ -213,6 +217,7 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_INITIALIZE_LOCK();
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        thread_sync_init();
 
         deassert_trisc();
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
@@ -316,14 +321,17 @@ extern "C" uint32_t _start1() {
                 for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
-                start_subordinate_kernel_run_early(enables);
+                bool subordinates_run_kernel = start_subordinate_kernel_run_early(enables);
 
-                // Run the kernel
-                WAYPOINT("R");
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                if (enables & (1u << index)) {
+                if (subordinates_run_kernel) {
+                    // If subordinates run kernel they could be using DFBs. DM0 needs to setup DFBs to program implicit synchronization.
                     uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
                     setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+                }
+                // Run the kernel
+                WAYPOINT("R");
+                if (enables & (1u << index)) {
                     uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");

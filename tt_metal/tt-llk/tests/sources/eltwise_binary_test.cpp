@@ -35,7 +35,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
-    const std::uint32_t transpose           = params.UNPACK_TRANSPOSE_FACES;
+    const ckernel::Transpose transpose      = params.UNPACK_TRANSPOSE_FACES
+                                                  ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
+                                                  : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
 
     // Configure hardware for unpacking, no broadcast, no transpose
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -153,9 +155,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    // BH configure_pack uses partial_face for BFP exp_section_size, but narrow_tile is unused (defaults to false)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, false /* narrow_tile */);
+        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */>(
 
@@ -163,7 +164,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
+    _llk_pack_init_<false /* untilize */, false /* zero_output */>(tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
 #else
     _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif

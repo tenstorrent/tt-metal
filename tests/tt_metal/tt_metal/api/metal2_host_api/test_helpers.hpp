@@ -7,6 +7,8 @@
 // Shared test utilities for Metal 2.0 Host API tests.
 // These helpers create minimal valid spec objects for testing.
 
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -15,8 +17,48 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+
+// This file contains shortcut helper functions to create minimal valid ProgramSpec
+// objects for unit tests. This cuts boilerplate in a unit testing context.
+//
+// This is NOT intended as a recommended pattern for production code!
+// See the Metal 2.0 Host API documentation and programming examples for
+// recommended patterns for constructing ProgramSpec objects in production code.
 
 namespace tt::tt_metal::experimental::metal2_host_api::test_helpers {
+
+// ============================================================================
+// Test environment helpers
+// ============================================================================
+
+// Saves and overrides TT_METAL_SLOW_DISPATCH_MODE on construction;
+// restores to its prior state (set or unset) on destruction.
+// (Unit test need SLOW_DISPATCH_MODE=1 to make a MeshDevice successfully.)
+class ScopedSlowDispatchOverride {
+public:
+    ScopedSlowDispatchOverride() {
+        if (const char* prev = std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            prev_value_.emplace(prev);
+        }
+        setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", /*overwrite=*/1);
+    }
+    ~ScopedSlowDispatchOverride() {
+        if (prev_value_) {
+            setenv("TT_METAL_SLOW_DISPATCH_MODE", prev_value_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
+        }
+    }
+
+    ScopedSlowDispatchOverride(const ScopedSlowDispatchOverride&) = delete;
+    ScopedSlowDispatchOverride& operator=(const ScopedSlowDispatchOverride&) = delete;
+
+private:
+    std::optional<std::string> prev_value_;
+};
 
 // ============================================================================
 // Constants
@@ -28,14 +70,15 @@ inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 // ============================================================================
 // Spec Creation Helpers
 // ============================================================================
+//
+// Note: KernelSpec and DataflowBufferSpec do not directly encode target_nodes.
+// Placement is stated on WorkUnitSpec; pass node sets to MakeMinimalWorkUnit instead.
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen2/Quasar)
-inline KernelSpec MakeMinimalDMKernel(
-    const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
+inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
-        .target_nodes = nodes,
         .num_threads = num_threads,
         .config_spec =
             DataMovementConfiguration{
@@ -47,12 +90,10 @@ inline KernelSpec MakeMinimalDMKernel(
 // Helper to create a minimal valid KernelSpec for data movement (Gen1/WH/BH)
 inline KernelSpec MakeMinimalGen1DMKernel(
     const std::string& name,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
-        .target_nodes = nodes,
         .num_threads = 1,
         .config_spec =
             DataMovementConfiguration{
@@ -65,12 +106,10 @@ inline KernelSpec MakeMinimalGen1DMKernel(
 }
 
 // Helper to create a minimal valid KernelSpec for compute
-inline KernelSpec MakeMinimalComputeKernel(
-    const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
+inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
-        .target_nodes = nodes,
         .num_threads = num_threads,
         .config_spec = ComputeConfiguration{},
     };
@@ -78,28 +117,22 @@ inline KernelSpec MakeMinimalComputeKernel(
 
 // Helper to create a minimal valid DataflowBufferSpec
 inline DataflowBufferSpec MakeMinimalDFB(
-    const std::string& name,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
-    uint32_t entry_size = 1024,
-    uint32_t num_entries = 2) {
+    const std::string& name, uint32_t entry_size = 1024, uint32_t num_entries = 2) {
     return DataflowBufferSpec{
         .unique_id = name,
-        .target_nodes = nodes,
         .entry_size = entry_size,
         .num_entries = num_entries,
     };
 }
 
-// Helper to create a minimal valid WorkerSpec
-inline WorkerSpec MakeMinimalWorker(
+// Helper to create a minimal valid WorkUnitSpec
+inline WorkUnitSpec MakeMinimalWorkUnit(
     const std::string& name,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
-    const std::vector<KernelSpecName>& kernels,
-    const std::vector<DFBSpecName>& dfbs = {}) {
-    return WorkerSpec{
+    const std::vector<KernelSpecName>& kernels) {
+    return WorkUnitSpec{
         .unique_id = name,
         .kernels = kernels,
-        .dataflow_buffers = dfbs,
         .target_nodes = nodes,
     };
 }
@@ -119,6 +152,31 @@ inline void BindDFBToKernel(
     });
 }
 
+// Helper to create a minimal valid TensorParameter.
+// Default layout: BFLOAT16, ROW_MAJOR, interleaved, shape {1, 32}. Hardware-agnostic;
+// works on any mock device (alignment + virtualized cores resolved by MakeProgramFromSpec).
+// buffer_type defaults to DRAM; pass BufferType::L1 for an SRAM-resident parameter.
+inline TensorParameter MakeMinimalTensorParameter(
+    const std::string& name, tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::DRAM) {
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config = tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    auto spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 32}, tensor_layout);
+    return TensorParameter{
+        .unique_id = name,
+        .spec = std::move(spec),
+    };
+}
+
+// Helper to add a TensorBinding to a kernel.
+inline void BindTensorParameterToKernel(
+    KernelSpec& kernel, const std::string& tensor_parameter_name, const std::string& accessor_name) {
+    kernel.tensor_bindings.push_back(KernelSpec::TensorBinding{
+        .tensor_parameter_name = tensor_parameter_name,
+        .accessor_name = accessor_name,
+    });
+}
+
 // Helper to create a minimal valid ProgramSpec for Gen1 (WH/BH): DM producer (RISCV_0) + compute consumer
 inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     NodeCoord node{0, 0};
@@ -126,10 +184,10 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", node, tt::tt_metal::DataMovementProcessor::RISCV_0);
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel", node);
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
 
-    auto dfb = MakeMinimalDFB("dfb_0", node);
+    auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
@@ -137,8 +195,7 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"}, {"dfb_0"})};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_kernel", "compute_kernel"})};
 
     return spec;
 }
@@ -151,11 +208,11 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     spec.program_id = "test_program";
 
     // Create a DM kernel (producer) and compute kernel (consumer)
-    auto dm_kernel = MakeMinimalDMKernel("dm_kernel", node);
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel", node);
+    auto dm_kernel = MakeMinimalDMKernel("dm_kernel");
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
 
     // Create a DFB with data format (required for compute endpoint)
-    auto dfb = MakeMinimalDFB("dfb_0", node);
+    auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     // Bind the DFB
@@ -165,9 +222,8 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
 
-    // Create a WorkerSpec
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"}, {"dfb_0"})};
+    // Create a WorkUnitSpec
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_kernel", "compute_kernel"})};
 
     return spec;
 }

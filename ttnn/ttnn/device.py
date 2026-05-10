@@ -18,6 +18,8 @@ Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 get_max_worker_l1_unreserved_size = ttnn._ttnn.device.get_max_worker_l1_unreserved_size
+get_dram_alignment = ttnn._ttnn.device.get_dram_alignment
+get_l1_alignment = ttnn._ttnn.device.get_l1_alignment
 get_optimal_dram_bank_to_logical_worker_assignment = (
     ttnn._ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment
 )
@@ -276,4 +278,15 @@ SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
-__all__ = []
+# Real-time profiler callbacks (experimental)
+ProgramRealtimeRecord = ttnn._ttnn.device.ProgramRealtimeRecord
+RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealtimeProfilerCallback
+UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
+IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerActive
+
+__all__ = [
+    "ProgramRealtimeRecord",
+    "RegisterProgramRealtimeProfilerCallback",
+    "UnregisterProgramRealtimeProfilerCallback",
+    "IsProgramRealtimeProfilerActive",
+]

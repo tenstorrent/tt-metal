@@ -86,6 +86,14 @@ class MathOperation(Enum):
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
+    # Swiglu is technically a binary SFPU op (gate+up → out), but because
+    # Quasar lacks the llk_math_eltwise_binary_sfpu_* dispatcher, its test
+    # harness runs through the unary SFPU path. We therefore register it as
+    # SFPU_UNARY for the test-dispatch constant (SfpuType::swiglu). The
+    # actual binary semantics are implemented by the C++ test source which
+    # unpacks two input tiles into Dest and calls _calculate_swiglu_ with
+    # three offsets directly.
+    SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
     ReluMax = OpSpec(
@@ -196,10 +204,7 @@ class DestAccumulation(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
 
 
 class L1Accumulation(Enum):
@@ -219,28 +224,36 @@ class PackerReluType(Enum):
     Relu activation function types for packer operations.
     """
 
-    NoRelu = 0
-    ZeroRelu = 1
-    MinThresholdRelu = 2
-    MaxThresholdRelu = 3
+    NoRelu = "NO_RELU"
+    ZeroRelu = "ZERO_RELU"
+    MinThresholdRelu = "MIN_THRESHOLD_RELU"
+    MaxThresholdRelu = "MAX_THRESHOLD_RELU"
 
-    def __str__(self):
-        match self:
-            case PackerReluType.NoRelu:
-                return "NO_RELU"
-            case PackerReluType.ZeroRelu:
-                return "ZERO_RELU"
-            case PackerReluType.MinThresholdRelu:
-                return "MIN_THRESHOLD_RELU"
-            case PackerReluType.MaxThresholdRelu:
-                return "MAX_THRESHOLD_RELU"
-            case _:
-                raise ValueError(f"Unsupported PackerReluType: {self!r}")
+    @property
+    def cpp_enum_value(self):
+        return f"ReluType::{self.value}"
+
+    @property
+    def bits(self) -> int:
+        return _PACKER_RELU_BITS[self.value]
+
+    @classmethod
+    def from_bits(cls, bits: int) -> "PackerReluType":
+        return cls(_PACKER_RELU_BITS_INV[bits])
+
+
+_PACKER_RELU_BITS = {
+    "NO_RELU": 0,
+    "ZERO_RELU": 1,
+    "MIN_THRESHOLD_RELU": 2,
+    "MAX_THRESHOLD_RELU": 3,
+}
+_PACKER_RELU_BITS_INV = {v: k for k, v in _PACKER_RELU_BITS.items()}
 
 
 def pack_relu_config(mode: "PackerReluType", threshold_bits: int) -> int:
     """Pack ReLU mode (2 bits) and threshold (16 bits) into a 32-bit config word."""
-    return (mode.value & 0x3) | ((threshold_bits & 0xFFFF) << 16)
+    return (mode.bits & 0x3) | ((threshold_bits & 0xFFFF) << 16)
 
 
 class Haloize(Enum):
@@ -249,10 +262,7 @@ class Haloize(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
 
 
 class ApproximationMode(Enum):
@@ -261,10 +271,7 @@ class ApproximationMode(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
 
 
 class Transpose(Enum):
@@ -273,10 +280,7 @@ class Transpose(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
 
 
 class MathFidelity(Enum):
@@ -305,10 +309,52 @@ class NarrowTile(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
+
+
+class PartialFace(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
+class EnforceFP32Accumulation(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
+class ClearFP32DstAcc(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
+class AccToDest(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
+class UnpackToDest(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
 
 
 class Tilize(Enum):
@@ -317,10 +363,7 @@ class Tilize(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
 
 
 class FastMode(Enum):
@@ -329,10 +372,7 @@ class FastMode(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
 
 
 class StableSort(Enum):
@@ -341,10 +381,7 @@ class StableSort(Enum):
 
     @property
     def cpp_enum_value(self):
-        if self.value == True:
-            return "true"
-        else:
-            return "false"
+        return str(self.value).lower()
 
 
 class Mailboxes(Enum):
@@ -492,6 +529,11 @@ class ReluConfig(Enum):
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1
+
+
+class GoldenType(Enum):
+    L1_GOLDEN = "L1_GOLDEN"
+    MASTER_GOLDEN = "MASTER_GOLDEN"
 
 
 # *********************************

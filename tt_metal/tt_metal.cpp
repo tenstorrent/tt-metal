@@ -7,6 +7,7 @@
 #include <circular_buffer_constants.h>
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -180,43 +181,6 @@ void ConfigureKernelGroup(
         program.impl().get_kernel(kernel_id)->configure(
             device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
     }
-}
-
-std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
-    std::optional<uint32_t> semaphore_id = std::nullopt;
-    std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-            CoreCoord logical_core(x, y);
-            auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
-            if (semaphores.size() == NUM_SEMAPHORES) {
-                TT_THROW(
-                    "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
-                    logical_core.str(),
-                    NUM_SEMAPHORES);
-            }
-
-            for (const auto& semaphore : semaphores) {
-                semaphore_histogram[semaphore.get().id()]++;
-            }
-        }
-    }
-
-    std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
-    for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
-        if (semaphore_histogram.at(sem_id) == 0) {
-            uninitialized_sem_id = sem_id;
-            break;
-        }
-    }
-
-    if (uninitialized_sem_id.has_value()) {
-        semaphore_id = uninitialized_sem_id;
-    } else {
-        TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
-    }
-
-    return semaphore_id;
 }
 
 inline void SetRuntimeArgsImpl(
@@ -488,12 +452,10 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-            auto runtime_id = program.get_runtime_id();
 
             // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
-            local_launch_msg.view().kernel_config().host_assigned_id() =
-                runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device_id);
+            local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
@@ -545,7 +507,8 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceSharded(
+    Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -566,6 +529,9 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
+        if (logical_core_filter != nullptr && !logical_core_filter->contains(core)) {
+            continue;
+        }
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
@@ -658,12 +624,19 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     }
 }
 
-void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
+        if (logical_core_filter != nullptr) {
+            TT_FATAL(
+                logical_core_filter->empty(),
+                "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
+                "per-core filtering)");
+            return;
+        }
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
-        WriteToDeviceSharded(buffer, host_buffer);
+        WriteToDeviceSharded(buffer, host_buffer, logical_core_filter);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
@@ -674,7 +647,7 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer);
+            WriteToDevice(buffer, host_buffer, /*logical_core_filter=*/nullptr);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
@@ -851,7 +824,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
         } else {
-            TT_ASSERT(!MetalContext::instance().device_manager()->is_dispatch_firmware_active());
+            auto& dm = MetalContext::instance().device_manager();
+            const bool fd_active = dm->is_dispatch_firmware_active();
+            const bool rt_done = dm->is_rt_profiler_device_init_complete(device->id());
+            TT_ASSERT(
+                !(fd_active && rt_done),
+                "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
+                "completed on this device.");
         }
 
 #ifdef TT_METAL_USE_EMULE
@@ -897,9 +876,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     hal.get_programmable_core_type(programmable_core_type_index);
                 for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                     auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                    auto runtime_id = program.get_runtime_id();
-                    kg->launch_msg.view().kernel_config().host_assigned_id() =
-                        runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
+                    // Raw runtime id matches Tracy / fast dispatch; profiler ingest encodes with device_id once.
+                    kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
                     auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     not_done_cores.insert(physical_core);
@@ -1127,6 +1105,24 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 }
 
 }  // namespace detail
+
+namespace experimental::core_subset_write {
+
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM:  // fallthrough
+        case BufferType::L1:    // fallthrough
+        case BufferType::L1_SMALL: {
+            detail::WriteToDevice(buffer, host_buffer, &logical_core_filter);
+        } break;
+        case BufferType::SYSTEM_MEMORY: {
+            TT_THROW("Writing to host memory is unsupported!");
+        } break;
+        default: TT_THROW("Unsupported buffer type!");
+    }
+}
+
+}  // namespace experimental::core_subset_write
 
 size_t GetNumAvailableDevices() { return MetalContext::instance().get_cluster().number_of_user_devices(); }
 
@@ -1563,24 +1559,7 @@ uint32_t CreateSemaphore(
             },
         },
         core_spec);
-    std::optional<uint32_t> semaphore_id;
-    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
-    TT_FATAL(
-        MetalContext::instance().is_coord_in_range((crs.ranges().back()).end_coord, core_type),
-        "Coordinates out of range");
-    for (const auto& core_range : crs.ranges()) {
-        std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
-        if (!semaphore_id.has_value()) {
-            semaphore_id = semaphore_id_candidate;
-        } else {
-            semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
-        }
-    }
-    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
-
-    program.impl().add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
-
-    return semaphore_id.value();
+    return program.impl().create_semaphore(crs, initial_value, core_type);
 }
 
 GlobalSemaphore CreateGlobalSemaphore(

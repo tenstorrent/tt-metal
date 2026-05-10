@@ -6,7 +6,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
-    test_conv2d.cpp
+    conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
 )
@@ -17,6 +17,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp
     test_gelu_bw_ulp.cpp
+    test_gelu_bw_main_ulp.cpp
     test_generic_op.cpp
     test_graph_add.cpp
     test_graph_basic.cpp
@@ -61,6 +62,7 @@ set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
     accessor/test_accessor_benchmarks.cpp
     accessor/test_tensor_accessor.cpp
     accessor/test_tensor_accessor_on_device.cpp
+    accessor/test_tensor_accessor_strided_dfb.cpp
 )
 
 set(UNIT_TESTS_TTNN_TENSOR_SOURCES

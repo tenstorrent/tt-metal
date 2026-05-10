@@ -6,10 +6,35 @@ import datetime
 import json
 import logging
 import os
+import re
 import signal
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
+
+# ttsim runs in-process (no ExalensServer). Its init must complete before any helpers.* import,
+# because helpers.chip_architecture.get_chip_architecture() reaches check_context() and this
+# conftest calls it at module-load time via the skip_for_* markers defined further down.
+# TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
+# TT_UMD_SIMULATOR_PATH is kept as an alias for the existing RTL-simulator workflow.
+# Gate on --run-simulator so the env var being set doesn't force a ttsim init on silicon runs,
+# and skip --compile-producer (it only compiles ELFs and never talks to a device). xdist workers
+# inherit env vars but not the controller's argv, so trust the env var when PYTEST_XDIST_WORKER
+# is set.
+_SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
+    "TT_UMD_SIMULATOR_PATH"
+)
+_IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
+_SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
+    "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
+)
+if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+    from ttexalens import tt_exalens_init as _tt_exalens_init
+
+    _tt_exalens_init.init_ttexalens(
+        simulation_directory=_SIMULATOR_PATH, use_4B_mode=False
+    )
 
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
@@ -276,21 +301,29 @@ def pytest_configure(config):
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if test_target.run_simulator:
-            simulator_path = os.environ.get("TT_UMD_SIMULATOR_PATH")
-
-            if simulator_path is None:
+            if _SIMULATOR_PATH is None:
                 pytest.exit(
-                    "ERROR: --run-simulator requires TT_UMD_SIMULATOR_PATH "
-                    "environment variable to be set.",
+                    "ERROR: --run-simulator requires TT_METAL_SIMULATOR "
+                    "(or TT_UMD_SIMULATOR_PATH) environment variable to be set.",
                     returncode=1,
                 )
 
-            # Only the controller process manages the server; xdist workers
-            # just connect to the already-running instance.
-            if not hasattr(config, "workerinput"):
+            if _SIMULATOR_PATH.endswith(".so"):
+                # ttsim: already initialized at module import above; runs in-process, no server.
+                # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
+                # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
+                if test_target.reset_simulator_per_test:
+                    pytest.exit(
+                        "ERROR: --reset-simulator-per-test is not supported with ttsim. "
+                        "Re-run without it.",
+                        returncode=1,
+                    )
+            elif not hasattr(config, "workerinput"):
+                # RTL simulator: only the controller process manages the server; xdist workers
+                # just connect to the already-running instance.
                 global _exalens_server
                 _exalens_server = ExalensServer(
-                    simulator_path=simulator_path,
+                    simulator_path=_SIMULATOR_PATH,
                     port=test_target.simulator_port,
                 )
         else:
@@ -363,6 +396,62 @@ def _stringify_params(params):
             parts.append(f"{name}={str(value)}")
 
     return f"[{' | '.join(parts)}]"
+
+
+# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
+#   [<clk>] ERROR: <Category>: <function>: <details>
+_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_logreport(report):
+    # pytest-forked appends a crashed child's captured streams to report.sections
+    # using lowercase headers ("captured stdout"/"captured stderr"), but pytest's
+    # TestReport.capstdout/capstderr properties only match headers that start with
+    # "Captured stdout"/"Captured stderr" (capital C). The junit XML writer reads
+    # via those properties, so without renaming, <system-out> stays empty for
+    # forked crashes. Rename in place so the ttsim "ERROR: ..." line lands in the
+    # XML and any junit-XML-aware viewer (junit2html, CI, etc.) can render it.
+    sections = getattr(report, "sections", None)
+    if sections:
+        report.sections = [
+            (
+                ("Captured stdout call", content)
+                if name == "captured stdout"
+                else (
+                    ("Captured stderr call", content)
+                    if name == "captured stderr"
+                    else (name, content)
+                )
+            )
+            for name, content in sections
+        ]
+
+    # Rewrite the headline of forked-crash reports from the useless
+    #   ":-1: running the test CRASHED with signal 0"
+    # to the actual ttsim category/function so it shows up in the test summary,
+    # in <error message="..."> in the junit XML, and in CI annotations.
+    #
+    # We also normalize report.when from pytest-forked's sentinel "???" to "call".
+    # Without this, pytest-sugar (and other reporters that count by phase) treat
+    # forked-crash reports as setup-phase errors and miss them in the live
+    # pass/fail/skip footer; the junit writer also classifies them as <error>
+    # rather than <failure>. Setting when="call" makes the report indistinguish-
+    # able from a normal call-phase failure, which is what we actually want:
+    # the test ran, ttsim hit an unimplemented path mid-execution, the test
+    # failed.
+    if report.outcome == "failed" and "CRASHED with signal" in str(
+        report.longrepr or ""
+    ):
+        report.when = "call"
+        m = _TTSIM_ERR_RE.search(report.capstdout or "")
+        if m:
+            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
+            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+            props = list(getattr(report, "user_properties", []))
+            props.append(("ttsim_category", cat))
+            props.append(("ttsim_func", func))
+            report.user_properties = props
 
 
 @pytest.hookimpl(hookwrapper=True)

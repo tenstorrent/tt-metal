@@ -15,6 +15,9 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
+#include "hostdevcommon/profiler_common.h"
+#include "hostdev/dev_msgs.h"
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -29,6 +32,7 @@ constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
 constexpr uint32_t cb_size = CB_SIZE;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
@@ -51,6 +55,16 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uint32_t cb_end = cb_base + cb_size;
+
+// Dispatch-core-local L1 region assigned by DispatchMemMap via
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
+// REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
+// description; this kernel is the consumer side of the embedded program_id_fifo.
+volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
+
+static bool rt_profiler_enabled = false;
+
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;
@@ -126,6 +140,21 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
 }
 
 FORCE_INLINE
+void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
+    bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
+
+    RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
+    msg->realtime_profiler_state = new_state;
+
+    if (msg->realtime_profiler_core_noc_xy != 0) {
+        uint64_t realtime_profiler_addr =
+            get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_state_addr);
+        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
+    }
+}
+
+FORCE_INLINE
 uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
     // Careful below: have to take the signed diff for 2s complement to handle the wrap
@@ -143,7 +172,11 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
+        if (rt_profiler_enabled) {
+            record_realtime_timestamp(rt_profiler_msg, false);
+        }
     }
+
     WAYPOINT("WCD");
 }
 
@@ -294,6 +327,7 @@ void process_dispatch_s_wait_cmd() {
     // Wait for workers to complete
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
     }
+
     // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
     // counter. dispatch_d will clear it's own counter
     update_worker_completion_count_on_dispatch_d<true>();
@@ -325,6 +359,52 @@ void set_go_signal_noc_data() {
     cmd_ptr = round_up_pow2((uint32_t)data_ptr, L1_ALIGNMENT);
 }
 
+// When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
+// that we never count locally. This function will wait for dispatch_d to publish its NOC 1 deltas into dispatch_d's
+// normal counter slots, then merge any non-zero deltas into our local counters before the barrier.
+FORCE_INLINE
+void merge_dispatch_d_noc_counter_deltas() {
+    if constexpr (distributed_dispatcher) {
+        DEVICE_PRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core");
+        ASSERT(0);
+        return;
+    }
+
+    constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
+
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+    noc_semaphore_wait(shutdown_sem_addr, 1);
+
+    invalidate_l1_cache();
+    const uint32_t reads_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::READS_NUM_ISSUED>(my_noc_index);
+    const uint32_t nonposted_writes_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(my_noc_index);
+    const uint32_t nonposted_writes_acked_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(my_noc_index);
+    const uint32_t nonposted_atomics_acked_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index);
+    const uint32_t posted_writes_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(my_noc_index);
+
+    if (reads_delta != 0) {
+        noc_reads_num_issued[my_noc_index] += reads_delta;
+    }
+    if (nonposted_writes_delta != 0) {
+        noc_nonposted_writes_num_issued[my_noc_index] += nonposted_writes_delta;
+    }
+    if (nonposted_writes_acked_delta != 0) {
+        noc_nonposted_writes_acked[my_noc_index] += nonposted_writes_acked_delta;
+    }
+    if (nonposted_atomics_acked_delta != 0) {
+        noc_nonposted_atomics_acked[my_noc_index] += nonposted_atomics_acked_delta;
+    }
+    if (posted_writes_delta != 0) {
+        noc_posted_writes_num_issued[my_noc_index] += posted_writes_delta;
+    }
+}
+
 void kernel_main() {
     set_l1_data_cache<true>();
     DPRINT << "dispatch_s : start" << ENDL();
@@ -344,21 +424,51 @@ void kernel_main() {
         }
     }
 
+    // realtime_profiler_msg_t signalling + FIFO + kernel_* .id fields are zeroed on the host in
+    // DispatchSKernel::ConfigureCore() before CQ kernels launch.
+
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+        uint32_t popped_pid = 0;
+        if (rt_profiler_enabled) {
+            record_realtime_timestamp(rt_profiler_msg, true);
+            popped_pid = pop_program_id(rt_profiler_msg);
+        }
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
+        if (rt_profiler_enabled) {
+            uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) ? popped_pid : 0;
+            write_buffer_id(rt_profiler_msg, buffer_id);
+        }
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
-            case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
+            case CQ_DISPATCH_CMD_TERMINATE:
+                if (rt_profiler_enabled) {
+                    signal_realtime_profiler_and_switch(rt_profiler_msg);
+                    noc_async_writes_flushed();
+                    for (volatile uint32_t delay = 0; delay < 5000; delay++) {
+                    }
+                }
+
+                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
+                if (rt_profiler_enabled) {
+                    uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
+                        rt_profiler_msg->realtime_profiler_core_noc_xy,
+                        rt_profiler_msg->realtime_profiler_remote_state_addr);
+                    dispatch_s_noc_inline_dw_write(
+                        realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
+                }
+                done = true;
+                break;
             default:
                 DPRINT << "dispatcher_s invalid command" << ENDL();
                 DEVICE_PRINT("dispatcher_s invalid command\n");
@@ -374,18 +484,20 @@ void kernel_main() {
             cmd_ptr = cb_base;
         }
         total_pages_acquired++;
+
+        if (!done && rt_profiler_enabled) {
+            signal_realtime_profiler_and_switch(rt_profiler_msg);
+        }
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
-#ifdef COMPILE_FOR_IDLE_ERISC
-    // Wait for all transactions to complete, to avoid hitting the asserts in
-    // idle_erisck.cc if there are outstanding transactions. These barriers
-    // don't work on worker cores, because there cq_dispatch is on the same core
-    // and shares use of this noc, but doesn't update this risc's transaction
-    // counts. However, we don't have the barrier checks in brisck.cc, so we can
-    // skip this for now.
+
+    if constexpr (!distributed_dispatcher) {
+        merge_dispatch_d_noc_counter_deltas();
+    }
+
     noc_async_full_barrier();
-#endif
+
     DPRINT << "dispatch_s : done" << ENDL();
     DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();

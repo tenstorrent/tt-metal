@@ -18,7 +18,6 @@
 #include "experimental/core_local_mem.h"
 
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
 
 namespace norm::layernorm::device::kernels::dataflow {
 
