@@ -12,8 +12,12 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <llrt/hal.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/fabric_types.hpp>
+#include <optional>
 
 namespace tt::tt_metal {
 
@@ -167,6 +171,150 @@ uint32_t calculate_expected_workers_to_finish(
     // Not managed by fast dispatch
     const auto num_workers = device->num_worker_cores(core_type, sub_device_id);
     return num_workers;
+}
+
+// FIX LT9-PROGRESS (#42429 Approach B): Read the always-on fabric packet-progress counter from
+// every active fabric ERISC on every device.  The counter lives at FABRIC_KERNEL_HEARTBEAT_ADDR+4
+// (written by fabric_erisc_router.cpp whenever tx_progress||rx_progress is true in the main loop).
+// Returns an XOR of all per-ERISC counter values; any change between two calls means at least one
+// ERISC is processing packets — the host timeout clock should reset.
+//
+// Returns 0 immediately when:
+//  - Fabric is disabled (FabricConfig::DISABLED)
+//  - DeviceManager is not initialized
+//  - The read throws (e.g. relay broken on non-MMIO device) — we eat the exception to keep the
+//    timeout path non-fatal, at the cost of possibly not seeing ERISC progress for that device.
+uint32_t get_fabric_erisc_progress() {
+    auto& ctx = MetalContext::instance();
+    if (!ctx.is_device_manager_initialized()) {
+        return 0;
+    }
+
+    auto& control_plane = ctx.get_control_plane();
+    if (control_plane.get_fabric_config() == tt_fabric::FabricConfig::DISABLED) {
+        return 0;
+    }
+
+    // Heartbeat address is arch-dependent; packet counter lives at +4.
+    const uint32_t heartbeat_addr = ctx.hal().get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+    const uint32_t packet_counter_addr = heartbeat_addr + 4;
+
+    auto& cluster = ctx.get_cluster();
+    uint32_t combined = 0;
+
+    for (ChipId chip_id : ctx.device_manager()->get_all_active_device_ids()) {
+        // get_active_fabric_eth_channels returns {chan_id, direction} pairs for channels
+        // that are running fabric router kernels.
+        const auto fabric_node_id = [&]() -> std::optional<tt_fabric::FabricNodeId> {
+            try {
+                return control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }();
+        if (!fabric_node_id) {
+            continue;  // chip not in fabric cluster
+        }
+
+        for (const auto& [eth_chan_id, _direction] :
+             control_plane.get_active_fabric_eth_channels(*fabric_node_id)) {
+            try {
+                const CoreCoord eth_logical_core =
+                    cluster.get_soc_desc(chip_id).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                const tt_cxy_pair eth_logical_pair(chip_id, eth_logical_core.x, eth_logical_core.y);
+                const tt_cxy_pair eth_virtual =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(eth_logical_pair, CoreType::ETH);
+                uint32_t counter_val = 0;
+                cluster.read_core(&counter_val, sizeof(uint32_t), eth_virtual, packet_counter_addr);
+                combined ^= counter_val;
+            } catch (...) {
+                // Non-MMIO relay broken or core unreachable — skip silently.
+            }
+        }
+    }
+
+    return combined;
+}
+
+// FIX LT9-PROGRESS (#42429 Approach C): Diagnostic dump of all active ERISC state when a dispatch
+// timeout fires.  Logs the heartbeat, packet counter, and EDMStatus for every active fabric ERISC.
+// This runs synchronously inside the on_timeout lambda — it is best-effort and never throws.
+// The goal is to give ops engineers a post-mortem snapshot of which ERISC(s) are truly stuck.
+void dump_fabric_erisc_state() {
+    auto& ctx = MetalContext::instance();
+    if (!ctx.is_device_manager_initialized()) {
+        return;
+    }
+
+    auto& control_plane = ctx.get_control_plane();
+    if (control_plane.get_fabric_config() == tt_fabric::FabricConfig::DISABLED) {
+        return;
+    }
+
+    const uint32_t heartbeat_addr = ctx.hal().get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+    const uint32_t packet_counter_addr = heartbeat_addr + 4;
+
+    auto& cluster = ctx.get_cluster();
+
+    log_warning(tt::LogMetal, "=== ERISC Fabric State Dump (timeout diagnostic) ===");
+
+    for (ChipId chip_id : ctx.device_manager()->get_all_active_device_ids()) {
+        const auto fabric_node_id = [&]() -> std::optional<tt_fabric::FabricNodeId> {
+            try {
+                return control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }();
+        if (!fabric_node_id) {
+            continue;
+        }
+
+        auto active_channels = control_plane.get_active_fabric_eth_channels(*fabric_node_id);
+        if (active_channels.empty()) {
+            continue;
+        }
+
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            try {
+                const CoreCoord eth_logical_core =
+                    cluster.get_soc_desc(chip_id).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                const tt_cxy_pair eth_logical_pair(chip_id, eth_logical_core.x, eth_logical_core.y);
+                const tt_cxy_pair eth_virtual =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(eth_logical_pair, CoreType::ETH);
+
+                uint32_t heartbeat_val = 0;
+                uint32_t packet_counter_val = 0;
+
+                cluster.read_core(&heartbeat_val, sizeof(uint32_t), eth_virtual, heartbeat_addr);
+                cluster.read_core(&packet_counter_val, sizeof(uint32_t), eth_virtual, packet_counter_addr);
+
+                // heartbeat format: 0xDCBAxxxx where xxxx is the 16-bit loop counter
+                const bool main_loop_alive = (heartbeat_val >> 16) == 0xDCBA;
+                log_warning(
+                    tt::LogMetal,
+                    "  dev={} chan={} eth=({},{})  heartbeat=0x{:08X} ({})  packets_processed={}",
+                    chip_id,
+                    eth_chan_id,
+                    eth_logical_core.x,
+                    eth_logical_core.y,
+                    heartbeat_val,
+                    main_loop_alive ? "ALIVE" : "STALLED",
+                    packet_counter_val);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "  dev={} chan={}  read FAILED: {}",
+                    chip_id,
+                    eth_chan_id,
+                    e.what());
+            } catch (...) {
+                log_warning(tt::LogMetal, "  dev={} chan={}  read FAILED (unknown exception)", chip_id, eth_chan_id);
+            }
+        }
+    }
+
+    log_warning(tt::LogMetal, "=== End ERISC Fabric State Dump ===");
 }
 
 }  // namespace tt::tt_metal

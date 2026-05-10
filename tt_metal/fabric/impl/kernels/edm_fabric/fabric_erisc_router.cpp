@@ -2314,6 +2314,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
 #endif
     volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+    // FIX LT9-PROGRESS (#42429 Approach B): always-on packet-progress counter at heartbeat+4.
+    // Host reads this in get_fabric_erisc_progress() and resets its dispatch-timeout clock whenever
+    // this counter advances, distinguishing "making progress on a large op" from "genuinely hung".
+    // Zero at kernel start so the host sees a clean baseline before any packets flow.
+    constexpr uint32_t FABRIC_PACKET_COUNTER_ADDR = FABRIC_KERNEL_HEARTBEAT_ADDR + 4;
+    volatile uint32_t* fabric_packet_counter_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_PACKET_COUNTER_ADDR);
+    *fabric_packet_counter_ptr = 0;
 
     auto execute_main_loop = [&]() {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
@@ -2660,6 +2667,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     rx_progress,
                     local_fabric_telemetry,
                     fabric_telemetry);
+            }
+
+            // FIX LT9-PROGRESS: advance the packet counter whenever any channel made progress this
+            // loop iteration. Host polls this to distinguish "slow but working" from "hung".
+            if (tx_progress || rx_progress) {
+                ++(*fabric_packet_counter_ptr);
             }
 
             if ((++fabric_heartbeat_counter & 0x3F) == 0) {

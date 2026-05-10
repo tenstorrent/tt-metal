@@ -74,6 +74,14 @@ uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
 
 uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
 
+// FIX LT9-PROGRESS (Approach B): XOR of all active fabric ERISC packet counters.
+// Advances whenever any ERISC processes a packet.  Returns 0 when fabric is disabled.
+uint32_t get_fabric_erisc_progress();
+
+// FIX LT9-PROGRESS (Approach C): Log heartbeat + packet counter for every active fabric ERISC.
+// Called on dispatch timeout to provide a post-mortem diagnostic snapshot.  Never throws.
+void dump_fabric_erisc_state();
+
 // Return the expected number of workers to be in the finished state
 uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);
 

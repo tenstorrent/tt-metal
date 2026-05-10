@@ -822,8 +822,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
                 TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
             };
 
+            // FIX LT9-PROGRESS (B): combine dispatch kernel progress with fabric ERISC packet
+            // progress so that ops blocked in fabric (AllGather etc.) don't false-trigger timeout.
             auto get_dispatch_progress = [&]() -> uint32_t {
-                return get_cq_dispatch_progress(this->device_id, cq_id);
+                return get_cq_dispatch_progress(this->device_id, cq_id) ^ get_fabric_erisc_progress();
             };
             auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
             loop_and_wait_with_timeout(
@@ -861,18 +863,23 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
                cq_interface.completion_fifo_rd_toggle == write_toggle;
     };
 
-    // Handler for the timeout
+    // Handler for the timeout — FIX LT9-PROGRESS (C): dump ERISC state before declaring hang.
     auto on_timeout = [this, &exit_condition]() {
         exit_condition.store(true);
+
+        // Approach C: emit heartbeat + packet counter for every active fabric ERISC so that ops
+        // engineers can identify which channel is stuck rather than just seeing a generic timeout.
+        dump_fabric_erisc_state();
 
         tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
-    // Get dispatch progress for timeout detection
+    // FIX LT9-PROGRESS (B): include fabric ERISC packet progress so that long-running fabric ops
+    // (AllGather, ReduceScatter on large tensors) don't false-trigger the dispatch timeout.
     auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
-        return get_cq_dispatch_progress(this->device_id, cq_id);
+        return get_cq_dispatch_progress(this->device_id, cq_id) ^ get_fabric_erisc_progress();
     };
 
     loop_and_wait_with_timeout(
