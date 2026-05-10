@@ -489,7 +489,7 @@ def _trunc(val: Any, max_len: int = 80) -> str:
     return s[: max_len - 3] + "..." if len(s) > max_len else s
 
 
-def render_report(report: ValidationReport, pcc_data: dict = None) -> str:
+def render_report(report: ValidationReport) -> str:
     lines: list[str] = []
 
     lines.append("# Sweep Trace Validation Report")
@@ -501,10 +501,6 @@ def render_report(report: ValidationReport, pcc_data: dict = None) -> str:
     lines.append(f"**Not exercised by sweep:** {len(report.missing_sweep)}")
     lines.append(f"**Incidental (non-target ops):** {len(report.incidental)}")
     lines.append(f"**Coverage:** {report.coverage:.1%}")
-    if pcc_data:
-        _total_pcc = len(pcc_data)
-        _pass_99 = sum(1 for v in pcc_data.values() if v >= 0.99)
-        lines.append(f"**PCC:** {_pass_99}/{_total_pcc} pass (>= 0.99)")
     lines.append("")
 
     # Per-operation summary table
@@ -518,27 +514,14 @@ def render_report(report: ValidationReport, pcc_data: dict = None) -> str:
     if op_stats:
         lines.append("## Per-operation summary")
         lines.append("")
-        if pcc_data:
-            lines.append("| Operation | Match | Diff | Hash Mismatch | Missing | Total | Min PCC |")
-            lines.append("|-----------|------:|-----:|--------------:|--------:|------:|--------:|")
-        else:
-            lines.append("| Operation | Match | Diff | Hash Mismatch | Missing | Total |")
-            lines.append("|-----------|------:|-----:|--------------:|--------:|------:|")
+        lines.append("| Operation | Match | Diff | Hash Mismatch | Missing | Total |")
+        lines.append("|-----------|------:|-----:|--------------:|--------:|------:|")
         for op in sorted(op_stats):
             s = op_stats[op]
             total = sum(s.values())
-            if pcc_data:
-                _op_pccs = [
-                    pcc_data[r.config_hash] for r in report.results if r.op_name == op and r.config_hash in pcc_data
-                ]
-                _min_pcc = f"{min(_op_pccs):.4f}" if _op_pccs else "N/A"
-                lines.append(
-                    f"| `{op}` | {s['match']} | {s['diff']} | {s['hash_mismatch']} | {s['missing_sweep']} | {total} | {_min_pcc} |"
-                )
-            else:
-                lines.append(
-                    f"| `{op}` | {s['match']} | {s['diff']} | {s['hash_mismatch']} | {s['missing_sweep']} | {total} |"
-                )
+            lines.append(
+                f"| `{op}` | {s['match']} | {s['diff']} | {s['hash_mismatch']} | {s['missing_sweep']} | {total} |"
+            )
         lines.append("")
 
     # Missing sweep configs (collapsed for brevity)
@@ -660,11 +643,6 @@ def main() -> int:
         default=None,
         help="Coverage threshold (0.0-1.0) below which the job fails. Default: no threshold.",
     )
-    parser.add_argument(
-        "--results-dir",
-        default=None,
-        help="Path to results_export directory for PCC data.",
-    )
     args = parser.parse_args()
 
     master_path = Path(args.master_trace)
@@ -693,36 +671,7 @@ def main() -> int:
     print(f"Loaded {len(sweep_paths)} sweep trace(s), {len(sweep_data['operations'])} operations")
 
     report = validate(master_data, sweep_data)
-
-    # Load PCC data from results_export if provided
-    pcc_data = {}
-    if args.results_dir and Path(args.results_dir).is_dir():
-        import os as _os_pcc
-
-        for _f in sorted(_os_pcc.listdir(args.results_dir)):
-            _fp = _os_pcc.path.join(args.results_dir, _f)
-            with open(_fp) as _fh:
-                _d = json.load(_fh)
-            if not isinstance(_d, list):
-                continue
-            for _e in _d:
-                if not isinstance(_e, dict):
-                    continue
-                _ih = _e.get("input_hash", "")
-                if _e.get("success", False):
-                    _msg = str(_e.get("message", ""))
-                    try:
-                        pcc_data[_ih] = float(_msg)
-                    except ValueError:
-                        if "PCC: " in _msg:
-                            try:
-                                pcc_data[_ih] = float(_msg.split("PCC: ")[1].split(",")[0].split(")")[0])
-                            except (ValueError, IndexError):
-                                pass
-                        if _ih not in pcc_data:
-                            pcc_data[_ih] = 1.0
-
-    rendered = render_report(report, pcc_data=pcc_data)
+    rendered = render_report(report)
 
     if args.output_report:
         with open(args.output_report, "w") as f:
