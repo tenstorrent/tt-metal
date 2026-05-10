@@ -76,6 +76,31 @@ def test_rapid_allgather_quiesce_stress(mesh_device):
             "skipping GAP-21 AllGather stress to avoid hang"
         )
 
+    # FIX BY (#42429): quiesce probe — detect relay-path failures invisible to the
+    # initial ring-sync health check.
+    #
+    # Background: on a fresh device open, fabric init runs ring-sync and verifies all
+    # ERISC channels except "external" ones (channels with no in-cluster peer, e.g.
+    # channels 14/15 on some WH devices).  A runner whose ETH relay path depends on
+    # those external-range channels can pass ring-sync but STILL hang during AllGather
+    # because the relay read from Phase 2.5 fails silently at runtime.
+    #
+    # is_fabric_degraded() returns False on such a runner because no flags were set
+    # during init.  The FIX RY check above therefore does not skip — and the first
+    # AllGather hangs in FDMeshCommandQueue::read_completion_queue_event indefinitely.
+    #
+    # Fix: call quiesce_devices() once as a probe BEFORE the main loop.  quiesce_devices()
+    # runs Phase 2.5 ETH relay reads for non-MMIO devices.  If any relay read throws or
+    # times out, set_fabric_relay_path_broken() is called for that device, making
+    # is_fabric_degraded() return True.  We then skip cleanly instead of hanging.
+    mesh_device.quiesce_devices()
+    if mesh_device.is_fabric_degraded():
+        pytest.skip(
+            "FIX BY (#42429): fabric degraded after quiesce probe (relay path broken on "
+            ">=1 non-MMIO device during Phase 2.5 ETH relay reads) — "
+            "skipping GAP-21 AllGather stress to avoid hang"
+        )
+
     logger.info(
         f"GAP-21: starting {_NUM_CYCLES} AllGather+quiesce cycles on "
         f"{num_devices}-device mesh"

@@ -292,6 +292,27 @@ void py_module(nb::module_& mod) {
                       pytest.skip("cluster degraded — fabric broken on >=1 device")
             )doc")
         .def(
+            "quiesce_devices",
+            &MeshDevice::quiesce_devices,
+            R"doc(
+              Quiesce all fabric workers across the mesh and restart them.
+
+              Drains all pending command queues, then runs the three-pass fabric quiesce+restart
+              sequence (Phase 2.5 ETH relay reads, Phase 3 firmware relaunch, Phase 5 handshake
+              wait).  During Phase 2.5, relay reads to non-MMIO devices will throw and set
+              ``fabric_relay_path_broken_`` if the ETH relay path is broken — making
+              ``is_fabric_degraded()`` return True on the next call.
+
+              Use as a pre-flight probe before AllGather on clusters that may have degraded
+              relay paths not detectable via the initial fabric-init ring sync (#42429 FIX BY):
+
+              .. code-block:: python
+
+                  mesh_device.quiesce_devices()
+                  if mesh_device.is_fabric_degraded():
+                      pytest.skip("FIX BY: relay path broken after quiesce probe")
+            )doc")
+        .def(
             "create_submesh",
             &MeshDevice::create_submesh,
             nb::arg("submesh_shape"),
