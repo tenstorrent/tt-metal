@@ -109,6 +109,25 @@ FORCE_INLINE void sender_side_handshake(
         }
         invalidate_l1_cache();
     }
+    // FIX HS1 (#42429): Send one final packet after exiting to handle the simultaneous-sender
+    // race condition where both sides call sender_side_handshake() concurrently:
+    //
+    //   1. Side A sends MAGIC_HANDSHAKE_VALUE → B.local_value.
+    //   2. Side B's init_handshake_info() resets B.local_value = 0 (erasing A's write).
+    //      This is possible because one device's UMD relay is ~200x faster, so B starts
+    //      ~6ms after A — within A's send loop but before A exits.
+    //   3. Side B (also in sender mode) sends MAGIC_HANDSHAKE_VALUE → A.local_value.
+    //   4. Side A sees A.local_value == MAGIC_HANDSHAKE_VALUE and exits the loop.
+    //   5. Side A stops sending — B.local_value is still 0, nobody will write to it.
+    //   6. Side B is stuck forever: B.local_value never becomes MAGIC_HANDSHAKE_VALUE.
+    //
+    // Fix: after the loop exits, send one unconditional final packet. It arrives at the
+    // remote AFTER the remote has completed init_handshake_info() (and its reset), so
+    // even if all earlier sends were erased by the remote's reset, this packet unblocks it.
+    // In the normal (non-collision) case this is harmless: remote is receiver_side_handshake()
+    // which has already exited after sending its ack — the extra write to its local_value
+    // is ignored.
+    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
 }
 
 FORCE_INLINE void receiver_side_handshake(
