@@ -137,7 +137,7 @@ def run(
     for i in range(len(padding) - 1, -1, -1):
         for p in padding[i]:
             torch_padding.append(p)
-    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=_golden_value)
 
     if isinstance(padding, list):
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
