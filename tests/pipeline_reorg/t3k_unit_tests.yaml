@@ -27,6 +27,15 @@
   owner_id: UBHPP2NDP # Joseph Chu
   team: ttnn
 
+- name: racecondition-hunt
+  model-name: racecondition-hunt
+  cmd: run_t3000_racecondition_hunt_tests
+  skus:
+    wh_llmbox:
+      timeout: 60
+  owner_id: ULMEPM2MA # Sean Nijjar / Neil Sexton
+  team: scaleout
+
 - name: t3k_tt_metal_multiprocess_tests
   cmd: run_t3000_tt_metal_multiprocess_tests
   skus:

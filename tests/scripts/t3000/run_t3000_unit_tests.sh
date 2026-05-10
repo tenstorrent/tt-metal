@@ -575,6 +575,241 @@ except Exception as e:
   fi
 }
 
+run_t3000_racecondition_hunt_tests() {
+  # Race condition investigation suite — BATCH 1 (AllGather canary) + BATCH 3
+  # (ETH/ERISC regression). Omits BATCH 2 (general TTNN) which is unrelated to
+  # the branch goal. Runs all tests added by nsexton/0-racecondition-hunt.
+  # Reset hardware state from any prior hung job.
+  # (mirrors run_t3000_ttnn_tests preamble)
+  timeout 30 tt-smi -r || true
+  local WARM_START WARM_END WARM_DURATION WARM_OUTPUT WARM_RING_TIMEOUT
+  WARM_START=$(date +%s)
+  WARM_OUTPUT=$(python3 -u -c "
+import sys, time
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX GS-3] initial warm-up complete — base-UMD channels cleared for GTest')
+except Exception as e:
+    print(f'[FIX GS-3] WARNING: initial warm-up failed ({e}) — GTests may skip due to stale base-UMD', file=sys.stderr)
+" 2>&1 || true)
+  echo "$WARM_OUTPUT"
+  WARM_END=$(date +%s)
+  WARM_DURATION=$((WARM_END - WARM_START))
+  WARM_RING_TIMEOUT=0
+  if echo "$WARM_OUTPUT" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores)"; then
+    echo "LOG_METAL: [FIX UP] ring-sync timeout marker detected in warm-up output — hardware not ready for traffic despite open/close exit 0." >&2
+    WARM_RING_TIMEOUT=1
+  fi
+  if [[ $WARM_DURATION -ge 120 || $WARM_RING_TIMEOUT -eq 1 ]]; then
+    echo "LOG_METAL: [FIX TO] warm-up ran ${WARM_DURATION}s (ring-sync timeout path, WARM_RING_TIMEOUT=${WARM_RING_TIMEOUT}). Running remedial tt-smi -r to clear dispatch-ERISC stale state. (#42429)"
+    timeout 30 tt-smi -r || true
+  fi
+
+  local n_chips raw_output
+  raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
+  n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
+  if [[ -z "$n_chips" ]]; then n_chips="ERROR"; fi
+  if ! [[ "$n_chips" =~ ^[0-9]+$ ]]; then
+    echo "LOG_METAL: ERROR — T3K topology check failed to query device count (python output: ${raw_output})" >&2
+    exit 1
+  fi
+  if [[ "$n_chips" -lt 8 ]]; then
+    echo "LOG_METAL: [FIX TL] T3K topology damaged after warm-up (${n_chips}/8 chips) — attempting recovery via tt-smi -r"
+    timeout 30 tt-smi -r || true
+    local TM_WARM_OUTPUT TM_RING_TIMEOUT
+    TM_WARM_OUTPUT=$(python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX TM] post-TL warm-up complete — relay re-established after recovery reset')
+except Exception as e:
+    print(f'[FIX TM] WARNING: post-TL warm-up failed ({e})', file=sys.stderr)
+" 2>&1 || true)
+    echo "$TM_WARM_OUTPUT"
+    TM_RING_TIMEOUT=0
+    if echo "$TM_WARM_OUTPUT" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores)"; then
+      echo "LOG_METAL: [FIX TM2] ring-sync timeout detected in post-TL warm-up — hardware may not be ready for traffic." >&2
+      TM_RING_TIMEOUT=1
+    fi
+    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
+    n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
+    if [[ -z "$n_chips" ]]; then n_chips="ERROR"; fi
+    if [[ "$n_chips" -lt 8 ]]; then
+      echo "LOG_METAL: ERROR — T3K topology still degraded after recovery: ${n_chips}/8 chips visible." >&2
+      echo "LOG_METAL: Hardware needs host reboot or engineer attention." >&2
+      exit 1
+    fi
+    echo "LOG_METAL: [FIX TL/TM] topology recovered: ${n_chips}/8 chips visible after reset+warm-up."
+  fi
+  echo "LOG_METAL: T3K topology OK — ${n_chips}/8 chips visible."
+
+  if [[ ${WARM_RING_TIMEOUT:-0} -eq 1 || ${TM_RING_TIMEOUT:-0} -eq 1 ]]; then
+    echo "LOG_METAL: [FIX UP2] ring-sync timeout detected in pre-test warm-up — attempting one more reset+warm-up before test loop." >&2
+    timeout 30 tt-smi -r || true
+    local UP2_WARM_OUTPUT UP2_RING_TIMEOUT
+    UP2_WARM_OUTPUT=$(python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX UP2] pre-test-loop warm-up complete')
+except Exception as e:
+    print(f'[FIX UP2] WARNING: warm-up failed ({e})', file=sys.stderr)
+" 2>&1 || true)
+    echo "$UP2_WARM_OUTPUT"
+    UP2_RING_TIMEOUT=0
+    if echo "$UP2_WARM_OUTPUT" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores)"; then
+      UP2_RING_TIMEOUT=1
+    fi
+    if [[ $UP2_RING_TIMEOUT -eq 1 ]]; then
+      echo "LOG_METAL: [FIX UP3] dispatch-ERISC timeout loop detected — running final tt-smi -r to clear rescue_stuck stale state, then proceeding to tests without warm-up. (#42429)" >&2
+      timeout 30 tt-smi -r || true
+    else
+      echo "LOG_METAL: [FIX UP2] ring-sync healthy after retry — proceeding to test loop."
+    fi
+  fi
+
+  record_test() {
+    local rc=$?
+    if [[ $rc -eq 0 && -f /tmp/gtest_last_result.xml ]]; then
+      local total_skipped
+      total_skipped=$(grep -oP '(?<=skipped=")[0-9]+' /tmp/gtest_last_result.xml \
+                        | awk '{s+=$1} END {print s+0}' 2>/dev/null || echo 0)
+      if [[ "${total_skipped:-0}" -gt 0 ]]; then
+        echo "LOG_METAL: ERROR — exit 0 but ${total_skipped} test(s) SKIPPED in GTest XML." >&2
+        echo "LOG_METAL: T3K topology may have degraded mid-run — treating as failure." >&2
+        rc=1
+      fi
+      rm -f /tmp/gtest_last_result.xml
+    fi
+    fail+=$rc
+    if [[ $rc -ne 0 ]]; then
+      echo "LOG_METAL: test returned rc=$rc — resetting hardware via tt-smi"
+      timeout 30 tt-smi -r || true
+      local post_warm_output post_ring_timeout
+      post_warm_output=$(python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX GS-3] post-reset warm-up complete — base-UMD channels cleared')
+except Exception as e:
+    print(f'[FIX GS-3] WARNING: post-reset warm-up failed ({e}) — next test may still skip', file=sys.stderr)
+" 2>&1 || true)
+      echo "$post_warm_output"
+      post_ring_timeout=0
+      if echo "$post_warm_output" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores)"; then
+        post_ring_timeout=1
+      fi
+      if [[ $post_ring_timeout -eq 1 ]]; then
+        consecutive_ring_timeout=$((consecutive_ring_timeout + 1))
+        echo "LOG_METAL: [FIX UP] post-reset warm-up ring-sync timeout #${consecutive_ring_timeout}/3 — hardware not ready for traffic." >&2
+        if [[ $consecutive_ring_timeout -ge 3 ]]; then
+          echo "LOG_METAL: [FIX UP] INFRA_ERROR — ring-sync timeout on ${consecutive_ring_timeout} consecutive warm-ups. Hardware requires reboot. Aborting test run." >&2
+          exit 1
+        fi
+      else
+        consecutive_ring_timeout=0
+      fi
+    fi
+  }
+
+  fail=0
+  consecutive_ring_timeout=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_racecondition_hunt_tests"
+
+  # ===========================================================================
+  # BATCH 1: AllGather — primary goal of this branch.
+  # ===========================================================================
+  echo "LOG_METAL: [BATCH 1/2] AllGather tests"
+
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
+
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
+
+  sleep 2
+  for ccl_mcq_test in \
+      "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0" \
+      "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0CQ1" \
+      "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksMultithreadCQ0"; do
+      echo "LOG_METAL: running test_ccl_multi_cq_multi_device --gtest_filter=${ccl_mcq_test}"
+      GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/test_ccl_multi_cq_multi_device --gtest_filter="${ccl_mcq_test}"
+      record_test
+      sleep 1
+  done
+
+  tt-smi -r || true
+  sleep 10
+  python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX GS-3] pre-GAP21 warm-up complete — base-UMD channels cleared')
+except Exception as e:
+    print(f'[FIX GS-3] WARNING: pre-GAP21 warm-up failed ({e})', file=sys.stderr)
+" 2>&1 || true
+  sleep 5
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
+
+  # ===========================================================================
+  # BATCH 2: ETH/ERISC infrastructure regression tests.
+  # ===========================================================================
+  echo "LOG_METAL: [BATCH 2/2] ETH/ERISC infrastructure regression tests"
+
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
+    --gtest_filter='Gap1ThreePassEthLaunchFixture.*:LaunchGateLiveEriscFixture.*:ERISCHeartbeatFixture.*:PartialMeshQuiesceFixture.*:RelayBrokenTeardownFixture.*:Phase25RelayBrokenCascadeFixture.*:MmioPhase5RelayBrokenFixture.*:InitRouterSyncDeadRelayFixture.*:ParallelHeartbeatPollFixture.*:ChannelsNotReadyLifecycleFixture.*:RelayTimeoutToleranceFixture.*:TeardownReopenEthOrderingFixture.*:AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*:ReadCoreRelayGuardFixture.*:FwLaunchAddrForceResetFixture.*:FwLaunchAddrRescueFixture.*:FwLaunchAddrQuiesceFixture.*:TeardownNullControlPlaneFixture.*:UmdHeartbeatSkipExitFixture.*:Phase25RelayRetryFixture.*:FixE2AyProbeDeadFayTriggerFixture.*:FixM2DeadPeerEriscResetFixture.*:FixPlBarrierGuardDeadRelayFixture.*:FixQcNonMmioResetCoresSkipFixture.*:FixQbResetLoopEarlyBreakFixture.*:FixPyPzPhase25TopologyTimeoutFixture.*:FixQdDeadRouterMmioSkipFixture.*:FixQuReassertFlagsFixture.*:FixNyRelayMuxClusterGuardFixture.*:FixTbTopologyMapperUnknownAsicFixture.*:FixQvPhase4SkipFixture.*:FixRzStaleBaseUmdFlagFixture.*:FixTf2dFabricHeaderArgsGuardFixture.*:FixTgControlPlaneHostRankGuardFixture.*:FixThRelayMuxNoLinksGuardFixture.*:FixTkDegradedClusterChipFilterFixture.*:FixTlDegradedClusterBailBeforeCreateMeshesFixture.*:FixTiRingSyncFastSkipFixture.*:Gap74BaseFixtureTeardownGuardFixture.*:FixQwbStaleBaseUmdSkipGuardFixture.*:FixTg2BaseUmdPartialL1ClearFixture.*' ; record_test
+
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
+  timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap27_fixav_nonmmio_sysmem_reset.py::test_gap27_fixav_nonmmio_sysmem_reset ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap30_fixal_started_early_exit_timing.py::test_gap30_fixal_started_early_exit_timing ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap35_fixat_fixas_mmio_phase5_skip.py ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap36_fixav_relay_dead_per_device_skip.py::test_gap36_fixav_relay_dead_per_device_skip ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py::test_gap39_fixns_single_topology_discovery ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py::test_gap40_fixae_flush_timeout_catch ; record_test
+
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase25_force_reset_pass0_chain.py::test_phase25_force_reset_pass0_chain ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_cross_device_relay_broken_race.py::test_cross_device_relay_broken_race ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_l1_corruption_cascade.py::test_l1_corruption_cascade_broken ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_phase4_mux_timeout_recovery.py::test_phase4_mux_timeout_recovery ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_snapshot_deadline_false_positive.py::test_snapshot_deadline_false_positive ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_3pass_eth_launch_ordering.py::test_3pass_eth_launch_no_deadlock ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_partial_mesh_handshake_tolerance.py::test_partial_mesh_quiesce_nonfatal ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_router_sync_graceful_degradation.py::test_router_sync_no_sigabrt ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_channels_not_ready_flag_lifecycle.py::test_channels_not_ready_cleared_on_reinit ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_teardown_parallel_heartbeat_poll.py::test_teardown_heartbeat_poll_parallel ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap79_fixxy2_relay_broken_cleared_allgather.py::test_relay_broken_cleared_allgather_correctness ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather.py::test_gap80_fixdt1_dispatch_erisc_timeout_warmup_allgather ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather.py::test_gap81_fixup3_dispatch_erisc_loop_warmup_skip_allgather ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap82_fixscaddr_eth_not_done_cores_allgather.py::test_gap82_fixscaddr_eth_not_done_cores_allgather ; record_test
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather.py::test_gap83_fixrr_rs_mmio_rompostcode_recovered_allgather ; record_test
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_racecondition_hunt_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_ttnn_udm_tests() {
   # Record the start time
   fail=0
