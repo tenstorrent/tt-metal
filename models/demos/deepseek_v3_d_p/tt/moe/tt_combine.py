@@ -76,10 +76,9 @@ class TtCombineModule(LightweightModule):
             topology: Fabric topology for remote token writes.
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
-            fp8_output: Emit the combined output in fp8_e4m3 (stored as uint8 since ttnn lacks
-                a native fp8 dtype). Requires Blackhole hardware.
+            fp8_output: Emit the combined output in fp8_e4m3. Requires Blackhole hardware.
         """
-        if fp8_output and "blackhole" not in ttnn.get_arch_name():
+        if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
         self.mesh_device = mesh_device

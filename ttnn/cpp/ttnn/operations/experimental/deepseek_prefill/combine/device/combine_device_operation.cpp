@@ -62,6 +62,12 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be interleaved (L1 or DRAM), not sharded");
 
+    // FP8 output is only supported on Blackhole
+    if (operation_attributes.use_fp8_combine) {
+        auto arch = tensor_args.dispatched_buffer.device()->arch();
+        TT_FATAL(arch == tt::ARCH::BLACKHOLE, "use_fp8_combine=true requires Blackhole hardware (got arch {})", arch);
+    }
+
     // Validate tensor shapes are compatible
     // Dispatch outputs are 4D: (per_device_batch, 1, max_dispatch_buffer_token_size, hidden_dim/metadata_len)
     // Counter is 3D: (num_dispatch_groups, per_device_batch, num_routed_experts)

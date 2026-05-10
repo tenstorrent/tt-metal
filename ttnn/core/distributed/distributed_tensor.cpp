@@ -408,10 +408,16 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        // Skipped at compile time for float8_e4m3: that path would require
-        // Tensor::to_vector<float8_e4m3>, which we don't instantiate (FP8 is row-major-only,
-        // so logical == physical always holds and this branch is never reached at runtime).
-        if constexpr (!std::is_same_v<T, float8_e4m3>) {
+        // FP8 (float8_e4m3) is row-major-only, so logical == physical always holds and the
+        // conversion path (which would require Tensor::to_vector<float8_e4m3>, not instantiated)
+        // is never reached. Guard explicitly so a future regression fails loudly instead of
+        // silently skipping the conversion.
+        if constexpr (std::is_same_v<T, float8_e4m3>) {
+            TT_FATAL(
+                tt::tt_metal::logical_matches_physical(tensor.tensor_spec()),
+                "float8_e4m3 tensors must have logical layout matching physical (row-major-only); "
+                "logical-to-physical conversion is not supported for FP8");
+        } else {
             if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
                 dst_buffer = dst_buffer.transform(
                     [&tensor](const tt::tt_metal::HostBuffer& shard) {
