@@ -294,6 +294,29 @@ resolve_deepseekv3_model() {
     echo "Using DeepSeek V3 model: ${DEEPSEEK_V3_HF_MODEL}"
 }
 
+maybe_use_quad_ring_prepared_model() {
+    local ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
+    ds_quad_torus="${ds_quad_torus,,}"
+    case "${ds_quad_torus}" in
+        ""|1|true|yes|on) ;;
+        *) return 0 ;;
+    esac
+
+    local model_path="${DEEPSEEK_V3_HF_MODEL:-}"
+    if [[ -z "${model_path}" ]]; then
+        return 0
+    fi
+    if [[ "${model_path}" == *-quad-ring ]]; then
+        return 0
+    fi
+
+    local quad_ring_candidate="${model_path}-quad-ring"
+    if [[ -d "${quad_ring_candidate}" ]]; then
+        export DEEPSEEK_V3_HF_MODEL="${quad_ring_candidate}"
+        echo "Using quad-ring prepared DeepSeek model: ${DEEPSEEK_V3_HF_MODEL}"
+    fi
+}
+
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
@@ -368,6 +391,8 @@ setup_quad_galaxy_env() {
             exit 1
             ;;
     esac
+
+    maybe_use_quad_ring_prepared_model
 }
 
 # Compute pytest --timeout value.
