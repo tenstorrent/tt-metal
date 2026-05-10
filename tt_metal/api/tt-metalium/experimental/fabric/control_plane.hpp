@@ -20,6 +20,8 @@
 
 #include <map>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,6 +51,18 @@ class Cluster;
 }  // namespace tt::umd
 
 namespace tt::tt_fabric {
+
+// FIX BQ (#42429): Typed exception for null-fabric_context teardown path.
+// Thrown by ControlPlane::get_fabric_context() when fabric_context_ is null
+// (post-teardown / atexit).  Catchers can distinguish this from other
+// std::runtime_error throws without fragile e.what() string matching.
+class FabricContextNullException : public std::runtime_error {
+public:
+    FabricContextNullException() :
+        std::runtime_error(
+            "FabricContextNullException: ControlPlane::get_fabric_context() called after teardown "
+            "(fabric_context_ is null). This is expected in post-teardown paths. (#42429 FIX BQ)") {}
+};
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {

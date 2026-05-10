@@ -514,6 +514,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                             mmio_id,
                             e.what());
                     } catch (...) {
+                        // FIX BQ (#42429): log non-std exceptions from FIX AC early MMIO reset
+                        log_debug(
+                            tt::LogMetal,
+                            "teardown: FIX AC early MMIO reset of ETH core {} on device {} threw non-std exception",
+                            virtual_core.str(),
+                            mmio_id);
                     }
                 }
             }
@@ -724,33 +730,26 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     log_info(
                         tt::LogAlways,
                         "teardown: FIX AQ — edm_status_address sentinel poll complete (Step 2 path).");
+                } catch (const tt::tt_fabric::FabricContextNullException&) {
+                    // FIX BQ (#42429): Typed catch replaces FIX BP's fragile e.what() string match.
+                    // fabric_context_ is already null (teardown/atexit path) — nothing to poll.
+                    // The previous code would sleep 10s here on every test teardown when
+                    // fabric_context_ was null: 20+ GTest teardowns × 10s = 13+ minutes of hang.
+                    log_debug(
+                        tt::LogMetal,
+                        "teardown: FIX AQ — fabric_context already torn down (FIX BQ typed catch), "
+                        "skipping 10s fallback wait. ROM-postcode channels left for next init. (#42429)");
                 } catch (const std::exception& e) {
-                    // FIX BP (#42429): If the exception is because fabric_context_ is already
-                    // null (teardown/atexit path), there is nothing to poll — skip the 10s
-                    // fallback wait entirely.  The previous code would sleep 10s here on every
-                    // test teardown when fabric_context_ was null, and since GTest keeps
-                    // running tests, this accumulated to 20+ cycles x ~40s = 13+ minutes of
-                    // hanging before CI timeout killed the t3k_ttmetal_tests job.
-                    const bool is_fabric_context_null =
-                        std::string(e.what()).find("FIX BP: fabric_context null") != std::string::npos;
-                    if (is_fabric_context_null) {
-                        log_debug(
-                            tt::LogMetal,
-                            "teardown: FIX AQ — fabric_context already torn down (FIX BP), "
-                            "skipping 10s fallback wait. ROM-postcode channels will be left "
-                            "for next init to clean up. (#42429 FIX BP)");
-                    } else {
-                        // FIX AQ-fallback (#42429): fabric_context_ exists but poll failed
-                        // for another reason.  Fall back to a time-based wait long enough for
-                        // FIX AC-reset ETH channels to complete ROM boot and write the UMD
-                        // relay sentinel (0x49706550) to edm_status_address.
-                        log_warning(
-                            tt::LogAlways,
-                            "teardown: FIX AQ — edm_status_address poll threw: {}; "
-                            "adding 10s fallback wait for ROM-postcode channels to clear. (#42429)",
-                            e.what());
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10000));  // FIX AQ-fallback
-                    }
+                    // FIX AQ-fallback (#42429): fabric_context_ exists but poll failed
+                    // for another reason.  Fall back to a time-based wait long enough for
+                    // FIX AC-reset ETH channels to complete ROM boot and write the UMD
+                    // relay sentinel (0x49706550) to edm_status_address.
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AQ — edm_status_address poll threw: {}; "
+                        "adding 10s fallback wait for ROM-postcode channels to clear. (#42429)",
+                        e.what());
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10000));  // FIX AQ-fallback
                 } catch (...) {
                     log_warning(
                         tt::LogAlways,
@@ -964,6 +963,11 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     device_id,
                     e.what());
             } catch (...) {
+                // FIX BQ (#42429): log non-std exceptions from l1_barrier
+                log_debug(
+                    tt::LogMetal,
+                    "teardown: l1_barrier threw non-std exception for device {}",
+                    device_id);
             }
         }
 
@@ -1034,6 +1038,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                             mmio_id,
                             e.what());
                     } catch (...) {
+                        // FIX BQ (#42429): log non-std exceptions from FIX AC timeout reset
+                        log_debug(
+                            tt::LogMetal,
+                            "teardown: FIX AC (timeout) reset of ETH core {} on MMIO device {} threw non-std exception",
+                            virtual_core.str(),
+                            mmio_id);
                     }
                 }
             }

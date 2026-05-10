@@ -2238,13 +2238,11 @@ void ControlPlane::print_ethernet_channels() const {
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
-    // FIX BP (#42429): Changed from TT_FATAL to std::runtime_error so that
-    // teardown callers (FIX AQ) can catch and identify this specific failure
-    // without noisy "critical | TT_FATAL" log spam on every test teardown
-    // when fabric_context_ is already null (atexit / degraded-init path).
+    // FIX BQ (#42429): Throw typed FabricContextNullException (replaces FIX BP's
+    // std::runtime_error) so callers can catch by type instead of e.what() string match.
+    // Evolution: TT_FATAL (pre-fix) → std::runtime_error (FIX BP) → typed exception (FIX BQ).
     if (this->fabric_context_ == nullptr) {
-        throw std::runtime_error(
-            "FIX BP: fabric_context null — ControlPlane::get_fabric_context() called after teardown (#42429)");
+        throw FabricContextNullException{};
     }
     return *this->fabric_context_;
 }
