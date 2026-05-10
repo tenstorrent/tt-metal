@@ -33,6 +33,8 @@ def dict_to_layernorm_program_config(cfg):
 
     if "LayerNormShardedMultiCoreProgramConfig" in cfg_type:
         m = re.search(r"x\s*=\s*(\d+).*?y\s*=\s*(\d+)", val_str)
+        if not m:
+            m = re.search(r"compute_with_storage_grid_size\s*=\s*(\d+)\s*-\s*(\d+)", val_str)
         grid = ttnn.CoreCoord(int(m.group(1)), int(m.group(2))) if m else ttnn.CoreCoord(8, 4)
 
         def _int(name, default=0):

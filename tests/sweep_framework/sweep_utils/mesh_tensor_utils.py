@@ -197,6 +197,9 @@ def create_mesh_device(
                 for _arg in _cfg.get("arguments", {}).values():
                     if not isinstance(_arg, dict):
                         continue
+                    _val = str(_arg.get("value", ""))
+                    if "compute_with_storage_grid_size=8-8" in _val:
+                        needs_row_only = True
                     _ss = (_arg.get("memory_config") or {}).get("shard_spec")
                     if not isinstance(_ss, dict):
                         _ss = _arg.get("shard_spec")
@@ -594,7 +597,7 @@ def create_tensor_on_mesh(
     mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
     layout: ttnn.Layout,
-    memory_config: ttnn.MemoryConfig,
+    memory_config,
     tensor_placement: Optional[Dict] = None,
 ) -> ttnn.Tensor:
     """
@@ -605,12 +608,16 @@ def create_tensor_on_mesh(
         mesh_device: Mesh device to create tensor on
         dtype: TTNN data type
         layout: TTNN layout (TILE/ROW_MAJOR)
-        memory_config: Memory configuration
+        memory_config: Memory configuration (MemoryConfig object or dict)
         tensor_placement: Optional placement info from traced config
 
     Returns:
         TTNN tensor on mesh device with proper placement
     """
+    if isinstance(memory_config, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        memory_config = dict_to_memory_config(memory_config) or ttnn.DRAM_MEMORY_CONFIG
     # Trace-validation path: when placement has Shard, the master records the
     # per-chip .shape (which equals the torch input shape). Going through
     # ShardTensor2dMesh would re-shard the input and produce a smaller per-chip
