@@ -112,11 +112,12 @@ using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>
 }  // namespace tt::tt_fabric
 
 template <uint8_t NUM_BUFFERS>
-void wait_for_static_connection_to_ready(
+bool wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // Watchdog: on WH the termination signal check is compiled out — if the
     // connection request never arrives this loop spins forever.
+    // FIX LT9: After watchdog fires, break out and return false to skip setup.
     // See: https://github.com/tenstorrent/tt-metal/issues/42429
     constexpr uint32_t kWatchdogIter = 100'000'000;
     uint32_t watchdog_count = 0;
@@ -129,11 +130,12 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
         if (++watchdog_count >= kWatchdogIter) {
             WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout
-            watchdog_count = 0;
+            return false;
         }
     }
 
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
+    return true;
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -354,16 +356,27 @@ void kernel_main() {
     fabric_connection.open<use_worker_allocated_credit_address>();
 
     // Wait for persistent channels to be ready
+    // FIX LT9: If any static connection times out, skip to termination wait.
+    bool any_timed_out = false;
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         if (worker_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr);
+            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr)) {
+                any_timed_out = true;
+            }
         }
     }
 
     for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
         if (router_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i], termination_signal_ptr);
+            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i], termination_signal_ptr)) {
+                any_timed_out = true;
+            }
         }
+    }
+
+    if (any_timed_out) {
+        while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {}
+        return;
     }
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;

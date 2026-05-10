@@ -2767,9 +2767,11 @@ void
         // Watchdog: on WH the termination signal check is compiled out — if the
         // connection request never arrives this loop spins forever.  The watchdog
         // fires WAYPOINT("SCRW") periodically to make such hangs diagnosable.
+        // FIX LT9: After watchdog fires, break out and skip connection establishment.
         // See: https://github.com/tenstorrent/tt-metal/issues/42429
         constexpr uint32_t kWatchdogIter = 100'000'000;
         uint32_t watchdog_count = 0;
+        bool timed_out = false;
         while (!connect_is_requested(*interface.connection_live_semaphore)
 #ifndef ARCH_WORMHOLE
                && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
@@ -2786,10 +2788,13 @@ void
 #endif
             if (++watchdog_count >= kWatchdogIter) {
                 WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout
-                watchdog_count = 0;
+                timed_out = true;
+                break;
             }
         }
-        establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        if (!timed_out) {
+            establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        }
     };
     if constexpr (multi_txq_enabled) {
         tuple_for_each_constexpr(

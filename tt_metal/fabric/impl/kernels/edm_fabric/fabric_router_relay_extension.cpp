@@ -139,11 +139,12 @@ constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
 template <uint8_t NUM_BUFFERS>
-void wait_for_static_connection_to_ready(
+bool wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // Watchdog: on WH the termination signal check is compiled out — if the
     // connection request never arrives this loop spins forever.
+    // FIX LT9: After watchdog fires, break out and return false to skip setup.
     // See: https://github.com/tenstorrent/tt-metal/issues/42429
     constexpr uint32_t kWatchdogIter = 100'000'000;
     uint32_t watchdog_count = 0;
@@ -155,11 +156,12 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
         if (++watchdog_count >= kWatchdogIter) {
             WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout
-            watchdog_count = 0;
+            return false;
         }
     }
 
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
+    return true;
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -600,7 +602,11 @@ void kernel_main() {
     auto noc_addr = get_noc_addr(router_noc_x, router_noc_y, fabric_router_sync_address);
     noc_semaphore_inc(noc_addr, 1);
 
-    wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface, termination_signal_ptr);
+    if (!wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface, termination_signal_ptr)) {
+        // FIX LT9: static connection timed out — skip to termination wait
+        while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {}
+        return;
+    }
 
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
 
