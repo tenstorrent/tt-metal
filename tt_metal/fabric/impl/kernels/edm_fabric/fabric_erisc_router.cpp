@@ -1439,10 +1439,17 @@ FORCE_INLINE void coordinated_context_switch_start_as_master(
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT));
         // Wait for erisc1 to ack
+        uint32_t watchdog_count = 0;
+        constexpr uint32_t kWatchdogIter = 100'000'000;
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
                 return;
+            }
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("CSMA");  // Context-Switch Master Ack timeout — peer may be dead
+                watchdog_count = 0;
+                break;
             }
         }
     }
@@ -1456,10 +1463,17 @@ FORCE_INLINE void coordinated_context_switch_finish_as_master(
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE));
         // Wait for erisc1 to ack
+        uint32_t watchdog_count = 0;
+        constexpr uint32_t kWatchdogIter = 100'000'000;
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
                 return;
+            }
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("CSMF");  // Context-Switch Master Finish timeout — peer may be dead
+                watchdog_count = 0;
+                break;
             }
         }
         // Resume normal operation
@@ -1483,18 +1497,36 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT)) {
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK));
-            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
-                   static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE)) {
-                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-                    return;
+            {
+                uint32_t watchdog_count = 0;
+                constexpr uint32_t kWatchdogIter = 100'000'000;
+                while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+                       static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE)) {
+                    if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                        return;
+                    }
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("CSNS");  // Context-Switch Non-master Spin timeout — master may be dead
+                        watchdog_count = 0;
+                        break;
+                    }
                 }
             }
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK));
-            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
-                   static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION)) {
-                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-                    return;
+            {
+                uint32_t watchdog_count = 0;
+                constexpr uint32_t kWatchdogIter = 100'000'000;
+                while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+                       static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION)) {
+                    if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                        return;
+                    }
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("CSNR");  // Context-Switch Non-master Resume timeout — master may be dead
+                        watchdog_count = 0;
+                        break;
+                    }
                 }
             }
         }
