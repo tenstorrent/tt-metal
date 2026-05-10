@@ -90,6 +90,14 @@ def run(
     # ttnn.pad(t, padding=padding) (kwarg). The two produce different traces.
     pad_was_positional = False
 
+    # JSON cannot represent inf/-inf; they're stored as huge numbers.
+    # Detect and convert back to float("inf") / float("-inf").
+    import math
+
+    if isinstance(value, (int, float)) and not math.isinf(value):
+        if abs(value) > 1e38:
+            value = float("-inf") if value < 0 else float("inf")
+
     if padding is None and arg1 is not None:
         is_nested = isinstance(arg1, list) and arg1 and isinstance(arg1[0], (list, tuple))
         if is_nested:
