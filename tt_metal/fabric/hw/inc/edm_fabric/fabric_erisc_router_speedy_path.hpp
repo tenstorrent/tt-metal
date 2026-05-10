@@ -257,7 +257,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         !receiver_state.has_pending_flush) {
         receiver_state.pending_flush_trid = receiver_state.current_write_trid;
         receiver_state.pending_flush_batch_count = receiver_state.unacked_sends;
-        receiver_state.current_write_trid = 1 - receiver_state.current_write_trid;
+        // FIX ER1: ping-pong between base and base+1 TRIDs (was `1 - trid`, broken for base != 0)
+        constexpr uint8_t trid_base = RX_CH_TRID_STARTS[VC_ID];
+        receiver_state.current_write_trid = 2 * trid_base + 1 - receiver_state.current_write_trid;
         receiver_state.has_pending_flush = true;
     }
     if (receiver_state.has_pending_flush) {
