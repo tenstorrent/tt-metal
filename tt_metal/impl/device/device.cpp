@@ -3187,6 +3187,27 @@ void Device::wait_for_fabric_workers_ready() {
                         master_chan);
                     break;
                 }
+                // FIX BU (#42429): REMOTE_HANDSHAKE_COMPLETE early-exit — local ERISC received
+                // the remote handshake but cannot advance to LOCAL_HANDSHAKE_COMPLETE.  This
+                // happens when the channel was transitioned via launch_msg (FIX M) from base-UMD
+                // relay firmware (0x49706550): the fabric firmware initialises, exchanges the
+                // remote-handshake packet with its peer, but the peer's ETH link is already
+                // shutting down so LOCAL_HANDSHAKE_COMPLETE is never reached.  2000ms is generous
+                // — a healthy handshake completes in <1ms.  Phase 5b (FIX AK) will declare this
+                // non-fatal as a partial-mesh teardown scenario.
+                constexpr uint32_t kRemoteHandshakeCompleteTimeoutMs = 2000;
+                if (sync_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE) &&
+                    elapsed > kRemoteHandshakeCompleteTimeoutMs) {
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5: REMOTE_HANDSHAKE_COMPLETE "
+                        "early-exit after {}ms — master chan {} local ERISC stuck (launch_msg "
+                        "transition?). Deferring to Phase 5b. (FIX BU: #42429)",
+                        this->id(),
+                        elapsed,
+                        master_chan);
+                    break;
+                }
                 if (elapsed > kSyncTimeoutMs) {
                     // FIX V (#42429): On a non-MMIO device, status=0x0 after 10s means the
                     // device's ETH channels never booted fabric firmware — the relay path to
