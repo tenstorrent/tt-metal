@@ -920,12 +920,25 @@ def test_get_optimal_worker_cores_for_sharded_tensor_rejects_interleaved_tensor(
 @pytest.mark.parametrize("noc", [ttnn.NOC.NOC_0, ttnn.NOC.NOC_1])
 def test_optimal_dram_workers_within_compute_grid(device, noc):
     """
-    Validate that all cores returned by get_optimal_dram_bank_to_logical_worker_assignment
-    fall within the valid compute grid. Regression test for issue #41031 where column major
-    dispatch on harvested devices returned cores on the dispatch column.
+    Validate that get_optimal_dram_bank_to_logical_worker_assignment returns one valid
+    worker core per DRAM bank, with every core inside the device's logical compute grid.
+
+    Since compute_with_storage_grid_size() is the logical Tensix worker grid (it already
+    excludes dispatch columns and harvested rows), an in-bounds logical core is by
+    construction a valid worker core.
+
+    Regression test for issue #41031, where column major dispatch on harvested Wormhole
+    devices returned cores on the dispatch column (e.g. (7, 2) on a 7x9 compute grid).
     """
     compute_grid = device.compute_with_storage_grid_size()
+    dram_grid = device.dram_grid_size()
+    expected_num_banks = dram_grid.x * dram_grid.y
+
     optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc)
+
+    assert len(optimal_workers) == expected_num_banks, (
+        f"Expected {expected_num_banks} optimal worker cores (one per DRAM bank), " f"got {len(optimal_workers)}"
+    )
 
     for i, core in enumerate(optimal_workers):
         assert core.x < compute_grid.x and core.y < compute_grid.y, (
