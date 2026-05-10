@@ -115,13 +115,13 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
                 TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
             case DataType::FP8_E4M3:
-                TT_ASSERT(
-                    layout == Layout::ROW_MAJOR,
-                    "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");  // Added only for ROW_MAJOR, because it
-                                                                                // is currently only used as dtype of
-                                                                                // output ROW_MAJOR of combine DeepSeek
-                                                                                // V3 Prefill operator inside of
-                                                                                // "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine"
+                // FP8_E4M3 is Blackhole-only; that arch catch-all lives in
+                // MeshTensor::allocate_on_device (the device-binding boundary), since this
+                // dtype/layout validator does not have access to a MeshDevice.
+                // Layout note: ROW_MAJOR-only here because FP8_E4M3 is currently produced
+                // exclusively as the row-major output of the DeepSeek V3 Prefill combine op
+                // (ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine).
+                TT_FATAL(layout == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");
                 break;
             default:
                 TT_ASSERT(

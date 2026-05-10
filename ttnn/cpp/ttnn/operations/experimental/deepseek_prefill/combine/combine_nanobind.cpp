@@ -66,9 +66,8 @@ void bind_combine(nb::module_& mod) {
                 Defaults to Linear.
             init_zeros (bool, optional): Whether to zero-initialize the output buffer before writing.
                 Defaults to True.
-            use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3
-                (stored as UINT8 since ttnn lacks a native fp8 dtype). Requires Blackhole hardware.
-                Defaults to False.
+            use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
+                Requires Blackhole hardware. Defaults to False.
 
         Returns:
             ttnn.Tensor:
