@@ -2096,6 +2096,9 @@ void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile t
     // Placeholder
     state_manager_l1->state = RouterState::RETRAINING;
     run_routing_without_noc_sync();
+    {
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::RETRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         // Wait for confirmation from host to avoid the WAW hazard:
         // Host issues retrain
@@ -2110,6 +2113,11 @@ void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile t
         // For the entirety of the H->D datapath. For the time being, this is too strong of a requirement
         // for cases where router code is not running in traditional H->D server/PC configurations
         // (i.e. some custom IP integrations may not easily satisfy this guarantee this)
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("RTRW");  // ReTRain Wait timeout — host has not cleared RETRAIN command
+            watchdog_count = 0;
+        }
+    }
     }
 
     // PAUSED is the only legal output state
@@ -2134,7 +2142,13 @@ void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volat
         // before we proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
 
         bool keep_running_pause = true;
+        constexpr uint32_t kWatchdogIter = 100'000'000;
+        uint32_t watchdog_count = 0;
         while (keep_running_pause && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("PAUS");  // PAUSe timeout — host has not issued RUN command
+                watchdog_count = 0;
+            }
             state_manager_l1->state = RouterState::PAUSED;
             switch (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
                 case RouterCommand::RUN:
