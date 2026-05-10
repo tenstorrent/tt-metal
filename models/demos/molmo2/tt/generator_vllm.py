@@ -33,96 +33,42 @@ try:
 
     class _TT_Molmo2ProcessingInfo(Molmo2ProcessingInfo):
         def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-            # Both image and video supported.
-            # Image is treated as a 1-frame video by _TT_Molmo2DummyInputsBuilder
-            # so that _get_mm_fields_config (which maps pixel_values_videos) works.
-            return {"video": 1, "image": 1}
+            # TT limit: 1 video OR up to 23 images per request.
+            # 23 = max_seq_len(36864) // (max_crops(8) * tokens_per_crop_image(196))
+            # Image pooling=[2,2] → 196 tokens/crop; video pooling=[3,3] → 81 tokens/frame.
+            return {"video": 1, "image": 23}
 
     class _TT_Molmo2DummyInputsBuilder(Molmo2DummyInputsBuilder):
-        """Handles image dummy inputs for vLLM init by redirecting as 1-frame video.
+        """Native image and video dummy inputs for vLLM init (token budget).
 
-        _get_mm_fields_config only handles pixel_values_videos (video path).
-        The HF Molmo2Processor only supports 1 video at a time.
-        Three cases handled:
-          - image-only: redirect as 1-frame video for token budget computation
-          - video-only: unchanged
-          - combined (video+image): use video only (HF processor limitation)
-        Real image inference uses pixel_values in prefill_forward (unchanged).
+        Images use the native <|image|> path (not redirected to video).
+        Chat template: 1 image → '<|image|>', N images → 'Image 1<|image|>...'
         """
 
         def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
             num_v = mm_counts.get("video", 0)
             num_i = mm_counts.get("image", 0)
-            if num_v > 0 and num_i > 0:
-                # Combined call: only video placeholders (HF processor supports 1 video)
-                return "<|video|>" * num_v
-            # image-only or video-only: treat each as a video placeholder
-            return "<|video|>" * (num_v + num_i)
+            if num_i == 1:
+                img_text = "<|image|>"
+            elif num_i > 1:
+                img_text = "".join(f"Image {i + 1}<|image|>" for i in range(num_i))
+            else:
+                img_text = ""
+            return img_text + "<|video|>" * num_v
 
         def get_dummy_mm_data(self, seq_len, mm_counts, mm_options=None):
             num_v = mm_counts.get("video", 0)
             num_i = mm_counts.get("image", 0)
-            if num_v > 0 and num_i > 0:
-                # Combined: only process video (HF supports 1 video at a time)
-                return super().get_dummy_mm_data(seq_len, {"video": num_v}, mm_options)
-            elif num_i > 0:
-                # Image-only: redirect as 1-frame video for token budget
-                return super().get_dummy_mm_data(seq_len, {"video": num_i}, mm_options)
-            return super().get_dummy_mm_data(seq_len, mm_counts, mm_options)
-
-    class _TT_Molmo2MultiModalProcessor(Molmo2MultiModalProcessor):
-        """Routes image inputs through the video path.
-
-        Molmo2 processes images identically to videos (same ViT + pooling).
-        We convert image data items → video data items at the top of apply()
-        so that all downstream vLLM validation (mm_item_counts, mm_hashes,
-        _validate_mm_kwargs) sees "video" modality consistently throughout.
-        """
-
-        def apply(self, inputs, timing_ctx):
-            """Convert image data items to 1-frame video data items before processing."""
-            import numpy as np
-            from PIL.Image import Image as PILImage
-
-            from vllm.multimodal.parse import VideoProcessorItems
-
-            if inputs.mm_data_items.get_count("image", strict=False) > 0:
-                image_items = inputs.mm_data_items.pop("image")
-                video_data = []
-                for i in range(image_items.get_count()):
-                    pil_img = image_items.get(i)
-                    if pil_img is None:
-                        video_data.append(None)
-                        continue
-                    if isinstance(pil_img, PILImage):
-                        arr = np.array(pil_img.convert("RGB"))  # [H, W, 3]
-                    else:
-                        arr = np.asarray(pil_img)
-                    video_data.append(
-                        (
-                            arr[np.newaxis],  # [1, H, W, 3]
-                            {
-                                "fps": 1.0,
-                                "total_num_frames": 1,
-                                "duration": 1.0,
-                                "video_backend": "numpy",
-                                "frames_indices": [0],
-                                "do_sample_frames": False,
-                            },
-                        )
-                    )
-                inputs.mm_data_items["video"] = VideoProcessorItems(video_data)
-                # HF processor inserts video tokens at <|video|> (token 151945), not <|image|> (151941).
-                _IMAGE_TOKEN_ID = 151941
-                _VIDEO_TOKEN_ID = 151945
-                if isinstance(inputs.prompt, str):
-                    inputs.prompt = inputs.prompt.replace("<|image|>", "<|video|>")
-                elif isinstance(inputs.prompt, list):
-                    inputs.prompt = [_VIDEO_TOKEN_ID if t == _IMAGE_TOKEN_ID else t for t in inputs.prompt]
-            return super().apply(inputs, timing_ctx)
+            result = {}
+            if num_v:
+                result.update(super().get_dummy_mm_data(seq_len, {"video": num_v}, mm_options))
+            if num_i:
+                # Native image path — NOT redirected to video
+                result.update(super().get_dummy_mm_data(seq_len, {"image": num_i}, mm_options))
+            return result
 
     _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
-        _TT_Molmo2MultiModalProcessor,
+        Molmo2MultiModalProcessor,
         info=_TT_Molmo2ProcessingInfo,
         dummy_inputs=_TT_Molmo2DummyInputsBuilder,
     )

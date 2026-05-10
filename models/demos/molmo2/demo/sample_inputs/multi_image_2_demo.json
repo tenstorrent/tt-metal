@@ -1,0 +1,21 @@
+[
+    [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": "https://storage.googleapis.com/oe-training-public/molmo2-eval-media/molmo_2_logo_RGB.png"
+                },
+                {
+                    "type": "image",
+                    "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
+                },
+                {
+                    "type": "text",
+                    "text": "Compare these two images. What is shown in each one?"
+                }
+            ]
+        }
+    ]
+]
