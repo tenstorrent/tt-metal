@@ -1291,10 +1291,11 @@ def recompute_config_hashes(json_file):
             old_hash = config.get("config_hash")
             op_args = config.get("arguments", {})
 
-            machine_info = None
-            executions = config.get("executions", [])
-            if executions and isinstance(executions[0], dict):
-                machine_info = executions[0].get("machine_info")
+            machine_info = config.get("traced_machine_info")
+            if machine_info is None:
+                executions = config.get("executions", [])
+                if executions and isinstance(executions[0], dict):
+                    machine_info = executions[0].get("machine_info")
             new_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             if new_hash != old_hash:
