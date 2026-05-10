@@ -297,7 +297,13 @@ class TtDeepSeekPrefillPipeline:
     # Per-request entry point
     # ----------------------------------------------------------------
 
-    def prefill(self, token_ids: list[int], slot_id: int, actual_isl: Optional[int] = None) -> int:
+    def prefill(
+        self,
+        token_ids: list[int],
+        slot_id: int,
+        actual_isl: Optional[int] = None,
+        dst_slot: Optional[int] = None,
+    ) -> int:
         """Run prefill for one request.
 
         All MPI ranks must call prefill() collectively with the same arguments;
@@ -306,8 +312,16 @@ class TtDeepSeekPrefillPipeline:
         Args:
             token_ids: Full input sequence in the user's original token order.
                 This function does the zigzag reorder internally.
-            slot_id: KV cache slot assigned by the inference server.
+            slot_id: KV cache slot assigned by the inference server. On prefill
+                this indexes prefill's own (single-slot) cache and is also
+                used as the migration's `src_slot`.
             actual_isl: Number of real (non-padded) tokens. Defaults to len(token_ids).
+            dst_slot: Destination slot on the decode side for the migration's
+                writes. When omitted, defaults to `slot_id` (back-compat behavior;
+                correct only when prefill and decode use the same slot
+                — typically the warmup / single-shot path). For real requests
+                where decode allocates its own slot independently, this MUST be
+                passed in by the inference scheduler.
 
         Returns:
             First generated token ID.
@@ -316,8 +330,10 @@ class TtDeepSeekPrefillPipeline:
         if actual_isl is None:
             actual_isl = len(token_ids)
 
+        assert dst_slot is not None, "dst_slot must be passed in or set in the config"
+
         tt_token_ids = self._prepare_input_tensor(token_ids)
-        on_layer_complete = self._build_migration_callback(slot_id, actual_isl)
+        on_layer_complete = self._build_migration_callback(slot_id, actual_isl, dst_slot)
 
         first_token_id, _first_token_prob, _ = self.model.forward(
             tt_token_ids,
@@ -378,7 +394,7 @@ class TtDeepSeekPrefillPipeline:
         assert self.compiled, "Call compile() before setup_migration()"
         self.migration_layer = BoundMigrationEndpoint(endpoint, remote_endpoint_id)
 
-    def _build_migration_callback(self, slot_id: int, actual_isl: int):
+    def _build_migration_callback(self, slot_id: int, actual_isl: int, dst_slot: int):
         """Build the per-layer migration callback passed to MLA via forward().
 
         MLA invokes this after fill_cache_for_user_(). MLA also handles zeroing
@@ -390,6 +406,12 @@ class TtDeepSeekPrefillPipeline:
         have also been sent + acked by the decode side. By the time forward()
         returns and the runner emits the first token over SHM, the entire KV
         cache has been migrated.
+
+        `slot_id` is prefill's local slot (= migration src_slot). `dst_slot`
+        is the destination slot on the decode side; these need not match
+        because prefill has a single-slot cache while decode has many slots,
+        and the inference scheduler may allocate a non-zero decode slot for
+        a request even though prefill always uses its own slot 0.
 
         Returns None when no migration_layer is configured — MLA then skips both
         the zero-out and the post-fill callback.
@@ -462,13 +484,38 @@ class TtDeepSeekPrefillPipeline:
             ttnn.synchronize_device(mesh_device)
             end_pos = math.ceil(actual_isl / 128) * 128
             print(
-                f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from slot {slot_id} to slot {slot_id}. Start_pos={0}, End_pos={end_pos}"
+                f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from src_slot={slot_id} to dst_slot={dst_slot}. Start_pos={0}, End_pos={end_pos}"
             )
             # Diagnostic: only on layer 0 (one-shot per prefill) to compare cache contents
             # via shard-spec readback against migration's raw-NOC reads in the same window.
             if layer_idx == 0:
                 _dump_cache_readback(layer_idx)
-            uuid = migration_layer.migrate_layer(layer_idx, 0, end_pos, slot_id, slot_id)
+                # Dump #3: pre-migrate, table-based dump (same read path the
+                # migration sender uses). Compare against _dump_cache_readback
+                # (ttnn shard-spec read) for layer 0 to detect table-vs-cache
+                # address mismatches. Tag goes into prefill_pid<PID>_static.chunks.
+                try:
+                    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
+                    _device_list = []
+                    for _r in range(rows):
+                        for _c in range(cols):
+                            _coord = ttnn.MeshCoordinate(_r, _c)
+                            _chip_id = mesh_device.get_device_id(_coord)
+                            _fnid = mesh_device.get_fabric_node_id(_coord)
+                            _device_list.append((int(_chip_id), int(_fnid.mesh_id), int(_fnid.chip_id)))
+                    migration_layer._endpoint.dump_table_with_contents(
+                        device_list=_device_list,
+                        which_table="local",
+                        role="prefill",
+                        tag="3-pre-migrate",
+                    )
+                except Exception as e:
+                    print(
+                        f"[migration][prefill] pre-migrate dump_table_with_contents "
+                        f"FAILED: {type(e).__name__}: {e}",
+                        flush=True,
+                    )
+            uuid = migration_layer.migrate_layer(layer_idx, 0, end_pos, slot_id, dst_slot)
             ## Wait for each one for initial bringup
             # if layer_idx == last_layer_idx:
             print(f"[migration][prefill] wait for migrate layer completion")
