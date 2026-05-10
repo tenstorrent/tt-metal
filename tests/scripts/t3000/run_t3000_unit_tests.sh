@@ -691,32 +691,8 @@ except Exception as e:
     if [[ $rc -ne 0 ]]; then
       echo "LOG_METAL: test returned rc=$rc — resetting hardware via tt-smi"
       timeout 30 tt-smi -r || true
-      local post_warm_output post_ring_timeout
-      post_warm_output=$(python3 -u -c "
-import sys
-try:
-    import ttnn
-    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
-    ttnn.close_mesh_device(m)
-    print('[FIX GS-3] post-reset warm-up complete — base-UMD channels cleared')
-except Exception as e:
-    print(f'[FIX GS-3] WARNING: post-reset warm-up failed ({e}) — next test may still skip', file=sys.stderr)
-" 2>&1 || true)
-      echo "$post_warm_output"
-      post_ring_timeout=0
-      if echo "$post_warm_output" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out|Timeout \([0-9]+ ms\) waiting for physical cores|rescue of stuck dispatch cores)"; then
-        post_ring_timeout=1
-      fi
-      if [[ $post_ring_timeout -eq 1 ]]; then
-        consecutive_ring_timeout=$((consecutive_ring_timeout + 1))
-        echo "LOG_METAL: [FIX UP] post-reset warm-up ring-sync timeout #${consecutive_ring_timeout}/3 — hardware not ready for traffic." >&2
-        if [[ $consecutive_ring_timeout -ge 3 ]]; then
-          echo "LOG_METAL: [FIX UP] INFRA_ERROR — ring-sync timeout on ${consecutive_ring_timeout} consecutive warm-ups. Hardware requires reboot. Aborting test run." >&2
-          exit 1
-        fi
-      else
-        consecutive_ring_timeout=0
-      fi
+      echo "LOG_METAL: FAIL-FAST — aborting test run after first failure/skip. Fix the above before continuing." >&2
+      exit 1
     fi
   }
 
