@@ -88,7 +88,7 @@ shield:
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
   unit:
-    wh_llmbox: 60
+    wh_llmbox: 120  # bumped from 60: racecondition-hunt test adds 60 min (nsexton/0-racecondition-hunt)
   integration:
     wh_llmbox: 40
   health:
