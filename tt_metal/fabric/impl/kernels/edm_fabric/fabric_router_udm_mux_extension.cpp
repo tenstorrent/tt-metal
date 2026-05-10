@@ -498,6 +498,9 @@ void kernel_main() {
 
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+    // FIX LT9-CLEAR (#42429): Clear stale termination signal from previous kernel run.
+    // See fabric_erisc_router.cpp for full explanation. Same stale-signal hazard exists here.
+    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // In UDM mode, mux does NOT signal upstream routers - the relay will do that
     // (upstream routers connect to relay, not mux)

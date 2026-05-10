@@ -564,6 +564,11 @@ void kernel_main() {
     // signal, then it tells relay to teardown.
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+    // FIX LT9-CLEAR (#42429): Clear stale termination signal from previous kernel run.
+    // See fabric_erisc_router.cpp for full explanation. The main loop at line 598 uses
+    // got_immediate_termination_signal<true> (force-invalidate) — a stale IMMEDIATELY_TERMINATE
+    // would cause the relay to exit immediately after READY_FOR_TRAFFIC without processing any traffic.
+    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
     volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_address);

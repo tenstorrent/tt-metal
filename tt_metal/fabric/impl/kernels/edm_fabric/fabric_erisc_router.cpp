@@ -3195,6 +3195,13 @@ void kernel_main() {
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
+    // FIX LT9-CLEAR (#42429): When FIX M skips soft reset (base-UMD relay firmware), L1 retains
+    // the IMMEDIATELY_TERMINATE value from the previous teardown. The FIX LT9-V2 watchdog in
+    // wait_for_static_connection_to_ready calls got_immediate_termination_signal<true> and would
+    // see this stale value, causing premature early exit and leaving EDM status at STARTED forever.
+    // Clear it here before any watchdog code runs. The host will write a fresh termination signal
+    // when it actually wants to stop this kernel.
+    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
     volatile auto edm_status_ptr = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 

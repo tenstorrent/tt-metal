@@ -336,6 +336,9 @@ void kernel_main() {
 
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+    // FIX LT9-CLEAR (#42429): Clear stale termination signal from previous kernel run.
+    // See fabric_erisc_router.cpp for full explanation. Same stale-signal hazard exists here.
+    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // signal the upstream routers the mux is ready
     if constexpr (num_upstream_routers > 0) {
