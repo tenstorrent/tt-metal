@@ -61,10 +61,7 @@ SAMPLE_DIR = Path(__file__).parent / "sample_inputs"
 # ---------------------------------------------------------------------------
 
 
-def pytest_addoption(parser):
-    parser.addoption("--input_prompts", default=None, help="JSON prompt file override")
-    parser.addoption("--max_new_tokens", default=None, type=int)
-    parser.addoption("--batch_size", default=None, type=int)
+# pytest_addoption is in conftest.py (needed for repo-root pytest invocations).
 
 
 # ---------------------------------------------------------------------------
