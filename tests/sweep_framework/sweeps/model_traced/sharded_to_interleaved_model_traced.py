@@ -249,9 +249,15 @@ def run(
     # Run sharded_to_interleaved (pass output config as positional arg to match master trace)
     start_time = start_measuring_time()
     if s2i_output_config is not None:
-        output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, **op_kwargs)
+        if _positional_dtype is not None:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, _positional_dtype, **op_kwargs)
+        else:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, **op_kwargs)
     else:
-        output_tensor = ttnn.sharded_to_interleaved(input_tensor, **op_kwargs)
+        if _positional_dtype is not None:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, output_dtype=_positional_dtype, **op_kwargs)
+        else:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, **op_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     # Verify output is interleaved

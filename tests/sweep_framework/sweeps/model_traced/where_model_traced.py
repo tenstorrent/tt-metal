@@ -208,6 +208,83 @@ def run(
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, input_tensor_c, **op_kwargs)
         output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
+    elif is_tensor_scalar:
+        # Mixed: tensor true_value + scalar false_value
+        shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (tuple, list)) else shape_a
+        if isinstance(shape_b, str):
+            import ast as _ast_wb
+
+            shape_b = tuple(_ast_wb.literal_eval(shape_b))
+        torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
+        torch_input_b = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        )(shape_b)
+        scalar_false = float(kwargs.get("arg2", 0.0)) if kwargs.get("arg2") is not None else 0.0
+        torch_output = torch.where(torch_condition > 0, torch_input_b, scalar_false)
+
+        if not is_host:
+            if is_mesh_device and input_a_tensor_placement:
+                condition_tensor = create_tensor_on_mesh(
+                    torch_condition,
+                    device,
+                    input_a_dtype,
+                    input_a_layout,
+                    input_a_memory_config,
+                    input_a_tensor_placement,
+                )
+            else:
+                condition_tensor = ttnn.from_torch(
+                    torch_condition,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=input_a_memory_config,
+                )
+            if is_mesh_device and input_b_tensor_placement:
+                input_tensor_b = create_tensor_on_mesh(
+                    torch_input_b,
+                    device,
+                    input_b_dtype,
+                    input_b_layout,
+                    input_b_memory_config,
+                    input_b_tensor_placement,
+                )
+            else:
+                input_tensor_b = ttnn.from_torch(
+                    torch_input_b,
+                    dtype=input_b_dtype,
+                    layout=input_b_layout,
+                    device=device,
+                    memory_config=input_b_memory_config,
+                )
+        else:
+            condition_tensor = ttnn.from_torch(torch_condition, dtype=input_a_dtype, layout=input_a_layout)
+            input_tensor_b = ttnn.from_torch(torch_input_b, dtype=input_b_dtype, layout=input_b_layout)
+
+        # Apply topology to match master
+        if is_mesh_device and input_a_tensor_placement:
+            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+            try:
+                apply_tensor_placement_topology(condition_tensor, input_a_tensor_placement, (1, 2))
+            except Exception:
+                pass
+        if is_mesh_device and input_b_tensor_placement:
+            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+            try:
+                apply_tensor_placement_topology(input_tensor_b, input_b_tensor_placement, (1, 2))
+            except Exception:
+                pass
+
+        start_time = start_measuring_time()
+        output_tensor = ttnn.where(condition_tensor, input_tensor_b, scalar_false, **op_kwargs)
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        e2e_perf = stop_measuring_time(start_time)
+
+        if is_mesh_device:
+            torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
+
     else:
         # Tensor creation
         try:
