@@ -398,12 +398,24 @@ def run_demo(
             64,
             1,
         ),
+        (  # 2 images + text, batch=1 — verifies multi-image via native image path
+            str(SAMPLE_DIR / "multi_image_2_demo.json"),
+            200,
+            1,
+        ),
+        (  # 20 images + text, batch=1 — stress test near max=23 (36864//(8*196))
+            str(SAMPLE_DIR / "multi_image_20_demo.json"),
+            200,
+            1,
+        ),
     ],
     ids=[
         "text_only-batch1",
         "text_only-batch2",
         "image-batch1",
         "video-batch1",
+        "multi-image-2-batch1",
+        "multi-image-20-batch1",
     ],
 )
 def test_demo(
