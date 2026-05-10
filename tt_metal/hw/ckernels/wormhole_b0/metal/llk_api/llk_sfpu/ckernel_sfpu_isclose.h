@@ -25,8 +25,12 @@ namespace ckernel::sfpu {
 // handles this via explicit ttnn::typecast calls before dispatch.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool EQUAL_NAN>
 inline void calculate_sfpu_isclose(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out, uint rtol_bits, uint atol_bits) {
-    constexpr uint dst_tile_size_sfpi = 32;
+    const uint32_t dst_index_in0,
+    const uint32_t dst_index_in1,
+    const uint32_t dst_index_out,
+    uint32_t rtol_bits,
+    uint32_t atol_bits) {
+    constexpr uint32_t dst_tile_size_sfpi = 32;
 
     const sfpi::vFloat atol = Converter::as_float(atol_bits);
     const sfpi::vFloat rtol = Converter::as_float(rtol_bits);
@@ -59,7 +63,8 @@ inline void calculate_sfpu_isclose(
         // formula yields inf <= inf = true for mismatched infinities, so we
         // override: if either operand is infinite, result = (a bits == b bits).
         sfpi::vInt a_abs_bits = sfpi::reinterpret<sfpi::vInt>(a) & 0x7FFFFFFF;
-        v_if(is_inf(a_abs_bits) || is_inf(b_abs_bits)) {
+        constexpr int32_t inf_bits = 0x7F800000;  // IEEE-754 +inf abs bits
+        v_if((a_abs_bits == inf_bits) || (b_abs_bits == inf_bits)) {
             result = sfpi::vConst0;
             v_if(sfpi::reinterpret<sfpi::vInt>(a) == b_bits) { result = sfpi::vConst1; }
             v_endif;
@@ -71,15 +76,15 @@ inline void calculate_sfpu_isclose(
         if constexpr (EQUAL_NAN) {
             // Nest "both NaN → 1" inside "any NaN → 0" to avoid evaluating the
             // inner predicate on clean (non-NaN) lanes.
-            v_if(is_nan(a_abs_bits) || is_nan(b_abs_bits)) {
+            v_if((a_abs_bits > inf_bits) || (b_abs_bits > inf_bits)) {
                 result = sfpi::vConst0;
-                v_if(is_nan(a_abs_bits) && is_nan(b_abs_bits)) { result = sfpi::vConst1; }
+                v_if((a_abs_bits > inf_bits) && (b_abs_bits > inf_bits)) { result = sfpi::vConst1; }
                 v_endif;
             }
             v_endif;
         } else {
             // Any NaN input ⇒ result = 0
-            v_if(is_nan(a_abs_bits) || is_nan(b_abs_bits)) { result = sfpi::vConst0; }
+            v_if((a_abs_bits > inf_bits) || (b_abs_bits > inf_bits)) { result = sfpi::vConst0; }
             v_endif;
         }
 

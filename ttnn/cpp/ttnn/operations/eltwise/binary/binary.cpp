@@ -615,6 +615,7 @@ Tensor invoke_binary_ng_isclose(
             {},
             std::nullopt,
             sub_core_grids,
+            std::nullopt,
             rtol,
             atol,
             equal_nan);
@@ -635,6 +636,7 @@ Tensor invoke_binary_ng_isclose(
         {},
         std::nullopt,
         sub_core_grids,
+        std::nullopt,
         rtol,
         atol,
         equal_nan);
@@ -1393,6 +1395,17 @@ Tensor hypot(
         {},
         /*fast_and_approximate_mode*/ false,
         std::nullopt);
+}
+
+Tensor isclose(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::detail::invoke_binary_ng_isclose(
+        input_a, input_b, rtol, atol, equal_nan, output_mem_config, std::nullopt);
 }
 
 }  // namespace ttnn

@@ -46,17 +46,6 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
     return result;
 }
 
-Tensor isclose(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float rtol,
-    float atol,
-    bool equal_nan,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::detail::invoke_binary_ng_isclose(
-        input_a, input_b, rtol, atol, equal_nan, output_mem_config, std::nullopt);
-}
-
 Tensor minimum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

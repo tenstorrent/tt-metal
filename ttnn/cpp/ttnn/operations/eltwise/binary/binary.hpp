@@ -182,7 +182,6 @@ Tensor invoke_binary_ng(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Dedicated helper for isclose: carries rtol, atol and equal_nan as first-class parameters.
 Tensor invoke_binary_ng_isclose(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -457,6 +456,13 @@ Tensor hypot(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+Tensor isclose(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {
