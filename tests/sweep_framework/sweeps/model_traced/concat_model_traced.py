@@ -254,6 +254,18 @@ def run(
         else:
             op_kwargs["sub_core_grids"] = None
 
+    # Restore tensor topology to match master trace
+    for i, tensor_spec in enumerate(arg0):
+        if isinstance(tensor_spec, dict) and i < len(ttnn_tensors):
+            tp = tensor_spec.get("tensor_placement")
+            if tp and is_mesh_device:
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+                try:
+                    apply_tensor_placement_topology(ttnn_tensors[i], tp, actual_mesh)
+                except Exception:
+                    pass
+
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, **op_kwargs)
     # Use arg0[0]'s tensor_placement to drive the mesh composer (all inputs share
     # the same placement for concat in the traced configs we've seen).
