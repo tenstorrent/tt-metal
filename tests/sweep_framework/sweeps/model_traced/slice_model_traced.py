@@ -258,6 +258,20 @@ def run(
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
             )
 
+    # Apply topology to starts/ends tensors to match master trace
+    if ("num_devices" in op_kwargs or "slice_dim" in op_kwargs) and is_mesh_device:
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+        pos_args_raw = extract_positional_args(kwargs)
+        for tensor_ref, arg_idx in [(slice_start, 1), (slice_end, 2)]:
+            if isinstance(tensor_ref, ttnn.Tensor):
+                raw_arg = pos_args_raw.get(arg_idx)
+                if isinstance(raw_arg, dict) and "tensor_placement" in raw_arg:
+                    try:
+                        apply_tensor_placement_topology(tensor_ref, raw_arg["tensor_placement"], (1, 2))
+                    except Exception:
+                        pass
+
     start_time = start_measuring_time()
     if use_named_kwargs:
         if has_explicit_step:
