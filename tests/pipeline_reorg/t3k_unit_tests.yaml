@@ -32,7 +32,7 @@
   cmd: run_t3000_racecondition_hunt_tests
   skus:
     wh_llmbox:
-      timeout: 60
+      timeout: 15
   owner_id: ULMEPM2MA # Sean Nijjar / Neil Sexton
   team: scaleout
 
