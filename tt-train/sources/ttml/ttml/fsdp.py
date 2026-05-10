@@ -570,10 +570,12 @@ def fully_shard(
             if chosen < 0:
                 chosen = param_tensor.get_rank() + chosen
 
-        if chosen is None:
+        shape = list(param_tensor.shape())
+        if chosen is None or shape[chosen] % axis_size != 0:
             warnings.warn(
                 f"Skipping FSDP sharding for parameter {rel_name!r} "
-                f"(shape {list(param_tensor.shape())}): chosen dim has size 1.",
+                f"(shape {shape}): chosen dim {chosen} has size {shape[chosen]} "
+                f"which is not divisible by FSDP axis size {axis_size}.",
                 stacklevel=2,
             )
             continue
@@ -588,14 +590,6 @@ def fully_shard(
                 f"Parameter {rel_name!r} is already sharded on mesh axis "
                 f"{mesh_axis!r} (placements={placements}). FSDP cannot "
                 f"layer a second shard on the same axis."
-            )
-
-        shape = list(param_tensor.shape())
-        if shape[chosen] % axis_size != 0:
-            raise RuntimeError(
-                f"Parameter {rel_name!r} has shape {shape}; dim {chosen} "
-                f"({shape[chosen]}) is not divisible by FSDP axis size "
-                f"{axis_size}."
             )
 
         sharded = _shard_replicated_param(param_tensor, chosen, axis_index, axis_size)
