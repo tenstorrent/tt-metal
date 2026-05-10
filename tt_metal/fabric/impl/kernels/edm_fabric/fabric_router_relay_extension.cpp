@@ -142,12 +142,21 @@ template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    // Watchdog: on WH the termination signal check is compiled out — if the
+    // connection request never arrives this loop spins forever.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)
 #ifndef ARCH_WORMHOLE
            && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
 #endif
     ) {
         invalidate_l1_cache();
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout
+            watchdog_count = 0;
+        }
     }
 
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
