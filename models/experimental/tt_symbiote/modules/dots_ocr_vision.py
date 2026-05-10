@@ -411,12 +411,12 @@ class TTNNDotsVisionMLP(TTNNModule):
         return new_mlp
 
     def preprocess_weights_impl(self):
-        """Linear weights in bfloat8_b (PyTorch Linear [out,in]; preprocessing applies TT layout)."""
+        """Linear weights in low precision (PyTorch Linear [out,in]; preprocessing applies TT layout)."""
 
         def pw(w):
             if w is None:
                 return None
-            return preprocess_linear_weight(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            return preprocess_linear_weight(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
 
         def pb(b):
             if b is None:
@@ -427,7 +427,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             fused_w = torch.cat([self._fc1_weight, self._fc3_weight], dim=0)
             self._intermediate_size = self._fc1_weight.shape[0]
             self.tt_fused_gate_up_weight = preprocess_linear_weight(
-                fused_w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+                fused_w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT
             )
             if self._fc1_bias is not None or self._fc3_bias is not None:
                 I = self._intermediate_size
@@ -459,9 +459,7 @@ class TTNNDotsVisionMLP(TTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = _vision_matmul_compute_config(
-            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
-        )
+        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
 
         self.tt_fused_gate_up_weight = _to_dev(getattr(self, "tt_fused_gate_up_weight", None))
         self.tt_fused_gate_up_bias = _to_dev(getattr(self, "tt_fused_gate_up_bias", None))
@@ -879,13 +877,14 @@ class TTNNDotsVisionAttention(TTNNModule):
         elif seq_len <= 1024:
             q_chunk = k_chunk = 128
         else:
-            q_chunk = k_chunk = 256
+            q_chunk = 256
+            k_chunk = 512
 
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=True,
+            exp_approx_mode=False,
         )
 
     def forward(
