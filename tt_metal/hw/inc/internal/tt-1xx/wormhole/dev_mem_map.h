@@ -189,7 +189,10 @@
 // Stack info
 // Stack and globals share the same piece of memory, one grows at the
 // expense of the other.
-#define MEM_BRISC_STACK_MIN_SIZE 256
+// Was 256; reduced to 240 (16-byte aligned) to free room in kernel
+// data region after firmware exports grew.  Wormhole BRISC kernels
+// don't recurse and stack frames are tiny — 240 B is generous.
+#define MEM_BRISC_STACK_MIN_SIZE 240
 #define MEM_NCRISC_STACK_MIN_SIZE 256
 #define MEM_TRISC0_STACK_MIN_SIZE 192
 #define MEM_TRISC1_STACK_MIN_SIZE 192
