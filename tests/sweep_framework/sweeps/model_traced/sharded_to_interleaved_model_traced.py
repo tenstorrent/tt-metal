@@ -85,22 +85,24 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Forward dtype when master had it (use __absent_keys__ guard).
+    _positional_dtype = None
     absent_keys = kwargs.get("__absent_keys__")
     has_absent_info = absent_keys is not None
     absent_keys = set(absent_keys or [])
-    if "output_dtype" not in op_kwargs:
+    if _positional_dtype is None:
         traced_dtype = kwargs.get("dtype")
         if traced_dtype is not None and traced_dtype != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
             parsed_dt = parse_dict_value("dtype", traced_dtype) if isinstance(traced_dtype, dict) else traced_dtype
             if parsed_dt is not None:
-                op_kwargs["output_dtype"] = parsed_dt
+                _positional_dtype = parsed_dt
 
     pos_args = extract_positional_args(kwargs)
     traced_output_mem_config = pos_args.get(1, None)
     traced_output_dtype = pos_args.get(2, None)
-    if traced_output_dtype is not None and "output_dtype" not in op_kwargs:
+    _positional_dtype = None
+    if traced_output_dtype is not None:
         from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
         parsed_dt = (
@@ -109,7 +111,7 @@ def run(
             else traced_output_dtype
         )
         if parsed_dt is not None:
-            op_kwargs["output_dtype"] = parsed_dt
+            _positional_dtype = parsed_dt
 
     # Determine the output memory config: prefer traced arg1 (positional), then explicit param
     if traced_output_mem_config is not None:
@@ -130,9 +132,10 @@ def run(
         if s2i_output_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
             s2i_output_config = None
 
-    # Remove output_memory_config / memory_config from op_kwargs since we pass it positionally
+    # Remove output_memory_config / memory_config / output_dtype from op_kwargs since we pass positionally
     op_kwargs.pop("output_memory_config", None)
     op_kwargs.pop("memory_config", None)
+    op_kwargs.pop("output_dtype", None)
 
     # Handle input_a_shape - ensure it's always a tuple
     if input_a_shape is None:

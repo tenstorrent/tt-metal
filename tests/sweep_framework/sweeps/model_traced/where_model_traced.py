@@ -126,6 +126,18 @@ def run(
                 torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
             )
 
+    if input_b_dtype == "__ABSENT__":
+        input_b_dtype = None
+    if input_c_dtype == "__ABSENT__":
+        input_c_dtype = None
+    if input_b_layout == "__ABSENT__":
+        input_b_layout = None
+    if input_b_memory_config == "__ABSENT__":
+        input_b_memory_config = None
+    if input_c_layout == "__ABSENT__":
+        input_c_layout = None
+    if input_c_memory_config == "__ABSENT__":
+        input_c_memory_config = None
     is_ternary_tensor = input_b_dtype is not None and input_c_dtype is not None
     is_tensor_scalar = input_b_dtype is not None and input_c_dtype is None
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
