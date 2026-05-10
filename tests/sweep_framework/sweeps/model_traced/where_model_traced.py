@@ -83,26 +83,18 @@ def run(
     absent_keys = kwargs.get("__absent_keys__")
     has_absent_info = absent_keys is not None
     absent_keys = set(absent_keys or [])
-    if has_absent_info and "memory_config" not in absent_keys and "memory_config" not in op_kwargs:
+    if "memory_config" not in op_kwargs:
         traced_mc = kwargs.get("memory_config")
         if traced_mc is not None and traced_mc != "__ABSENT__":
             parsed_mc = parse_dict_value("memory_config", traced_mc) if isinstance(traced_mc, dict) else traced_mc
             if parsed_mc is not None:
                 op_kwargs["memory_config"] = parsed_mc
-            else:
-                op_kwargs["memory_config"] = None
-        else:
-            op_kwargs["memory_config"] = None
-    if has_absent_info and "dtype" not in absent_keys and "dtype" not in op_kwargs:
+    if "dtype" not in op_kwargs:
         traced_dt = kwargs.get("dtype")
         if traced_dt is not None and traced_dt != "__ABSENT__":
             parsed_dt = parse_dict_value("dtype", traced_dt) if isinstance(traced_dt, dict) else traced_dt
             if parsed_dt is not None:
                 op_kwargs["dtype"] = parsed_dt
-            else:
-                op_kwargs["dtype"] = None
-        else:
-            op_kwargs["dtype"] = None
 
     # Pre-allocate output tensor if the master config recorded one
     output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
@@ -213,10 +205,7 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, input_tensor_c, **op_kwargs)
-        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-        output_tensor = mesh_tensor_to_torch(
-            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
-        )
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
     else:
         # Tensor creation
@@ -255,10 +244,7 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, scalar_true, scalar_false, **op_kwargs)
-        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-        output_tensor = mesh_tensor_to_torch(
-            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
-        )
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison
