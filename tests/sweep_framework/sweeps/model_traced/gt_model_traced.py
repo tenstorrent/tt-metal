@@ -160,7 +160,13 @@ def run(
         # Pre-allocate output tensor if the master config recorded one
         output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
         if output_tensor_info and output_tensor_info.get("shape"):
-            ot_shape = tuple(output_tensor_info["shape"])
+            ot_shape_raw = output_tensor_info["shape"]
+            if isinstance(ot_shape_raw, str):
+                import ast
+
+                ot_shape = tuple(ast.literal_eval(ot_shape_raw))
+            else:
+                ot_shape = tuple(ot_shape_raw)
             ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
             if isinstance(ot_dtype, dict):
                 ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
