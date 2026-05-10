@@ -11,6 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.deepseek_v3.tt.moe_expert_mapping import get_expert_owner_linearized_mesh_coord
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
 
@@ -29,13 +30,10 @@ def tt_to_torch_dtype(tt_dtype):
 
 def get_linearized_mesh_coord(num_replicated_devices, cluster_axis, expert_id, experts_per_cluster, experts_per_device):
     if cluster_axis == 0:
-        cluster_id = expert_id // experts_per_cluster
-        expert_id_within_cluster = expert_id % experts_per_cluster
-        device_id_within_cluster = expert_id_within_cluster // experts_per_device
-
-        return device_id_within_cluster * num_replicated_devices + cluster_id
+        mesh_shape = (experts_per_cluster // experts_per_device, num_replicated_devices)
     else:
-        return expert_id // experts_per_device
+        mesh_shape = (num_replicated_devices, experts_per_cluster // experts_per_device)
+    return get_expert_owner_linearized_mesh_coord(mesh_shape, cluster_axis, expert_id, experts_per_device)
 
 
 def create_torch_w0_tensors(L, E, H, N):

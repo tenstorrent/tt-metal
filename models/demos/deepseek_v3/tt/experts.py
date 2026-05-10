@@ -10,6 +10,10 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.moe_expert_mapping import (
+    OPTIMIZED_MOE_CLUSTER_AXIS,
+    get_expert_owner_linearized_mesh_coord,
+)
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -175,8 +179,8 @@ class Experts(AbstractModule):
         matmul_N = w0.shape[-1]
         ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
 
-        prepared_w0_w1 = []
-        prepared_w2 = []
+        prepared_w0_w1 = [None] * mesh_device.get_num_devices()
+        prepared_w2 = [None] * mesh_device.get_num_devices()
         for i in range(0, num_routed_experts, num_experts_per_device):
             prepared_w0_w1_tensor = prepare_w0_w1_tensor(
                 w0[:, i : i + num_experts_per_device, :, :],
@@ -196,8 +200,17 @@ class Experts(AbstractModule):
                 ring2cores,
             )
 
-            prepared_w0_w1.append(prepared_w0_w1_tensor)
-            prepared_w2.append(prepared_w2_tensor)
+            linearized_mesh_coord = get_expert_owner_linearized_mesh_coord(
+                mesh_device.shape,
+                OPTIMIZED_MOE_CLUSTER_AXIS,
+                i,
+                num_experts_per_device,
+            )
+            prepared_w0_w1[linearized_mesh_coord] = prepared_w0_w1_tensor
+            prepared_w2[linearized_mesh_coord] = prepared_w2_tensor
+
+        if any(tensor is None for tensor in prepared_w0_w1) or any(tensor is None for tensor in prepared_w2):
+            raise RuntimeError("Optimized MoE expert weight placement did not assign every mesh device")
 
         prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
         prepared_w2 = torch.cat(prepared_w2, dim=2)
