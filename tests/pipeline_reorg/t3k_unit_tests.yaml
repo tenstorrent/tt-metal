@@ -37,6 +37,7 @@
   team: scaleout
 
 - name: t3k_tt_metal_multiprocess_tests
+  model-name: t3k_tt_metal_multiprocess_tests
   cmd: run_t3000_tt_metal_multiprocess_tests
   skus:
     wh_llmbox:
@@ -45,6 +46,7 @@
   team: scaleout
 
 - name: t3k_ttnn_udm_tests
+  model-name: t3k_ttnn_udm_tests
   cmd: run_t3000_ttnn_udm_tests
   skus:
     wh_llmbox:
@@ -107,6 +109,7 @@
   model-name: mistral-small-3.1-24b-vision
 
 - name: t3k_ttnn_multiprocess_slow_tests
+  model-name: t3k_ttnn_multiprocess_slow_tests
   cmd: run_t3000_ttnn_multiprocess_slow_tests
   skus:
     wh_llmbox:
