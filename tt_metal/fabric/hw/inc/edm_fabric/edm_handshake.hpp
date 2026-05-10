@@ -97,6 +97,8 @@ FORCE_INLINE void sender_side_handshake(
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
@@ -106,6 +108,10 @@ FORCE_INLINE void sender_side_handshake(
         } else {
             count++;
             internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+        }
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("HSSB");  // HandShake Sender Base timeout — still spinning
+            watchdog_count = 0;
         }
         invalidate_l1_cache();
     }
