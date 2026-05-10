@@ -2120,6 +2120,8 @@ fi
 
 # ─── MISSING DIRECTIONS (fabric_tensix_builder.cpp UDM core exhaustion) ───
 # "Missing directions" = a routing plane has no active ETH link in some direction on a boundary device.
+# In UDM mode the code tries to assign a spare mux core per missing direction so packets can still be
+# forwarded. Warnings fire when the core budget (3 for nebula_x1, from YAML) is exhausted.
 # Expected on corner/edge nodes in a healthy 2D mesh. Warnings indicate UDM inter-mux forwarding gaps.
 MISSING_DIRS_NO_CORES=$(grep -c "No remaining cores for missing directions" "$CLEAN" 2>/dev/null || true)
 MISSING_DIRS_PARTIAL=$(grep -c "Not enough cores for all missing directions" "$CLEAN" 2>/dev/null || true)
@@ -2128,16 +2130,26 @@ if [ "${MISSING_DIRS_NO_CORES:-0}" -gt 0 ] || [ "${MISSING_DIRS_PARTIAL:-0}" -gt
     echo ""
     echo "  => [MISSING DIRECTIONS] UDM mux core exhaustion detected."
     if [ "${MISSING_DIRS_NO_CORES:-0}" -gt 0 ]; then
-        echo "     ${MISSING_DIRS_NO_CORES} device(s): zero cores left — missing direction has NO tensix builder."
+        echo "     ${MISSING_DIRS_NO_CORES} device(s): zero cores left — missing direction has NO tensix builder (zero UDM coverage)."
+        # Parse device IDs from the warning lines for a concise per-device summary
+        ZERO_CORE_DEVS=$(grep "No remaining cores for missing directions" "$CLEAN" \
+            | grep -oP 'Device \K[0-9]+' | sort -n | tr '\n' ',' | sed 's/,$//')
+        [ -n "${ZERO_CORE_DEVS}" ] && echo "     Affected device IDs: ${ZERO_CORE_DEVS}"
         grep -m3 "No remaining cores for missing directions" "$CLEAN" | sed 's/^/     /' | cut -c1-160
     fi
     if [ "${MISSING_DIRS_PARTIAL:-0}" -gt 0 ]; then
         echo "     ${MISSING_DIRS_PARTIAL} device(s): partial cores — adding some but not all missing directions."
+        # Parse device IDs and per-device missing/adding counts
+        PARTIAL_DEVS=$(grep "Not enough cores for all missing directions" "$CLEAN" \
+            | grep -oP 'Device \K[0-9]+' | sort -n | tr '\n' ',' | sed 's/,$//')
+        [ -n "${PARTIAL_DEVS}" ] && echo "     Affected device IDs: ${PARTIAL_DEVS}"
         grep -m3 "Not enough cores for all missing directions" "$CLEAN" | sed 's/^/     /' | cut -c1-160
     fi
     echo "     Tensix builders compiled for missing dirs: ${MISSING_DIRS_TENSIX_BUILT:-0}."
-    echo "     NOTE: This is expected for boundary devices in a healthy 2D mesh (corner=2 missing, edge=1 missing)."
-    echo "     It is NOT expected if the missing direction SHOULD have a live ETH neighbor (degraded channel case)."
+    echo "     NOTE: Expected for boundary devices in a healthy 2D mesh (corner=2 missing, edge=1 missing)."
+    echo "           Devices with 'zero cores' have NO UDM forwarding for their uncovered direction(s)."
+    echo "           This is UNEXPECTED if the missing direction should have a live ETH neighbor (degraded channel case)."
+    echo "           Cross-check: degraded/dead channel count per device should explain missing direction count."
 fi
 
 # ─── FIX TF (test_tt_fabric degraded skip) ───
