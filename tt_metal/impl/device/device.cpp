@@ -2881,18 +2881,20 @@ void Device::wait_for_fabric_workers_ready() {
     // FIX RZ4 (#42429): FIX AK/AM (phase5b_erisc_health_check) sets
     // fabric_channels_not_ready_for_traffic_=true when channels are stuck at
     // REMOTE_HANDSHAKE_COMPLETE or fail reads (0xDEADECE7) during a quiesce Phase 5b.
-    // That flag persists into the NEXT quiesce call, where FIX QV (below) would then skip
+    // That flag persists into the NEXT quiesce call, where FIX QV (below) would skip
     // Phase 4+5 entirely on the FRESH Phase 3 relaunch — channels never get a chance to
     // reach READY_FOR_TRAFFIC, and FIX AK fires again next quiesce → cascade of GTEST_SKIP.
     //
     // FIX RZ4: if the flag is set AND the master ETH router channel is NOT permanently dead
     // (not in fabric_pre_dead_channels_ or fabric_external_umd_channels_), the flag was set
     // transiently.  Phase 2.5 already TERMINATED those stuck channels; Phase 3 relaunched
-    // them fresh.  Clear the flag so Phase 4+5 run and verify the fresh relaunch.
+    // them fresh.  Allow Phase 4+5 to run to verify the relaunch; clear the flag only AFTER
+    // Phase 5b confirms all channels reached READY_FOR_TRAFFIC (see clear point below).
     //
-    // Exception (FIX QV case): master chan IS permanently dead → keep the flag so FIX QV
-    // skips Phase 4 (Phase 4 would TT_THROW after 5000ms timeout per channel on a dead-master
+    // Exception (FIX QV case): master chan IS permanently dead → keep the flag and let FIX QV
+    // skip Phase 4 (Phase 4 would TT_THROW after 5000ms timeout per channel on a dead-master
     // MMIO device — every test TearDown would cost +5s and mark the test FAILED not SKIPPED).
+    bool rz4_transient_channels_not_ready = false;
     if (fabric_channels_not_ready_for_traffic_) {
         const auto master_chan_rz4 = builder_ctx.get_fabric_master_router_chan(this->id());
         const bool master_permanently_dead =
@@ -2901,13 +2903,14 @@ void Device::wait_for_fabric_workers_ready() {
         if (!master_permanently_dead) {
             log_info(
                 tt::LogMetal,
-                "wait_for_fabric_workers_ready: Device {} FIX RZ4 — clearing transient "
-                "fabric_channels_not_ready_for_traffic_ (set by FIX AK/AM in prior quiesce cycle; "
-                "master chan {} is not permanently dead; Phase 3 relaunched fresh — "
-                "running Phase 4+5 to verify restored fabric). (#42429)",
+                "wait_for_fabric_workers_ready: Device {} FIX RZ4 — transient "
+                "fabric_channels_not_ready_for_traffic_ detected (set by FIX AK/AM in prior "
+                "quiesce cycle; master chan {} is not permanently dead); proceeding with Phase 4+5 "
+                "to verify fresh Phase 3 relaunch — flag cleared only after channels confirmed "
+                "READY_FOR_TRAFFIC. (#42429)",
                 this->id(),
                 master_chan_rz4);
-            fabric_channels_not_ready_for_traffic_ = false;
+            rz4_transient_channels_not_ready = true;
         }
     }
 
@@ -2922,7 +2925,10 @@ void Device::wait_for_fabric_workers_ready() {
     // Skip Phase 4 (and Phase 5) for such devices: the MUX won't carry traffic
     // (test guards skip ops when this flag is set via FIX QS), so the poll is unnecessary.
     // This mirrors the Phase 4+5 skip for fabric_relay_path_broken_ on non-MMIO devices.
-    if (fabric_channels_not_ready_for_traffic_) {
+    //
+    // Exception: rz4_transient_channels_not_ready=true means the flag was set transiently
+    // (FIX AK/AM) and the master chan is alive — Phase 4+5 must run to verify the relaunch.
+    if (fabric_channels_not_ready_for_traffic_ && !rz4_transient_channels_not_ready) {
         log_warning(
             tt::LogMetal,
             "wait_for_fabric_workers_ready: Device {} has channels not ready for traffic "
@@ -3459,6 +3465,21 @@ void Device::wait_for_fabric_workers_ready() {
             // Extracted to Device::phase5b_erisc_health_check() for readability.
             if (phase5b_erisc_health_check(active_channels, soc_desc_p5, router_sync_addr, expected_ready)) {
                 return;
+            }
+            // FIX RZ4 clear point (#42429): Phase 5b completed without detecting unhealthy
+            // channels — all active channels are confirmed at READY_FOR_TRAFFIC.  If we entered
+            // Phase 4+5 with a transient flag (rz4_transient_channels_not_ready=true, set by
+            // FIX AK/AM in the prior quiesce cycle), clear it now.  From this point the device
+            // is fully healthy; the next quiesce will no longer see a stale flag and will not
+            // cascade into GTEST_SKIP via FIX QV.
+            if (rz4_transient_channels_not_ready) {
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} FIX RZ4 — all channels confirmed "
+                    "READY_FOR_TRAFFIC after Phase 4+5; clearing transient "
+                    "fabric_channels_not_ready_for_traffic_. (#42429)",
+                    this->id());
+                fabric_channels_not_ready_for_traffic_ = false;
             }
         }  // end else (!phase5_relay_read_threw && !fabric_relay_path_broken_)
     }
