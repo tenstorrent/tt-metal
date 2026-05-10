@@ -201,6 +201,16 @@ def run(
     if len(in_shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
         in_shape = (1, in_shape[0])
 
+    # Parse string dtype/layout if needed
+    if isinstance(input_a_dtype, str):
+        from tests.sweep_framework.master_config_loader_v2 import parse_dtype
+
+        input_a_dtype = parse_dtype(input_a_dtype) or ttnn.bfloat16
+    if isinstance(input_a_layout, str):
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        input_a_layout = parse_dict_value("layout", {"type": "Layout", "repr": input_a_layout}) or ttnn.TILE_LAYOUT
+
     # Parse memory_config dict if needed
     if isinstance(input_a_memory_config, dict):
         from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
