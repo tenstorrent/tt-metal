@@ -646,6 +646,7 @@ def _compute_config_hash(op_name, op_args, machine_info):
     hardware, mesh_config = _extract_hardware_and_mesh(machine_info)
     hash_args = copy.deepcopy(op_args)
     _normalize_for_hash(hash_args)
+    _canonicalize_for_storage(hash_args)
     normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
