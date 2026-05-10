@@ -201,6 +201,12 @@ def run(
     if len(in_shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
         in_shape = (1, in_shape[0])
 
+    # Parse memory_config dict if needed
+    if isinstance(input_a_memory_config, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        input_a_memory_config = dict_to_memory_config(input_a_memory_config) or ttnn.DRAM_MEMORY_CONFIG
+
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         in_shape
     )
