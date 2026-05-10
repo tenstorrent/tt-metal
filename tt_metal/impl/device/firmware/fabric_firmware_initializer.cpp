@@ -1521,37 +1521,46 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                     eth_chan_id,
                     status_buf[0]);
             } else if (status_buf[0] == kRomPostcode) {
-                // FIX RP PARALLEL (#42429): ROM boot postcode — defer to shared-deadline batch poll.
+                // FIX BT (#42429): ROM boot postcode — promote IMMEDIATELY to probe_dead_channels.
                 //
-                // Root cause of the session-N→N+1 cascade observed 2026-05-04:
+                // Background (FIX RP PARALLEL history):
                 //   Session N teardown fires assert_risc_reset_at_core on non-MMIO channels →
                 //   ERISCs reset → BRISC ROM writes 0x49705180 to edm_status_address as a
                 //   power-on init postcode → before the ERISC finishes booting to UMD relay
                 //   firmware (which would overwrite with 0x49706550), close_device() is called
                 //   with relay already marked broken → UMD relay never completes the write.
-                //   Session N+1: terminate_stale_erisc_routers reads 0x49705180, the old else-
-                //   branch (FIX O) classified it as corrupt → probe_dead_channels=4 → FIX E2
-                //   marks Device 4 dead-relay → ALL tests skip via FIX QE.
+                //   Session N+1: terminate_stale_erisc_routers reads 0x49705180.
                 //
-                // Previously FIX RP polled each channel SEQUENTIALLY for up to
-                // kRomPostcodePollTotalMs (5s).  On a T3K with 32 channels at ROM postcode
-                // (link training stuck with dead non-MMIO side), this was 32 × 5s = 160s of
-                // sequential timeouts.  The channels never transition because ETH link training
-                // requires both sides alive — so every poll always timed out.
+                // FIX RP PARALLEL (earlier) collected all ROM-postcode channels into a batch
+                // and polled them against a 5s shared deadline before promoting to
+                // probe_dead_channels.  The intent was to allow ERISCs mid-boot to finish.
                 //
-                // Fix: collect all ROM-postcode channels here; the post-loop parallel poll
-                // (below) polls ALL of them against a SINGLE shared 5s deadline.  One 5s wait
-                // covers N channels instead of N × 5s sequential waits.
+                // FIX BT: the 5s batch poll is ALWAYS wasted — here's why:
+                //   0x49705180 is the BRISC ROM power-on initialization postcode.  An ERISC
+                //   stuck at this postcode is frozen in ROM boot waiting for a PCIe-triggered
+                //   reset (deassert_risc_reset).  It will NOT write a new value to
+                //   edm_status_address on its own — polling forever produces no transition.
+                //   The PCIe reset is provided by FIX RR in configure_fabric_cores(), which
+                //   runs AFTER terminate_stale_erisc_routers() returns.  Waiting 5s here
+                //   achieves nothing — the channel is stuck and FIX RR is the only recovery.
+                //
+                // Promoting immediately to probe_dead_channels lets FIX RR attempt the soft
+                // reset without burning 5s of wall time first.  If FIX RR also fails, the
+                // channel is confirmed dead and configure_fabric throws (caught as SKIP by
+                // FIX BR in SetUp()).
                 //
                 // Do NOT zero edm_status_address — 0x49705180 is a valid ROM postcode, not
                 // garbage; zeroing it mid-boot could interfere with the ROM init sequence.
                 // Do NOT send TERMINATE — there is no firmware to receive it during ROM boot.
                 const bool is_non_mmio = cluster_.get_associated_mmio_device(dev->id()) != dev->id();
-                rom_postcode_deferred.push_back({eth_chan_id, eth_logical_core, is_non_mmio});
+                probe_dead_channels.insert(eth_chan_id);
+                corrupt_count++;
                 log_info(
                     tt::LogMetal,
-                    "terminate_stale_erisc_routers: FIX RP Device {} chan={} ROM postcode "
-                    "0x{:08x} — deferred to parallel poll batch (is_non_mmio={})",
+                    "terminate_stale_erisc_routers: FIX BT Device {} chan={} ROM postcode "
+                    "0x{:08x} — immediately promoted to probe_dead_channels (no 5s poll). "
+                    "FIX RR in configure_fabric_cores() will attempt PCIe soft-reset. "
+                    "(is_non_mmio={})",
                     dev->id(),
                     eth_chan_id,
                     kRomPostcode,
@@ -1703,10 +1712,10 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
         }
     }
 
-    // FIX RP PARALLEL (#42429): poll all deferred ROM-postcode channels with a single shared
-    // deadline instead of N × 5s sequential timeouts.
-    // On a T3K with 32 channels at 0x49705180 (link training stuck, non-MMIO side dead), this
-    // turns 160s of sequential timeouts into one 5s shared window.
+    // FIX BT (#42429): ROM-postcode channels are now immediately promoted to probe_dead_channels
+    // in the per-channel loop above (was: FIX RP PARALLEL — batch poll with 5s shared deadline).
+    // rom_postcode_deferred will always be empty after FIX BT; this block is kept as a safety
+    // net in case future code paths add to it again, but in practice it never executes.
     if (!rom_postcode_deferred.empty()) {
         log_info(
             tt::LogMetal,
