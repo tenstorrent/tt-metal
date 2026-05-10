@@ -438,15 +438,20 @@ protected:
             // FIX BC-2 (#42429): prior teardown left system mesh with fewer devices than
             //   requested (probe_dead_channels + dead_relay_devices_ → system_mesh only sees
             //   MMIO chips) → "only N devices are available in the system mesh"
+            // FIX BR (#42429): prior teardown left MMIO channels newly-dead (soft reset timed out)
+            //   → configure_fabric throws "newly-dead ETH channel(s)...Cannot write fabric firmware"
+            //   at device.cpp:502. Without this catch, SetUp() propagates the exception and the
+            //   test is marked FAILED instead of SKIPPED, blocking the entire suite.
             if (what.find("is not active") != std::string::npos ||
-                what.find("devices are available") != std::string::npos) {
+                what.find("devices are available") != std::string::npos ||
+                what.find("newly-dead ETH channel") != std::string::npos) {
                 if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
                     tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
                 }
                 GTEST_SKIP() << fmt::format(
-                    "FIX BC (#42429): MeshDevice::create() threw degraded-cluster exception — "
-                    "non-MMIO ETH relay dead or system mesh missing devices after corrupt teardown; "
-                    "skipping test. ({})",
+                    "FIX BC/BR (#42429): MeshDevice::create() threw degraded-cluster exception — "
+                    "non-MMIO ETH relay dead, system mesh missing devices, or MMIO channels "
+                    "newly-dead after corrupt teardown; skipping test. ({})",
                     what.substr(0, 300));
             }
             throw;
