@@ -2878,6 +2878,39 @@ void Device::wait_for_fabric_workers_ready() {
         return;
     }
 
+    // FIX RZ4 (#42429): FIX AK/AM (phase5b_erisc_health_check) sets
+    // fabric_channels_not_ready_for_traffic_=true when channels are stuck at
+    // REMOTE_HANDSHAKE_COMPLETE or fail reads (0xDEADECE7) during a quiesce Phase 5b.
+    // That flag persists into the NEXT quiesce call, where FIX QV (below) would then skip
+    // Phase 4+5 entirely on the FRESH Phase 3 relaunch — channels never get a chance to
+    // reach READY_FOR_TRAFFIC, and FIX AK fires again next quiesce → cascade of GTEST_SKIP.
+    //
+    // FIX RZ4: if the flag is set AND the master ETH router channel is NOT permanently dead
+    // (not in fabric_pre_dead_channels_ or fabric_external_umd_channels_), the flag was set
+    // transiently.  Phase 2.5 already TERMINATED those stuck channels; Phase 3 relaunched
+    // them fresh.  Clear the flag so Phase 4+5 run and verify the fresh relaunch.
+    //
+    // Exception (FIX QV case): master chan IS permanently dead → keep the flag so FIX QV
+    // skips Phase 4 (Phase 4 would TT_THROW after 5000ms timeout per channel on a dead-master
+    // MMIO device — every test TearDown would cost +5s and mark the test FAILED not SKIPPED).
+    if (fabric_channels_not_ready_for_traffic_) {
+        const auto master_chan_rz4 = builder_ctx.get_fabric_master_router_chan(this->id());
+        const bool master_permanently_dead =
+            fabric_pre_dead_channels_.count(master_chan_rz4) > 0 ||
+            fabric_external_umd_channels_.count(master_chan_rz4) > 0;
+        if (!master_permanently_dead) {
+            log_info(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} FIX RZ4 — clearing transient "
+                "fabric_channels_not_ready_for_traffic_ (set by FIX AK/AM in prior quiesce cycle; "
+                "master chan {} is not permanently dead; Phase 3 relaunched fresh — "
+                "running Phase 4+5 to verify restored fabric). (#42429)",
+                this->id(),
+                master_chan_rz4);
+            fabric_channels_not_ready_for_traffic_ = false;
+        }
+    }
+
     // FIX QV (#42429): MMIO devices whose master ERISC router channel is pre-dead have
     // fabric_channels_not_ready_for_traffic_=true set by FIX QU after configure_fabric().
     // Phase 3 loaded Tensix MUX firmware on these channels (configure_fabric_cores runs
