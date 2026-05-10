@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import torch
@@ -954,17 +953,24 @@ class DecoderStage(StageKind):
     def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         self._persistent_loop.terminate()
 
-    def dump_kv_cache(self, out_dir, stage_idx: int) -> None:
-        """Dump on-device KV cache for this stage as a torch binary on host.
+    def get_kv_cache_host(self) -> torch.Tensor | None:
+        """Pull this stage's on-device KV cache to host as a single torch tensor.
 
         Caller must invoke this under a fast-dispatch context (e.g.
         ``with ttnn.device.setup_fast_dispatch(mesh_device): ...``) since slow-dispatch
-        does not support arbitrary on-device reads. Output file is named
-        ``kv_cache_stage_<stage_idx>_layer_<layer_idx>.pt`` in ``out_dir``.
+        does not support arbitrary on-device reads. Persisting the result to disk
+        (filename, layout, suffixing, etc.) is the caller's responsibility — this
+        method only composes the sharded on-device KV cache into a host tensor
+        and returns it.
+
+        Returns:
+            The composed host KV-cache tensor of shape
+            ``(num_slots, 1, max_seq_len, kvpe_dim)`` dtype bfloat16, or ``None``
+            if invoked before ``setup`` (no KV cache to compose).
         """
         if not self._state or "d" not in self._state:
-            logger.warning(f"[stage={stage_idx}] dump_kv_cache called before setup; skipping")
-            return
+            logger.warning("get_kv_cache_host called before setup; returning None")
+            return None
         ttnn_kv_cache = self._state["d"]["ttnn_kv_cache"]
         mesh_device = self._state["mesh_device"]
         dcs = self._state["dcs"]
@@ -988,19 +994,12 @@ class DecoderStage(StageKind):
             col_n = composed[col_idx * self._num_slots : (col_idx + 1) * self._num_slots]
             if not torch.equal(col0, col_n):
                 n_diff = (col0 != col_n).any(dim=tuple(range(1, col0.dim()))).sum().item()
-                logger.warning(
-                    f"[stage={stage_idx}] TP col mismatch: col 0 vs col {col_idx} differ "
-                    f"on {n_diff}/{self._num_slots} slots"
-                )
+                logger.warning(f"TP col mismatch: col 0 vs col {col_idx} differ on {n_diff}/{self._num_slots} slots")
 
         composed = composed[: self._num_slots]
         kv_cache_torch = interleave_kv_cache(composed, dcs, num_sp)
-
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"kv_cache_stage_{stage_idx:02d}_layer_{self._layer_idx}.pt"
-        torch.save(kv_cache_torch, out_path)
-        logger.info(f"[stage={stage_idx}] dumped KV cache shape={tuple(kv_cache_torch.shape)} to {out_path}")
+        logger.info(f"composed KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}")
+        return kv_cache_torch
 
 
 class HostIoDecoderStage(DecoderStage):
@@ -1029,7 +1028,7 @@ class HostIoDecoderStage(DecoderStage):
         self,
         *,
         weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights,
-        embedding_weights: DeepSeekV3EmbeddingLayerWeights,
+        embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
         layer_idx: int,
         metadata: DeepseekMetadata,
         max_seq_len: int,
@@ -1040,7 +1039,22 @@ class HostIoDecoderStage(DecoderStage):
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
+        inject_hidden_states: bool = False,
     ) -> None:
+        # Two mutually-exclusive H2D modes:
+        #   - default (embedding lookup): host pushes a 256-byte token page; the fused
+        #     H2D+embedding kernel resolves token_id -> embedding row from DRAM.
+        #   - inject_hidden_states: host pushes a full
+        #     `activation (HIDDEN_SIZE bf16) || DeepseekMetadata` page; the simple
+        #     h2d_receiver kernel forwards verbatim. Used by tests that drive the
+        #     decoder with reference hidden-state traces.
+        if inject_hidden_states:
+            assert embedding_weights is None, (
+                "embedding_weights cannot be set when inject_hidden_states=True (the embedding "
+                "lookup is bypassed in this mode)"
+            )
+        else:
+            assert embedding_weights is not None, "embedding_weights is required unless inject_hidden_states=True"
         super().__init__(
             weights=weights,
             layer_idx=layer_idx,
@@ -1056,6 +1070,7 @@ class HostIoDecoderStage(DecoderStage):
             host_loopback=False,
         )
         self._embedding_weights = embedding_weights
+        self._inject_hidden_states = inject_hidden_states
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
@@ -1082,11 +1097,22 @@ class HostIoDecoderStage(DecoderStage):
         # PipelineBlock._init_combined_h2d_d2h_stage:
         #   d2h_page_size == N * exit_upstream_page_size + DeepseekMetadata.aligned_size_bytes()
         page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-        token_size_bytes = DeepseekMetadata.aligned_size_bytes()
 
-        # H2D socket depth matches every other stage that pulls tokens from host
-        # (see EmbeddingStage / TOKEN_META_FIFO_SIZE).
-        h2d_socket_fifo_size = token_size_bytes * TOKEN_FIFO_NUM_PAGES
+        # Two H2D modes:
+        #   - default: 256-byte token page + DRAM embedding lookup (production).
+        #   - inject_hidden_states: full `activation || metadata` page direct from host;
+        #     embedding kernel bypassed. Smaller H2D FIFO depth since pages are 57x larger.
+        if self._inject_hidden_states:
+            h2d_socket_page_size = page_size
+            h2d_socket_fifo_size = h2d_socket_page_size * DEFAULT_ACTIVATION_FIFO_PAGES
+            embedding_tensor = None
+        else:
+            h2d_socket_page_size = DeepseekMetadata.aligned_size_bytes()
+            # H2D socket depth matches every other stage that pulls tokens from host
+            # (see EmbeddingStage / TOKEN_META_FIFO_SIZE).
+            h2d_socket_fifo_size = h2d_socket_page_size * TOKEN_FIFO_NUM_PAGES
+            embedding_tensor = self._embedding_weights.embedding
+
         d2h_socket_page_size = page_size
         d2h_socket_fifo_size = d2h_socket_page_size * DEFAULT_ACTIVATION_FIFO_PAGES
         # Local socket pair between the H2D core and MOE_SENDER_CORE on the entry node.
@@ -1103,9 +1129,10 @@ class HostIoDecoderStage(DecoderStage):
             upstream_d2d_socket_page_size=page_size,
             downstream_d2d_socket_page_size=page_size,
             h2d_socket_fifo_size=h2d_socket_fifo_size,
+            h2d_socket_page_size=h2d_socket_page_size,
             d2h_socket_fifo_size=d2h_socket_fifo_size,
             d2h_socket_page_size=d2h_socket_page_size,
-            embedding_tensor=self._embedding_weights.embedding,
+            embedding_tensor=embedding_tensor,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=exit_upstream_page_size,

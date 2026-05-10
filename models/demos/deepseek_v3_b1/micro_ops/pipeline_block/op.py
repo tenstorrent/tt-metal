@@ -195,6 +195,7 @@ class PipelineBlock:
         upstream_d2d_socket_page_size,
         downstream_d2d_socket_page_size,
         h2d_socket_fifo_size=None,
+        h2d_socket_page_size=None,
         d2h_socket_fifo_size=None,
         d2h_socket_page_size=None,
         entry_node_downstream=None,
@@ -257,7 +258,12 @@ class PipelineBlock:
         self._h2d_page_size_bytes = None
         self._d2h_page_size_bytes = None
 
-        token_size_bytes = DeepseekMetadata.aligned_size_bytes()
+        # Default H2D page = DeepseekMetadata struct (256 B). Callers like the combined
+        # H2D+D2H stage in inject-hidden-states mode override this to fit a full
+        # (activation || metadata) payload directly on the H2D wire.
+        token_size_bytes = (
+            h2d_socket_page_size if h2d_socket_page_size is not None else DeepseekMetadata.aligned_size_bytes()
+        )
         if self.is_pipeline_start and self.is_last_stage and not self.initialize_loopback:
             # Single-process pipeline (one stage spanning the mesh) with both H2D and D2H on
             # the same stage. Plugs a decoder-shaped compute (entry_node_downstream /
@@ -476,7 +482,10 @@ class PipelineBlock:
         assert d2h_socket_page_size is not None, "d2h_socket_page_size must be provided"
         assert d2h_socket_fifo_size >= d2h_socket_page_size
         assert h2d_socket_fifo_size >= token_size_bytes
-        assert embedding_tensor is not None, "embedding_tensor is required for the combined H2D+D2H stage"
+        # embedding_tensor is optional: when None, HostInterface skips the fused embedding
+        # kernel and uses h2d_receiver.cpp to forward the host-supplied page verbatim
+        # (used by inject-hidden-states mode where the host pushes a full
+        # `activation || metadata` page instead of just a token id).
         assert (
             entry_node_downstream is not None
         ), "entry_node_downstream is required for the combined H2D+D2H stage (the compute input core)"
