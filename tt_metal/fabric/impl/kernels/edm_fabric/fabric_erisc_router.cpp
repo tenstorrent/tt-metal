@@ -2853,25 +2853,37 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
 
 constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
-// Note: No termination check is added here intentionally. Both local ERISCs share
-// the same termination signal, so both will see it and exit their respective wait
-// loops naturally. Adding a termination check here would be unsafe — if one ERISC
-// broke out of the sync early and skipped its scratch register write, the other
-// could spin forever waiting for a value that never arrives.
+// Note: No termination check is added here — both local ERISCs share the same
+// termination signal, so both will see it and exit their respective main-loop
+// wait loops naturally.  However, if one ERISC crashes or hangs before reaching
+// this sync point, the other would spin forever.  A bounded iteration count
+// lets the surviving ERISC proceed with teardown after a timeout.
+// See: https://github.com/tenstorrent/tt-metal/issues/42429
 __attribute__((optimize("Os"))) void wait_for_other_local_erisc() {
     constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
     constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
+    constexpr uint32_t kSyncMaxIter = 100'000'000;  // ~2-4 s on ERISC
     if constexpr (IS_TEARDOWN_MASTER()) {
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
+        uint32_t watchdog_count = 0;
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_step2_value) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            if (++watchdog_count >= kSyncMaxIter) {
+                WAYPOINT("TSYN");  // Teardown SYNc timeout — other ERISC did not arrive
+                break;
+            }
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
     } else {
+        uint32_t watchdog_count = 0;
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_start_value) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            if (++watchdog_count >= kSyncMaxIter) {
+                WAYPOINT("TSYN");  // Teardown SYNc timeout — other ERISC did not arrive
+                break;
+            }
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
     }
