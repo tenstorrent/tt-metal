@@ -162,10 +162,15 @@ def assert_output_pcc(
 
 
 def run_test_forward_pass_moe(
-    *, mode, num_tokens, batch_size_per_row, hf_config, cache_path, mesh_device, ccl, weight_type
+    *, mode, num_tokens, batch_size_per_row, hf_config, cache_path, mesh_device, ccl, weight_type, snapshot_dir=None
 ):
     logger.info(f"moe test: HF reference + IO (mode={mode}, tokens={num_tokens}, mesh={tuple(mesh_device.shape)})")
     reference_model = build_reference_model(hf_config)
+    if snapshot_dir is not None:
+        from models.demos.mistral_small_4_119B.tt.moe.moe import load_ttmistral4_moe_from_sharded_safetensors
+
+        load_ttmistral4_moe_from_sharded_safetensors(reference_model, snapshot_dir, layer_idx=0, strict=False)
+        reference_model = reference_model.to(torch.float32).eval()
     state_dict, torch_input, reference_output = generate_reference_io(
         num_tokens=num_tokens,
         reference_model=reference_model,
@@ -295,6 +300,43 @@ def test_moe_submodule_convert_weights_and_state(hf_config, mesh_device, tmp_pat
     assert "w_down_shared_expert" in sh_out
     assert "shared_expert_state_torch" in sh_out
     assert "mesh_device" in TtMistral4SharedExpert.create_state(hf_config, mesh_device=mesh_device, ccl=None)
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "mode, batch_size_per_row, seq_len",
+    [
+        ("decode", 1, 1),
+        ("prefill", 1, _PREFILL_SEQ_LEN),
+    ],
+)
+def test_forward_pass_checkpoint(mode, batch_size_per_row, seq_len, mesh_device, tmp_path):
+    """MoE forward test with real Mistral Small 4 119B checkpoint weights."""
+    from pathlib import Path
+
+    from models.demos.mistral_small_4_119B.tt.moe.moe import mistral4_text_config_from_snapshot
+
+    snapshot_dir = Path(__file__).resolve().parents[1] / "models" / "mistral_small_4"
+    if not (snapshot_dir / "config.json").is_file():
+        pytest.skip("No config.json (snapshot not available)")
+    if not (snapshot_dir / "model.safetensors.index.json").is_file():
+        pytest.skip("No model.safetensors.index.json (snapshot incomplete)")
+
+    hf_config = mistral4_text_config_from_snapshot(snapshot_dir)
+    if getattr(hf_config, "_experts_implementation", None) in (None, ""):
+        hf_config._experts_implementation = "grouped_mm"
+
+    run_test_forward_pass_moe(
+        mode=mode,
+        num_tokens=batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len,
+        batch_size_per_row=batch_size_per_row,
+        hf_config=hf_config,
+        cache_path=tmp_path,
+        mesh_device=mesh_device,
+        ccl=None,
+        weight_type="checkpoint",
+        snapshot_dir=snapshot_dir,
+    )
 
 
 if __name__ == "__main__":

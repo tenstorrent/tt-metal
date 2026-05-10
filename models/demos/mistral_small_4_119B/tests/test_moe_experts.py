@@ -176,5 +176,157 @@ def test_forward_pass(mode, batch_size_per_row, seq_len, mesh_device, tmp_path):
     assert all_passed, f"Experts output mismatch: min_chunk_pcc={min_pcc} below required {PCC_REQUIRED_EXPERTS}"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "mode,batch_size_per_row,seq_len",
+    [
+        ("decode", 8, 1),
+        ("prefill", 1, _PREFILL_SEQ_LEN),
+    ],
+)
+def test_forward_pass_checkpoint(mode, batch_size_per_row, seq_len, mesh_device, tmp_path):
+    """Experts forward test with real Mistral Small 4 119B checkpoint weights."""
+    from pathlib import Path
+
+    from transformers.models.mistral4.modeling_mistral4 import Mistral4NaiveMoe
+
+    from models.demos.mistral_small_4_119B.tt.moe.moe import (
+        TtMistral4MoE,
+        load_ttmistral4_moe_from_sharded_safetensors,
+        mistral4_text_config_from_snapshot,
+    )
+
+    snapshot_dir = Path(__file__).resolve().parents[1] / "models" / "mistral_small_4"
+    if not (snapshot_dir / "config.json").is_file():
+        pytest.skip("No config.json (snapshot not available)")
+    if not (snapshot_dir / "model.safetensors.index.json").is_file():
+        pytest.skip("No model.safetensors.index.json (snapshot incomplete)")
+
+    hf_config = mistral4_text_config_from_snapshot(snapshot_dir)
+    if getattr(hf_config, "_experts_implementation", None) in (None, ""):
+        hf_config._experts_implementation = "grouped_mm"
+
+    num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
+
+    # Load real expert weights from checkpoint
+    moe = TtMistral4MoE(hf_config)
+    load_ttmistral4_moe_from_sharded_safetensors(moe, snapshot_dir, layer_idx=0, strict=False)
+
+    reference_model = Mistral4NaiveMoe(hf_config).eval().to(torch.float32)
+    # Load experts weights: gate_up_proj and down_proj
+    experts_state = {k: v.detach().clone() for k, v in moe.state_dict().items() if k.startswith("experts.")}
+    reference_model.load_state_dict(experts_state, strict=False)
+    reference_model = reference_model.to(torch.float32).eval()
+
+    state_dict = reference_model.state_dict()
+    del moe
+
+    weight_config = TtMistral4Experts.convert_weights(
+        hf_config,
+        (state_dict,),
+        tmp_path / "moe_experts_ckpt_weights",
+        mesh_device,
+    )
+    model_config = (
+        TtMistral4Experts.decode_model_config(hf_config, mesh_device)
+        if mode == "decode"
+        else TtMistral4Experts.prefill_model_config(hf_config, mesh_device)
+    )
+    model_state = TtMistral4Experts.create_state(hf_config, mesh_device=mesh_device, ccl=None)
+
+    run_config = dict(model_config)
+    run_config.update(weight_config)
+    run_config.update(model_state)
+    run_config["mesh_device"] = mesh_device
+
+    torch_input = torch.randn(1, 1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
+    topk_indices = torch.randint(
+        0,
+        hf_config.n_routed_experts,
+        (num_tokens, hf_config.num_experts_per_tok),
+        dtype=torch.int64,
+    )
+    topk_weights = torch.rand((num_tokens, hf_config.num_experts_per_tok), dtype=torch.float32)
+    topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-20)
+
+    with torch.no_grad():
+        ref_out = reference_model(
+            torch_input.reshape(-1, hf_config.hidden_size).to(torch.float32), topk_indices, topk_weights
+        )
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_topk_indices = ttnn.from_torch(
+        topk_indices.view(1, 1, num_tokens, -1).to(torch.int32),
+        device=mesh_device,
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_topk_weights = ttnn.from_torch(
+        topk_weights.view(1, 1, num_tokens, -1).to(torch.bfloat16),
+        device=mesh_device,
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    tt_output = (
+        TtMistral4Experts.forward_decode(tt_input, tt_topk_indices, tt_topk_weights, run_config)
+        if mode == "decode"
+        else TtMistral4Experts.forward_prefill(tt_input, tt_topk_indices, tt_topk_weights, run_config)
+    )
+
+    if mesh_device.get_num_devices() == 1:
+        tt_output_torch = ttnn.to_torch(tt_output)[0, 0]
+    else:
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        )[0, 0]
+
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_topk_indices)
+    ttnn.deallocate(tt_topk_weights)
+    ttnn.deallocate(tt_output)
+
+    ref_out_flat = ref_out.to(torch.float32).reshape(-1, hf_config.hidden_size)
+    tt_out_flat = tt_output_torch.to(torch.float32).reshape(-1, hf_config.hidden_size)
+    rows = min(ref_out_flat.shape[0], tt_out_flat.shape[0])
+    logger.info(f"Mode: {mode}, Seq len: {seq_len}, compare_rows={rows} (checkpoint)")
+
+    num_chunks = (rows + TARGET_CHUNK_SIZE - 1) // TARGET_CHUNK_SIZE
+    min_pcc = float("inf")
+    all_passed = True
+
+    for chunk_idx in range(num_chunks):
+        start = chunk_idx * TARGET_CHUNK_SIZE
+        end = min(start + TARGET_CHUNK_SIZE, rows)
+        chunk_passed, chunk_pcc = comp_pcc(
+            ref_out_flat[start:end],
+            tt_out_flat[start:end],
+            PCC_REQUIRED_EXPERTS,
+        )
+        min_pcc = min(min_pcc, chunk_pcc)
+        all_passed = all_passed and chunk_passed
+
+    status = "PASS" if all_passed else "FAIL"
+    logger.info(
+        f"[{status}] experts checkpoint forward mode={mode} | min_chunk_pcc={min_pcc} | required>={PCC_REQUIRED_EXPERTS}"
+    )
+    assert (
+        all_passed
+    ), f"Checkpoint experts output mismatch: min_chunk_pcc={min_pcc} below required {PCC_REQUIRED_EXPERTS}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

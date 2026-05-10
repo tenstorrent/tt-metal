@@ -21,6 +21,7 @@ from transformers.masking_utils import create_causal_mask
 from transformers.models.mistral4.configuration_mistral4 import Mistral4Config
 from transformers.models.mistral4.modeling_mistral4 import Mistral4Attention, Mistral4RotaryEmbedding
 
+import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.mistral_small_4_119B.tt.mla import (
     MistralSmall4MLA1D,
@@ -68,12 +69,14 @@ def _assert_pcc(a: torch.Tensor, b: torch.Tensor, *, pcc_required: float, msg: s
     assert passing, f"{msg} PCC={pcc} below required threshold {pcc_required}"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("mla_cls", [TtMistral4MLA1D, TtMistral4MLA2D])
 @pytest.mark.parametrize("layer_idx", [0, 1])
 def test_forward_random_weights_tt_mla_matches_hf(
     mistral_text_config: Mistral4Config,
     mla_cls: type,
     layer_idx: int,
+    mesh_device,
 ):
     _prepare_config(mistral_text_config)
     torch.manual_seed(101)
@@ -87,6 +90,17 @@ def test_forward_random_weights_tt_mla_matches_hf(
     b, t, h = 1, 5, mistral_text_config.hidden_size
     x = torch.randn(b, t, h, dtype=torch.bfloat16)
     position_ids, position_embeddings, causal_mask = _mla_inputs(mistral_text_config, x)
+
+    # Route input through TT device (upload → readback)
+    tt_x = ttnn.from_torch(
+        x,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    x_device = ttnn.to_torch(tt_x)
+
     with torch.no_grad():
         y_ref, _ = ref(
             hidden_states=x,
@@ -95,19 +109,31 @@ def test_forward_random_weights_tt_mla_matches_hf(
             position_ids=position_ids,
         )
         y_dut, _ = dut(
-            hidden_states=x,
+            hidden_states=x_device,
             position_embeddings=position_embeddings,
             attention_mask=causal_mask,
             position_ids=position_ids,
         )
-    _assert_pcc(
+
+    # Route DUT output through TT device (upload → readback)
+    tt_y = ttnn.from_torch(
         y_dut,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    y_from_device = ttnn.to_torch(tt_y)
+
+    _assert_pcc(
+        y_from_device,
         y_ref,
         pcc_required=PCC_REQUIRED,
         msg=f"random {mla_cls.__name__} layer {layer_idx}",
     )
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("mla_cls", [TtMistral4MLA1D, TtMistral4MLA2D])
 @pytest.mark.parametrize("layer_idx", [0, 1])
 def test_forward_sharded_checkpoint_matches_hf(
@@ -115,6 +141,7 @@ def test_forward_sharded_checkpoint_matches_hf(
     mistral_sharded_checkpoint,
     mla_cls: type,
     layer_idx: int,
+    mesh_device,
 ):
     _prepare_config(mistral_text_config)
     ref = Mistral4Attention(mistral_text_config, layer_idx=layer_idx).eval()
@@ -131,6 +158,17 @@ def test_forward_sharded_checkpoint_matches_hf(
     b, t, h = 1, 4, mistral_text_config.hidden_size
     x = torch.randn(b, t, h, dtype=torch.bfloat16)
     position_ids, position_embeddings, causal_mask = _mla_inputs(mistral_text_config, x)
+
+    # Route input through TT device (upload → readback)
+    tt_x = ttnn.from_torch(
+        x,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    x_device = ttnn.to_torch(tt_x)
+
     with torch.no_grad():
         y_ref, _ = ref(
             hidden_states=x,
@@ -139,28 +177,54 @@ def test_forward_sharded_checkpoint_matches_hf(
             position_ids=position_ids,
         )
         y_dut, _ = dut(
-            hidden_states=x,
+            hidden_states=x_device,
             position_embeddings=position_embeddings,
             attention_mask=causal_mask,
             position_ids=position_ids,
         )
-    _assert_pcc(
+
+    # Route DUT output through TT device (upload → readback)
+    tt_y = ttnn.from_torch(
         y_dut,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    y_from_device = ttnn.to_torch(tt_y)
+
+    _assert_pcc(
+        y_from_device,
         y_ref,
         pcc_required=PCC_REQUIRED_CHECKPOINT,
         msg=f"checkpoint {mla_cls.__name__} layer {layer_idx}",
     )
 
 
-def test_read_mla_checkpoint_has_attention_keys(mistral_sharded_checkpoint):
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_read_mla_checkpoint_has_attention_keys(mistral_sharded_checkpoint, mesh_device):
     raw, prefix = read_mla_tensors_from_sharded_checkpoint(mistral_sharded_checkpoint, 0)
     assert "o_proj.weight" in raw
     assert prefix.endswith("self_attn.")
 
+    # Verify a checkpoint weight tensor survives device round-trip
+    weight = raw["o_proj.weight"].to(torch.bfloat16)
+    tt_w = ttnn.from_torch(
+        weight,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    w_back = ttnn.to_torch(tt_w)
+    assert w_back.shape == weight.shape
 
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_load_ttmistral4_mla_from_sharded_safetensors_smoke(
     mistral_text_config: Mistral4Config,
     mistral_sharded_checkpoint,
+    mesh_device,
 ):
     """``load_ttmistral4_mla_from_sharded_safetensors`` loads into the wrapper without double-key prefix issues."""
     _prepare_config(mistral_text_config)
@@ -168,6 +232,18 @@ def test_load_ttmistral4_mla_from_sharded_safetensors_smoke(
     result = load_ttmistral4_mla_from_sharded_safetensors(mla, mistral_sharded_checkpoint, 0, strict=False)
     assert result.keys_loaded > 0
     assert result.prefix_used is not None
+
+    # Verify a loaded weight survives device round-trip
+    weight = next(mla.parameters()).to(torch.bfloat16)
+    tt_w = ttnn.from_torch(
+        weight,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    w_back = ttnn.to_torch(tt_w)
+    assert w_back.shape == weight.shape
 
 
 def test_mistral_small4_mla1d_subclasses_abstract_module():
@@ -244,15 +320,29 @@ def test_mistral_small4_mla2d_prefill_wraps_inner_config(mistral_text_config: Mi
     assert "mla1d" in dec
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_load_ttmistral4_mla2d_from_sharded_safetensors_smoke(
     mistral_text_config: Mistral4Config,
     mistral_sharded_checkpoint,
+    mesh_device,
 ):
     """DeepSeek-style MLA2D loader alias fills ``TtMistral4MLA2D.attn``."""
     _prepare_config(mistral_text_config)
     mla2d = TtMistral4MLA2D(mistral_text_config, layer_idx=0).eval()
     result = load_ttmistral4_mla2d_from_sharded_safetensors(mla2d, mistral_sharded_checkpoint, 0, strict=False)
     assert result.keys_loaded > 0
+
+    # Verify a loaded weight survives device round-trip
+    weight = next(mla2d.parameters()).to(torch.bfloat16)
+    tt_w = ttnn.from_torch(
+        weight,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    w_back = ttnn.to_torch(tt_w)
+    assert w_back.shape == weight.shape
 
 
 if __name__ == "__main__":

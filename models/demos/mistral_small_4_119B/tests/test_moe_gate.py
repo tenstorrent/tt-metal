@@ -232,5 +232,125 @@ def test_linear_fallback_op_uses_hf_oriented_gate_weights(monkeypatch: pytest.Mo
     assert output.shape == tuple(expected.shape)
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "mode,batch_size_per_row,seq_len",
+    [
+        ("decode", 1, 1),
+        ("prefill", 1, _PREFILL_SEQ_LEN),
+    ],
+)
+def test_forward_pass_checkpoint(mode, batch_size_per_row, seq_len, mesh_device, tmp_path):
+    """Gate forward test with real Mistral Small 4 119B checkpoint weights."""
+    from pathlib import Path
+
+    from transformers.models.mistral4.modeling_mistral4 import Mistral4TopkRouter
+
+    from models.demos.mistral_small_4_119B.tt.moe.moe import (
+        TtMistral4MoE,
+        load_ttmistral4_moe_from_sharded_safetensors,
+        mistral4_text_config_from_snapshot,
+    )
+
+    snapshot_dir = Path(__file__).resolve().parents[1] / "models" / "mistral_small_4"
+    if not (snapshot_dir / "config.json").is_file():
+        pytest.skip("No config.json (snapshot not available)")
+    if not (snapshot_dir / "model.safetensors.index.json").is_file():
+        pytest.skip("No model.safetensors.index.json (snapshot incomplete)")
+
+    hf_config = mistral4_text_config_from_snapshot(snapshot_dir)
+    if getattr(hf_config, "_experts_implementation", None) in (None, ""):
+        hf_config._experts_implementation = "grouped_mm"
+
+    # Load real gate weight from checkpoint
+    moe = TtMistral4MoE(hf_config)
+    load_ttmistral4_moe_from_sharded_safetensors(moe, snapshot_dir, layer_idx=0, strict=False)
+    gate_weight = moe.gate.weight.detach().clone()
+    del moe
+
+    num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
+
+    reference_model = Mistral4TopkRouter(hf_config).eval()
+    reference_model.load_state_dict({"weight": gate_weight}, strict=True)
+    hf_state_dict = reference_model.state_dict()
+
+    weight_config = TtMistral4MoEGate.convert_weights(
+        hf_config,
+        (hf_state_dict,),
+        tmp_path / "moe_gate_ckpt_weights",
+        mesh_device,
+    )
+
+    model_config = (
+        TtMistral4MoEGate.decode_model_config(hf_config, mesh_device, topk_fallback=True, use_bitonic_sort=True)
+        if mode == "decode"
+        else TtMistral4MoEGate.prefill_model_config(hf_config, mesh_device, topk_fallback=True, use_bitonic_sort=True)
+    )
+    model_state = TtMistral4MoEGate.create_state(hf_config, mesh_device=mesh_device, ccl=None)
+
+    run_config = dict(model_config)
+    run_config.update(weight_config)
+    run_config.update(model_state)
+    run_config["mesh_device"] = mesh_device
+
+    torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
+    router_logits_ref = reference_model(torch_input.to(torch.float32))
+    reference_topk_weights, reference_topk_indices = _route_tokens_to_experts(hf_config, router_logits_ref)
+
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(1),
+        device=mesh_device,
+        mesh_mapper=_activations_mesh_mapper(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    tt_topk_weights, tt_topk_indices = (
+        TtMistral4MoEGate.forward_decode(tt_input, run_config)
+        if mode == "decode"
+        else TtMistral4MoEGate.forward_prefill(tt_input, run_config)
+    )
+
+    if mesh_device.get_num_devices() == 1:
+        tt_topk_weights_torch = ttnn.to_torch(tt_topk_weights)[0].squeeze(0)
+        tt_topk_indices_torch = ttnn.to_torch(tt_topk_indices)[0].squeeze(0)
+    else:
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape))
+        tt_topk_weights_torch = ttnn.to_torch(tt_topk_weights, mesh_composer=composer)[0].squeeze(0)
+        tt_topk_indices_torch = ttnn.to_torch(tt_topk_indices, mesh_composer=composer)[0].squeeze(0)
+
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_topk_weights)
+    ttnn.deallocate(tt_topk_indices)
+
+    logger.info(f"Mode: {mode}, Seq len: {seq_len} (checkpoint)")
+
+    passing, pcc_message = comp_pcc(
+        reference_topk_weights.to(torch.float32),
+        tt_topk_weights_torch.to(torch.float32),
+        TOPK_WEIGHTS_PCC_REQUIRED,
+    )
+    status = "PASS" if passing else "FAIL"
+    logger.info(
+        f"[{status}] moe_gate checkpoint topk_weights mode={mode} | PCC={pcc_message} | required>={TOPK_WEIGHTS_PCC_REQUIRED}"
+    )
+    assert passing, f"Checkpoint TopK weights PCC requirement {TOPK_WEIGHTS_PCC_REQUIRED} not met: {pcc_message}"
+
+    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.int32), dim=-1, stable=True)[0]
+    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch.to(torch.int32), dim=-1, stable=True)[0]
+    indices_match = reference_topk_indices == tt_topk_indices_torch
+    topk_indices_match_rate = indices_match.float().mean().item()
+    logger.info(
+        f"[{'PASS' if topk_indices_match_rate >= TOPK_INDICES_MATCH_RATE_REQUIRED else 'FAIL'}] "
+        f"moe_gate checkpoint topk_indices mode={mode} | "
+        f"match_rate={topk_indices_match_rate:.6f} | required>={TOPK_INDICES_MATCH_RATE_REQUIRED:.2f}"
+    )
+    assert (
+        topk_indices_match_rate >= TOPK_INDICES_MATCH_RATE_REQUIRED
+    ), f"Checkpoint TopK indices match rate {topk_indices_match_rate:.6f} below required {TOPK_INDICES_MATCH_RATE_REQUIRED:.2f}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
