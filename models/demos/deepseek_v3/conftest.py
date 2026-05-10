@@ -239,8 +239,17 @@ def set_deterministic_env():
     Fixture to set seeds and enable deterministic algorithms for DeepSeek tests.
     This ensures reproducible results across test runs.
     """
-    torch.manual_seed(5)
-    torch.use_deterministic_algorithms(True)
+    previous_deterministic_algorithms = torch.are_deterministic_algorithms_enabled()
+    previous_fill_uninitialized_memory = torch.utils.deterministic.fill_uninitialized_memory
+    try:
+        torch.manual_seed(5)
+        torch.use_deterministic_algorithms(True)
+        # DeepSeek reference tensors are too large for PyTorch's deterministic debug fill.
+        torch.utils.deterministic.fill_uninitialized_memory = False
+        yield
+    finally:
+        torch.use_deterministic_algorithms(previous_deterministic_algorithms)
+        torch.utils.deterministic.fill_uninitialized_memory = previous_fill_uninitialized_memory
 
 
 @pytest.fixture(scope="session")
