@@ -156,6 +156,60 @@ def annotate_video_frame_with_points(
     frame.save(str(output_path))
 
 
+def annotate_video_with_points(video_path: str, coords_str: str, output_path: str) -> None:
+    """Read *video_path*, draw coordinate dots on matching frames, write *output_path* (MP4).
+
+    Args:
+        video_path:  source video file.
+        coords_str:  space-separated triplets ``frame_time x_norm y_norm ...``
+                     where x_norm, y_norm ∈ [0, 1000] and frame_time is in seconds.
+        output_path: destination MP4 path.
+    """
+    import av
+    import numpy as np
+    from PIL import Image as _Image
+    from PIL import ImageDraw as _ImageDraw
+
+    # Parse (time, x_norm, y_norm) triplets using Molmo's 3–4-digit coord format
+    _POINTS_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s+([0-9]{3,4})\s+([0-9]{3,4})")
+    coord_list = []
+    for m in _POINTS_RE.finditer(coords_str):
+        coord_list.append((float(m.group(1)), float(m.group(2)), float(m.group(3))))
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    in_container = av.open(video_path)
+    in_stream = in_container.streams.video[0]
+    fps = float(in_stream.average_rate)
+    W = in_stream.width
+    H = in_stream.height
+
+    out_container = av.open(output_path, mode="w")
+    out_stream = out_container.add_stream("libx264", rate=int(round(fps)))
+    out_stream.width = W
+    out_stream.height = H
+    out_stream.pix_fmt = "yuv420p"
+
+    for frame_idx, packet in enumerate(in_container.decode(video=0)):
+        t = frame_idx / fps
+        arr = packet.to_ndarray(format="rgb24")
+        img = _Image.fromarray(arr)
+        draw = _ImageDraw.Draw(img)
+        for t_coord, x_norm, y_norm in coord_list:
+            if abs(t - t_coord) <= 0.5 / fps + 1e-6:
+                cx = int(x_norm / 1000 * W)
+                cy = int(y_norm / 1000 * H)
+                _draw_dot(draw, cx, cy)
+        out_frame = av.VideoFrame.from_ndarray(np.array(img), format="rgb24")
+        for pkt in out_stream.encode(out_frame):
+            out_container.mux(pkt)
+
+    for pkt in out_stream.encode():
+        out_container.mux(pkt)
+    in_container.close()
+    out_container.close()
+
+
 def save_annotated_outputs(prompts: list, responses: list, output_dir) -> None:
     """Overlay model coordinates onto source images/video frames and save to *output_dir*.
 
@@ -169,8 +223,9 @@ def save_annotated_outputs(prompts: list, responses: list, output_dir) -> None:
 
     from PIL import Image as _Image
 
+    # Closing quote is optional — model may truncate at max_new_tokens before it
     _COORD_FULL_RE = _re.compile(
-        r"<(?:points?|tracks?)[^>]*\s+coords=\"([0-9\t:;,. ]+)\"[^>]*/?>",
+        r'<(?:points?|tracks?)[^>]*\s+coords="([0-9\t:;,. ]+)',
         _re.IGNORECASE,
     )
 
@@ -206,30 +261,11 @@ def save_annotated_outputs(prompts: list, responses: list, output_dir) -> None:
                     logger.warning(f"  [overlay] could not annotate {img_src}: {exc}")
 
         elif video_path:
-            # Annotate extracted key frames using decord
+            # Produce an annotated MP4 with dots burned onto every matching frame
             try:
-                import decord
-
-                vr = decord.VideoReader(video_path)
-                fps = vr.get_avg_fps()
-                for coords_block in all_coords:
-                    tokens = coords_block.split()
-                    # video coord triplets: frame_time  x_norm  y_norm
-                    i = 0
-                    while i + 2 < len(tokens):
-                        try:
-                            t = float(tokens[i])
-                            x_norm = float(tokens[i + 1])
-                            y_norm = float(tokens[i + 2])
-                            frame_idx = min(int(t * fps), len(vr) - 1)
-                            frame = vr[frame_idx].asnumpy()
-                            frame_img = _Image.fromarray(frame)
-                            out = output_dir / f"user{u}_t{t:.1f}_annotated.png"
-                            annotate_video_frame_with_points(frame_img, x_norm, y_norm, out)
-                        except (ValueError, IndexError):
-                            pass
-                        i += 3
-                logger.info(f"  [overlay] saved annotated frames to {output_dir}")
+                out = output_dir / f"user{u}_annotated.mp4"
+                annotate_video_with_points(video_path, coords_str, str(out))
+                logger.info(f"  [overlay] saved annotated video {out}")
             except Exception as exc:
                 logger.warning(f"  [overlay] could not annotate video {video_path}: {exc}")
 
