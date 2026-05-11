@@ -3,8 +3,8 @@
 @@ -6,6 +6,7 @@
  #include <array>
  #include <cstdint>
- #include <vector>
 +#include <tuple>
- 
+ #include <vector>
+
  namespace CaDiCaL {
  

@@ -4,6 +4,7 @@
 
 #include "topology_solver_sat_solver.hpp"
 
+#include <cstdlib>
 #include <memory>
 
 #include <cadical.hpp>
