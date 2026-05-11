@@ -773,6 +773,10 @@ class SeedManager:
             ``rand_tile`` each step, advancing the per-user RNG
             independently.  No host interaction needed.
 
+        ``empty_slots`` narrows the update to the currently active physical
+        slots.  When omitted on the seeded path, only slots that still have an
+        explicit seed receive a host-generated value; all others receive SKIP.
+
         ``reset_seed`` always sets ``_reseted=True``, so any new prefill
         re-enters state 1 to refresh the device RNG.
         """
@@ -802,9 +806,16 @@ class SeedManager:
                 return
         else:
             # Advance RNG for each user in empty_slots; non-active slots get MAX_UINT32.
-            new_seeds = [
-                rng.randint(0, 1000000) if i in active_slots else MAX_UINT32 for i, rng in enumerate(self.rngs)
-            ]
+            if requested_empty_slots is None:
+                new_seeds = [
+                    rng.randint(0, 1000000) if self.seeds[i] is not None else MAX_UINT32
+                    for i, rng in enumerate(self.rngs)
+                ]
+            else:
+                new_seeds = [
+                    rng.randint(0, 1000000) if i in active_slots else MAX_UINT32
+                    for i, rng in enumerate(self.rngs)
+                ]
             if replicate_seeds:
                 if requested_empty_slots is not None:
                     assert len(requested_empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"

@@ -1101,7 +1101,14 @@ class Generator(WarmupForwardMixin):
                         sampling_params.seed,
                         list(range(self.model_args.max_batch_size)),
                     )
-        self.model.sampling.seed_manager.get_new_values()
+        active_seed_slots = None
+        if sampling_params is not None and start_pos is not None:
+            active_seed_slots = (
+                torch.nonzero(torch.as_tensor(start_pos) >= 0, as_tuple=False)
+                .flatten()
+                .tolist()
+            )
+        self.model.sampling.seed_manager.get_new_values(active_seed_slots)
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
