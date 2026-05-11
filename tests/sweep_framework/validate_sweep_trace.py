@@ -291,9 +291,14 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
         for k in all_keys:
             child_path = f"{prefix}.{k}" if prefix else k
             if k not in master:
-                diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
+                # Skip extra keys with None value — the tracer captures function
+                # defaults (dtype=None, memory_config=None) that the master trace
+                # never had. These are not real diffs.
+                if sweep[k] is not None:
+                    diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
-                diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
+                if master[k] is not None:
+                    diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
             else:
                 diffs.extend(deep_diff(master[k], sweep[k], child_path))
     elif isinstance(master, list) and isinstance(sweep, list):
@@ -455,7 +460,7 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                         op_name=op_name,
                         master_config_id=master_cid,
                         sweep_config_id=sweep_cid,
-                        status="diff",
+                        status="diff" if diffs else "match",
                         diffs=diffs,
                         sweep_config_hash=sweep_config_hash,
                     )
