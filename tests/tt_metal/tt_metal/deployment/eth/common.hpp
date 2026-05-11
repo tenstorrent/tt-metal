@@ -18,6 +18,13 @@
         start = NOW();                                                                        \
     } while (0)
 
+struct LinkError {
+    int send_device_id;
+    int recv_device_id;
+    const CoreCoord send_core;
+    const CoreCoord recv_core;
+};
+
 namespace tt::tt_metal {
 
 [[maybe_unused]]
@@ -576,6 +583,23 @@ static bool tensix_compare_dram_banks(
             last_error);
     }
     return !total_errors;
+}
+
+void print_summary(std::span<struct LinkError> errors) {
+    if (!errors.size()) {
+        return;
+    }
+
+    log_critical(tt::LogTest, "Failing links:");
+    for (auto& e : errors) {
+        log_critical(
+            tt::LogTest,
+            "\tSender device {}, receiver device {}, sender core {}, receiver core {}",
+            e.send_device_id,
+            e.recv_device_id,
+            e.send_core,
+            e.recv_core);
+    }
 }
 
 }  // namespace tt::tt_metal
