@@ -678,6 +678,41 @@ def create_reference_mlp_models(state_dict, layer_idx):
     return expert_mlp, shared_mlp
 
 
+def remap_experts_to_slots_0_7(state_dict, layer_idx, target_expert_ids):
+    """Build a new dict where ``mlp.experts.0..7`` weights are the listed ``target_expert_ids``.
+
+    Lets a test load only the 8 specific experts of interest while keeping ``num_routed_experts=8``
+    and rigging the gate to select indices 0..7 (group 0). For a ``LazyStateDict`` source only the
+    keys this test consumes (this layer's attention/norm/gate/shared/experts) are materialized;
+    other layers and global keys are skipped.
+
+    Args:
+        state_dict: source state dict (dict or LazyStateDict in HF key convention).
+        layer_idx: MoE layer index to remap.
+        target_expert_ids: list of exactly 8 absolute expert IDs (0..255).
+
+    Returns:
+        plain dict with this layer's non-expert keys plus the 8 remapped expert weight keys.
+    """
+    if len(target_expert_ids) != 8:
+        raise ValueError(f"target_expert_ids must have exactly 8 entries, got {len(target_expert_ids)}")
+    layer_prefix = f"model.layers.{layer_idx}."
+    expert_prefix = f"{layer_prefix}mlp.experts."
+    out = {}
+    for key in state_dict:
+        if not key.startswith(layer_prefix):
+            continue  # skip other layers + global keys
+        if key.startswith(expert_prefix):
+            continue  # skip original expert keys; only the remapped 0..7 survive
+        out[key] = state_dict[key]
+    for new_idx, target_id in enumerate(target_expert_ids):
+        for proj in ("gate_proj", "up_proj", "down_proj"):
+            src = f"{expert_prefix}{target_id}.{proj}.weight"
+            dst = f"{expert_prefix}{new_idx}.{proj}.weight"
+            out[dst] = state_dict[src]
+    return out
+
+
 def rig_moe_gate_for_expected_experts(
     state_dict,
     layer_idx,
@@ -889,9 +924,33 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize(
+    "layer_idx_override,target_expert_ids",
+    [
+        pytest.param(None, None, id="group0_32experts"),
+        # Position 67 selected experts per layer (from compressed run, accepted_experts.json)
+        pytest.param(3, [101, 197, 215, 109, 119, 199, 126, 66], id="layer3_pos67"),
+        pytest.param(4, [2, 64, 77, 10, 14, 95, 7, 3], id="layer4_pos67"),
+        pytest.param(5, [16, 59, 42, 48, 78, 92, 134, 81], id="layer5_pos67"),
+        pytest.param(6, [9, 194, 3, 38, 151, 35, 140, 143], id="layer6_pos67"),
+        pytest.param(7, [151, 147, 30, 5, 26, 148, 64, 231], id="layer7_pos67"),
+        pytest.param(8, [12, 8, 26, 240, 243, 226, 245, 87], id="layer8_pos67"),
+        pytest.param(9, [61, 40, 11, 2, 204, 205, 221, 103], id="layer9_pos67"),
+        pytest.param(10, [177, 149, 135, 174, 126, 121, 31, 14], id="layer10_pos67"),
+        pytest.param(11, [5, 126, 0, 7, 77, 162, 72, 179], id="layer11_pos67"),
+        pytest.param(12, [25, 193, 195, 201, 153, 237, 228, 148], id="layer12_pos67"),
+    ],
+)
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
-def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device,
+    reconfig_moe_cbs,
+    noc_mode,
+    layer_idx_override,
+    target_expert_ids,
+    get_reference_model_state_dict,
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -899,6 +958,11 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     then results are reduced (summed) across all devices to ROOT1.
 
     Gate is rigged so grouped top-k picks deterministic winners.
+
+    When ``target_expert_ids`` is None (default): loads 32 experts (group 0) and picks 8 of them.
+    When ``target_expert_ids`` is a list of 8 absolute expert IDs: loads ONLY those 8 by remapping
+    them into slots 0..7 (group 0). Gate is rigged to pick slots 0..7. Useful for reproducing what
+    the demo selected at a specific position.
     """
     num_devices = TestConfig.NUM_DEVICES_4x2
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -913,22 +977,38 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     M = RoutedExpert.M
     K = RoutedExpert.K
 
-    logger.info(f"Testing fused MoE with reduce: K={K}")
+    effective_layer_idx = layer_idx_override if layer_idx_override is not None else ROUTED_EXPERT_LAYER_IDX
+    logger.info(f"Testing fused MoE with reduce: K={K}, layer_idx={effective_layer_idx}")
 
-    # Fast iteration: load only 32 experts (group 0) and rig routing to stay within that group.
-    num_routed_experts = 32
-    state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        is_moe=True,
-        seed=RoutedExpert.SEED,
-        num_routed_experts=num_routed_experts,
-        include_global=False,
-    )
-    winning_groups = [0]
-    winning_experts_by_group = {0: [1, 4, 7, 11, 15, 19, 23, 28]}
+    if target_expert_ids is None:
+        # Default: load 32 experts (group 0) and pick 8 of them.
+        num_routed_experts = 32
+        state_dict = get_reference_model_state_dict(
+            layer_idx=effective_layer_idx,
+            is_moe=True,
+            seed=RoutedExpert.SEED,
+            num_routed_experts=num_routed_experts,
+            include_global=False,
+        )
+        winning_groups = [0]
+        winning_experts_by_group = {0: [1, 4, 7, 11, 15, 19, 23, 28]}
+    else:
+        # Load only 8 experts: remap target IDs into slots 0..7 (group 0), rig gate to pick 0..7.
+        num_routed_experts = 8
+        full_state = get_reference_model_state_dict(
+            layer_idx=effective_layer_idx,
+            is_moe=True,
+            seed=RoutedExpert.SEED,
+            num_routed_experts=256,
+            include_global=False,
+        )
+        state_dict = remap_experts_to_slots_0_7(full_state, effective_layer_idx, target_expert_ids)
+        winning_groups = [0]
+        winning_experts_by_group = {0: list(range(8))}
+        logger.info(f"Loaded only experts {target_expert_ids} (remapped to slots 0..7)")
     expected_expert_ids = rig_moe_gate_for_expected_experts(
         state_dict,
-        ROUTED_EXPERT_LAYER_IDX,
+        effective_layer_idx,
         winning_groups,
         winning_experts_by_group,
     )
@@ -941,7 +1021,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         create_final_output=False,
         state_dict=state_dict,
         is_moe=True,
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        layer_idx=effective_layer_idx,
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
@@ -955,7 +1035,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         mesh_mapper=mesh_mapper,
         state_dict=state_dict,
         is_moe=True,
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        layer_idx=effective_layer_idx,
     )
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
@@ -1186,7 +1266,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     # --- Reference model comparison ---
     num_experts_in_state_dict = sum(1 for k in state_dict if ".mlp.experts." in k and "gate_proj" in k)
     if num_experts_in_state_dict >= 256:
-        reference_moe, _ = create_reference_moe_model(state_dict, ROUTED_EXPERT_LAYER_IDX)
+        reference_moe, _ = create_reference_moe_model(state_dict, effective_layer_idx)
 
         # Apply RMSNorm (same as B1 fused op does internally)
         x = r.torch_input.float()
