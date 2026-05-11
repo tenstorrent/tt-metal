@@ -19,19 +19,15 @@ namespace {
 
 void set_runtime_args(
     Program& program,
-    const Tensor& a,
-    const Tensor& b,
-    const Tensor& output,
+    const MeshTensor& a,
+    const MeshTensor& b,
+    const MeshTensor& output,
     const GroupAttnMatmulParams& operation_attributes,
     const GroupAttnMatmulSharedVariables& shared_vars) {
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = b.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
-    tt::tt_metal::IDevice* device = a.device();
+    auto& device = a.device();
 
     // A block of work is one MtNt
     uint32_t Q_HEADS =
@@ -114,14 +110,14 @@ void set_runtime_args(
     uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();
     CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end_coord;
-    CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    CoreCoord top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    CoreCoord bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     // Default reader runtime args
     std::vector<uint32_t> reader_runtime_args = {
         0,  // 0: has_work_for_mcast_kv_heads
         0,  // 1: has_work_for_q_heads
-        src1_buffer->address(),
+        b.address(),
         Mt,
         Nt,
         KV_HEADS,
@@ -177,8 +173,8 @@ void set_runtime_args(
     // Default writer runtime args
     std::vector<uint32_t> writer_runtime_args = {
         0,  // 0: has_work_for_q_heads
-        src0_buffer->address(),
-        dst_buffer->address(),
+        a.address(),
+        output.address(),
         Mt,
         Kt,
         Nt,
@@ -280,9 +276,9 @@ void set_runtime_args(
     // Update dynamic CBs (which is most of them)
     if (shared_vars.in0_is_sharded) {
         uint32_t cb0_num_input_tiles =
-            a.shard_spec().value().numel() / TILE_HW;  // Should be full MtKt and C should be 1
+            a.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full MtKt and C should be 1
         UpdateDynamicCircularBufferAddressAndTotalSize(
-            program, shared_vars.cb_src0, *src0_buffer, cb0_num_input_tiles * shared_vars.in0_single_tile_size);
+            program, shared_vars.cb_src0, a, cb0_num_input_tiles * shared_vars.in0_single_tile_size);
     } else {
         uint32_t cb0_num_input_tiles =
             in0_block_w;  // TODO: Generalize; double buffer and add blocking along ineer dim if we have Mt > 1
@@ -295,18 +291,18 @@ void set_runtime_args(
 
     if (shared_vars.in1_is_sharded) {
         uint32_t cb2_num_input_tiles =
-            b.shard_spec().value().numel() / TILE_HW;  // Should be full CKtNt and batch must be 32
+            b.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full CKtNt and batch must be 32
         UpdateDynamicCircularBufferAddressAndTotalSize(
-            program, shared_vars.cb_src2, *src1_buffer, cb2_num_input_tiles * shared_vars.in1_single_tile_size);
+            program, shared_vars.cb_src2, b, cb2_num_input_tiles * shared_vars.in1_single_tile_size);
     }
 
     UpdateCircularBufferTotalSize(program, shared_vars.cb_interm1, MtNt * shared_vars.interm_single_tile_size);
 
     if (shared_vars.output_is_sharded) {
         uint32_t num_output_tiles =
-            output.shard_spec().value().numel() / TILE_HW;  // Should be full MtNt and C should be 1
+            output.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full MtNt and C should be 1
         UpdateDynamicCircularBufferAddressAndTotalSize(
-            program, shared_vars.cb_output, *dst_buffer, num_output_tiles * shared_vars.output_single_tile_size);
+            program, shared_vars.cb_output, output, num_output_tiles * shared_vars.output_single_tile_size);
     } else {
         uint32_t num_output_tiles =
             MtNt;  // TODO: Should be MtNt if Mt > 1? Or, produce one Nt at a time and double buffer?
@@ -323,42 +319,38 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
     Tensor& tensor_return_value) {
     tt::tt_metal::Program program{};
 
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-    const auto& output = tensor_return_value;
+    const MeshTensor& a = tensor_args.input_tensor_a.mesh_tensor();
+    const MeshTensor& b = tensor_args.input_tensor_b.mesh_tensor();
+    const MeshTensor& output = tensor_return_value.mesh_tensor();
 
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
+    distributed::MeshDevice& device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), operation_attributes.compute_kernel_config);
 
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
-    tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32
-                                            ? tt::DataFormat::Float32
-                                            : tt::DataFormat::Float16_b;
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
-    uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    tt::tt_metal::DataType in0_data_format = a.dtype();
+    tt::tt_metal::DataType in1_data_format = b.dtype();
+    tt::tt_metal::DataType output_data_format = tensor_return_value.dtype();
+    tt::tt_metal::DataType interm_data_format = fp32_dest_acc_en and in0_data_format == tt::tt_metal::DataType::FLOAT32
+                                                    ? tt::tt_metal::DataType::FLOAT32
+                                                    : tt::tt_metal::DataType::BFLOAT16;
 
-    if (in0_data_format == tt::DataFormat::Float32 or in1_data_format == tt::DataFormat::Float32 or
-        output_data_format == tt::DataFormat::Float32) {
+    uint32_t in0_single_tile_size = tt::tt_metal::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tt_metal::tile_size(in1_data_format);
+    uint32_t interm_single_tile_size = tt::tt_metal::tile_size(interm_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output_data_format);
+
+    if (in0_data_format == tt::tt_metal::DataType::FLOAT32 or in1_data_format == tt::tt_metal::DataType::FLOAT32 or
+        output_data_format == tt::tt_metal::DataType::FLOAT32) {
         TT_ASSERT(fp32_dest_acc_en == true, "when inputs/output are in fp32 format, fp32_dest_acc_en must be set");
     }
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = b.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     // Load kernels on all device cores, because we use cached program for input shapes with changing shapes
-    CoreCoord device_compute_with_storage_grid = device->compute_with_storage_grid_size();
+    CoreCoord device_compute_with_storage_grid = device.compute_with_storage_grid_size();
     auto all_device_cores =
         CoreRange({0, 0}, {device_compute_with_storage_grid.x - 1, device_compute_with_storage_grid.y - 1});
 
@@ -386,7 +378,8 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
     const uint32_t intermediate_num_tiles = out_subblock_num_tiles;
     const uint32_t in1_per_core_w = in1_num_subblocks * out_block_w;
     const uint32_t in1_block_w_tile_bytes = operation_attributes.out_subblock_w * in1_single_tile_size;
-    uint32_t ONE_ROW_BFLOAT16_BYTES = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? 128 : 64;
+    uint32_t ONE_ROW_BFLOAT16_BYTES =
+        fp32_dest_acc_en and in0_data_format == tt::tt_metal::DataType::FLOAT32 ? 128 : 64;
     const uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w;  // TODO: Generalize
 
     log_debug(tt::LogOp, "in0_block_w: {}", in0_block_w);
@@ -419,10 +412,10 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
     in1_mcast_sender_noc_x.reserve(mcast_sender_grid.x);
     in1_mcast_sender_noc_y.reserve(mcast_sender_grid.y);
     for (uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
-        in1_mcast_sender_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+        in1_mcast_sender_noc_x.push_back(device.worker_core_from_logical_core({core_idx_x, 0}).x);
     }
     for (uint32_t core_idx_y = 0; core_idx_y < mcast_sender_grid.y; ++core_idx_y) {
-        in1_mcast_sender_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+        in1_mcast_sender_noc_y.push_back(device.worker_core_from_logical_core({0, core_idx_y}).y);
     }
 
     // Set up CBs
@@ -435,12 +428,12 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
     CBHandle cb_src0;
     if (in0_is_sharded) {
         uint32_t cb0_num_input_tiles =
-            a.shard_spec().value().numel() / TILE_HW;  // Should be full MtKt and C should be 1
+            a.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full MtKt and C should be 1
         tt::tt_metal::CircularBufferConfig src0_cb_config =
             tt::tt_metal::CircularBufferConfig(
                 cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
                 .set_page_size(src0_cb_index, in0_single_tile_size)
-                .set_globally_allocated_address(*src0_buffer);
+                .set_globally_allocated_address(a);
         cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
     } else {
         uint32_t cb0_num_input_tiles =
@@ -467,12 +460,12 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
     if (in1_is_sharded) {
         uint32_t src2_cb_index = tt::CBIndex::c_2;
         uint32_t cb2_num_input_tiles =
-            b.shard_spec().value().numel() / TILE_HW;  // Should be full CKtNt and batch must be 32
+            b.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full CKtNt and batch must be 32
         tt::tt_metal::CircularBufferConfig cb_src2_config =
             tt::tt_metal::CircularBufferConfig(
                 cb2_num_input_tiles * in1_single_tile_size, {{src2_cb_index, in1_data_format}})
                 .set_page_size(src2_cb_index, in1_single_tile_size)
-                .set_globally_allocated_address(*src1_buffer);
+                .set_globally_allocated_address(b);
         cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src2_config);
     }
 
@@ -497,12 +490,12 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
     CBHandle cb_output;
     if (output_is_sharded) {
         uint32_t num_output_tiles =
-            output.shard_spec().value().numel() / TILE_HW;  // Should be full MtNt and C should be 1
+            output.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full MtNt and C should be 1
         tt::tt_metal::CircularBufferConfig cb_output_config =
             tt::tt_metal::CircularBufferConfig(
                 num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
                 .set_page_size(output_cb_index, output_single_tile_size)
-                .set_globally_allocated_address(*dst_buffer);
+                .set_globally_allocated_address(output);
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
     } else {
         uint32_t num_output_tiles =
@@ -519,15 +512,15 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
         (uint32_t)operation_attributes.row_major,
         operation_attributes.out_subblock_w,
     };
-    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_cb_index,
         operation_attributes.out_subblock_w,
         intermediate_num_tiles,
     };
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
     std::map<std::string, std::string> writer_kernel_defines;
@@ -542,7 +535,7 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
     }
 
     tt::tt_metal::NOC reader_noc =
-        tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());  // Default is NOC_1
+        tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());  // Default is NOC_1
     const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
     tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto reader_id = tt::tt_metal::CreateKernel(
@@ -631,9 +624,9 @@ void GroupAttnMatmulProgramFactory::override_runtime_arguments(
     Tensor& tensor_return_value) {
     set_runtime_args(
         cached_program.program,
-        tensor_args.input_tensor_a,
-        tensor_args.input_tensor_b,
-        tensor_return_value,
+        tensor_args.input_tensor_a.mesh_tensor(),
+        tensor_args.input_tensor_b.mesh_tensor(),
+        tensor_return_value.mesh_tensor(),
         operation_attributes,
         cached_program.shared_variables);
 }
