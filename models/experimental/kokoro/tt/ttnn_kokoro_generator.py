@@ -230,22 +230,18 @@ def _reflect_pad1_left_bct(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.concat([left, x], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
-def _f0_nearest_upsample_match_torch(f0_coarse: ttnn.Tensor, scale: int, device) -> ttnn.Tensor:
+def _f0_nearest_upsample_device(f0_coarse: ttnn.Tensor, scale: int) -> ttnn.Tensor:
     """
-    Nearest-neighbor upsample along time (dim=1), matching ``nn.Upsample`` / ``torch.repeat_interleave``.
+    Nearest-neighbor upsample (B, T, 1) → (B, T*scale, 1) purely on device.
 
-    ``ttnn.repeat_interleave`` can diverge from PyTorch on device for large ``scale``; host repeat preserves
-    vocoder PCC against the reference checkpoint.
+    Reshape to (B, T, scale, 1) via repeat, then collapse — equivalent to
+    ``torch.repeat_interleave(scale, dim=1)`` with no host round-trip.
     """
-    host = ttnn.to_torch(f0_coarse).contiguous()
-    up = host.repeat_interleave(int(scale), dim=1).contiguous()
-    return ttnn.from_torch(
-        up,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    b = int(f0_coarse.shape[0])
+    t = int(f0_coarse.shape[1])
+    x = ttnn.reshape(f0_coarse, [b, t, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    x = ttnn.repeat(x, ttnn.Shape([1, 1, scale, 1]), memory_config=ttnn.L1_MEMORY_CONFIG)
+    return ttnn.reshape(x, [b, t * scale, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 class KokoroGenerator:
@@ -303,7 +299,7 @@ class KokoroGenerator:
             f0_coarse = ttnn.typecast(f0_coarse, ttnn.float32)
 
         batch_size = int(x.shape[0])
-        f0_up = _f0_nearest_upsample_match_torch(f0_coarse, self.f0_up_scale_int, self.device)
+        f0_up = _f0_nearest_upsample_device(f0_coarse, self.f0_up_scale_int)
         har_bt1, _noise, _uv = self.m_source(f0_up, deterministic=deterministic)
         ttnn.deallocate(f0_up)
         har_b1t = ttnn.permute(har_bt1, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
