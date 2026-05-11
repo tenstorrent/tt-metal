@@ -40,7 +40,7 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
     ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """
     Test LTXTransformerBlock: compare TT vs LTX-2 PyTorch BasicAVTransformerBlock.
@@ -188,7 +188,7 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """
     Test LTXTransformerModel: compare 1-layer TT model vs LTX-2 PyTorch LTXModel.
@@ -337,7 +337,7 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_ltx_transformer_inner_step(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """
     Test LTXTransformerModel.inner_step: validates the pipeline denoising loop path.

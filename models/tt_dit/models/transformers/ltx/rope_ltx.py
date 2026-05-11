@@ -87,6 +87,9 @@ def generate_freqs(
         indices_grid = (indices_grid_start + indices_grid_end) / 2.0
     elif len(indices_grid.shape) == 4:
         indices_grid = indices_grid[..., 0]
+    else:
+        # 3D (B, N, n_dims) → transpose to (B, n_dims, N) for get_fractional_positions
+        indices_grid = indices_grid.transpose(1, 2)
 
     fractional_positions = get_fractional_positions(indices_grid, max_pos)
     indices = indices.to(device=fractional_positions.device)
