@@ -48,16 +48,15 @@ void kernel_main() {
 #endif
 
     // out = in0[r x k]*in1[k x c]
-    mm_init(in0_id, in1_id, out_id);
+    mm_init(in0_id, in1_id, partials_id);
+
+#ifdef PACKER_L1_ACC
+    cb_partials.reserve_back(out_block_num_tiles);
+#endif
 
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         acquire_dst();
-#ifdef PACKER_L1_ACC
-        if (block_id > 0) {
-            cb_partials.wait_front(out_block_num_tiles);
-            cb_partials.pop_front(out_block_num_tiles);
-        }
-#else
+#ifndef PACKER_L1_ACC
         if (block_id > 0) {
             copy_tile_to_dst_init_short(partials_id);
             cb_partials.wait_front(out_block_num_tiles);
@@ -90,17 +89,20 @@ void kernel_main() {
         cb_in1.pop_front(in1_block_num_tiles);
 
 #ifdef PACKER_L1_ACC
-        pack_reconfig_l1_acc(block_id == 0 ? 0 : 1);
-        cb_partials.reserve_back(out_block_num_tiles);
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-            pack_tile(tile_index, partials_id);
+            pack_tile<true>(tile_index, partials_id, tile_index);
         }
-        cb_partials.push_back(out_block_num_tiles);
+        if (block_id == 0) {
+            pack_reconfig_l1_acc(1);
+        }
         release_dst();
 #else
         const bool is_last = (block_id == last_block_id);
         auto& cb_acc = is_last ? cb_out : cb_partials;
         const uint32_t acc_id = is_last ? out_id : partials_id;
+        if (is_last) {
+            PACK((llk_pack_init(out_id)));
+        }
         cb_acc.reserve_back(out_block_num_tiles);
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
             pack_tile(tile_index, acc_id);
@@ -111,6 +113,7 @@ void kernel_main() {
     }
 
 #ifdef PACKER_L1_ACC
+    cb_partials.push_back(out_block_num_tiles);
     pack_reconfig_l1_acc(0);
 
     copy_tile_to_dst_init_short(partials_id);
@@ -121,6 +124,7 @@ void kernel_main() {
     }
     cb_partials.pop_front(out_block_num_tiles);
 
+    PACK((llk_pack_init(out_id)));
     cb_out.reserve_back(out_block_num_tiles);
     for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
         pack_tile(tile_index, out_id);

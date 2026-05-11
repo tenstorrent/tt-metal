@@ -186,7 +186,11 @@ ALWI void mm_init_short(
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
+#endif
 }
 
 // clang-format off
