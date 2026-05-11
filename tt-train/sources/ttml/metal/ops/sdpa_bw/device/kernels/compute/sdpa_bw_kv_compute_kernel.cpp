@@ -177,10 +177,8 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
             // u_scaler is precomputed by Q kernel and loaded by reader into cb_u_scalar_row
 
-            compute_grad_attn_weights(cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, scaler_bits);
-
-            compute_grad_scores(
-                cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
+            compute_grad_scores_fused(
+                cb_grad_output, cb_value, v_tiles, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
             update_grad_key(
                 cb_grad_scores,
@@ -193,7 +191,6 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_wait_front(cb_grad_key_accum, qk_tiles);
 
             cb_pop_front(cb_u_scalar_row, onetile);
-            cb_pop_front(cb_grad_attn_weights, onetile);
             cb_pop_front(cb_grad_scores, onetile);
             cb_pop_front(cb_attention_weights, onetile);
             cb_pop_front(cb_intermediates, num_of_interm_tiles);

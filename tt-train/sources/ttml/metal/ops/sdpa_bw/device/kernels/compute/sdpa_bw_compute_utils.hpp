@@ -5,8 +5,6 @@
 #pragma once
 
 #include <api/compute/reg_api.h>
-#include <api/debug/dprint.h>
-#include <api/debug/dprint_tensix.h>
 
 #include <cstdint>
 
@@ -106,51 +104,17 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 // to subtract column 0 (lse values) broadcast across all columns — entirely in DST.
 // Scores stay in DST at full FP32 — no CB roundtrip, no TF32 truncation.
 // Must be called inside a tile_regs_acquire/commit block, after matmul + mask.
-//
-// Context: this function is called inside a tile_regs_acquire block AFTER:
-//   1. matmul_tiles() accumulated Q @ K^T into DST[scores_reg] (FPU matmul)
-//   2. mul_unary_tile(scores_reg, scaler_bits) scaled the result (SFPU scalar mul)
-//   (optionally: apply_mask_on_reg() for causal masking)
-//
-// At this point DST[scores_reg] contains the scaled scores in FP32.
-// We want to compute: DST[scores_reg] = exp(DST[scores_reg] - bcast_col(lse))
-//
-// sfpu_sub_bcast_col should do exactly this: subtract column 0 of DST[lse_reg]
-// broadcast across all 32 columns from DST[scores_reg], entirely within DST.
-// However, when tested it appears to corrupt subsequent matmul operations —
-// sfpu_sub_bcast_col_init() modifies persistent MATH thread state (ADDR_MOD_7,
-// replay slot 0, LREG6) that is not restored by mm_init_short, causing all
-// matmul operations after the first call to produce garbage in DST.
 // cb_intermediates is Float32, fp32_dest_acc_en = true.
 void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
     const uint32_t lse_reg = scores_reg + 1U;
 
-    // Step 1: Load lse tile into DST[lse_reg] via copy_tile.
-    //   cb_intermediates contains logsumexp values in column 0 (from forward pass row-reduce).
-    //   copy_tile places the full tile into DST[lse_reg] without any broadcast.
     reconfig_data_format(cb_intermediates, cb_intermediates);
     copy_tile_init(cb_intermediates);
     copy_tile(cb_intermediates, /* tile_idx */ 0, lse_reg);
 
-    // Debug: dump DST state before and after sfpu_sub_bcast_col
-    DPRINT << "=== apply_softmax_statistics_on_dst ===" << ENDL();
-    DPRINT << "DST[scores_reg=" << scores_reg << "] BEFORE sfpu_sub_bcast_col:" << ENDL();
-    dprint_tensix_dest_reg(scores_reg);
-    DPRINT << "DST[lse_reg=" << lse_reg << "] (loaded via copy_tile from cb_intermediates):" << ENDL();
-    dprint_tensix_dest_reg(lse_reg);
-
-    // Step 2: SFPU column-broadcast subtract.
-    //   Expected: DST[scores_reg][r][c] -= DST[lse_reg][r][0] for all c in [0..31]
-    //   Observed: First invocation per core works correctly. All subsequent matmuls
-    //   produce garbage — sfpu_sub_bcast_col_init() corrupts persistent state.
-    //   Moving init to kernel_main() (before the loop) does NOT fix the issue.
     sfpu_sub_bcast_col_init();
     sfpu_sub_bcast_col(scores_reg, lse_reg);
 
-    DPRINT << "DST[scores_reg=" << scores_reg << "] AFTER sfpu_sub_bcast_col:" << ENDL();
-    dprint_tensix_dest_reg(scores_reg);
-
-    // Step 3: exp in-place
     exp_tile_init</* approx */ false>();
     exp_tile</* approx */ false>(scores_reg);
 }
@@ -298,10 +262,10 @@ void compute_grad_scores(
     cb_push_back(cb_grad_scores, onetile);
 }
 
-// Fused: computes dP = dO @ V^T and then dS = P * (dP - u) * scale.
-// Eliminates the separate compute_grad_attn_weights call. Uses cb_grad_attn_weights
-// as an internal temporary (single L1 roundtrip within the compute kernel, no DRAM).
-// The subtraction uses the proven FPU sub_tiles_bcast_cols path.
+// Fused: computes dP = dO @ V^T and then dS = P * (dP - u) * scale entirely in DST.
+// After matmul, dP stays in DST[0] at full FP32. Uses sfpu_sub_bcast_col to subtract u
+// (column-broadcast) in-place, then multiplies by P and scales — all without packing dP
+// to a CB. Only the final dS result is packed once to cb_grad_scores.
 void compute_grad_scores_fused(
     const uint32_t cb_grad_output,
     const uint32_t cb_value,
@@ -310,7 +274,13 @@ void compute_grad_scores_fused(
     const uint32_t cb_u_scalar_row,
     const uint32_t scaler_bits,
     /* output */ const uint32_t cb_grad_scores) {
-    // Phase 1: matmul dO @ V^T → dP, pack to internal temp
+    const uint32_t grad_reg = 0;
+    const uint32_t scratch_reg = 1U;
+
+    cb_wait_front(cb_u_scalar_row, onetile);
+    cb_wait_front(cb_attention_weights, onetile);
+
+    // matmul dO @ V^T → DST[0] = dP (stays in DST at full FP32)
     reconfig_data_format(cb_grad_output, cb_value);
     mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
     tile_regs_acquire();
@@ -320,47 +290,30 @@ void compute_grad_scores_fused(
             cb_value,
             /* tile_idx */ tile_idx,
             /* tile_idx */ tile_idx,
-            /* dst_reg_idx*/ 0);
+            /* dst_reg_idx*/ grad_reg);
     }
-    tile_regs_commit();
 
-    tile_regs_wait();
-    cb_reserve_back(cb_grad_scores, onetile);
-    pack_reconfig_data_format(cb_grad_scores);
-    pack_tile(0, cb_grad_scores);
-    tile_regs_release();
-    cb_push_back(cb_grad_scores, onetile);
+    // DST[1] = u (load before sfpu_sub_bcast_col_init to avoid state conflict)
+    reconfig_data_format(cb_u_scalar_row, cb_u_scalar_row);
+    copy_tile_init(cb_u_scalar_row);
+    copy_tile(cb_u_scalar_row, /* tile_idx */ 0, scratch_reg);
 
-    // Phase 2: dS = P * (dP - u) * scale
-    cb_wait_front(cb_grad_scores, onetile);
-    cb_wait_front(cb_u_scalar_row, onetile);
-    cb_wait_front(cb_attention_weights, onetile);
+    // DST[0] = dP - u (column broadcast subtract, u in column 0)
+    sfpu_sub_bcast_col_init();
+    sfpu_sub_bcast_col(grad_reg, scratch_reg);
 
-    const uint32_t grad_reg = 0;
-    const uint32_t attn_weights_reg = 1U;
-
-    tile_regs_acquire();
-    reconfig_data_format(cb_grad_scores, cb_u_scalar_row);
-    sub_bcast_cols_init_short(cb_grad_scores, cb_u_scalar_row);
-    sub_tiles_bcast_cols(
-        cb_grad_scores,
-        cb_u_scalar_row,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        grad_reg);
-
-    copy_tile_to_dst_init_short_with_dt(cb_grad_scores, cb_attention_weights, /*transpose=*/0);
-    copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
+    // DST[1] = P (reinit unpack state after sfpu_sub_bcast_col_init)
+    copy_tile_to_dst_init_short_with_dt(cb_u_scalar_row, cb_attention_weights, /*transpose=*/0);
+    copy_tile(cb_attention_weights, /* tile_idx */ 0, scratch_reg);
 
     mul_binary_tile_init();
-    mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);
+    mul_binary_tile(grad_reg, scratch_reg, grad_reg);
 
+    // DST[0] = (dP - u) * P * scale
     binop_with_scalar_tile_init();
     mul_unary_tile(grad_reg, scaler_bits);
 
     tile_regs_commit();
-
-    cb_pop_front(cb_grad_scores, onetile);
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_scores, onetile);

@@ -166,9 +166,8 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         tile_regs_release();
         cb_push_back(cb_attention_weights, onetile);
 
-        compute_grad_attn_weights(cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, scaler_bits);
-
-        compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
+        compute_grad_scores_fused(
+            cb_grad_output, cb_value, v_tiles, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
         update_grad_query(
             cb_grad_scores,
@@ -182,7 +181,6 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         cb_pop_front(cb_key, qk_tiles);
         cb_pop_front(cb_value, v_tiles);
         cb_pop_front(cb_attention_weights, onetile);
-        cb_pop_front(cb_grad_attn_weights, onetile);
     }
 
     pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, qk_tiles);
