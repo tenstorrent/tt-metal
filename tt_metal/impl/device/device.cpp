@@ -753,25 +753,43 @@ void Device::configure_fabric(
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
     }
-    // FIX RZ (#42429): If this non-MMIO device had base-UMD relay channels that required
+    // FIX RZ (#42429): If this device had base-UMD relay channels that required
     // FIX M's skip-soft-reset / launch_msg transition, mark the device as having stale
-    // base-UMD channels.  The Python test's is_fabric_degraded() check uses this flag to
-    // skip AllGather operations that would hang on devices whose channels were transitioned
-    // via launch_msg but cannot handle AllGather traffic reliably.
-    if (!skip_soft_reset_channels.empty() && !this->is_mmio_capable()) {
+    // base-UMD channels.  This extends Phase 5/5b timeouts for all device types.
+    // For non-MMIO devices, the Python test's is_fabric_degraded() check also uses
+    // fabric_base_umd_fixm_init_ to skip AllGather (FIX RZ3).
+    // FIX AT (#42429): Extended to MMIO devices for Phase 5b timeout extension.
+    // FIX AT (#42429): Extend fabric_stale_base_umd_channels_ to MMIO devices — they also
+    // have base-UMD channels that require an extended Phase 5b health-check timeout (24000ms
+    // instead of 2000ms).  Without this, MMIO channels time out at 2001ms and are left in
+    // an intermediate EDM state, causing the AllGather to hang 3 minutes later.
+    // The AllGather guard (fabric_base_umd_fixm_init_) remains non-MMIO-only since MMIO
+    // devices can still relay via PCIe and should not skip AllGather.
+    if (!skip_soft_reset_channels.empty()) {
         fabric_stale_base_umd_channels_ = true;
-        // FIX RZ3 (#42429): Also set the persistent companion — ring-sync passing later
-        // (FIX RZ2) must NOT clear this.  is_fabric_degraded() and GAP-A/GAP-C will check
-        // it to block AllGather dispatch for the entire session.
-        fabric_base_umd_fixm_init_ = true;
-        log_warning(
-            tt::LogMetal,
-            "configure_fabric: Device {} (non-MMIO) has {} base-UMD channel(s) transitioned "
-            "via launch_msg (FIX M).  Setting fabric_stale_base_umd_channels_=true and "
-            "fabric_base_umd_fixm_init_=true — AllGather on this cluster may hang.  "
-            "FIX RZ skips the Python stress test; FIX RZ3 persists the guard past ring-sync. (#42429)",
-            this->id_,
-            skip_soft_reset_channels.size());
+        if (!this->is_mmio_capable()) {
+            // FIX RZ3 (#42429): Also set the persistent companion for non-MMIO devices.
+            // Ring-sync passing later (FIX RZ2) must NOT clear this.
+            // is_fabric_degraded() and GAP-A/GAP-C will check it to block AllGather
+            // dispatch for the entire session.
+            fabric_base_umd_fixm_init_ = true;
+            log_warning(
+                tt::LogMetal,
+                "configure_fabric: Device {} (non-MMIO) has {} base-UMD channel(s) transitioned "
+                "via launch_msg (FIX M).  Setting fabric_stale_base_umd_channels_=true and "
+                "fabric_base_umd_fixm_init_=true — AllGather on this cluster may hang.  "
+                "FIX RZ skips the Python stress test; FIX RZ3 persists the guard past ring-sync. (#42429)",
+                this->id_,
+                skip_soft_reset_channels.size());
+        } else {
+            log_info(
+                tt::LogMetal,
+                "configure_fabric: Device {} (MMIO) has {} base-UMD channel(s) transitioned "
+                "via launch_msg (FIX M).  Setting fabric_stale_base_umd_channels_=true — "
+                "Phase 5/5b extended timeouts active. FIX AT (#42429)",
+                this->id_,
+                skip_soft_reset_channels.size());
+        }
     }
     // Exit summary: on the healthy path (no dead channels, no relay-soft-reset skips) emit
     // a single compact line.  Only log the verbose detail block when something is non-trivial
