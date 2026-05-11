@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX DT-1|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RR|FIX RS|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SB2-R|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX XY-2|FIX EXT|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|relay_broken cleared|relay path restored|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|fabric_telemetry_dump|fabric_baseline_compare|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX DT-1|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RR|FIX RR-NM|FIX RS|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SB2-R|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX XY-2|FIX EXT|FIX X|FIX P25-CLEAN|FIX EV|FIX BU|FIX BT|FIX FQ|FIX QD|FIX QE|FIX QS|FIX VC|FIX RZ2|FIX RZ3|FIX RZ4|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|relay_broken cleared|relay path restored|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|0x49705530|already.clean|already.terminated|phase25_already_clean|channels_not_ready_for_traffic|EventSynchronize.*broken|master_router_chan.*stuck|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|fabric_telemetry_dump|fabric_baseline_compare|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -2229,6 +2229,128 @@ if [ "${FIX_TF_SKIP:-0}" -gt 0 ]; then
     echo "     has_degraded_fabric() returned true (relay_broken || channels_not_ready || stale_base_umd)."
     echo "     Without FIX TF: compile_programs() would dispatch to non-MMIO device with broken relay"
     echo "     -> FIX Z throw in enqueue_write_shards_nolock -> std::terminate -> SIGABRT."
+fi
+
+# ─── FIX P25-CLEAN (Phase 3 skip for already-terminated channels) ───
+echo ""
+echo "=== FIX P25-CLEAN (Phase 3 skip already-terminated out-of-mesh channels) ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'P25-CLEAN|phase25_already_clean|already.clean.*skip.*Phase 3|Phase 3.*skip.*already.terminated', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected — FIX P25-CLEAN did not fire)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'Device \d+', 'Dev N', msg)
+        key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => FIX P25-CLEAN: {len(events)} event(s) — channels found TERMINATED before quiesce were correctly skipped in Phase 3.')
+    print(f'     Without P25-CLEAN: Phase 3 launches quiesce FW on dead peer channels -> stuck STARTED -> cascade hang.')
+"
+
+# ─── FIX AP (master_router_chan stuck → relay_path_broken) ───
+echo ""
+echo "=== FIX AP (master_router_chan stuck → fabric_relay_path_broken_) ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'FIX AP|master_router_chan.*stuck|master.*chan.*relay.*broken', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected — master router chan healthy)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'Device \d+', 'Dev N', msg)
+        key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => FIX AP: {len(events)} event(s) — master_router_chan stuck at REMOTE_HANDSHAKE_COMPLETE')
+    print(f'     marks fabric_relay_path_broken_=true so dispatch detects dead relay instead of hanging.')
+"
+
+# ─── FIX EV (EventSynchronize dead-relay guard) ───
+echo ""
+echo "=== FIX EV (EventSynchronize infinite spin guard on dead relay) ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'FIX EV|EventSynchronize.*broken.*relay|EventSynchronize.*relay.*broken|EventSynchronize.*skip.*dead', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected — EventSynchronize did not encounter dead relay)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'Device \d+', 'Dev N', msg)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => FIX EV: {len(events)} event(s) — EventSynchronize skipped polling on dead-relay device')
+    print(f'     Without FIX EV: nice_spin_until loops forever (event counter never incremented) -> 8min CI timeout.')
+"
+
+# ─── FIX RR-NM (Relay-assisted ERISC reset for non-MMIO dead channels) ───
+echo ""
+echo "=== FIX RR-NM (non-MMIO dead channel relay-assisted ERISC reset) ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'FIX RR-NM', line):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected — FIX RR-NM recovery path not triggered)')
+else:
+    seen = set()
+    step_counts = {}
+    for msg in events:
+        step_m = re.search(r'step (\d+)', msg)
+        step = step_m.group(1) if step_m else '?'
+        step_counts[step] = step_counts.get(step, 0) + 1
+        key = re.sub(r'dev=\d+', 'dev=N', msg)
+        key = re.sub(r'chan=\d+', 'chan=N', key)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => FIX RR-NM: {len(events)} event(s) across steps: {dict(sorted(step_counts.items()))}')
+    print(f'     Step 1: MMIO PCIe-direct reset. Step 2: non-MMIO relay-assisted reset. Step 3: dead_relay_devices_ cleanup.')
+"
+
+# ─── ROM BOOT INTERMEDIATE STATE (0x49705530) ───
+echo ""
+echo "=== ROM BOOT INTERMEDIATE STATE (0x49705530) ==="
+ROM_INTERMEDIATE=$(grep -c '0x49705530' "$CLEAN" 2>/dev/null; :)
+if [ "${ROM_INTERMEDIATE:-0}" -gt 0 ]; then
+    echo "  WARNING: 0x49705530 (ROM boot intermediate state) detected ${ROM_INTERMEDIATE} time(s)."
+    echo "  This indicates ERISC channels stuck mid-ROM-boot — not yet at base-UMD firmware (0x49706550)."
+    echo "  These channels will not respond to fabric handshakes and have no recovery path until FIX RR-NM."
+    grep '0x49705530' "$CLEAN" | head -5 | while IFS= read -r line; do
+        echo "    $(echo "$line" | cut -c1-140)"
+    done
+else
+    echo "  (none detected — no channels stuck in ROM boot intermediate state)"
 fi
 
 echo ""
