@@ -3048,7 +3048,16 @@ bool Device::phase5b_erisc_health_check(
                     truly_unhealthy.begin(), truly_unhealthy.end(), [master_router_chan](const UnhealthyChannel& u) {
                         return u.eth_chan_id == static_cast<uint32_t>(master_router_chan);
                     });
-                if (master_chan_stuck) {
+                // FIX AK-3 (#42429): REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) means EDM firmware
+                // IS running on both sides — the stall is a cross-batch quiesce ordering timing
+                // artifact, NOT a genuine relay failure.  FIX AK already states "We must NOT set
+                // fabric_relay_path_broken_ here" for this case.  Only set relay_path_broken when
+                // channels are at 0x0 or STARTED (firmware genuinely didn't launch).
+                const bool all_remote_handshake_complete = std::all_of(
+                    truly_unhealthy.begin(), truly_unhealthy.end(), [](const UnhealthyChannel& u) {
+                        return u.actual_status == static_cast<uint32_t>(EDMSt::REMOTE_HANDSHAKE_COMPLETE);
+                    });
+                if (master_chan_stuck && !all_remote_handshake_complete) {
                     fabric_relay_path_broken_ = true;
                     log_error(
                         tt::LogMetal,
