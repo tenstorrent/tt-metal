@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full TTNN Kokoro ISTFTNet ``Decoder`` (front + body + generator); ``m_source`` uses device ``KokoroTtnnSineGen``."""
+"""Full TTNN Kokoro ISTFTNet ``Decoder`` (front + body + generator); harmonic source is ``KokoroTtnnSineGen`` or optional PyTorch ``SineGen``."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ def preprocess_kokoro_decoder_tt_parameters(
     *,
     f0_coarse_time: int,
     disable_complex: bool = False,
+    use_torch_sinegen: bool = False,
 ) -> dict[str, Any]:
     """
     Preprocess full ``Decoder`` for :class:`KokoroDecoderTt` / :class:`KokoroIstftNetTt`.
@@ -31,6 +32,9 @@ def preprocess_kokoro_decoder_tt_parameters(
         decoder: ``kokoro_istftnet.Decoder``.
         f0_coarse_time: Length ``Tf`` of the coarse F0 curve (``F0_curve.shape[1]``) before ``f0_upsamp``.
         disable_complex: Passed through to generator / STFT preprocess (``CustomSTFT`` path).
+        use_torch_sinegen: If True, run PyTorch :class:`~models.experimental.kokoro.reference.kokoro_istftnet.SineGen`
+            on CPU for harmonics (then upload for TTNN ``Linear``/``tanh``) to compare PCC vs device
+            :class:`~models.experimental.kokoro.tt.ttnn_sinegen.KokoroTtnnSineGen`.
 
     Returns:
         Dict with ``front``, ``body``, ``generator`` keys. Mutates ``decoder`` submodules in place
@@ -54,6 +58,7 @@ def preprocess_kokoro_decoder_tt_parameters(
         device,
         f0_upsampled_time=f0_upsampled_time,
         disable_complex=disable_complex,
+        use_torch_sinegen=use_torch_sinegen,
     )
     return {"front": front_p, "body": body_p, "generator": gen_p}
 
