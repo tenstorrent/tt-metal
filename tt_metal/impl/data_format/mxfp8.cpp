@@ -5,7 +5,6 @@
 #include <tt-metalium/mxfp8.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -22,17 +21,6 @@
 #include "tracy/Tracy.hpp"
 
 namespace {
-
-// 2^n for integer n, avoiding the libm overhead of std::ldexp on the hot
-// per-element unpack path. Fast path bit-constructs a normal float for
-// n in [-126, 127]; the rare edges (subnormal scale, E8M0 NaN scale) defer
-// to std::ldexp so behavior matches at boundaries.
-inline float pow2_f32(int k) {
-    if (k >= -126 && k <= 127) {
-        return std::bit_cast<float>(static_cast<uint32_t>(127 + k) << 23);
-    }
-    return std::ldexp(1.0f, k);
-}
 
 // MXFP8 E5M2 (a.k.a. MXFP8R): 1 sign / 5 exp / 2 mantissa with IEEE-style Inf/NaN.
 // Max normal = (1 + 3/4) * 2^15 = 57344. OCP MX block of 32 with E8M0 scale.
@@ -148,7 +136,7 @@ std::vector<uint32_t> pack_as_mxfp8_tiles_impl(
 
             int scale_exp = block_scale.shared_exp_adj;
             uint32_t base = blk_idx * params.block_size;
-            const float scale_pack = pow2_f32(-scale_exp);
+            const float scale_pack = tt::tt_metal::mx::pow2_f32(-scale_exp);
             for (uint32_t i = 0; i < params.block_size; ++i) {
                 float v = tile_values[base + i];
                 float scaled = v * scale_pack;
@@ -208,7 +196,7 @@ std::vector<float> unpack_mxfp8_tiles_into_float_vec_impl(
         for (uint32_t blk = 0; blk < exp_count; ++blk) {
             uint8_t scale_exp_biased = exps[blk];
             int scale_exp_unbiased = static_cast<int>(scale_exp_biased) - params.scale_bias;
-            const float scale_unpack = pow2_f32(scale_exp_unbiased);
+            const float scale_unpack = tt::tt_metal::mx::pow2_f32(scale_exp_unbiased);
             uint32_t base = blk * params.block_size;
             for (uint32_t j = 0; j < params.block_size; ++j) {
                 uint32_t i = base + j;

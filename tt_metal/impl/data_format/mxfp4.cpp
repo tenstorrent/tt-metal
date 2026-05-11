@@ -114,10 +114,11 @@ std::vector<uint32_t> pack_as_mxfp4_tiles(
             exps.push_back(block_scale.shared_exp_biased);
 
             int scale_exp = block_scale.shared_exp_adj;
+            const float scale_pack = tt::tt_metal::mx::pow2_f32(-scale_exp);
             uint32_t base = blk_idx * kMxFp4Params.block_size;
             for (uint32_t i = 0; i < kMxFp4Params.block_size; ++i) {
                 float v = tile_values[base + i];
-                float scaled = std::ldexp(v, -scale_exp);
+                float scaled = v * scale_pack;
                 elems.push_back(static_cast<uint8_t>(tt::tt_metal::mx::convert_to_mx_elem_bits(scaled, kMxFp4Params)));
             }
         }
@@ -194,12 +195,13 @@ std::vector<float> unpack_mxfp4_tiles_into_float_vec(
         for (uint32_t blk = 0; blk < exp_count; ++blk) {
             uint8_t scale_exp_biased = exps[blk];
             int scale_exp_unbiased = static_cast<int>(scale_exp_biased) - kMxFp4Params.scale_bias;
+            const float scale_unpack = tt::tt_metal::mx::pow2_f32(scale_exp_unbiased);
             uint32_t base = blk * kMxFp4Params.block_size;
             for (uint32_t j = 0; j < kMxFp4Params.block_size; ++j) {
                 uint32_t i = base + j;
                 float elem_pre_scale =
                     tt::tt_metal::mx::convert_from_mx_elem_bits(elems[i], scale_exp_biased, kMxFp4Params);
-                tile_values[i] = std::ldexp(elem_pre_scale, scale_exp_unbiased);
+                tile_values[i] = elem_pre_scale * scale_unpack;
             }
         }
 
