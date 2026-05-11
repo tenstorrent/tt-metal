@@ -1543,8 +1543,9 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
-    UpdateDynamicCircularBufferAddressAndTotalSize(
-        program, cb_handle, *tensor.mesh_buffer().get_reference_buffer(), total_size);
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    circular_buffer->config().set_globally_allocated_address_and_total_size(tensor, total_size);
+    circular_buffer->assign_global_address();
 }
 
 uint32_t CreateSemaphore(

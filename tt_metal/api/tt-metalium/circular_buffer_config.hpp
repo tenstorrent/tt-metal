@@ -69,6 +69,8 @@ public:
 
     CircularBufferConfig& set_globally_allocated_address_and_total_size(const Buffer& buffer, uint32_t total_size);
 
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(const MeshTensor& tensor, uint32_t total_size);
+
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
     const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles() const;

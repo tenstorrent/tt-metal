@@ -175,6 +175,11 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const MeshTensor& tensor, uint32_t total_size) {
+    return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const Buffer& buffer, uint32_t total_size) {
     if (not buffer.is_l1()) {
         TT_THROW("Only L1 buffers can have an associated circular buffer!");
