@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
+#include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "tt_metal/distributed/shm_resource_tracker.hpp"
@@ -26,12 +27,17 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment,
     const std::string& shm_name) {
-    // Buffer layout: [data_region (fifo_size bytes)][bytes_sent (4 bytes)]
+    // Buffer layout: [data_region (fifo_size bytes)][bytes_sent (4 bytes)][HDSocketConnectorState]
     uint32_t total_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
     uint32_t total_buffer_size_words = total_buffer_size_bytes / sizeof(uint32_t);
     // Round up to page boundary
     size_t page_size = sysconf(_SC_PAGESIZE);
-    size_t alloc_size = align(total_buffer_size_bytes, page_size);
+    // Reserve room for HDSocketConnectorState past the pinned region, aligned up
+    // to its own alignment requirement so the reinterpret_cast<> in connect() is
+    // well-defined. The pinned HostBuffer view below still spans only
+    // [data | bytes_sent], so the device never touches the state struct.
+    connector_state_offset_ = align(total_buffer_size_bytes, alignof(HDSocketConnectorState));
+    size_t alloc_size = align(connector_state_offset_ + sizeof(HDSocketConnectorState), page_size);
 
     shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
     void* aligned_ptr = shm_->ptr();
@@ -174,6 +180,12 @@ D2HSocket::D2HSocket(
     config_buffer_address_ = config_buffer_->address();
     const SocketSenderSize sender_size;
     bytes_acked_device_offset_ = sender_size.md_size_bytes;
+
+    // Initialize the persistent connector-state struct living in SHM.
+    // NamedShm::create zero-initialized the region; we only stamp the version.
+    connector_state_ =
+        reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
+    connector_state_->version = kHDSocketConnectorStateVersion;
 }
 
 D2HSocket::~D2HSocket() noexcept {
@@ -223,6 +235,12 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     read_ptr_ = next_fifo_rd_ptr;
     page_size_ = page_size;
     fifo_curr_size_ = fifo_page_aligned_size;
+    if (connector_state_) {
+        connector_state_->page_size = page_size_;
+        connector_state_->fifo_curr_size = fifo_curr_size_;
+        connector_state_->bytes_acked = bytes_acked_;
+        connector_state_->read_ptr = read_ptr_;
+    }
 }
 
 bool D2HSocket::has_data() {
@@ -258,6 +276,12 @@ void D2HSocket::pop_bytes(uint32_t num_bytes) {
     } else {
         read_ptr_ += num_bytes;
         bytes_acked_ += num_bytes;
+    }
+    // Crash-safe persistence for the next driver process. Null in hugepage
+    // fallback mode, which doesn't support cross-process attach.
+    if (connector_state_) {
+        connector_state_->bytes_acked = bytes_acked_;
+        connector_state_->read_ptr = read_ptr_;
     }
 }
 
@@ -318,6 +342,7 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
     desc.bytes_sent_offset = fifo_size_;
     desc.bytes_acked_device_offset = bytes_acked_device_offset_;
+    desc.connector_state_offset = connector_state_offset_;
 
     descriptor_path_ = descriptor_path_for_socket("d2h", socket_id);
     desc.write_to_file(descriptor_path_);
@@ -345,6 +370,37 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
     socket->pcie_writer_instance_ =
         std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
     socket->pcie_writer_ = socket->pcie_writer_instance_->get_pcie_writer();
+
+    // Restore connector-mutable state left behind by any prior driver process.
+    // First connector after owner-init sees an all-zero struct (version stamped
+    // by the owner), which matches a fresh socket.
+    TT_FATAL(
+        desc.connector_state_offset + sizeof(HDSocketConnectorState) <= desc.shm_size,
+        "Descriptor connector_state_offset out of range for SHM size {}.",
+        desc.shm_size);
+    socket->connector_state_offset_ = desc.connector_state_offset;
+    socket->connector_state_ = reinterpret_cast<HDSocketConnectorState*>(
+        static_cast<uint8_t*>(socket->shm_->ptr()) + desc.connector_state_offset);
+    TT_FATAL(
+        socket->connector_state_->version == kHDSocketConnectorStateVersion,
+        "HDSocketConnectorState version mismatch: got {}, expected {}.",
+        socket->connector_state_->version,
+        kHDSocketConnectorStateVersion);
+    socket->page_size_ = socket->connector_state_->page_size;
+    socket->fifo_curr_size_ = socket->connector_state_->fifo_curr_size;
+    socket->bytes_acked_ = socket->connector_state_->bytes_acked;
+    socket->read_ptr_ = socket->connector_state_->read_ptr;
+    // bytes_sent_ is the cached copy of the device-written counter that already
+    // lives in SHM. Read it live so wait_for_bytes() sees fresh data immediately.
+    socket->bytes_sent_ = socket->bytes_sent_ptr_[0];
+
+    // Reconcile the device-side bytes_acked with the restored SHM value. The
+    // previous driver process may have died between pop_bytes (SHM flushed)
+    // and notify_sender (PCIe write to the device's config buffer), leaving
+    // the device's bytes_acked behind. Without this, the device kernel may
+    // stall thinking the FIFO is full while the new connector waits for fresh
+    // data. For a fresh socket this writes 0 over 0 — a no-op.
+    socket->notify_sender();
 
     return socket;
 }
