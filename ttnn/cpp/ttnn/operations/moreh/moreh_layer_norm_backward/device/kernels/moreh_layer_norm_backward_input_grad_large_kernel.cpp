@@ -346,13 +346,15 @@ void kernel_main() {
                 CopyTilePolicy::NoWaitNoPop,
                 CbIndexMode::Pinned,
                 Dst::D0>;
-            MulBcast elt{};
-            elt.a_tile_idx = 1;
             eltwise_chain(
                 onetile,
-                elt,
-                PackTile<cb_recip_nrstd, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
-                         PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+                MulBcast{/*a=*/1, /*b=*/0},
+                PackTile<
+                    cb_recip_nrstd,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
 
         // Compute cb_dx

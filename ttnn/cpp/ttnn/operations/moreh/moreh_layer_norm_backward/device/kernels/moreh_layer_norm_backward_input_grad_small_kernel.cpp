@@ -86,13 +86,15 @@ void kernel_main() {
                 CopyTilePolicy::NoWaitNoPop,
                 CbIndexMode::Pinned,
                 Dst::D0>;
-            MulBcast elt{};
-            elt.a_tile_idx = 1;  // n_recip_n[1] holds 1/n
             eltwise_chain(
                 onetile,
-                elt,
-                PackTile<cb_recip_nrstd, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
-                         PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+                MulBcast{/*a=*/1, /*b=*/0},  // n_recip_n[1] holds 1/n
+                PackTile<
+                    cb_recip_nrstd,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
 
         // y = (x - mean) * rstd
@@ -317,14 +319,15 @@ void kernel_main() {
                     CopyTilePolicy::NoWaitNoPop,
                     CbIndexMode::Pinned,
                     Dst::D0>;
-                MulElt elt{};
-                elt.a_tile_idx = wt;
-                elt.b_tile_idx = wt;
                 eltwise_chain(
                     onetile,
-                    elt,
-                    PackTile<cb_ydy, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
-                             PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+                    MulElt{wt, wt},
+                    PackTile<
+                        cb_ydy,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
             }
 
             // Compute cb_ydyadd
@@ -389,12 +392,9 @@ void kernel_main() {
                     CopyTilePolicy::NoWaitNoPop,
                     CbIndexMode::Pinned,
                     Dst::D0>;
-                MulElt elt{};
-                elt.a_tile_idx = 0;
-                elt.b_tile_idx = wt;
                 eltwise_chain(
                     onetile,
-                    elt,
+                    MulElt{0, wt},
                     PackTile<
                         cb_ndy,
                         Dst::D0,
@@ -457,12 +457,9 @@ void kernel_main() {
                     CopyTilePolicy::NoWaitNoPop,
                     CbIndexMode::Pinned,
                     Dst::D0>;
-                MulBcast elt{};
-                elt.a_tile_idx = wt;
-                elt.b_tile_idx = 0;
                 eltwise_chain(
                     onetile,
-                    elt,
+                    MulBcast{wt, 0},
                     PackTile<
                         cb_yydysum,
                         Dst::D0,
