@@ -241,4 +241,90 @@ root_instance { template_name: "root"
     std::filesystem::remove_all(dir);
 }
 
+// ---- Heterogeneous merge tests ----
+//
+// These exercise build_from_directory(dir, DeploymentDescriptor): each cabling file
+// declares its own (disjoint) templates and the deployment is sliced per file.
+
+static void write_single_node_cabling(
+    const std::string& path, const std::string& node, const std::string& desc, uint32_t hid = 0) {
+    write(path,
+        "graph_templates { key: \"root\" value {\n"
+        "  children { name: \"" + node + "\" node_ref { node_descriptor: \"" + desc + "\" } }\n"
+        "}}\nroot_instance { template_name: \"root\"\n"
+        "  child_mappings { key: \"" + node + "\" value { host_id: " + std::to_string(hid) + " } }\n}\n");
+}
+
+// File A declares WH_GALAXY, file B declares WH_GALAXY_Y_TORUS - disjoint same-arch templates.
+// Pre-PR this failed as "structural mismatch"; post-PR the templates union and merge succeeds.
+TEST(HeterogeneousMergeTest, DisjointSameArchTemplates_Merge) {
+    auto dir = tmp_dir("hetero_disjoint");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write_single_node_cabling(cdir + "a.textproto", "node1", "WH_GALAXY");
+    write_single_node_cabling(cdir + "b.textproto", "node2", "WH_GALAXY_Y_TORUS");
+    write(dir + "dep.textproto",
+        "hosts{host:\"node1\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"node2\" node_type:\"WH_GALAXY_Y_TORUS\"}\n");
+
+    CablingGenerator gen(cdir, dir + "dep.textproto");
+    const auto hosts = gen.generate_factory_system_descriptor().hosts();
+
+    ASSERT_EQ(hosts.size(), 2u);
+    EXPECT_EQ(hosts[0].hostname(), "node1");
+    EXPECT_EQ(hosts[1].hostname(), "node2");
+
+    std::filesystem::remove_all(dir);
+}
+
+// Deployment lists a host that no cabling file references - new orphan check should fire.
+TEST(HeterogeneousMergeTest, OrphanDeploymentHost_Throws) {
+    auto dir = tmp_dir("hetero_orphan");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write_single_node_cabling(cdir + "a.textproto", "node1", "WH_GALAXY");
+    write(dir + "dep.textproto",
+        "hosts{host:\"node1\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"ghost\" node_type:\"WH_GALAXY\"}\n");
+
+    EXPECT_THROW(CablingGenerator(cdir, dir + "dep.textproto"), std::runtime_error);
+
+    std::filesystem::remove_all(dir);
+}
+
+// Cabling file uses host_ids {0, 2} - per-file slicing requires a contiguous 0..N-1 space.
+TEST(HeterogeneousMergeTest, NonContiguousHostIds_Throws) {
+    auto dir = tmp_dir("hetero_gap");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write(cdir + "a.textproto", R"(
+graph_templates { key: "root" value {
+  children { name: "node1" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node2" node_ref { node_descriptor: "WH_GALAXY" } }
+}}
+root_instance { template_name: "root"
+  child_mappings { key: "node1" value { host_id: 0 } }
+  child_mappings { key: "node2" value { host_id: 2 } }
+}
+)");
+    write_deploy(dir + "dep.textproto", {"node1", "node2"}, "WH_GALAXY");
+
+    EXPECT_THROW(CablingGenerator(cdir, dir + "dep.textproto"), std::runtime_error);
+
+    std::filesystem::remove_all(dir);
+}
+
+// Cabling refers to a hostname (child_name) that is not in the deployment descriptor.
+TEST(HeterogeneousMergeTest, HostnameMissingFromDeployment_Throws) {
+    auto dir = tmp_dir("hetero_missing");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write_single_node_cabling(cdir + "a.textproto", "node1", "WH_GALAXY");
+    write_deploy(dir + "dep.textproto", {"other"}, "WH_GALAXY");
+
+    EXPECT_THROW(CablingGenerator(cdir, dir + "dep.textproto"), std::runtime_error);
+
+    std::filesystem::remove_all(dir);
+}
+
 }  // namespace tt::scaleout_tools
