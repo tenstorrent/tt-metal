@@ -14,27 +14,21 @@
 
 namespace ttnn::prim {
 
-ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
+tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
     const auto& input_tensors = tensor_args.input_tensors;
     const uint32_t dim = operation_attributes.dim;
-    const Tensor& output = tensor_return_value;
+    Tensor& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    Program program = CreateProgram();
-    KernelHandle reader_kernel_id = 0;
-    KernelHandle writer_kernel_id = 0;
-    std::vector<CoreCoord> cores;
-
+    ProgramDescriptor desc;
     IDevice* device = output.device();
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
-
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
-
     constexpr bool rm_orientation = false;
 
     uint32_t num_output_pages;
@@ -110,16 +104,20 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     }
 
     const uint32_t num_input_tensors = input_tensors.size();
-
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_pages = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_pages * single_page_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_page_size);
-    CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_pages * single_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_page_size,
+        }}},
+    });
 
     const uint32_t num_dims = output.padded_shape().rank();
 
@@ -190,20 +188,19 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, num_input_tensors};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_cb_index, num_input_tensors};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
         TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
     }
 
-    std::map<std::string, std::string> concat_defines;
-
+    KernelDescriptor::Defines concat_defines;
     if (rm_layout && dim == num_dims - 1) {
-        concat_defines["WIDTH_CONCAT"] = "1";
+        concat_defines.emplace_back("WIDTH_CONCAT", "1");
     }
 
-    std::vector<uint32_t> writer_compile_time_args;
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args;
     if (rm_layout) {
         writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
     } else {
@@ -211,31 +208,30 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     }
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    // Tilized reader
-    reader_kernel_id = CreateKernel(
-        program,
-        rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
-                    "reader_concat_stick_layout_interleaved_start_id.cpp"
-                  : "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
-                    "reader_concat_interleaved_start_id.cpp",
-        all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args, concat_defines));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+                                            "reader_concat_stick_layout_interleaved_start_id.cpp"
+                                          : "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+                                            "reader_concat_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.defines = std::move(concat_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    writer_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         rm_layout
             ? "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    if (sub_core_grids.has_value() && !output.is_sharded()) {
-        // Use the cores list we already computed from sub_core_grids
-        cores = cores_list;
-    } else {
-        // Use grid_to_cores for full compute grid
-        cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
-    }
+    const auto cores = (sub_core_grids.has_value() && !output.is_sharded())
+                           ? cores_list
+                           : grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     const uint32_t g1_num_cores = core_group_1.num_cores();
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -275,43 +271,15 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         } else {
             writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_kernel_args);
 
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_kernel_args);
+        reader_desc.runtime_args.emplace_back(core, std::move(reader_kernel_args));
+        writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
         num_pages_written += num_pages_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
-}
-
-void ConcatProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConcatParams& /*operation_attributes*/,
-    const ConcatInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-
-    auto& program = cached_program.program;
-    const auto& shared_vars = cached_program.shared_variables;
-
-    std::vector<uint32_t> src_addrs;
-    src_addrs.reserve(tensor_args.input_tensors.size());
-    for (const auto& input_tensor : tensor_args.input_tensors) {
-        src_addrs.push_back(input_tensor.buffer()->address());
-    }
-
-    Buffer* dst_buffer = tensor_return_value.buffer();
-
-    for (const CoreCoord& core : shared_vars.cores) {
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
-            std::copy(src_addrs.cbegin(), src_addrs.cend(), runtime_args.data() + 3);
-        }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
-    }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
 }
 
 }  // namespace ttnn::prim
