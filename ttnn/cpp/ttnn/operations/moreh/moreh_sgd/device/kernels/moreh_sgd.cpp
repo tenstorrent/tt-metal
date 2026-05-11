@@ -34,10 +34,7 @@ ALWI void moreh_bin_chain() {
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
         Dst::D0>;
-    BinElt elt{};
-    elt.a_tile_idx = IdxA;
-    elt.b_tile_idx = IdxB;
-    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(1, BinElt{IdxA, IdxB}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
@@ -49,11 +46,9 @@ ALWI void moreh_copy_chain() {
         Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
         CopyTileReconfig::Input>;
-    CopyElt elt{};
-    elt.cb_tile_idx = Idx;
     eltwise_chain(
         1,
-        elt,
+        CopyElt{Idx},
         PackTile<
             CbOut,
             Dst::D0,
