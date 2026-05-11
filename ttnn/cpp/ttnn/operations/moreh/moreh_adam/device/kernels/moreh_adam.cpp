@@ -56,6 +56,9 @@ ALWI void moreh_bin_chain() {
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
 ALWI void moreh_copy_chain() {
     using namespace compute_kernel_lib;
+    // FIX: explicit pack_reconfig — chain helper does not emit pack_reconfig
+    // for non-clash chains (hoisted_init_for_each skips Pack elements).
+    WITH_FP32_DEST_ACC(pack_reconfig_data_format(CbOut));
     using CopyElt = CopyTile<
         CbIn,
         Dst::D0,
@@ -199,18 +202,8 @@ void kernel_main() {
             /*popA=*/true,
             /*popB=*/true>();
 
-        // cb_exp_avg_out (raw LLK swap for bisect)
-        tile_regs_acquire();
-        cb_wait_front(tmp_cb_exp_avg, onetile);
-        cb_reserve_back(cb_exp_avg_out, onetile);
-        copy_tile_init_with_dt(tmp_cb_exp_avg);
-        copy_tile(tmp_cb_exp_avg, first_tile, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_exp_avg_out);
-        cb_push_back(cb_exp_avg_out, onetile);
-        tile_regs_release();
+        // cb_exp_avg_out
+        moreh_copy_chain<tmp_cb_exp_avg, cb_exp_avg_out, first_tile, /*pop=*/false>();
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -269,37 +262,38 @@ void kernel_main() {
             /*popA=*/true,
             /*popB=*/true>();
 
-        // cb_exp_avg_sq_out (raw LLK swap for bisect)
-        tile_regs_acquire();
-        cb_wait_front(tmp_cb_exp_avg_sq, onetile);
-        cb_reserve_back(cb_exp_avg_sq_out, onetile);
-        copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
-        copy_tile(tmp_cb_exp_avg_sq, first_tile, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_exp_avg_sq_out);
-        cb_push_back(cb_exp_avg_sq_out, onetile);
-        tile_regs_release();
+        // cb_exp_avg_sq_out
+        moreh_copy_chain<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, first_tile, /*pop=*/false>();
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
         // denom = sqrt(max_exp_avg_sq) / sqrt(bias_correction2) + eps;
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
-        // cb_tmp1 = pow(beta2, step);  (T1.32 — raw LLK swap for bisect)
-        tile_regs_acquire();
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta2_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        cb_reserve_back(cb_tmp1, onetile);
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_push_back(cb_tmp1, onetile);
-        tile_regs_release();
+        // cb_tmp1 = pow(beta2, step);  (T1.32)
+        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp1));  // explicit pack reconfig
+        {
+            using namespace compute_kernel_lib;
+            auto copy_elt = CopyTile<
+                cb_scalar_args,
+                Dst::D0,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::Pinned,
+                CopyTileReconfig::Input>{};
+            copy_elt.cb_tile_idx = beta2_tile;
+            auto power_elt = Power<Dst::D0>{};
+            power_elt.exponent = step;
+            eltwise_chain(
+                onetile,
+                copy_elt,
+                power_elt,
+                PackTile<
+                    cb_tmp1,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         // cb_tmp1 = 1 / (1 - cb_tmp1);
         tile_regs_acquire();
@@ -335,18 +329,8 @@ void kernel_main() {
         cb_push_back(tmp_cb_max_exp_avg_sq, onetile);
         tile_regs_release();
 
-        // cb_max_exp_avg_sq_out  (T1.34 — raw LLK swap for bisect)
-        tile_regs_acquire();
-        cb_wait_front(tmp_cb_max_exp_avg_sq, onetile);
-        cb_reserve_back(cb_max_exp_avg_sq_out, onetile);
-        copy_tile_init_with_dt(tmp_cb_max_exp_avg_sq);
-        copy_tile(tmp_cb_max_exp_avg_sq, first_tile, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_max_exp_avg_sq_out);
-        cb_push_back(cb_max_exp_avg_sq_out, onetile);
-        tile_regs_release();
+        // cb_max_exp_avg_sq_out  (T1.34)
+        moreh_copy_chain<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/false>();
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
@@ -395,19 +379,30 @@ void kernel_main() {
         tile_regs_release();
 
         // bias_correction1 = 1 - pow(beta1, step);
-        // cb_tmp2 = pow(beta1, step);  (T1.33 — raw LLK swap for bisect)
-        tile_regs_acquire();
-        cb_reserve_back(cb_tmp2, onetile);
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta1_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        cb_push_back(cb_tmp2, onetile);
-        tile_regs_release();
+        // cb_tmp2 = pow(beta1, step);  (T1.33)
+        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp2));  // explicit pack reconfig
+        {
+            using namespace compute_kernel_lib;
+            auto copy_elt = CopyTile<
+                cb_scalar_args,
+                Dst::D0,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::Pinned,
+                CopyTileReconfig::Input>{};
+            copy_elt.cb_tile_idx = beta1_tile;
+            auto power_elt = Power<Dst::D0>{};
+            power_elt.exponent = step;
+            eltwise_chain(
+                onetile,
+                copy_elt,
+                power_elt,
+                PackTile<
+                    cb_tmp2,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         // cb_tmp2 = 1 / (1 - cb_tmp2);
         tile_regs_acquire();
