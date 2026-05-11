@@ -513,13 +513,20 @@ struct BinaryFpu : BinaryFpuTag {
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_init(CbA, CbB);
             else                                       mul_tiles_init(CbA, CbB);
         } else {
-            // Broadcast init via init_bcast<EltwiseBinaryType, BroadcastType>.
+            // Reg A fix: replace init_bcast<>() (full HW configure mid-MAIN) with short-init
+            // forms: llk_math_eltwise_binary_init + llk_unpack_AB_init. No hw_configure,
+            // no pack_dest_init, no math_pack_sync_init — preserves D8 invariant
+            // (BIG init only at compute_kernel_hw_startup boot, never per-tile mid-MAIN).
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
             constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
                                 (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
                                                            ckernel::EltwiseBinaryType::ELWMUL;
-            constexpr uint32_t ocb = (CbOut != 0) ? CbOut : CbA;
-            init_bcast<et, bt>(CbA, CbB, ocb);
+            if constexpr (Op == BinaryFpuOp::Mul) {
+                MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>()));
+            } else {
+                MATH((llk_math_eltwise_binary_init<et, bt, MathFidelity::LoFi>()));
+            }
+            UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
         }
     }
 
