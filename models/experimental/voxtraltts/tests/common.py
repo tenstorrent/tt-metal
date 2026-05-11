@@ -36,5 +36,5 @@ def create_real_voxtral_text_model_or_skip(
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
         )
-    except Exception as exc:  # pragma: no cover - environment-dependent checkpoint/device setup
+    except Exception as exc:
         pytest.skip(f"Unable to build VoxtralTTTextModel from real checkpoint: {exc}")
