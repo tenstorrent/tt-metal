@@ -126,7 +126,7 @@ def get_devices(
                 return list(context.devices.values())
             raise TTTriageError(
                 "Triage (with --dev=in_use) needs Inspector data or TT_METAL_VISIBLE_DEVICES set; "
-                "pass --dev=<id> or --dev=all to override."
+                "pass --dev=<id> or --dev=all to override and use specific or all devices correspondingly."
             )
         metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
 
