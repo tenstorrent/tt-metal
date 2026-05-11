@@ -42,6 +42,11 @@ def test_nn_parameter_in_module_init_under_tracer():
                 self.weight = torch.nn.Parameter(torch.empty((n_routed_experts, gating_dim)))
 
         gate = Gate(n_routed_experts=8, gating_dim=16)
+        # Verify both the tensor autograd properties and that Module.__setattr__
+        # registered the attribute as a real nn.Parameter.
+        assert isinstance(gate.weight, torch.nn.Parameter)
+        assert "weight" in gate._parameters
+        assert gate._parameters["weight"] is gate.weight
         assert gate.weight.is_leaf
         assert gate.weight.grad_fn is None
 
