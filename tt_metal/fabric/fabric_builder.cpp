@@ -121,16 +121,27 @@ void FabricBuilder::create_routers() {
         // unreachable non-MMIO device, the poll times out (kStartedTimeoutMs=1s)
         // and sets channels_not_ready_for_traffic_=true, degrading the mesh.
         //
-        // Fix: prefer channels whose peer is an MMIO device (directly reachable
-        // via PCIe, always responsive).  Among equal-priority peers, use lowest
-        // channel ID for determinism (preserving FIX BD's guarantee).
+        // FIX BG (#42429): Exclude dispatch-link channels from master_router selection.
+        //
+        // In 2CQ mode, dispatch uses ETH channels 6/7 on MMIO devices.  FabricBuilder
+        // also maps those same channels as fabric routers (dispatch_links_).  When the
+        // channel is transitioning from base-UMD state (fabric loaded via launch_msg),
+        // the dispatch firmware may still write its own status value to edm_status_address
+        // before the fabric ERISC fully takes over.  If master_router_chan_ lands on a
+        // dispatch-link channel the health-check probe at that address reads the dispatch
+        // firmware's status word (e.g. 0x3f803f80) rather than LOCAL_HANDSHAKE_COMPLETE
+        // (0xa2b2c2d2), causing spurious health-check mismatches.
+        //
+        // Fix: demote dispatch-link channels in the comparator so they are selected as
+        // master_router only when no non-dispatch channel is available with an MMIO peer.
+        // This reasons about the dispatch-channel characteristic, not device numbers.
         //
         // Selection priority:
-        //   1. Channels connecting to MMIO peers (peer_is_mmio=true), lowest chan ID
-        //   2. Channels connecting to non-MMIO peers, lowest chan ID
-        //
-        // This does NOT use device numbers — it reasons by the MMIO characteristic
-        // of the peer, which determines reachability.
+        //   1. Channels with MMIO peers AND not a dispatch link
+        //   2. Channels with MMIO peers that ARE dispatch links
+        //   3. Channels with non-MMIO peers AND not a dispatch link
+        //   4. Channels with non-MMIO peers that ARE dispatch links
+        //   Within each tier: lowest channel ID for determinism (FIX BD)
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& ctrl_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         auto best_it = std::min_element(
@@ -147,26 +158,37 @@ void FabricBuilder::create_routers() {
                 if (a_mmio != b_mmio) {
                     return a_mmio;  // MMIO peer wins
                 }
+                // FIX BG (#42429): Among equal MMIO-peer priority, prefer non-dispatch-link
+                // channels.  Dispatch-link channels share the ERISC with dispatch firmware
+                // and may show dispatch-firmware status at edm_status_address during
+                // base-UMD→fabric firmware transition, causing health-check false negatives.
+                const bool a_dispatch = a.second->is_dispatch_link();
+                const bool b_dispatch = b.second->is_dispatch_link();
+                if (a_dispatch != b_dispatch) {
+                    return !a_dispatch;  // non-dispatch link wins
+                }
                 // Equal priority: lowest channel ID for determinism (FIX BD)
                 return a.first < b.first;
             });
         master_router_chan_ = best_it->first;
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
-        // FIX BD/BF (#42429): log selected master channel for diagnosability.
-        // Includes peer chip ID, MMIO status, and total candidates so failures
-        // can be correlated to specific device/channel topology.
+        // FIX BD/BF/BG (#42429): log selected master channel for diagnosability.
+        // Includes peer chip ID, MMIO status, dispatch-link status, and total candidates
+        // so failures can be correlated to specific device/channel topology.
         {
             const auto peer_chip = ctrl_plane.get_physical_chip_id_from_fabric_node_id(
                 best_it->second->get_peer_fabric_node_id());
             const bool peer_mmio = (cluster.get_associated_mmio_device(peer_chip) == peer_chip);
+            const bool is_dispatch = best_it->second->is_dispatch_link();
             log_info(
                 tt::LogFabric,
                 "FabricBuilder::create_routers: Device {} selected master_router_chan={} "
-                "(peer_chip={} peer_is_mmio={} total_router_candidates={}) (FIX BD/BF #42429)",
+                "(peer_chip={} peer_is_mmio={} is_dispatch_link={} total_router_candidates={}) (FIX BD/BF/BG #42429)",
                 device_->id(),
                 master_router_chan_,
                 peer_chip,
                 peer_mmio,
+                is_dispatch,
                 routers_.size());
         }
     }
