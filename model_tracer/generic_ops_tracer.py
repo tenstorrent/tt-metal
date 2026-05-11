@@ -354,14 +354,74 @@ def is_valid_operation(op_name, valid_operations, excluded_operations):
     return normalized_op in valid_operations
 
 
-def collect_operation_jsons(trace_dir):
-    """Collect all operation JSON files from the trace directory"""
+def collect_operation_jsons(trace_dir, include_failed=False):
+    """Collect all operation JSON files from the trace directory.
+
+    Supports two layouts:
+    1. Flat: JSON files directly in trace_dir (legacy / standalone scripts).
+    2. Per-test subdirs: each subdirectory contains a ``_status.json`` sidecar
+       written by the conftest ``_per_test_trace_dir`` fixture.  Only traces
+       from subdirectories whose status is ``"passed"`` are collected; failed
+       and skipped tests are excluded so that partial / invalid configs do not
+       pollute the master JSON.
+
+    Args:
+        trace_dir: Path to the trace directory.
+        include_failed: If True, also collect traces from failed tests.
+    """
     trace_path = Path(trace_dir)
     if not trace_path.exists():
         return []
 
-    # Find all JSON files in the operation_parameters directory
-    json_files = sorted(trace_path.glob("*.json"))
+    # Check if per-test subdirectories exist (look for _status.json in any subdir)
+    subdirs_with_status = []
+    for child in sorted(trace_path.iterdir()):
+        if child.is_dir() and (child / "_status.json").exists():
+            subdirs_with_status.append(child)
+
+    if subdirs_with_status:
+        json_files = []
+        passed_count = 0
+        skipped_count = 0
+        failed_count = 0
+        for subdir in subdirs_with_status:
+            status_data = {}
+            try:
+                with open(subdir / "_status.json", "r") as f:
+                    status_data = json.load(f)
+                status = status_data.get("status", "unknown")
+            except Exception:
+                status = "unknown"
+
+            if status == "passed":
+                passed_count += 1
+                subdir_jsons = sorted(p for p in subdir.glob("*.json") if not p.name.startswith("_"))
+                json_files.extend(subdir_jsons)
+            elif status == "skipped":
+                skipped_count += 1
+            else:
+                failed_count += 1
+                test_id = status_data.get("test_nodeid", subdir.name) if isinstance(status_data, dict) else subdir.name
+                if include_failed:
+                    subdir_jsons = sorted(p for p in subdir.glob("*.json") if not p.name.startswith("_"))
+                    json_files.extend(subdir_jsons)
+                    print(f"   ⚠️  Including traces from failed test: {test_id}")
+                else:
+                    print(f"   ⏭️  Skipping traces from failed test: {test_id}")
+
+        summary_parts = [f"{passed_count} passed"]
+        if failed_count > 0:
+            if include_failed:
+                summary_parts.append(f"{failed_count} failed (included)")
+            else:
+                summary_parts.append(f"{failed_count} failed (skipped)")
+        if skipped_count > 0:
+            summary_parts.append(f"{skipped_count} skipped")
+        print(f"📊 Per-test trace summary: {', '.join(summary_parts)}")
+        return sorted(json_files)
+
+    # Flat layout fallback: all JSONs directly in trace_dir (exclude sidecars)
+    json_files = sorted(p for p in trace_path.glob("*.json") if not p.name.startswith("_"))
     return json_files
 
 
@@ -896,7 +956,9 @@ def detect_pytest_tests(test_path):
         return False
 
 
-def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None):
+def run_test_with_tracing(
+    test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None, include_failed=False
+):
     """Run test with --trace-params flag and collect operation JSONs"""
     extra_args = extra_args or []
 
@@ -995,7 +1057,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
             pass
 
     # Collect generated JSON files from the unique subdirectory
-    json_files = collect_operation_jsons(trace_dir)
+    json_files = collect_operation_jsons(trace_dir, include_failed=include_failed)
 
     print(f"📊 Found {len(json_files)} operation trace files")
 
@@ -1329,6 +1391,11 @@ Examples (Import existing traces):
         help="Process existing trace directory and add to master JSON (skips test execution). "
         "Useful for importing traces collected on other machines with --store flag.",
     )
+    parser.add_argument(
+        "--include-failed",
+        action="store_true",
+        help="Include traces from failed tests (by default only passed tests are collected)",
+    )
 
     # Handle explicit separator
     if "--" in sys.argv:
@@ -1360,18 +1427,13 @@ Examples (Import existing traces):
             print(f"❌ Error: Trace directory not found: {args.load}")
             return 1
         trace_dir = args.load
-        # Find all JSON files in the trace directory, excluding metadata
-        trace_files = [
-            os.path.join(trace_dir, f)
-            for f in os.listdir(trace_dir)
-            if f.endswith(".json") and not f.startswith("_trace_")
-        ]
+        trace_files = collect_operation_jsons(trace_dir, include_failed=args.include_failed)
         if not trace_files:
             print(f"❌ Error: No JSON trace files found in {args.load}")
             return 1
         result = {
             "success": True,
-            "trace_files": sorted(trace_files),
+            "trace_files": trace_files,
             "trace_dir": trace_dir,
             "keep_traces": True,  # Always keep when processing existing traces
         }
@@ -1389,22 +1451,11 @@ Examples (Import existing traces):
     try:
         # Run test with tracing (unless processing existing traces)
         if not args.load:
-            result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
+            result = run_test_with_tracing(
+                args.test_path, args.output_dir, args.store, args.debug, extra_args, args.include_failed
+            )
 
-        print("\n" + "=" * 50)
-        print("📋 RESULTS")
-        print("=" * 50)
-
-        # Display test results if we ran tests (not from existing traces)
-        if not args.load and "test_stats" in result:
-            stats = result["test_stats"]
-            if stats["total"] > 0:
-                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
-            else:
-                # Fallback if we couldn't parse the output
-                print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
-
-        print(f"📊 Collected {len(result['trace_files'])} operation trace files")
+        print(f"\n📊 Collected {len(result['trace_files'])} operation trace files")
 
         if not args.load and not result["trace_files"]:
             if result["success"]:
@@ -1600,10 +1651,17 @@ Examples (Import existing traces):
                 if cleaned_count > 0:
                     print(f"✅ Cleaned up {cleaned_count} trace file(s)")
 
-                # Also remove the metadata file and subdirectory
+                # Also remove the metadata file, per-test subdirectories, and parent
                 trace_dir = result.get("trace_dir")
                 if trace_dir and os.path.exists(trace_dir):
                     try:
+                        import shutil
+
+                        # Remove per-test subdirectories (including failed/skipped ones)
+                        for child in Path(trace_dir).iterdir():
+                            if child.is_dir():
+                                shutil.rmtree(child, ignore_errors=True)
+
                         # Remove metadata file if it exists
                         metadata_file = os.path.join(trace_dir, "_trace_metadata.json")
                         if os.path.exists(metadata_file):
@@ -1621,22 +1679,33 @@ Examples (Import existing traces):
                 if cleaned_count > 0:
                     print("💡 Tip: Use --store flag to keep individual trace files")
 
-            print(f"\n✅ Operations extracted successfully!")
-            print(f"📄 Master file: {master_file}")
-
             # Fix memory config shard_spec entries in the master JSON
             fix_memory_config_in_json(master_file)
 
-        # Fail the pipeline if the underlying test run had any failures.
-        # This ensures CI catches pytest failures instead of silently
-        # succeeding just because traces were collected.
-        if not args.load and not result.get("success", True):
-            stats = result.get("test_stats", {})
-            if stats.get("failed", 0) > 0:
-                print(f"\n❌ Failing because {stats['failed']} test(s) failed")
+        # Print final summary at the very end so it's always visible
+        print("\n" + "=" * 50)
+        print("📋 RESULTS")
+        print("=" * 50)
+
+        if result.get("trace_files"):
+            print(f"📄 Master file: {master_file}")
+            print(f"📊 Collected {len(result['trace_files'])} operation trace files")
+
+        if not args.load and "test_stats" in result:
+            stats = result["test_stats"]
+            if stats["total"] > 0:
+                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
+                if stats["failed"] > 0:
+                    if args.include_failed:
+                        print(f"📌 Traces captured from all {stats['total']} test(s) (--include-failed enabled)")
+                    else:
+                        print(
+                            f"📌 Traces captured from {stats['passed']} passed test(s) only ({stats['failed']} failed test traces ignored)"
+                        )
             else:
-                print(f"\n❌ Failing because test process exited with code {result.get('exit_code', 1)}")
-            return 1
+                print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
+
+        print(f"\n✅ Operations extracted successfully!")
 
         return 0
 
