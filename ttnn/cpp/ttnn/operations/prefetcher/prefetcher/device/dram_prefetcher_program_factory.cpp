@@ -271,9 +271,11 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         uint32_t vc = (bank_id & 0x1) + 2;
         bank_ids.push_back(bank_id);
 
+        // Compare with previous cores' vc
         for (size_t j = 0; j < core_index; ++j) {
             const CoreCoord& prev_core = reader_cores[j];
-            if (prev_core.y == core.y and (((bank_id & 0x1) + 2) == ((bank_ids[j] & 0x1) + 2))) {
+            if (prev_core.y == core.y and
+                (((bank_id & 0x1) + 2) == ((bank_ids[j] & 0x1) + 2))) {  // same vc and same row
                 vc = ((vc + 1) & 0x1) + 2;
                 break;
             }
