@@ -43,6 +43,21 @@ void EventSynchronize(const MeshEvent& event) {
             continue;
         }
         auto* physical_device = event.device()->impl().get_device(coord);
+        // FIX EV: Skip spin-wait for non-MMIO devices whose fabric relay path is broken.
+        // Such devices cannot execute dispatch commands, so last_completed_event will
+        // never advance and nice_spin_until would block forever (observed: 8-minute hang
+        // until CI cancels the job).  The reader thread already set thread_exception_state_
+        // and threw from read_completion_queue_event; the exception will surface through
+        // the normal error-propagation path after we return here.
+        if (!physical_device->is_mmio_capable() && physical_device->is_fabric_relay_path_broken()) {
+            log_warning(
+                LogMetal,
+                "EventSynchronize: device {} relay path broken (non-MMIO) — skipping spin-wait for event {} on cq {}",
+                physical_device->id(),
+                event.id(),
+                event.mesh_cq_id());
+            continue;
+        }
         auto& sysmem = physical_device->sysmem_manager();
         const auto cq_id = event.mesh_cq_id();
         const auto target_id = event.id();
