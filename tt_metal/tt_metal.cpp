@@ -824,7 +824,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
         } else {
-            TT_ASSERT(!MetalContext::instance().device_manager()->is_dispatch_firmware_active());
+            auto& dm = MetalContext::instance().device_manager();
+            const bool fd_active = dm->is_dispatch_firmware_active();
+            const bool rt_done = dm->is_rt_profiler_device_init_complete(device->id());
+            TT_ASSERT(
+                !(fd_active && rt_done),
+                "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
+                "completed on this device.");
         }
 
 #ifdef TT_METAL_USE_EMULE

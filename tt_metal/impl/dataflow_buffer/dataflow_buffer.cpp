@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/ranges.h>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
@@ -182,35 +183,47 @@ uint8_t ClientTypeAllocator::allocate_for_consumer(uint8_t producer_client_type,
 
 // Computes dfb_txn_id_descriptor_t for either the producer or consumer side of a DFB.
 static dfb_txn_id_descriptor_t compute_txn_descriptor(
-    uint16_t capacity,
+    uint16_t num_entries,
     uint8_t num_producers,
     uint8_t num_consumers,
     bool is_producer,
     const std::vector<uint8_t>& txn_ids,
-    uint8_t num_tcs_per_risc) {
+    uint8_t num_tcs_per_risc,
+    ::dfb::AccessPattern access_pattern) {
     uint8_t num_prods_or_cons = is_producer ? num_producers : num_consumers;
     uint8_t num_txn_ids = static_cast<uint8_t>(txn_ids.size());
+
+    // Each ALL consumer needs to issue the transaction before the ISR can fire
+    const bool consumes_all = !is_producer && (access_pattern == ::dfb::AccessPattern::ALL);
+    const uint32_t required_divisor =
+        consumes_all ? (num_txn_ids * num_tcs_per_risc)
+                            : (num_txn_ids * num_prods_or_cons * num_tcs_per_risc);
+    TT_FATAL(
+        num_entries % required_divisor == 0,
+        "DFB num_entries {} must be divisible by {} to ensure equal credits per TC per ISR cycle",
+        num_entries,
+        required_divisor);
 
     // threshold is the number of transactions that each txn ID needs to process before posting/acking
     // for reads the transaction needs to be committed to dst, for writes the transaction needs to be sent out
     uint8_t threshold;
-    if (num_producers == 1 && num_consumers == 1) {
-        TT_FATAL(
-            capacity % num_txn_ids == 0,
-            "DFB capacity {} must be divisible by num_txn_ids {} for implicit sync",
-            capacity,
-            num_txn_ids);
-        threshold = static_cast<uint8_t>(capacity / num_txn_ids);
+    uint8_t per_txn;
+    if (consumes_all) {
+        // wr_sent is a global counter shared across all DMs. Each of the num_consumers DMs writes
+        // per_txn entries per txn_id, so the ISR must not fire until all consumers have finished
+        // their batch: threshold = num_consumers × per_txn.
+        per_txn = static_cast<uint8_t>(num_entries / num_txn_ids);
+        threshold = static_cast<uint8_t>(num_prods_or_cons * per_txn);
     } else {
-        threshold = num_prods_or_cons * num_tcs_per_risc;
+        threshold = static_cast<uint8_t>(num_entries / num_txn_ids);
+        // Defensive assertion — guaranteed by the upfront check above.
+        TT_FATAL(
+            threshold % num_prods_or_cons == 0,
+            "num_entries_to_process_threshold {} must be divisible by num_prods_or_cons {}",
+            threshold,
+            num_prods_or_cons);
+        per_txn = threshold / num_prods_or_cons;
     }
-
-    TT_FATAL(
-        threshold % num_prods_or_cons == 0,
-        "num_entries_to_process_threshold {} must be divisible by num_prods_or_cons {}",
-        threshold,
-        num_prods_or_cons);
-    uint8_t per_txn = threshold / num_prods_or_cons;
 
     TT_FATAL(
         per_txn % num_tcs_per_risc == 0,
@@ -228,6 +241,29 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         desc.txn_ids[i] = txn_ids[i];
     }
     return desc;
+}
+
+// Returns the smallest n in (1, NUM_TXN_IDS] satisfying the divisibility constraint that
+// compute_txn_descriptor() enforces:
+//   ALL consumer:  num_entries % (n * num_tcs_per_risc) == 0
+//   all other cases:   num_entries % (n * num_prods_or_cons * num_tcs_per_risc) == 0
+// Falls back to 1 if no n > 1 satisfies the constraint.
+// If even n=1 does not satisfy the constraint the configuration is invalid
+// and compute_txn_descriptor() will catch it with a TT_FATAL.
+static uint8_t compute_optimal_txn_id_count(
+    uint16_t num_entries,
+    uint8_t num_prods_or_cons,
+    uint8_t num_tcs_per_risc,
+    bool consumes_all) {
+    for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
+        uint32_t divisor = consumes_all
+            ? static_cast<uint32_t>(n) * num_tcs_per_risc
+            : static_cast<uint32_t>(n) * num_prods_or_cons * num_tcs_per_risc;
+        if (num_entries % divisor == 0) {
+            return n;
+        }
+    }
+    return 1;
 }
 
 bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
@@ -359,6 +395,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     init.num_producers = this->config.num_producers;
     init.producer_txn_descriptor = this->producer_txn_descriptor;
     init.consumer_txn_descriptor = this->consumer_txn_descriptor;
+    init.implicit_sync_configured = 0;
 
     log_debug(
         tt::LogMetal,
@@ -1233,46 +1270,49 @@ void ProgramImpl::finalize_single_dfb_config(
 
     // Allocate transaction IDs and compute ISR descriptor fields when implicit sync is enabled.
     // Only done on the first core processed for this DFB because txn IDs are core-invariant
-    // Two txn IDs per side for double buffering.
     if (config.enable_implicit_sync && dfb->groups.empty()) {
-        constexpr uint8_t TXN_IDS_PER_SIDE = 2;
-
         if (!producer_is_tensix_only) {
-            auto producer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries, config.num_producers, num_producer_tcs,
+                /*consumes_all=*/false);
+            auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
             dfb->producer_txn_descriptor = compute_txn_descriptor(
-                dfb->capacity,
+                config.num_entries,
                 config.num_producers,
                 config.num_consumers,
                 /*is_producer=*/true,
                 producer_txn_ids,
-                num_producer_tcs);
-            log_debug(
+                num_producer_tcs,
+                config.pap);
+            log_info(
                 tt::LogMetal,
-                "DFB {} implicit sync: producer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
-                dfb->producer_txn_descriptor.txn_ids[0],
-                dfb->producer_txn_descriptor.txn_ids[1],
+                fmt::join(producer_txn_ids, ","),
                 dfb->producer_txn_descriptor.num_entries_to_process_threshold,
                 dfb->producer_txn_descriptor.num_entries_per_txn_id,
                 dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
         }
 
         if (!consumer_is_tensix_only) {
-            auto consumer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            const bool consumes_all = (config.cap == ::dfb::AccessPattern::ALL);
+            uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries, config.num_consumers, num_consumer_tcs,
+                /*consumes_all=*/consumes_all);
+            auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
             dfb->consumer_txn_descriptor = compute_txn_descriptor(
-                dfb->capacity,
+                config.num_entries,
                 config.num_producers,
                 config.num_consumers,
                 /*is_producer=*/false,
                 consumer_txn_ids,
-                num_consumer_tcs);
-            log_debug(
+                num_consumer_tcs,
+                config.cap);
+            log_info(
                 tt::LogMetal,
-                "DFB {} implicit sync: "
-                "consumer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
-                dfb->consumer_txn_descriptor.txn_ids[0],
-                dfb->consumer_txn_descriptor.txn_ids[1],
+                fmt::join(consumer_txn_ids, ","),
                 dfb->consumer_txn_descriptor.num_entries_to_process_threshold,
                 dfb->consumer_txn_descriptor.num_entries_per_txn_id,
                 dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
