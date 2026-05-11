@@ -13,6 +13,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "tt-metalium/sub_device_types.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -327,6 +329,23 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
     return result;
 }
+
+void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const MatmulMultiCoreReuseProgramConfig& program_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
+
+void validate_matmul_compute_grid_within_subdevice_tensix_workers(
+    const tt::tt_metal::IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const tt::tt_metal::CoreCoord& compute_with_storage_grid_size,
+    const char* context_label);
 
 }  // namespace ttnn::operations::matmul::utilities
 

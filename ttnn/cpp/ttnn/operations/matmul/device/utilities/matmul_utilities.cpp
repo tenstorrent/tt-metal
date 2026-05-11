@@ -8,6 +8,10 @@
 #include <set>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/hal_types.hpp"
+#include "tt-metalium/work_split.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::matmul::utilities {
@@ -259,6 +263,96 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
         curr_tile.get_transpose_within_face(),
         curr_tile.get_transpose_of_faces());
     return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
+}
+
+void validate_matmul_compute_grid_within_subdevice_tensix_workers(
+    const tt::tt_metal::IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const tt::tt_metal::CoreCoord& compute_with_storage_grid_size,
+    const char* context_label) {
+    if (!sub_device_id.has_value()) {
+        return;
+    }
+    if (compute_with_storage_grid_size.x == 0 || compute_with_storage_grid_size.y == 0) {
+        return;
+    }
+    const auto tensix_workers =
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    const auto bbox = tensix_workers.bounding_box();
+    const tt::tt_metal::CoreCoord program_end{
+        bbox.start_coord.x + static_cast<int32_t>(compute_with_storage_grid_size.x) - 1,
+        bbox.start_coord.y + static_cast<int32_t>(compute_with_storage_grid_size.y) - 1};
+    const tt::tt_metal::CoreRangeSet program_grid_on_device({tt::tt_metal::CoreRange(bbox.start_coord, program_end)});
+    TT_FATAL(
+        tensix_workers.contains(program_grid_on_device),
+        "{}: compute_with_storage_grid_size ({}, {}) anchored at sub-device origin {} must lie within sub-device "
+        "TENSIX worker cores {}",
+        context_label,
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        bbox.start_coord,
+        tensix_workers);
+}
+
+void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const MatmulMultiCoreReuseProgramConfig& program_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set) {
+    // Mirrors matmul_multicore_reuse_optimized_program_factory.cpp core splitting + factory TT_FATAL.
+    const uint32_t B = ttnn::get_batch_size(a_shape_padded);
+    const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
+    const uint32_t per_core_M_u = static_cast<uint32_t>(program_config.per_core_M);
+    const uint32_t per_core_N_u = static_cast<uint32_t>(program_config.per_core_N);
+    const uint32_t num_output_blocks_total = (B * Mt / per_core_M_u) * (Nt / per_core_N_u);
+    TT_FATAL(
+        num_output_blocks_total > 0,
+        "Matmul reuse-optimized produced zero output blocks (B={} Mt={} Nt={} per_core_M={} per_core_N={}); see "
+        "matmul_multicore_reuse_optimized_program_factory",
+        B,
+        Mt,
+        Nt,
+        per_core_M_u,
+        per_core_N_u);
+
+    std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
+    if (input_tensor_a.is_sharded()) {
+        shard_spec = input_tensor_a.shard_spec().value();
+    } else if (input_tensor_b.is_sharded()) {
+        shard_spec = input_tensor_b.shard_spec().value();
+    } else if (output_mem_config.is_sharded() && output_mem_config.buffer_type() != tt::tt_metal::BufferType::DRAM) {
+        shard_spec = output_mem_config.shard_spec().value();
+    }
+
+    uint32_t num_cores = 0;
+    if (shard_spec.has_value()) {
+        num_cores = shard_spec->grid.num_cores();
+    } else if (core_range_set.has_value()) {
+        std::tie(num_cores, std::ignore, std::ignore, std::ignore, std::ignore, std::ignore) =
+            tt::tt_metal::split_work_to_cores(core_range_set.value(), num_output_blocks_total);
+    } else {
+        const tt::tt_metal::CoreCoord grid = program_config.compute_with_storage_grid_size;
+        std::tie(num_cores, std::ignore, std::ignore, std::ignore, std::ignore, std::ignore) =
+            tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+    }
+
+    TT_FATAL(
+        num_cores > 0,
+        "split_work_to_cores produced zero cores for matmul reuse-optimized (num_output_blocks_total={})",
+        num_output_blocks_total);
+    const uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
+    TT_FATAL(
+        num_evenly_divided_output_blocks > 0,
+        "Not all cores from core_range was used! num_output_blocks_total={} num_cores={} (matmul reuse-optimized; "
+        "matches matmul_multicore_reuse_optimized_program_factory)",
+        num_output_blocks_total,
+        num_cores);
 }
 
 }  // namespace ttnn::operations::matmul::utilities
