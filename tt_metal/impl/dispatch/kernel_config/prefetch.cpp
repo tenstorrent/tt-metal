@@ -576,7 +576,9 @@ void PrefetchKernel::ConfigureCore() {
         const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
+        const uint32_t prefetch_q_bytes = my_dispatch_constants.prefetch_q_size();
+        TT_ASSERT(prefetch_q_bytes % sizeof(uint32_t) == 0);
+        std::vector<uint32_t> prefetch_q(prefetch_q_bytes / sizeof(uint32_t), 0);
         uint32_t prefetch_q_base =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
         std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
