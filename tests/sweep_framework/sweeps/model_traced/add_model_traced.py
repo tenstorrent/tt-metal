@@ -109,7 +109,11 @@ def run(
     # build_op_kwargs strips memory_config by default, but the model trace may have
     # passed it explicitly. Same for dtype (output dtype).
     # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
-    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    # Only pass None when absent_keys is populated (V2 loader provided info) and the key
+    # is NOT in absent_keys (meaning the master trace explicitly had this kwarg).
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
     if "memory_config" not in absent_keys:
         if memory_config is not None and memory_config != "__ABSENT__":
             parsed_mc = (
@@ -117,18 +121,18 @@ def run(
             )
             if parsed_mc is not None:
                 op_kwargs["memory_config"] = parsed_mc
-            else:
+            elif has_absent_info:
                 op_kwargs["memory_config"] = None
-        elif memory_config is None:
+        elif memory_config is None and has_absent_info:
             op_kwargs["memory_config"] = None
     if "dtype" not in absent_keys:
         if dtype is not None and dtype != "__ABSENT__":
             parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
             if parsed_dt is not None:
                 op_kwargs["dtype"] = parsed_dt
-            else:
+            elif has_absent_info:
                 op_kwargs["dtype"] = None
-        elif dtype is None:
+        elif dtype is None and has_absent_info:
             op_kwargs["dtype"] = None
 
     # V2 format provides separate shapes for each input
