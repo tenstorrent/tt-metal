@@ -16,7 +16,6 @@ import pytest
 import torch
 
 import ttnn
-from ttnn import ReplicateTensorToMesh
 
 
 @pytest.mark.parametrize(
@@ -36,7 +35,7 @@ def test_with_ops_all_devices_mesh(mesh_device):
             t,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.distributed.ReplicateTensorToMesh(mesh_device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
