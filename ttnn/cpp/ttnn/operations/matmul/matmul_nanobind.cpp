@@ -671,7 +671,7 @@ void py_module(nb::module_& mod) {
             dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
             activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead. Defaults to `None`.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`. See :class:`ttnn.DeviceComputeKernelConfig` for the available fields and their meanings.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
@@ -731,22 +731,23 @@ void py_module(nb::module_& mod) {
 
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
         )doc",
-        &matmul,
-        nb::arg("input_tensor_a"),
-        nb::arg("input_tensor_b"),
-        nb::kw_only(),
-        nb::arg("transpose_a") = false,
-        nb::arg("transpose_b") = false,
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("program_config") = nb::none(),
-        nb::arg("activation") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("core_grid") = nb::none(),
-        nb::arg("output_tile") = nb::none(),
-        nb::arg("optional_output_tensor") = nb::none(),
-        nb::arg("global_cb") = nb::none(),
-        nb::arg("sub_device_id") = nb::none());
+        ttnn::overload_t(
+            &matmul,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("transpose_a") = false,
+            nb::arg("transpose_b") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("activation") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
+            nb::arg("output_tile") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
+            nb::arg("global_cb") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 
     ttnn::bind_function<"linear">(
         mod,
@@ -794,7 +795,7 @@ void py_module(nb::module_& mod) {
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
             activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. Defaults to `None`. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`. See :class:`ttnn.DeviceComputeKernelConfig` for the available fields and their meanings.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
@@ -802,23 +803,24 @@ void py_module(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
         )doc",
-        &linear,
-        nb::arg("input_tensor_a"),
-        nb::arg("input_tensor_b"),
-        nb::kw_only(),
-        nb::arg("bias") = nb::none(),
-        nb::arg("transpose_a") = false,
-        nb::arg("transpose_b") = false,
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("program_config") = nb::none(),
-        nb::arg("activation") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("core_grid") = nb::none(),
-        nb::arg("output_tile") = nb::none(),
-        nb::arg("optional_output_tensor") = nb::none(),
-        nb::arg("global_cb") = nb::none(),
-        nb::arg("sub_device_id") = nb::none());
+        ttnn::overload_t(
+            &linear,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("bias") = nb::none(),
+            nb::arg("transpose_a") = false,
+            nb::arg("transpose_b") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("activation") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
+            nb::arg("output_tile") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
+            nb::arg("global_cb") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 
     ttnn::bind_function<"matmul_batched_weights">(
         mod,
@@ -858,7 +860,7 @@ void py_module(nb::module_& mod) {
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
             activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. Defaults to `None`. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`. See :class:`ttnn.DeviceComputeKernelConfig` for the available fields and their meanings.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
@@ -868,22 +870,23 @@ void py_module(nb::module_& mod) {
         Returns:
             List of ttnn.Tensor: the output tensors.
         )doc",
-        &matmul_batched_weights,
-        nb::arg("input_tensor_a"),
-        nb::arg("input_tensors_b"),
-        nb::kw_only(),
-        nb::arg("transpose_a") = false,
-        nb::arg("transpose_b") = false,
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("program_config") = nb::none(),
-        nb::arg("activation") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("core_grid") = nb::none(),
-        nb::arg("output_tile") = nb::none(),
-        nb::arg("optional_output_tensor") = nb::none(),
-        nb::arg("global_cb") = nb::none(),
-        nb::arg("sub_device_id") = nb::none());
+        ttnn::overload_t(
+            &matmul_batched_weights,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensors_b"),
+            nb::kw_only(),
+            nb::arg("transpose_a") = false,
+            nb::arg("transpose_b") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("activation") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
+            nb::arg("output_tile") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
+            nb::arg("global_cb") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 
     ttnn::bind_function<"addmm">(
         mod,
@@ -942,7 +945,7 @@ void py_module(nb::module_& mod) {
             memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType): the data type of the output tensor. Supported types: `ttnn.bfloat16`, `ttnn.float32`, `ttnn.bfloat8_b`  Defaults to `None` which means it will default to the highest precision of `input_tensor`, `mat1_tensor` or `mat2_tensor`.
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`. See :class:`ttnn.DeviceComputeKernelConfig` for the available fields and their meanings.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User-provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
@@ -953,20 +956,21 @@ void py_module(nb::module_& mod) {
             ttnn.Tensor: output tensor of shape (n, p)
 
         )doc",
-        &addmm,
-        nb::arg("input_tensor"),
-        nb::arg("mat1_tensor"),
-        nb::arg("mat2_tensor"),
-        nb::kw_only(),
-        nb::arg("alpha") = 1.0,
-        nb::arg("beta") = 1.0,
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("core_grid") = nb::none(),
-        nb::arg("output_tile") = nb::none(),
-        nb::arg("optional_output_tensor") = nb::none());
+        ttnn::overload_t(
+            &addmm,
+            nb::arg("input_tensor"),
+            nb::arg("mat1_tensor"),
+            nb::arg("mat2_tensor"),
+            nb::kw_only(),
+            nb::arg("alpha") = 1.0,
+            nb::arg("beta") = 1.0,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
+            nb::arg("output_tile") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none()));
 
     ttnn::bind_function<"sparse_matmul">(
         mod,
@@ -989,7 +993,7 @@ void py_module(nb::module_& mod) {
             is_input_b_sparse (bool, optional): boolean indicating whether `input_tensor_b` is sparse. Defaults to `True`. Together with `is_input_a_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`. See :class:`ttnn.DeviceComputeKernelConfig` for the available fields and their meanings.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
@@ -1077,23 +1081,24 @@ void py_module(nb::module_& mod) {
                   - Interleaved (L1/DRAM)
                   - Interleaved (L1/DRAM)
         )doc",
-        &sparse_matmul,
-        nb::arg("input_tensor_a"),
-        nb::arg("input_tensor_b"),
-        nb::kw_only(),
-        nb::arg("sparsity"),
-        nb::arg("program_config"),
-        nb::arg("nnz") = nb::none(),
-        nb::arg("is_input_a_sparse") = false,
-        nb::arg("is_input_b_sparse") = true,
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("core_grid") = nb::none(),
-        nb::arg("output_tile") = nb::none(),
-        nb::arg("optional_output_tensor") = nb::none(),
-        nb::arg("global_cb") = nb::none(),
-        nb::arg("sub_device_id") = nb::none());
+        ttnn::overload_t(
+            &sparse_matmul,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("sparsity"),
+            nb::arg("program_config"),
+            nb::arg("nnz") = nb::none(),
+            nb::arg("is_input_a_sparse") = false,
+            nb::arg("is_input_b_sparse") = true,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
+            nb::arg("output_tile") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
+            nb::arg("global_cb") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 
     // Bind MatmulParams for descriptor-based operations
     nb::class_<ttnn::prim::MatmulParams>(mod, "MatmulParams")
@@ -1147,6 +1152,95 @@ void py_module(nb::module_& mod) {
             "default_core_range",
             &ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
             nb::arg("device"));
+
+    // Bind MatmulMultiCoreProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreProgramFactory>(mod, "MatmulMultiCoreProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMcast2DProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory>(mod, "MatmulMultiCoreReuseMcast2DProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>(
+        mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>(
+        mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind select_program_factory for Python-side factory dispatch
+    mod.def(
+        "matmul_select_program_factory",
+        &ttnn::prim::MatmulDeviceOperation::select_program_factory,
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"));
 
     // Bind create_matmul_attributes helper
     mod.def(

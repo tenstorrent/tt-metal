@@ -494,7 +494,7 @@ void salad_correct_fused(
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
  */
-template <bool profiling_enabled, uint32_t head_dim_t_, uint32_t dst_size>
+template <bool profiling_enabled, uint32_t head_dim_t_, uint32_t dst_size, bool uniform_pack_format = false>
 static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
@@ -510,6 +510,12 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             constexpr uint32_t N = 1;
             mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             reconfig_data_format(col_identity_cb, cur_sum_cb);
+            // Pack format follows scratch_cb (Float16_b intermediate) for the recip output.
+            // Required when normalized_out_cb has a different format (e.g., Bfp8 output dtype):
+            // s>0 iterations re-enter here after the bcast loop set pack format to normalized_out_cb.
+            if constexpr (!uniform_pack_format) {
+                pack_reconfig_data_format(scratch_cb);
+            }
 
             cb_wait_front(col_identity_cb, N);
             cb_wait_front(cur_sum_cb, 1);
@@ -540,6 +546,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
             mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
+            // Pack output to normalized_out_cb (may be a different format than scratch_cb,
+            // e.g., Bfp8 output dtype with Float16_b intermediates).
+            if constexpr (!uniform_pack_format) {
+                pack_reconfig_data_format(normalized_out_cb);
+            }
             cb_wait_front(cur_out_cb, head_dim_t_);
             cb_wait_front(scratch_cb, 1);
 
@@ -563,6 +574,14 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             cb_pop_front(scratch_cb, 1);
             cb_pop_front(cur_out_cb, head_dim_t_);
         }
+    }
+    // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
+    // (e.g. salad_correct_fused on the next K-chunk's drain row) pack to F16b CBs
+    // with the right format. Without this, when normalized_out_cb has a different
+    // format (e.g. Bfp8 output dtype), the format register stays Bfp8 and the next
+    // pack to a F16b CB writes garbage that's later mis-decoded by F16b unpacks.
+    if constexpr (!uniform_pack_format) {
+        pack_reconfig_data_format(scratch_cb);
     }
 }
 
@@ -808,8 +827,10 @@ static void sdpa_inner_loop_step(
             reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
         }
 
-        // Ring mask: L1-accumulate causal + padding masks onto cb_qkt_im for this row group.
-        if constexpr (ring_mode) {
+        // Lightweight mask stamp: L1-accumulate causal and/or padding masks onto cb_qkt_im
+        // for this row group. Active for ring, causal non-ring, or non-causal padded with a
+        // partial-tile mask (single-chip streaming partial-K case).
+        if constexpr (ring_mode || is_causal_sdpa || use_padded_mask) {
             if ((is_causal_sdpa && apply_causal) || (apply_mask && lw_partial_tile_idx > 0)) {
                 // MOP is configured for actual_sbw tiles (blocked matmul); mask needs 1 tile per pack.
                 configure_single_tile_pack(cb_qkt_im);
@@ -921,6 +942,16 @@ static void sdpa_inner_loop_step(
                     kt_sub * actual_sbw,
                     qkt_subblock_h,
                     actual_sbw);
+                // PACK-to-UNPACK barrier: sub_exp writes cb_qkt_im in-place via pack_tile<true>;
+                // V matmul UNPACK below reads the same positions and needs to see those writes.
+                // For q_num_subblocks==1 the cb_wait_front was already satisfied by Phase 1's
+                // cb_push_back_hold_wr_ptr, so it doesn't sync sub_exp's writes; explicit
+                // semaphore handshake required.
+                if constexpr (q_num_subblocks == 1) {
+                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                }
                 if (kt_sub == 0) {
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                     cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
@@ -935,7 +966,10 @@ static void sdpa_inner_loop_step(
                     if constexpr (!uniform_unpack_format) {
                         reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                     }
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, matmul_inner);
+                    // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
+                    // narrower logical width. Keep unpack init on the physical stride; inner_dim below
+                    // still limits how many V rows are multiplied.
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                     // Configure once before v_subblock loop; skip inside.
                     configure_row_pack_width(out_cb, qktv_subblock_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -968,13 +1002,22 @@ static void sdpa_inner_loop_step(
             qktv_in0_wait_tiles += qktv_in0_row_tiles;
         }
 
+        // Pack→unpack barrier between Phase 2's q_sub=0 drain and the main V-matmul loop.
+        // The drain runs sub_exp in-place on cb_qkt_im at the last q_subblock's positions
+        // (PACK writes); the upcoming V matmul (UNPACK reads) targets those same positions.
+        // Without an explicit handshake, UNPACK can see stale L1 bytes — observed as wildly
+        // wrong V matmul output (rmse > 1) on small-DHt + small-chunk causal shapes.
+        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             cb_push_back(cur.sum, sbh);
             cb_push_back(out_cb, sbh * vDHt);
-            normalize_row_streaming<profiling_enabled, vDHt, dst_size>(
+            normalize_row_streaming<profiling_enabled, vDHt, dst_size, uniform_pack_format>(
                 cur.sum, out_cb, cb_col_identity, cb_recip_scratch, cb_normalized_out, sbh);
             pushed++;
         };
@@ -1043,7 +1086,9 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                 }
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
+                // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
+                // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
+                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1207,7 +1252,8 @@ template <
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
     uint32_t cb_mask_in,
-    bool uniform_dataformat = false>
+    bool uniform_dataformat = false,
+    bool is_causal_sdpa = false>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -1216,7 +1262,15 @@ void sdpa_standard_v2(
     const uint32_t cb_max_A,
     const uint32_t cb_max_B,
     const uint32_t cb_sum_A,
-    const uint32_t cb_sum_B) {
+    const uint32_t cb_sum_B,
+    const uint32_t local_q_start = 0,
+    const uint32_t chunked_q_chunk_offset = 0,
+    const LightweightMaskContext& lw_mask = {},
+    const uint32_t q_num_chunks = 0) {
+    // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
+    static_assert(
+        !(use_padded_mask && is_causal_sdpa), "use_padded_mask and is_causal_sdpa are mutually exclusive in v2");
+
     // Neginf tile is permanently fronted by the writer — wait once before any K-chunk loop.
     constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
     if constexpr (use_padded_mask && padded_k_tiles_inner > 0) {
@@ -1246,12 +1300,41 @@ void sdpa_standard_v2(
         constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
                                                    (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
+        // Causal-only: BALANCED_Q_PARALLEL Q-chunk remap, per-Q diagonal K-chunk limit, and
+        // q_start_tile (the only causal-mask consumer downstream). Non-causal builds skip
+        // the whole block — q_chunk_local stays in-order, q_start_tile=0, k_loop_end=full.
+        uint32_t q_chunk_local = local_q_start + q;
+        uint32_t q_start_tile = 0;
+        uint32_t k_loop_end = k_num_chunks;
+        if constexpr (is_causal_sdpa) {
+#if defined BALANCED_Q_PARALLEL
+            // Pair a light (top-half) Q chunk with a heavy (bottom-half) Q chunk per core to
+            // balance causal work. Reader and writer apply the same remap; compute must agree
+            // or causal masks + output positions desync.
+            const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
+            if (q >= q_chunk_div_2) {
+                const uint32_t back_q_iter = q - q_chunk_div_2;
+                q_chunk_local = q_num_chunks - 1 - (local_q_start + back_q_iter);
+            }
+#endif
+            // q_chunk_global is the absolute Q chunk index (used for the diagonal);
+            // chunked-prefill shifts this via chunked_q_chunk_offset.
+            const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;
+            q_start_tile = q_chunk_global * Sq_chunk_t;
+            const uint32_t limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+            k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
+        }
+
         auto call_step = [&](auto profiling_tag,
                              bool is_last,
                              bool is_first,
                              uint32_t active_Sk,
                              bool reduce_trigger,
-                             uint32_t sbw) {
+                             uint32_t sbw,
+                             bool apply_causal,
+                             uint32_t k_start_tile,
+                             bool apply_mask,
+                             uint32_t lw_partial_tile_idx) {
             sdpa_inner_loop_step<
                 decltype(profiling_tag)::value,
                 Sq_chunk_t,
@@ -1266,7 +1349,7 @@ void sdpa_standard_v2(
                 qktv_subblock_w,
                 use_padded_mask,
                 false,  // ring_mode
-                false,  // is_causal_sdpa
+                is_causal_sdpa,
                 uniform_dataformat,
                 cb_q_in,
                 cb_kt_in,
@@ -1282,27 +1365,70 @@ void sdpa_standard_v2(
                 cur,
                 is_last,
                 is_first,
-                false,  // apply_mask
-                0,      // lw_partial_tile_idx
+                apply_mask,
+                lw_partial_tile_idx,
                 active_Sk,
                 reduce_trigger,
-                sbw);
+                sbw,
+                INVALID_CB,  // save_out_cb
+                INVALID_CB,  // save_max_cb
+                apply_causal,
+                q_start_tile,
+                k_start_tile,
+                lw_mask.neginf_tile_idx,
+                lw_mask.causal_diag_tile_idx);
         };
 
-        for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; k_chunk++) {
+        for (uint32_t k_chunk = 0; k_chunk < k_loop_end; k_chunk++) {
             bool is_first = (k_chunk == 0);
-            bool is_last = (k_chunk == k_num_chunks - 1);
+            bool is_last = (k_chunk == k_loop_end - 1);
 
-            bool is_padded = is_last && padded_k_tiles_inner > 0;
+            // Padded path is non-causal only (use_padded_mask && is_causal_sdpa rejected by static_assert).
+            const bool is_padded = !is_causal_sdpa && is_last && (padded_k_tiles_inner > 0);
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
             bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
+            uint32_t chunk_sbw = is_padded ? padded_sbw : full_sbw;
+
+            // Last-chunk narrowing: causal and non-causal partial-tile K are mutually exclusive
+            // (static_assert at function entry), but both shrink chunk_active_Sk on is_last to
+            // skip cols past the diag (causal) or past Sk's last partial tile (non-causal partial).
+            //
+            // Mask side:
+            // - Causal: per-row diagonal/trailing-neginf stamp via apply_lightweight_mask_streaming
+            //   (no-stamp / partial-stamp / full-neginf decided per row by diag_col).
+            // - Non-causal partial: trailing fully-padded tiles → neginf via num_padded; partial
+            //   boundary tile → vertical-bar mask tile via apply_mask + lw_partial_tile_idx.
+            bool apply_partial_mask = false;
+            uint32_t target_active_Sk = chunk_active_Sk;
+            if constexpr (use_padded_mask && !is_causal_sdpa) {
+                if (is_last && lw_mask.global_n_partial_col > 0) {
+                    target_active_Sk = Sk_chunk_t - lw_mask.global_n_padded_tiles;
+                    apply_partial_mask = true;
+                }
+            } else if constexpr (is_causal_sdpa) {
+                if (is_last) {
+                    target_active_Sk = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                }
+            }
+            const bool apply_causal = is_causal_sdpa;
+            if (target_active_Sk < chunk_active_Sk) {
+                chunk_active_Sk = target_active_Sk;
+                chunk_sbw = largest_factor_le(chunk_active_Sk, qkt_subblock_w);
+                // reduce_trigger relies on active_Sk == Sk_chunk_t for the unpack MOP split.
+                chunk_reduce_trigger = false;
+            }
+
             call_step(
                 std::false_type{},
                 is_last,
                 is_first,
                 chunk_active_Sk,
                 chunk_reduce_trigger,
-                is_padded ? padded_sbw : full_sbw);
+                chunk_sbw,
+                apply_causal,
+                k_chunk * Sk_chunk_t,
+                apply_partial_mask,
+                apply_partial_mask ? lw_mask.global_n_partial_tile_idx : 0u);
 
             // Post-iteration cleanup
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
@@ -1458,7 +1584,7 @@ void sdpa_ring_v2(
                     q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
                 }
                 constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
-                normalize_row_streaming<false, vDHt, norm_dst_size>(
+                normalize_row_streaming<false, vDHt, norm_dst_size, uniform_format>(
                     q_prev_norm.sum, q_prev_norm.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, Sq_chunk_t);
                 cb_pop_front(q_prev_norm.max, Sq_chunk_t);
                 if (q_per_core > 1) {

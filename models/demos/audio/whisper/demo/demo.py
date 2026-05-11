@@ -184,6 +184,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
         enable_encoder_trace=True,
+        use_2cq=True,
     )
 
     def _model_pipeline(
@@ -296,8 +297,9 @@ def run_demo_whisper_for_audio_classification_inference(
         # Convert logits to torch
         logits_torch = ttnn.to_torch(logits, mesh_composer=output_mesh_composer)
 
-        # Argmax over class dimension
-        predicted_class_ids = torch.argmax(logits_torch.squeeze(1), dim=1)
+        # Argmax over class (last) dimension; flatten to yield one prediction per sample
+        # regardless of any extra leading unit dims produced by ttnn tile-layout conversion.
+        predicted_class_ids = torch.argmax(logits_torch, dim=-1).flatten()[:current_batch_size]
         predicted_labels = [model.config.id2label[class_id.item()] for class_id in predicted_class_ids]
 
         for idx, label_str in enumerate(predicted_labels):
@@ -785,7 +787,7 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "use_per_request_params",
-    [True],
+    [False, True],
 )
 @pytest.mark.parametrize(
     "run_both_batch_sizes",
@@ -822,6 +824,7 @@ def test_demo_for_conditional_generation(
         is_ci_env
         and model_repo == "openai/whisper-large-v3"
         and (compression_ratio_threshold is not None or batch_size_per_device == 2)
+        and not use_per_request_params
     ):
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
@@ -852,6 +855,15 @@ def test_demo_for_conditional_generation(
             return_timestamps=return_timestamps,
         )
 
+    should_check_perf = (
+        is_ci_env
+        and model_repo == "distil-whisper/distil-large-v3"
+        and batch_size_per_device == 1
+        and mesh_device.get_num_devices() == available_devices
+        and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
+        and not use_per_request_params
+    )
+
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,
@@ -863,43 +875,47 @@ def test_demo_for_conditional_generation(
         prompt=prompt,
         batch_size_per_device=batch_size_per_device,
         stream=stream,
-        run_both_batch_sizes=run_both_batch_sizes,
+        run_both_batch_sizes=run_both_batch_sizes and not should_check_perf,
     )
 
-    if (
-        is_ci_env
-        and model_repo == "distil-whisper/distil-large-v3"
-        and batch_size_per_device == 1
-        and mesh_device.get_num_devices() == available_devices
-        and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
-    ):
+    if should_check_perf:
         metrics_dictionary = {
             2: {"prefill_time_to_token": 0.13, "decode_t/s/u": 124.0},
             8: {"prefill_time_to_token": 0.14, "decode_t/s/u": 105.0},
             32: {"prefill_time_to_token": 0.22, "decode_t/s/u": 77.5},
         }
+        expected_perf_metrics = None
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
                 expected_perf_metrics = {"prefill_time_to_token": 0.06, "decode_t/s/u": 310.0}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.05, "decode_t/s/u": 330.0}
-        else:  # wormhole_b0
+                expected_perf_metrics = {"prefill_time_to_token": 0.05, "decode_t/s/u": 530.0}
+        elif mesh_device.get_num_devices() in metrics_dictionary:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
-        total_batch = mesh_device.get_num_devices() * batch_size_per_device
-        expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
-        measurements = {
-            "prefill_time_to_token": ttft,
-            "decode_t/s": decode_throughput * total_batch,
-            "decode_t/s/u": decode_throughput,
-        }
-        expected_measurements = {
-            "prefill_time_to_token": True,
-            "decode_t/s": True,
-            "decode_t/s/u": True,
-        }
-        verify_perf(
-            measurements, expected_perf_metrics, high_tol_percentage=1.20, expected_measurements=expected_measurements
-        )
+
+        if expected_perf_metrics is not None:
+            total_batch = mesh_device.get_num_devices() * batch_size_per_device
+            expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
+            measurements = {
+                "prefill_time_to_token": ttft,
+                "decode_t/s": decode_throughput * total_batch,
+                "decode_t/s/u": decode_throughput,
+            }
+            expected_measurements = {
+                "prefill_time_to_token": True,
+                "decode_t/s": True,
+                "decode_t/s/u": True,
+            }
+            verify_perf(
+                measurements,
+                expected_perf_metrics,
+                high_tol_percentage=1.20,
+                expected_measurements=expected_measurements,
+            )
+        else:
+            logger.warning(
+                f"Skipping perf check: no expected perf target for {mesh_device.get_num_devices()}-device wormhole_b0 mesh"
+            )
 
 
 @pytest.mark.parametrize(

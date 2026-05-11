@@ -5,8 +5,13 @@
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
+#include <filesystem>
+#include <thread>
+
 #include "impl/context/metal_context.hpp"
+#include "tt_fabric_test_constants.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
     for (const auto& sync_config : config.sync_configs) {
@@ -86,26 +91,94 @@ void TestContext::wait_for_programs_with_progress() {
         return;
     }
 
-    // Create progress monitor (but don't start polling thread yet)
     progress_config_.show_workers = show_workers_;
     TestProgressMonitor monitor(this, progress_config_);
 
-    // Poll and check for completion in this thread
-    log_info(
-        tt::LogTest,
-        "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
-        progress_config_.poll_interval_seconds,
-        progress_config_.hung_threshold_seconds);
-    bool completed = monitor.poll_until_complete();
+    if (progress_config_.granular) {
+        fixture_->barrier();
 
-    if (!completed) {
-        last_test_hung_ = true;
-        has_test_failures_ = true;
-        log_error(tt::LogTest, "Skipping remaining steps for this test due to hang.");
-        return;
+        log_info(
+            tt::LogTest,
+            "Granular progress monitoring started (poll interval: {}s, hung threshold: {}s, "
+            "confirmation rounds: {})",
+            progress_config_.poll_interval_seconds,
+            progress_config_.hung_threshold_seconds,
+            progress_config_.hung_confirmation_rounds);
+
+        auto result = monitor.poll_until_complete_or_hung();
+
+        // Globally agree on whether ANY rank saw a hang. We can't make this decision
+        // locally because exchange_hung_records() / write_*_report() involve
+        // collective MPI ops that must be entered by every rank. If ranks made the
+        // decision based only on local state, ranks with all-complete endpoints
+        // would skip the collective and the hung ranks would deadlock waiting.
+        using namespace tt::tt_metal::distributed::multihost;
+        const auto& dist_ctx = DistributedContext::get_current_world();
+        int my_rank = *dist_ctx->rank();
+        const auto& records = monitor.get_hung_records();
+        uint32_t local_hung = (result == MonitorResult::HUNG_DETECTED) ? static_cast<uint32_t>(records.size()) : 0;
+        uint32_t global_hung = local_hung;
+        if (*dist_ctx->size() > 1) {
+            dist_ctx->all_reduce(
+                ttsl::Span<uint32_t>(&local_hung, 1), ttsl::Span<uint32_t>(&global_hung, 1), ReduceOp::SUM);
+        }
+
+        if (global_hung > 0) {
+            if (local_hung > 0) {
+                log_warning(tt::LogTest, "Hang detected: {} endpoint(s) confirmed hung on this host", local_hung);
+            } else {
+                log_warning(
+                    tt::LogTest,
+                    "Hang detected on a peer rank ({} total endpoint(s) confirmed hung); participating in report "
+                    "exchange",
+                    global_hung);
+            }
+
+            // Phase 4: MPI exchange and report generation. Every rank must call
+            // exchange_hung_records (it gathers per-rank counts internally); ranks
+            // with zero local records simply contribute nothing.
+            auto all_wire_records = monitor.exchange_hung_records(flow_descriptors_);
+
+            if (my_rank == 0 && !all_wire_records.empty()) {
+                monitor.write_summary_report(all_wire_records, flow_descriptors_);
+                monitor.write_detailed_report(all_wire_records, flow_descriptors_);
+            }
+
+            if (progress_config_.wait_on_hang) {
+                log_warning(tt::LogTest, "--wait-on-hang is set: blocking indefinitely. Ctrl-C to abort.");
+                while (true) {
+                    std::this_thread::sleep_for(std::chrono::seconds(60));
+                }
+            }
+
+            TT_THROW(
+                "Test aborted: {} endpoint(s) confirmed hung cluster-wide ({} on this host). "
+                "Reports written to: {}  {}",
+                global_hung,
+                local_hung,
+                monitor.get_summary_report_path().string(),
+                monitor.get_detail_report_path().string());
+        }
+
+        log_info(tt::LogTest, "All endpoints complete, waiting for programs to finish...");
+    } else {
+        log_info(
+            tt::LogTest,
+            "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
+            progress_config_.poll_interval_seconds,
+            progress_config_.hung_threshold_seconds);
+
+        bool completed = monitor.poll_until_complete();
+
+        if (!completed) {
+            last_test_hung_ = true;
+            has_test_failures_ = true;
+            log_error(tt::LogTest, "Skipping remaining steps for this test due to hang.");
+            return;
+        }
+        log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
     }
 
-    log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
     fixture_->wait_for_programs();
 }
 
@@ -259,6 +332,7 @@ void TestContext::reset_devices() {
     test_devices_.clear();
     device_global_sync_cores_.clear();
     device_local_sync_cores_.clear();
+    flow_descriptors_.clear();
     this->allocator_->reset();
 
     code_profiler_.reset();
@@ -647,6 +721,25 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
 
     uint32_t payload_buffer_size = receiver_memory_map_.get_payload_chunk_size();
 
+    // Build flow descriptor before local ownership checks so every host
+    // assigns the same deterministic flow_uid for cross-host collation.
+    std::vector<FabricNodeId> descriptor_dsts = dst_node_ids;
+    std::sort(descriptor_dsts.begin(), descriptor_dsts.end());
+
+    FlowUid flow_uid = static_cast<FlowUid>(flow_descriptors_.size());
+    flow_descriptors_.push_back(FlowDescriptor{
+        .src_node_id = src_node_id,
+        .src_logical_core = src_logical_core,
+        .dst_node_ids = std::move(descriptor_dsts),
+        .dst_logical_core = dst_logical_core,
+        .link_id = traffic_config.link_id,
+        .vc_id = traffic_config.vc_id,
+        .chip_send_type = traffic_config.parameters.chip_send_type,
+        .noc_send_type = traffic_config.parameters.noc_send_type,
+        .num_packets = traffic_config.parameters.num_packets,
+        .payload_size_bytes = traffic_config.parameters.payload_size_bytes,
+    });
+
     TestTrafficSenderConfig sender_config = {
         .parameters = traffic_config.parameters,
         .src_node_id = traffic_config.src_node_id,
@@ -660,7 +753,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .payload_buffer_size = payload_buffer_size,
         .link_id = traffic_config.link_id,
         .noc_id = traffic_config.noc_id,
-        .vc_id = traffic_config.vc_id};
+        .vc_id = traffic_config.vc_id,
+        .flow_uid = flow_uid};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,
@@ -668,7 +762,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .target_address = target_address,
         .atomic_inc_address = atomic_inc_address,
         .payload_buffer_size = payload_buffer_size,
-        .link_id = traffic_config.link_id};
+        .link_id = traffic_config.link_id,
+        .flow_uid = flow_uid};
 
     if (traffic_config.parameters.enable_flow_control) {
         TT_FATAL(
