@@ -11,6 +11,7 @@ target_sources(unit_tests_api_lib PRIVATE
     test_alignment_writes.cpp
     test_cb_pages.cpp
     test_pointer_size.cpp
+    test_semaphore_write.cpp
 )
 
 target_include_directories(

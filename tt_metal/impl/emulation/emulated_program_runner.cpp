@@ -126,6 +126,9 @@ thread_local uint8_t __emule_trisc_id = 0;
 thread_local uint32_t __emule_num_threads = 1;
 thread_local uint32_t __emule_my_thread_id = 0;
 
+thread_local uint32_t __emule_sem_l1_range_start = 0;
+thread_local uint32_t __emule_sem_l1_range_end = 0;
+
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
@@ -170,6 +173,13 @@ extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
     // Ensure pointer size is correct
     if (offset % 4 != 0) {
         fprintf(stderr, "[ASAN ERROR] Local L1 Alignment: Offset 0x%x must be 4-byte aligned for scalar access\n", offset);
+        abort();
+    }
+    if (__emule_sem_l1_range_end > 0 &&
+        offset >= __emule_sem_l1_range_start && offset < __emule_sem_l1_range_end) {
+        fprintf(stderr,
+                "[ASAN ERROR] Illegal Semaphore Access: Offset 0x%x is inside the reserved Semaphore region [0x%x, 0x%x)\n",
+                offset, __emule_sem_l1_range_start, __emule_sem_l1_range_end);
         abort();
     }
     return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
@@ -342,6 +352,8 @@ struct CoreSetup {
     uint8_t phys_y;
     std::vector<DFBAllocInfo> dfb_allocs;
     bool has_dfbs = false;
+    uint32_t sem_base;
+    uint32_t sem_size;
 };
 
 // Per-slot initialization data for a DFB tile-counter slot. wr_ptr and rd_ptr
@@ -1334,7 +1346,17 @@ static void setup_core_state(
         bool has_dfbs = !dfb_impls.empty();
         std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, dfb_impls);
 
-        core_setups.push_back({logical_core, core, &ki_list, phys_x, phys_y, std::move(dfb_allocs), has_dfbs});
+        uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
+        core_setups.push_back(
+            {logical_core,
+             core,
+             &ki_list,
+             phys_x,
+             phys_y,
+             std::move(dfb_allocs),
+             has_dfbs,
+             emule_sem_base,
+             sem_region_size});
     }
 }
 
@@ -1493,6 +1515,8 @@ static void launch_cores(
                     std::vector<std::exception_ptr> kernel_exceptions(cs.ki_list->size());
                     uint32_t lx = cs.logical_core.x;
                     uint32_t ly = cs.logical_core.y;
+                    uint32_t sem_base = cs.sem_base;
+                    uint32_t sem_size = cs.sem_size;
                     for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
                         KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
                         tt_emule::EmuleDFBInterface* dfb_array =
@@ -1509,6 +1533,8 @@ static void launch_cores(
                                               py,
                                               lx,
                                               ly,
+                                              sem_base,
+                                              sem_size,
                                               kidx,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
@@ -1530,6 +1556,8 @@ static void launch_cores(
                             my_y[1] = py;
                             __emule_logical_x = lx;
                             __emule_logical_y = ly;
+                            __emule_sem_l1_range_start = sem_base;
+                            __emule_sem_l1_range_end = sem_base + sem_size;
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
@@ -1559,6 +1587,8 @@ static void launch_cores(
                             __emule_dfbs = nullptr;
                             __emule_tc_array = nullptr;
                             __emule_core_map = nullptr;
+                            __emule_sem_l1_range_start = 0;
+                            __emule_sem_l1_range_end = 0;
                         });
                     }
 
