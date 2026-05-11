@@ -1,7 +1,8 @@
 # Capabilities: eltwise_chain (kernel-side helper library)
 
-> Last updated: 2026-05-08 by incremental-verifier (run7 refinement verification pass)
-> Branch: `astancov/eltwise_run7_refined` HEAD `3b0cc6026e8`
+> Last updated: 2026-05-11 by incremental-verifier (Type-1 sweep + Reg A/B/C verification pass)
+> Branch: `astancov/eltwise_run7_refined` HEAD `7060e1245a3`
+> Prior pass: 2026-05-08 (run7 refinement) at `3b0cc6026e8`
 
 This is a **kernel-side helper library**, not a user-facing TTNN op. The capabilities below document what kinds of chain shapes, element types, traits, and modes the helper supports as of the run7 refinement.
 
@@ -136,4 +137,50 @@ After v6 collapse to single `Index` template param on `BinaryFpu`/`BlockBinaryFp
 - **Architecture:** Wormhole_b0. Block-element `DEST_AUTO_LIMIT = 16` is hard-coded for Wormhole.
 - **Kernel build flag dependence:** `FP32_DEST_ACC_EN` required for any CARRY element with `EnableFp32DestAcc=true`. Compile-time `static_assert` rejects opt-in on kernels not built with the flag.
 - **Programming model:** modern dst-sync only (`tile_regs_acquire/commit/wait/release`).
-- **Test reach:** `tests/ttnn/unit_tests/kernel_lib/test_eltwise.py` — 453 passed / 7 skipped at HEAD `3b0cc6026e8`. Includes `test_optional_chain_element` parametrize for the U5 element.
+- **Test reach:** `tests/ttnn/unit_tests/kernel_lib/test_eltwise.py` — 453 passed / 7 skipped at HEAD `7060e1245a3` (preserved through Reg A + Reg C helper edits).
+
+---
+
+## Helper init-emission state (post Reg A + Reg C)
+
+### Reg A — bcast init pair (commit `be533cfbbf4`)
+
+The chain emits two distinct init patterns for bcast:
+
+| Element | Init form | Why |
+|---|---|---|
+| `BinaryFpu<...Bcast != None>` | `llk_math_eltwise_binary_init_with_operands<et, bt, FID>(CbA, CbB)` + `llk_unpack_AB_init<bt>(CbA, CbB)` (`eltwise_chain.inl:528-532`) | Short-init pair (math + unpack only) — D8-compliant. The `_with_operands` form reads operand TensorShape from CB metadata via `get_operand_tensor_shape`, avoiding the `DEFAULT_TENSOR_SHAPE` hang the non-operand form caused on softmax LARGE_H partial-tile shapes. |
+| `UnaryBcast<...>` | `unary_bcast_init<bt>(Cb, ocb)` (`eltwise_chain.inl:714`) | Full BIG init (hw_configure + pack_dest_init + sync_init). **Technically D8-violating** but required: `bcast_to` kernels (`compute_interleaved_*_bcast_to.cpp`) have no boot init at all — no `binary_op_init_common`, no `compute_kernel_hw_startup` — and rely on `UnaryBcast::init()` as their IMPLICIT BOOT. The redundant MMIO writes are harmless on Wormhole. |
+
+D8 grep gate remains clean — both inits are per-element LLK helpers, not the `compute_kernel_hw_startup` / `binary_op_init_common` / `mm_init` / `reduce_init` family.
+
+### Reg C — PackTile reconfig fold (commit `7ab7da6027c`)
+
+`hoisted_init_for_each` at `eltwise_chain.inl:1031-1045` no longer guards on `!is_pack_tile_op_v<ElemT>`. Pack elements now correctly fire `emit_pre_element_transitions` so `pack_reconfig_data_format(CbOut)` declared via `PackTile<...PackTileReconfig::Output>` actually emits on the hoisted (non-clash) chain path. Pack init() remains a no-op so no side-effects beyond the reconfig.
+
+Prior bug: chains without FPU-clash elements (no `BinaryFpu`/`UnaryBcast`/`DestReuseBinary`) inherited stale pack format from prior chain — affected `moreh_adam` T1.32/T1.33 (CopyTile+Power+PackTile chain) which dropped to 66F until the helper guard was removed.
+
+### D8 strict-grep state
+
+Helper-body emission of BIG inits remains: **1 site** (the intentional convenience wrapper at `eltwise_chain.inl:1254`). Verifier ran:
+
+```bash
+grep -nE 'init_common|compute_kernel_hw_startup|mm_init|reduce_init' \
+     ttnn/cpp/ttnn/kernel_lib/eltwise_{chain.hpp,chain.inl,block.hpp}
+```
+
+All hits are doxygen comment text or the `#include "compute_kernel_hw_startup.h"` directive — except the one wrapper call at line 1254. D8 invariant held through Reg A + Reg C helper edits.
+
+---
+
+## Known limitation (verifier-flagged, NOT addressed by Reg A/B/C)
+
+The chain helper is **DEST-format-correct** when the kernel-side caller opts in via per-element flags:
+
+- `CopyTileReconfig::Input` on `CopyTile`
+- `PackTileReconfig::Output` on `PackTile`
+- `EnableFp32DestAcc=true` (when kernel built with `FP32_DEST_ACC_EN`)
+
+If the migration drops these flags relative to the pre-migration raw shape (which used `copy_tile_init_with_dt` / `pack_tile_with_dt` for dynamic CB-format-driven reconfig), the `fp32_dest_acc_en=True` numerical path can produce `-inf` / overflow. The Type-1 sweep's `moreh_unary_chain`/`moreh_rexp_chain` templates (in `moreh_softmax_*_large.cpp`) and the `nll_loss_step2`/`nll_loss_backward` migrations exhibit this gap — see verification report for the full regression class.
+
+**Not a helper bug — a migration-side annotation gap.** The helper supports the correct path; migrations must explicitly opt in.
