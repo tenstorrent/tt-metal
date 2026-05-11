@@ -396,3 +396,121 @@ def tt_sampling_output_token_id(tt_tokens: ttnn.Tensor, batch_slot: int) -> int:
     """Read global token id for one batch row from ``SamplingGenerator.sample`` output (mirrors ``Generator`` prefill path)."""
     flat = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)
     return int(flat[batch_slot].item())
+
+
+def image_token_placeholder_positions(input_ids_1row: torch.Tensor, image_token_id: int) -> torch.LongTensor:
+    """Return indices ``[N]`` along the prompt where ``input_ids == image_token_id`` (single batch row)."""
+    if input_ids_1row.ndim != 1:
+        raise ValueError(f"Expected 1-D input_ids row, got {tuple(input_ids_1row.shape)}")
+    m = input_ids_1row == int(image_token_id)
+    return torch.nonzero(m, as_tuple=False).squeeze(-1).to(torch.long)
+
+
+def tt_multimodal_scatter_index_tt(mesh_device, positions_1d: torch.LongTensor, hidden_dim: int) -> ttnn.Tensor:
+    """Expand ``positions_1d [N]`` for ``ttnn.scatter`` along sequence dim: shape ``[1, 1, N, hidden_dim]``."""
+    n = int(positions_1d.numel())
+    if n < 1:
+        raise ValueError("No image_token_id placeholders in prompt input_ids.")
+    idx_host = positions_1d.reshape(1, 1, n, 1).expand(1, 1, n, hidden_dim).to(torch.int32).contiguous()
+    return ttnn.from_torch(
+        idx_host,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def tt_projected_image_rows_to_device(mesh_device, img_rows_bf16: torch.Tensor) -> ttnn.Tensor:
+    """``[N, H]`` bf16 → replicated ``[1, 1, N, H]`` TILE."""
+    if img_rows_bf16.ndim != 2:
+        raise ValueError(f"Expected img_rows [N, H], got {tuple(img_rows_bf16.shape)}")
+    tile = img_rows_bf16.unsqueeze(0).unsqueeze(0).contiguous()
+    return ttnn.from_torch(
+        tile,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def tt_pad_prompt_embeddings_suffix_tt(
+    mesh_device, pad_row_1d_bf16: torch.Tensor, pad_n: int, hidden_dim: int
+) -> ttnn.Tensor | None:
+    """Replicate ``pad_row_1d_bf16 [H]`` into ``[1, 1, pad_n, H]`` (TT concat suffix)."""
+    if pad_n <= 0:
+        return None
+    if pad_row_1d_bf16.ndim != 1 or int(pad_row_1d_bf16.numel()) != hidden_dim:
+        raise ValueError(f"pad_row must be [hidden_dim], got {tuple(pad_row_1d_bf16.shape)} vs dim {hidden_dim}")
+    blk = pad_row_1d_bf16.unsqueeze(0).expand(pad_n, hidden_dim).contiguous().reshape(1, 1, pad_n, hidden_dim)
+    return ttnn.from_torch(
+        blk,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def tt_forward_prefill_multimodal_scatter_merge_from_device_ids(
+    tt_lm: TtMinistral3Model,
+    ids_tt: ttnn.Tensor,
+    seq_len_keep: int,
+    img_patch_rows_tt: ttnn.Tensor,
+    scatter_idx_tt: ttnn.Tensor,
+    pad_row_bf16_cpu: torch.Tensor,
+    mesh_device,
+    model_args: ModelArgs,
+) -> ttnn.Tensor:
+    """
+    TT multimodal prompt: embed ids on device → ``ttnn.scatter`` image rows onto placeholders → concat pad embeddings
+    to TT-valid sequence length → ``ttnn.arange`` positions → ``forward_prefill_from_embeddings``.
+    """
+    hid = tt_lm.embed_tokens(ids_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    hid4 = ttnn.unsqueeze_to_4D(hid)
+    hid_work = ttnn.clone(hid4)
+    merged = ttnn.scatter(hid_work, dim=2, index=scatter_idx_tt, src=img_patch_rows_tt)
+    ttnn.deallocate(hid4)
+
+    target = tt_prefill_target_seqlen(seq_len_keep, int(model_args.n_kv_heads), int(model_args.cluster_shape[1]))
+    pad_n = target - seq_len_keep
+    H = int(model_args.dim)
+    pad_bf = pad_row_bf16_cpu.to(dtype=torch.bfloat16, device="cpu").contiguous().view(H)
+    pad_tail = tt_pad_prompt_embeddings_suffix_tt(mesh_device, pad_bf, pad_n, H)
+
+    full_emb = merged
+    if pad_tail is not None:
+        full_emb = ttnn.concat([merged, pad_tail], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(merged)
+        ttnn.deallocate(pad_tail)
+    try:
+        pos_tt = ttnn.reshape(
+            ttnn.arange(
+                0,
+                target,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+            ),
+            (1, 1, 1, target),
+        )
+        try:
+            return tt_lm.forward_prefill_from_embeddings(full_emb, None, pos_tt)
+        finally:
+            ttnn.deallocate(pos_tt)
+    finally:
+        ttnn.deallocate(full_emb)
+
+
+def tt_sequence_last_uint32_token_id(mesh_device, ids_tt: ttnn.Tensor, seq_len: int) -> int:
+    """Token id at index ``seq_len - 1`` from replicated ids ``[1,1,1,*]``."""
+    if seq_len < 1:
+        raise ValueError("seq_len must be >= 1")
+    tail = ttnn.slice(ids_tt, (0, 0, 0, seq_len - 1), (1, 1, 1, seq_len))
+    v = int(ttnn.to_torch(ttnn.get_device_tensors(tail)[0]).reshape(-1)[0].item())
+    ttnn.deallocate(tail)
+    return v
