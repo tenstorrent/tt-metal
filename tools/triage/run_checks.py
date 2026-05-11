@@ -187,7 +187,11 @@ def get_block_locations(
     if inspector_data is None or metal_device_id_mapping is None:
         for device in devices:
             for block_type in BLOCK_TYPES:
-                if block_type == "dram" and not device.is_blackhole():
+                if block_type == "active_eth":
+                    block_locations[device][block_type] = device.active_eth_block_locations
+                elif block_type == "idle_eth":
+                    block_locations[device][block_type] = device.idle_eth_block_locations
+                elif block_type == "dram" and not device.is_blackhole():
                     block_locations[device][block_type] = []
                 else:
                     block_locations[device][block_type] = device.get_block_locations(
