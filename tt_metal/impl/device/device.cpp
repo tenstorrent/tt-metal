@@ -1102,6 +1102,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // (inline) or launch_eth_cores_for_quiesce() (deferred) to deassert those RISCs after
     // writing the launch message.
     pending_phase25_force_reset_chans_.clear();
+    phase25_force_reset_rhc_chans_.clear();  // FIX AR-2 (#42429): reset at quiesce entry
     phase25_already_clean_chans_.clear();  // FIX P25-CLEAN (#42429)
     phase25_p25_clean_for_health_check_.clear();  // FIX QH-1 (#42429): reset at quiesce entry
 
@@ -1341,6 +1342,16 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         env_impl.get_cluster().assert_risc_reset_at_core(
                             tt_cxy_pair(this->id(), eth_virtual_core), tt::umd::RiscType::ALL);
                         pending_phase25_force_reset_chans_.insert(eth_chan_id);
+                        // FIX AR-2 (#42429): track channels that were actively running EDM
+                        // firmware (REMOTE_HANDSHAKE_COMPLETE) when force-reset.  These need a
+                        // longer FIX AS UMD-canary poll timeout (2000ms vs 500ms) — they were
+                        // not quiesced before reset, so the full UMD relay boot takes longer.
+                        using EDMStP25 = tt::tt_fabric::EDMStatus;
+                        if (status_buf[0] == static_cast<uint32_t>(EDMStP25::REMOTE_HANDSHAKE_COMPLETE) ||
+                            status_buf[0] == static_cast<uint32_t>(EDMStP25::LOCAL_HANDSHAKE_COMPLETE) ||
+                            status_buf[0] == static_cast<uint32_t>(EDMStP25::STARTED)) {
+                            phase25_force_reset_rhc_chans_.insert(eth_chan_id);
+                        }
                         log_warning(
                             tt::LogMetal,
                             "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
@@ -1596,6 +1607,12 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         // FIX AS (#42429): track which logical cores were successfully deasserted so we can
         // poll each one individually rather than sleeping a fixed 50ms.
         std::vector<CoreCoord> deasserted_lcs_inline;
+        // FIX AR-2 (#42429): flag set if any deasserted channel was running active EDM firmware
+        // (REMOTE_HANDSHAKE_COMPLETE / LOCAL_HANDSHAKE_COMPLETE / STARTED) when Phase 2.5 force-
+        // reset it.  Those channels need a 2000ms boot window — a hard reset of an actively-
+        // running ERISC takes longer to settle into UMD relay firmware than one that was already
+        // quiesced (500ms is enough for the quiesced case).
+        bool has_rhc_chans_inline = false;
         for (uint32_t p0_idx = 0; p0_idx < logical_cores_used.size(); p0_idx++) {
             if (hal.get_core_type(p0_idx) != CoreType::ETH) {
                 continue;
@@ -1655,6 +1672,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         }
                     }
                     deasserted_lcs_inline.push_back(lc0);
+                    // FIX AR-2 (#42429): if this channel was running active EDM firmware at
+                    // Phase 2.5 force-reset time, flag it so FIX AS uses an extended timeout.
+                    if (phase25_force_reset_rhc_chans_.count(eth_chan_0)) {
+                        has_rhc_chans_inline = true;
+                    }
                 } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
@@ -1678,12 +1700,24 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         // FIX AS (#42429): per-channel poll replacing blind 50ms sleep.
         // Wait for each deasserted ERISC to reach UMD relay canary (0x49706550) or TERMINATED
         // before writing launch messages — prevents race with .bss init zeroing edm_status.
+        // FIX AR-2 (#42429): channels that were running active EDM firmware (RHC/LHC/STARTED)
+        // at force-reset need 2000ms — a hard reset of an actively-running ERISC takes longer
+        // to settle into UMD relay firmware than a quiesced ERISC (for which 500ms is enough).
         constexpr uint32_t kForceResetPollIntervalMs_inline = 5;
-        constexpr uint32_t kForceResetPollTimeoutMs_inline = 500;
+        const uint32_t kForceResetPollTimeoutMs_inline = has_rhc_chans_inline ? 2000U : 500U;
         const uint32_t umd_relay_canary_p0 =
             static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
         constexpr uint32_t terminated_val_p0 = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
         const auto erisc_sync_addr_p0 = builder_ctx.get_fabric_router_sync_address_and_status().first;
+        if (has_rhc_chans_inline) {
+            log_warning(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} FIX AR-2: {} RHC channel(s) in "
+                "deassert set — using extended UMD-canary poll timeout {}ms (vs 500ms default)",
+                this->id(),
+                phase25_force_reset_rhc_chans_.size(),
+                kForceResetPollTimeoutMs_inline);
+        }
         uint32_t total_waited_ms_p0 = 0;
         bool all_ready_p0 = deasserted_lcs_inline.empty();
         while (!all_ready_p0 && total_waited_ms_p0 < kForceResetPollTimeoutMs_inline) {
@@ -2055,6 +2089,12 @@ void Device::launch_eth_cores_for_quiesce() {
     // FIX AR (#42429): Take local copy of Phase 2.5 force-reset channels for Pass-0 deassert.
     const auto p25_force_reset = std::move(pending_phase25_force_reset_chans_);
     pending_phase25_force_reset_chans_.clear();
+    // FIX AR-2 (#42429): take local snapshot of channels that were actively running EDM firmware
+    // (RHC/LHC/STARTED) when Phase 2.5 force-reset them.  FIX AS uses this to select an extended
+    // poll timeout (2000ms vs 500ms) — a hard reset of an actively-running ERISC needs more boot
+    // time than a quiesced one.
+    const auto p25_rhc_chans = std::move(phase25_force_reset_rhc_chans_);
+    phase25_force_reset_rhc_chans_.clear();
     // FIX P25-CLEAN (#42429): Take local copy of Phase 2.5 already-clean channels.
     // These will be skipped in Phase 3 launch — their peers are not quiescing.
     const auto p25_already_clean = std::move(phase25_already_clean_chans_);
@@ -2102,6 +2142,8 @@ void Device::launch_eth_cores_for_quiesce() {
     if (!p25_force_reset.empty()) {
         // Collect the logical cores that were successfully deasserted so we can poll them.
         std::vector<CoreCoord> deasserted_lcs;
+        // FIX AR-2 (#42429): flag set if any deasserted channel was running active EDM firmware.
+        bool has_rhc_chans = false;
         for (uint32_t p0_idx = 0; p0_idx < logical_cores_used.size(); p0_idx++) {
             if (hal.get_core_type(p0_idx) != CoreType::ETH) {
                 continue;
@@ -2155,6 +2197,10 @@ void Device::launch_eth_cores_for_quiesce() {
                         }
                     }
                     deasserted_lcs.push_back(lc0);
+                    // FIX AR-2 (#42429): flag if this channel was running active EDM firmware.
+                    if (p25_rhc_chans.count(eth_chan_0)) {
+                        has_rhc_chans = true;
+                    }
                 } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
@@ -2187,8 +2233,19 @@ void Device::launch_eth_cores_for_quiesce() {
         // TERMINATED (0xA4B4C4D4), up to kForceResetPollTimeoutMs. Channels that remain at 0x0
         // after the timeout are dead/non-booting; mark them in pending_quiesce_newly_dead_eth_chans_
         // so Phase 5 and subsequent quiesce operations skip them.
+        // FIX AR-2 (#42429): if any deasserted channel was running active EDM firmware at force-
+        // reset time, use 2000ms — hard resets of active ERISCs take longer to boot into UMD relay.
         constexpr uint32_t kForceResetPollIntervalMs = 5;
-        constexpr uint32_t kForceResetPollTimeoutMs = 500;
+        const uint32_t kForceResetPollTimeoutMs = has_rhc_chans ? 2000U : 500U;
+        if (has_rhc_chans) {
+            log_warning(
+                tt::LogMetal,
+                "launch_eth_cores_for_quiesce: Device {} FIX AR-2: {} RHC channel(s) in deassert "
+                "set — using extended UMD-canary poll timeout {}ms (vs 500ms default)",
+                this->id(),
+                p25_rhc_chans.size(),
+                kForceResetPollTimeoutMs);
+        }
         const uint32_t umd_relay_canary_poll =
             static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
         constexpr uint32_t terminated_val_poll = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);

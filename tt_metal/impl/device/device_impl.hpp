@@ -455,6 +455,13 @@ private:
     // FIX AI-2 (#42429): ETH channels that Phase 2.5 force-halted with assert_risc_reset(ALL).
     // Phase 3 / launch_eth_cores_for_quiesce() must deassert these after write_launch_msg.
     std::unordered_set<uint32_t> pending_phase25_force_reset_chans_;
+    // FIX AR-2 (#42429): subset of pending_phase25_force_reset_chans_ that were at
+    // REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) when Phase 2.5 timed out and force-reset them.
+    // EDM firmware was actively running on these channels (not quiesced), so after force-reset
+    // they need a full UMD relay boot cycle — potentially >500ms.  FIX AS must use an extended
+    // timeout (2000ms) for these channels to avoid incorrectly marking them newly_dead and
+    // cascading into relay_path_broken_ via FIX AT.
+    std::unordered_set<uint32_t> phase25_force_reset_rhc_chans_;
     // FIX P25-CLEAN (#42429): channels that Phase 2.5 found already TERMINATED
     // (status=0xa4b4c4d4 "already clean") — skip Phase 3 launch for these, as
     // their peers are not active in the current fabric/quiesce session.
