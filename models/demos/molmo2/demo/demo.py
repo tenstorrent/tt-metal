@@ -586,7 +586,9 @@ def run_demo(
         logger.info(f"\n=== USER {u} ===\nPROMPT:   {prompt_text[:120]}\nRESPONSE: {_format_response(text).strip()}\n")
 
     # Overlay coordinates on source images / video frames if any response has coords
-    output_dir = Path(input_prompts_path).parent / "annotated_outputs"
+    # One sub-folder per demo so outputs don't overwrite each other
+    stem = Path(input_prompts_path).stem  # e.g. "point_video_demo"
+    output_dir = Path(input_prompts_path).parent / "annotated_outputs" / stem
     save_annotated_outputs(prompts, responses, output_dir)
 
     return responses
