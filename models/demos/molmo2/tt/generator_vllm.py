@@ -191,14 +191,9 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         logger.info(f"Pre-compiling prefill JIT kernels for buckets {PREFILL_BUCKETS}...")
         model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
 
-        # NOTE: warmup_all_buckets(use_trace=True) is intentionally SKIPPED here.
-        # Prefill traces (is_causal=True) + decode trace cannot coexist with
-        # bidirectional image/video eager prefill — _capture_prefill_trace docstring:
-        # "is_causal=False with explicit mask SDPA cannot coexist with the decode trace".
-        # With prefill traces captured, image prefills (S≤4096, bidirectional) hang
-        # permanently after the decode trace is also captured. Skipping prefill traces
-        # avoids this conflict. The text-only decoder path still benefits from the
-        # JIT compilation in warmup_all_buckets(use_trace=False) above.
+        # Capture prefill traces for ALL buckets — matches demo/test_10_videos.py step 2.
+        logger.info("Capturing prefill traces (all buckets)...")
+        model.warmup_all_buckets(use_trace=True)
 
         # After warmup_all_buckets, KV cache is filled by the last bucket's forward_prefill.
         # Run one decode step to JIT-compile the decode kernel.
@@ -207,45 +202,63 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
 
-        # Vision-integrated prefill: warms the ttnn.add delta-injection path used by
-        # forward_prefill when pixel_values is not None (not covered by text-only warmup).
-        #
-        # Two passes required:
-        #   1. Video pass  (k_pool=9, n_pooled=81)   — 81 image tokens, matches video frames
-        #   2. Image pass  (k_pool=4, n_pooled=392)  — 392 image tokens = 2 crops × 196
-        #      The mask pattern difference (81 vs 392 nonzero token_type_ids) triggers a
-        #      separate JIT compile of the decoder. Without this, the first image request
-        #      hits a 6-7s JIT stall that causes a TT Metal dispatch timeout.
-        for _pass_name, _k_pool, _n_pooled_per_crop, _n_crops_warmup in [
-            ("video", 9, 81, 8),  # video: k_pool=9, 81 pooled/frame, 8 frames/chunk
-            ("image", 4, 196, 2),  # image: k_pool=4, 196 pooled/crop, 2 crops (typical)
-        ]:
-            _n_pooled = _n_pooled_per_crop * _n_crops_warmup
-            _n_patches = 729
-            _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max ViT batch)
-            _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
-            logger.info(f"Pre-compiling vision-integrated prefill ({_pass_name}, n_pooled={_n_pooled})...")
-            for _S_warmup in PREFILL_BUCKETS:
-                if _S_warmup < _n_pooled:
-                    continue
-                _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
-                _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
-                _dummy_tti = None
-                if _S_warmup <= 8192:
-                    _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
-                    _dummy_tti[0, :_n_pooled] = 1
-                logger.info(f"  {_pass_name} vision-integrated prefill bucket {_S_warmup}...")
-                _ = model.forward_prefill(
-                    input_ids=_dummy_ids,
-                    pixel_values=_dummy_pv,
-                    pooled_patches_idx=_dummy_pool_idx,
-                    token_type_ids=_dummy_tti,
-                    user_id=0,
-                )
+        # VIDEO vision-integrated prefill only — warms ttnn.add delta path for video.
+        # NOTE: image vision-integrated prefill is intentionally deferred to AFTER the
+        # decode trace capture (see below). Running forward_prefill(pixel_values, k_pool=4)
+        # BEFORE the decode trace causes subsequent image inference to hang permanently.
+        # The demo (test_10_videos.py) works because it never calls forward_prefill with
+        # pixel_values during warmup — only during actual test runs AFTER decode trace.
+        _n_patches = 729
+        _k_pool, _n_pooled = 9, 81  # video: k_pool=9, 81 pooled/frame
+        _dummy_pv = torch.zeros(1, 8, _n_patches, 588)
+        _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
+        logger.info(f"Pre-compiling video vision-integrated prefill (n_pooled={_n_pooled})...")
+        for _S_warmup in PREFILL_BUCKETS:
+            if _S_warmup < _n_pooled:
+                continue
+            _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
+            _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
+            _dummy_tti = None
+            if _S_warmup <= 8192:
+                _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
+                _dummy_tti[0, :_n_pooled] = 1
+            logger.info(f"  video vision-integrated prefill bucket {_S_warmup}...")
+            _ = model.forward_prefill(
+                input_ids=_dummy_ids,
+                pixel_values=_dummy_pv,
+                pooled_patches_idx=_dummy_pool_idx,
+                token_type_ids=_dummy_tti,
+                user_id=0,
+            )
 
         # Capture decode trace — matches demo step 4.
         logger.info("Capturing decode trace (matches demo warmup step 4)...")
         model.warmup_decode_trace()
+
+        # IMAGE vision-integrated prefill — must run AFTER decode trace capture.
+        # Reason: running bidirectional forward_prefill(k_pool=4, S=512) before the
+        # decode trace causes subsequent image inference to hang (see comment above).
+        # Running it after the decode trace (as in the demo's test_10_videos.py) is safe.
+        _k_pool_img, _n_pooled_img = 4, 392  # image: k_pool=4, 196 pooled/crop × 2 crops
+        _dummy_pool_idx_img = torch.zeros(1, _n_pooled_img, _k_pool_img, dtype=torch.long)
+        logger.info(f"Pre-compiling image vision-integrated prefill (n_pooled={_n_pooled_img}, after decode trace)...")
+        for _S_warmup in PREFILL_BUCKETS:
+            if _S_warmup < _n_pooled_img:
+                continue
+            _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
+            _dummy_ids[0, :_n_pooled_img] = cfg.image_patch_id
+            _dummy_tti = None
+            if _S_warmup <= 8192:
+                _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
+                _dummy_tti[0, :_n_pooled_img] = 1
+            logger.info(f"  image vision-integrated prefill bucket {_S_warmup}...")
+            _ = model.forward_prefill(
+                input_ids=_dummy_ids,
+                pixel_values=_dummy_pv,
+                pooled_patches_idx=_dummy_pool_idx_img,
+                token_type_ids=_dummy_tti,
+                user_id=0,
+            )
         logger.info("JIT warmup complete — server ready to serve")
 
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)

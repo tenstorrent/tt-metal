@@ -528,52 +528,40 @@ class TtMolmo2Model(LightweightModule):
     def warmup_vision_compile(self) -> None:
         """Pre-compile all vision (ViT + pooling + projector) JIT kernels.
 
-        The pooling uses ttnn.embedding with a lookup table of shape
-        [n_crops * n_patches, feat_dim] — a different shape for each unique
-        n_crops value.  TTNN compiles a separate kernel for each shape, so we
-        must run warmup at all n_crops multiples expected at inference time.
+        N_pooled is now padded to PREFILL_BUCKET values in _run_chunked_ttnn_pooling,
+        so we only need to warm up once per PREFILL_BUCKET value — same principle as
+        padding seq_len to bucket sizes for the decoder. This replaces the previous
+        approach of iterating over all possible n_crops values (55 iterations).
 
-        n_crops grows in steps of _MAX_VIT_BATCH=8 (crops per ViT chunk).
-        The ViT encoder kernel is the same for all multiples, so ViT compiles
-        only on the first call.  Only the pooling embedding table shape differs.
-
-        We compile up to max_crops derived from max_seq_len:
-          max_frames ≈ max_seq_len / 83  (81 pooled patches + ~2 frame markers)
-          max_crops  = max_frames (1 crop per frame)
-        This covers all video lengths the model might see at inference time.
+        One warmup call per PREFILL_BUCKET covers all video/image lengths that map
+        to that bucket, since the pooling ops only see the padded N_pooled value.
         """
         N_PATCHES = 729
         _MAX_VIT_BATCH = 8
-        N_PATCHES_PER_FRAME_TOK = 83  # 81 pooled + ~2 frame-marker tokens
-
-        # Derive max crops from the model's max sequence length.
-        max_crops = max(
-            _MAX_VIT_BATCH,
-            (self.configuration.max_seq_len // N_PATCHES_PER_FRAME_TOK // _MAX_VIT_BATCH) * _MAX_VIT_BATCH,
-        )
 
         # ---- Video: k_pool=9 (3×3) ----
-        # _run_chunked_ttnn_pooling now pads feat_2d to multiples of 8*729=5832 rows,
-        # so unique embedding table shapes = {5832, 11664, ..., max_crops*729-aligned}.
-        # Compile all of them here so no new JIT happens at inference time.
+        # N_pooled is bucketed to PREFILL_BUCKETS in _run_chunked_ttnn_pooling,
+        # so we warm up once per bucket — same as prefill seq_len bucketing.
         K_POOL_VIDEO = 9
-        n_pooled_video = self._POOL_CHUNK_WINDOWS
-        print(f"[vision warmup] video k_pool=9, compiling all table sizes up to {max_crops} crops...", flush=True)
-        for n_crops_w in range(_MAX_VIT_BATCH, max_crops + 1, _MAX_VIT_BATCH):
-            # Only run the full ViT for the first iteration (compiles ViT kernels);
-            # subsequent iterations only need to hit the pooling embedding kernel.
-            dummy_pv = torch.zeros(1, n_crops_w, N_PATCHES, 588)
-            dummy_idx = torch.zeros(1, n_pooled_video, K_POOL_VIDEO, dtype=torch.long)
+        dummy_pv = torch.zeros(1, _MAX_VIT_BATCH, N_PATCHES, 588)
+        print(
+            f"[vision warmup] video k_pool=9, N_pooled buckets {PREFILL_BUCKETS}...",
+            flush=True,
+        )
+        for n_pooled_bucket in PREFILL_BUCKETS:
+            dummy_idx = torch.zeros(1, n_pooled_bucket, K_POOL_VIDEO, dtype=torch.long)
             _ = self.run_vision_backbone(dummy_pv, dummy_idx)
         print("[vision warmup] video done", flush=True)
 
-        # ---- Image: k_pool=4 (2×2) — single image = 1 crop ----
+        # ---- Image: k_pool=4 (2×2) ----
         K_POOL_IMAGE = 4
-        n_pooled_image = self._POOL_CHUNK_WINDOWS
-        print(f"[vision warmup] image k_pool=4, N_pooled={n_pooled_image} ...", flush=True)
-        dummy_pv = torch.zeros(1, _MAX_VIT_BATCH, N_PATCHES, 588)
-        dummy_idx = torch.zeros(1, n_pooled_image, K_POOL_IMAGE, dtype=torch.long)
-        _ = self.run_vision_backbone(dummy_pv, dummy_idx)
+        print(
+            f"[vision warmup] image k_pool=4, N_pooled buckets {PREFILL_BUCKETS}...",
+            flush=True,
+        )
+        for n_pooled_bucket in PREFILL_BUCKETS:
+            dummy_idx = torch.zeros(1, n_pooled_bucket, K_POOL_IMAGE, dtype=torch.long)
+            _ = self.run_vision_backbone(dummy_pv, dummy_idx)
         print("[vision warmup] image done", flush=True)
 
         print("[vision warmup] done", flush=True)
@@ -767,14 +755,25 @@ class TtMolmo2Model(LightweightModule):
         then processes pooling windows in chunks of _POOL_CHUNK_WINDOWS to keep
         DRAM peak manageable at any video length.
 
+        N_pooled is padded to the next PREFILL_BUCKET value so that TTNN only
+        compiles a fixed set of kernel variants — same principle as padding seq_len
+        to bucket sizes for the prefill decoder. Without this, every unique video
+        length triggers a new JIT compile (~6-7s per new N_pooled value).
+
         Key correctness properties:
           - uint32 indices: max index for 384 frames = 280k >> bfloat16 safe limit ~256
           - ROW_MAJOR reshape before attn-mask build: avoids tile-padding artefacts
             when k_pool (e.g. 9 or 4) is not a multiple of tile size 32
         """
         B, n_crops, n_patches, feat_dim = vit_cpu.shape
-        N_pooled = pooled_patches_idx.shape[1]
+        N_pooled_real = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
+
+        # Pad N_pooled to the next PREFILL_BUCKET so TTNN reuses compiled kernels.
+        N_pooled = get_padded_prefill_len(N_pooled_real)
+        if N_pooled > N_pooled_real:
+            pad = torch.full((B, N_pooled - N_pooled_real, k_pool), -1, dtype=pooled_patches_idx.dtype)
+            pooled_patches_idx = torch.cat([pooled_patches_idx, pad], dim=1)
         mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
         # H2D: full feature table as 2D ROW_MAJOR embedding lookup table.
@@ -885,7 +884,8 @@ class TtMolmo2Model(LightweightModule):
 
         ttnn.deallocate(feat_tt)
         pooled_all = torch.cat(all_chunks, dim=0).unsqueeze(0)  # [1, N_pooled, 1152]
-        return pooled_all
+        # Slice back to real N_pooled (discard the padding added for bucketing)
+        return pooled_all[:, :N_pooled_real, :]
 
     def run_vision_backbone(
         self,
