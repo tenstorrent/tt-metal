@@ -1191,8 +1191,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     const bool use_sat_engine =
         topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global);
 
-    // Kissat forbids kissat_add after kissat_solve; enumerate models with a fresh solver + full re-encode per blocking
-    // step (topology_sat_search_n). When SAT is requested (Auto→SAT or Sat), use that path for every max_solutions.
+    // CaDiCaL is incremental: topology_sat_search_n keeps one solver, encodes hard constraints once, then appends
+    // blocking clauses between solves. When SAT is requested (Auto→SAT or Sat), use that path for every max_solutions.
     if (use_sat_engine) {
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
         sat_engine.search_n(

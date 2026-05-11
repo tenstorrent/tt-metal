@@ -606,8 +606,9 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
  * problem space is exhausted. Each returned MappingResult is individually validated.
  *
  * When TopologyMappingSolverEngine::Sat (or Auto when it selects SAT) is in use, every enumeration — including
- * max_solutions > 1 and solve_topology_mapping_all — uses Kissat with a full CNF re-encode per blocking clause
- * (see topology_sat_search_n). DFS is used only when the engine resolves to DFS.
+ * max_solutions > 1 and solve_topology_mapping_all — uses CaDiCaL incrementally: hard constraints are encoded once,
+ * then blocking clauses are appended between solves (see topology_sat_search_n). DFS is used only when the engine
+ * resolves to DFS.
  *
  * @param target_graph The target (sub-)graph pattern to embed
  * @param global_graph The host graph to embed into
