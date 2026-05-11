@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-This is the modified version of the vision_attention for the Mistral-Small-3.1-24B-Instruct-2503 model.
-We introduced the `apply_rotary_pos_emb_vision_tt` function to llama_image_attention to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+Modified vision attention for Mistral-Small / Pixtral-class checkpoints.
+Uses ``apply_rotary_pos_emb_vision_tt`` for Devstral-compatible RoPE.
 """
 
 import torch
@@ -64,30 +64,20 @@ class TtMistralImageAttention(LightweightModule):
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
-        self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
         self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
         self.configuration = configuration
 
         self.model_config = configuration.get_model_config()
-
-        if configuration.dummy_weights or (weight_cache_path is None):
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}{name}")
 
         wq_str = f"{state_dict_prefix}wq.weight"
         wk_str = f"{state_dict_prefix}wk.weight"
         wv_str = f"{state_dict_prefix}wv.weight"
         wo_str = f"{state_dict_prefix}wo.weight"
 
-        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % configuration.num_devices == 0
         assert self.n_kv_heads % configuration.num_devices == 0
 
-        # Pad head_dim to multiple of 32
         def pad_head_dim(weight, heads_out=True):
-            # Pad head dim to multiple of 32
-            # heads_out means that the output dim of this weight contains heads.
             dim = weight.shape[1]
             assert weight.shape[0] == dim
             padded_head_dim = nearest_32(self.head_dim)
@@ -116,21 +106,9 @@ class TtMistralImageAttention(LightweightModule):
                 [
                     torch.concat(
                         [
-                            torch.transpose(
-                                wq_chunked[i],
-                                -2,
-                                -1,
-                            ),
-                            torch.transpose(
-                                wk_chunked[i],
-                                -2,
-                                -1,
-                            ),
-                            torch.transpose(
-                                wv_chunked[i],
-                                -2,
-                                -1,
-                            ),
+                            torch.transpose(wq_chunked[i], -2, -1),
+                            torch.transpose(wk_chunked[i], -2, -1),
+                            torch.transpose(wv_chunked[i], -2, -1),
                         ],
                         dim=-1,
                     )
@@ -146,15 +124,11 @@ class TtMistralImageAttention(LightweightModule):
         )
 
         self.wo = ttnn.as_tensor(
-            torch.transpose(
-                wo_padded,
-                -2,
-                -1,
-            ),
+            torch.transpose(wo_padded, -2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
 
@@ -173,13 +147,12 @@ class TtMistralImageAttention(LightweightModule):
             self.wqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
         if seq_len > MAX_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        # split qkv into heads
         (
             q_heads_1QSD,
             k_heads_1KSD,
@@ -196,7 +169,6 @@ class TtMistralImageAttention(LightweightModule):
             cos, sin = position_embeddings
             q_heads_1QSD, k_heads_1KSD = apply_rotary_pos_emb_vision_tt(q_heads_1QSD, k_heads_1KSD, cos, sin)
         ttnn.deallocate(xqkv_fused)
-        # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
         )
@@ -209,28 +181,23 @@ class TtMistralImageAttention(LightweightModule):
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
         )
-        # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD)
         ttnn.deallocate(k_heads_1KSD)
         ttnn.deallocate(v_heads_1VSD)
 
-        ###
-        # Output matmul
-        ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # reshaping long sequence to matmul fit on device
         if seq_len > MAX_MM_SEQ_LEN:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
@@ -239,10 +206,7 @@ class TtMistralImageAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # All reduce
-        if self.num_devices > 1:  # replace with reduce_scatter and all_gather
-            # TODO: 26411
-            # Remove this blackhole condition once fabric CCLs are working on blackhole
+        if self.num_devices > 1:
             if is_blackhole():
                 dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
             else:
@@ -262,8 +226,9 @@ class TtMistralImageAttention(LightweightModule):
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
-            # slicing the required sequence length
             dense_out_reduced = dense_out_reduced[:, :, : dense_out_gathered.shape[-2], :]
             return dense_out_reduced
-        else:
-            return output_11SH
+        return output_11SH
+
+
+__all__ = ["TtMistralImageAttention", "apply_rotary_pos_emb_vision_tt", "rotate_half"]
