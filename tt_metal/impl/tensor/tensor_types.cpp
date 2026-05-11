@@ -112,7 +112,7 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
     }
 }
 
-uint32_t tile_size(const DataType& dtype) {
+uint32_t tile_size(DataType dtype) {
     auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
     return tt::tile_size(output_data_format);
 }
