@@ -605,9 +605,9 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
  * collecting distinct solutions until either max_solutions mappings have been found or the
  * problem space is exhausted. Each returned MappingResult is individually validated.
  *
- * With TopologyMappingSolverEngine::Sat and max_solutions > 1, enumeration uses DFS: Kissat cannot add clauses after a
- * solve, so SAT multi-model listing would otherwise require a full re-encode per solution. Single-solve (max_solutions
- * <= 1) still uses Kissat when SAT is selected.
+ * When TopologyMappingSolverEngine::Sat (or Auto when it selects SAT) is in use, every enumeration — including
+ * max_solutions > 1 and solve_topology_mapping_all — uses Kissat with a full CNF re-encode per blocking clause
+ * (see topology_sat_search_n). DFS is used only when the engine resolves to DFS.
  *
  * @param target_graph The target (sub-)graph pattern to embed
  * @param global_graph The host graph to embed into
@@ -617,6 +617,9 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
  * @param connection_validation_mode STRICT or RELAXED channel validation
  * @param quiet_mode Suppress verbose logging
  * @param solver_engine Which backend to use
+ * @param unique_shapes If true, count solutions by the set of global nodes used (order-independent); permutations on
+ *        the same global set share one slot. For SAT enumeration this is enforced with extra CNF clauses so the
+ *        solver skips entire automorphism classes per model. For DFS, equivalent pruning is applied where possible.
  * @return Vector of up to max_solutions valid MappingResults (may be empty if no solution exists)
  */
 template <typename TargetNode, typename GlobalNode>
@@ -627,7 +630,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     size_t max_solutions,
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
     bool quiet_mode = false,
-    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
+    bool unique_shapes = false);
 
 /**
  * @brief Find all distinct valid topology mappings up to the implementation enumeration limit.
@@ -640,6 +644,7 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
  * @param connection_validation_mode STRICT or RELAXED channel validation
  * @param quiet_mode Suppress verbose logging
  * @param solver_engine Which backend to use
+ * @param unique_shapes See solve_topology_mapping_n
  * @return Vector of all valid MappingResults found within that limit. If the result count equals the
  *         implementation enumeration cap, a warning is logged: more solutions may exist.
  */
@@ -650,7 +655,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
     bool quiet_mode = false,
-    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
+    bool unique_shapes = false);
 
 /**
  * @brief Find a valid topology mapping that differs from all previously found ones.
@@ -668,6 +674,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
  * @param connection_validation_mode STRICT or RELAXED channel validation
  * @param quiet_mode Suppress verbose logging
  * @param solver_engine Which backend to use
+ * @param unique_shapes If true, excluded_mappings block their global image sets (not just exact assignments); see
+ *        solve_topology_mapping_n
  * @return A new MappingResult not matching any excluded mapping, or success=false if exhausted
  */
 template <typename TargetNode, typename GlobalNode>
@@ -678,9 +686,23 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
     const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
     bool quiet_mode = false,
-    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
+    bool unique_shapes = false);
 
 namespace detail {
+
+/** Sorted list of global indices used by a mapping (image set key for unique_shapes). */
+inline std::vector<int> topology_mapping_shape_key(const std::vector<int>& mapping) {
+    std::vector<int> key;
+    key.reserve(mapping.size());
+    for (int g : mapping) {
+        if (g >= 0) {
+            key.push_back(g);
+        }
+    }
+    std::sort(key.begin(), key.end());
+    return key;
+}
 
 bool topology_mapping_should_use_sat_engine(
     TopologyMappingSolverEngine engine, size_t n_target = 0, size_t n_global = 0);
@@ -951,6 +973,8 @@ bool topology_sat_search_n(
     size_t max_solutions,
     std::vector<std::vector<int>>& all_mappings_out,
     bool quiet_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
     TopologySearchState& state);
 
 /**
@@ -1013,6 +1037,20 @@ public:
         const std::vector<int>& mapping,
         ConnectionValidationMode validation_mode);
 
+    /**
+     * @brief Generate and order candidates for a target node
+     *
+     * Filters by hard constraints first, then orders by cost (lower = better)
+     */
+    template <typename TargetNode, typename GlobalNode>
+    static std::vector<size_t> generate_ordered_candidates(
+        size_t target_idx,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        const std::vector<int>& mapping,
+        const std::vector<bool>& used,
+        ConnectionValidationMode validation_mode);
+
 private:
     /**
      * @brief Compute cost for selecting a target node (lower = better)
@@ -1045,20 +1083,6 @@ private:
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         const std::vector<int>& mapping,
-        ConnectionValidationMode validation_mode);
-
-    /**
-     * @brief Generate and order candidates for a target node
-     *
-     * Filters by hard constraints first, then orders by cost (lower = better)
-     */
-    template <typename TargetNode, typename GlobalNode>
-    static std::vector<size_t> generate_ordered_candidates(
-        size_t target_idx,
-        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-        const std::vector<int>& mapping,
-        const std::vector<bool>& used,
         ConnectionValidationMode validation_mode);
 
     // Cost weights (ensure hard >> soft >> runtime)
@@ -1206,6 +1230,9 @@ public:
      * @param max_solutions Maximum number of solutions to collect
      * @param all_mappings_out Output vector populated with each solution (mapping[target_idx] = global_idx)
      * @param quiet_mode If true, suppress verbose info-level log messages
+     * @param unique_shapes If true, solutions are unique by image set of global indices (see solve_topology_mapping_n)
+     * @param initial_forbidden_shape_keys Sorted shape keys (global index tuples) treated as already used for
+     *        uniqueness (e.g. exclusions from solve_topology_mapping_next)
      * @return true if at least one solution was found
      */
     bool search_n(
@@ -1214,7 +1241,9 @@ public:
         ConnectionValidationMode validation_mode,
         size_t max_solutions,
         std::vector<std::vector<int>>& all_mappings_out,
-        bool quiet_mode = false);
+        bool quiet_mode = false,
+        bool unique_shapes = false,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {});
 
     /**
      * @brief Get the current search state
@@ -1282,8 +1311,9 @@ public:
      * @brief Search for up to max_solutions distinct complete mappings using SAT with blocking clauses.
      *
      * After each SAT solve that returns SAT, the current assignment is decoded and pushed to
-     * all_mappings_out. A blocking clause is then added to forbid that exact assignment, and
-     * the solver is called again. This repeats until UNSAT or all_mappings_out.size() >= max_solutions.
+     * all_mappings_out. A blocking clause is then added — exact assignment, or a shape clause over the image set
+     * when unique_shapes is true — and the solver is called again. This repeats until UNSAT or
+     * all_mappings_out.size() >= max_solutions.
      *
      * @param graph_data Indexed graph data
      * @param constraint_data Indexed constraint data
@@ -1291,6 +1321,8 @@ public:
      * @param max_solutions Maximum number of solutions to collect
      * @param all_mappings_out Output vector populated with each solution (mapping[target_idx] = global_idx)
      * @param quiet_mode If true, suppress verbose info-level log messages
+     * @param unique_shapes If true, block entire image-set equivalence classes per model (see solve_topology_mapping_n)
+     * @param initial_forbidden_shape_keys Up-front shape keys to forbid (decoded with each fresh encoding)
      * @return true if at least one solution was found
      */
     bool search_n(
@@ -1299,7 +1331,9 @@ public:
         ConnectionValidationMode validation_mode,
         size_t max_solutions,
         std::vector<std::vector<int>>& all_mappings_out,
-        bool quiet_mode = false);
+        bool quiet_mode = false,
+        bool unique_shapes = false,
+        const std::vector<std::vector<int>>& initial_forbidden_shape_keys = {});
 
     const TopologySearchState& get_state() const { return state_; }
 

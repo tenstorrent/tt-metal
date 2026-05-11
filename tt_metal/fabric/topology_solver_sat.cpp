@@ -237,6 +237,47 @@ size_t topology_sat_preferred_greedy_lower_bound(
     return best;
 }
 
+// Returns false if the clause would be empty (no literal can be true to map outside shape_set).
+bool topology_sat_build_shape_blocking_clause(
+    const TopologySatHardEncoding& enc, const std::vector<int>& shape_sorted, std::vector<int>& clause_out) {
+    clause_out.clear();
+    const size_t nt = enc.assign_lit.size();
+    for (size_t t = 0; t < nt; ++t) {
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        for (size_t k = 0; k < globs.size(); ++k) {
+            const int g = static_cast<int>(globs[k]);
+            if (!std::binary_search(shape_sorted.begin(), shape_sorted.end(), g)) {
+                clause_out.push_back(lits[k]);
+            }
+        }
+    }
+    return !clause_out.empty();
+}
+
+void topology_sat_add_shape_clause_or_unsat(
+    TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& clause_working) {
+    if (clause_working.empty()) {
+        if (!enc.assign_lit.empty() && !enc.assign_lit[0].empty()) {
+            const int lit = enc.assign_lit[0][0];
+            solver.add(lit);
+            solver.add(0);
+            solver.add(-lit);
+            solver.add(0);
+        } else {
+            solver.add(1);
+            solver.add(0);
+            solver.add(-1);
+            solver.add(0);
+        }
+        return;
+    }
+    for (int lit : clause_working) {
+        solver.add(lit);
+    }
+    solver.add(0);
+}
+
 }  // namespace
 
 // ── Cardinality Encoding Primitives ──────────────────────────────────────────
@@ -1323,6 +1364,8 @@ bool topology_sat_search_n(
     size_t max_solutions,
     std::vector<std::vector<int>>& all_mappings_out,
     [[maybe_unused]] bool quiet_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
     TopologySearchState& state) {
     state = TopologySearchState{};
     state.mapping.assign(graph_data.n_target, -1);
@@ -1343,73 +1386,87 @@ bool topology_sat_search_n(
         return false;
     }
 
-    // Kissat forbids kissat_add after kissat_solve (no incremental clauses). Enumerating models therefore
-    // requires either a fresh solver + full re-encode per blocking clause (very slow) or delegating multi-solution
-    // enumeration to DFS from solve_topology_mapping_n. This function keeps the re-encode loop for callers that
-    // invoke it directly with max_solutions==1 only.
-    std::vector<std::vector<int>> blocking_clauses;
-
+    // CaDiCaL is incremental: encode hard constraints once on a single solver, then append blocking clauses after
+    // each satisfiable model instead of rebuilding CNF or replaying into a fresh solver each iteration.
+    TopologySatSolver solver;
     TopologySatHardEncoding enc;
-    {
-        TopologySatSolver probe;
-        if (!topology_sat_encode_hard_constraints(probe, graph_data, constraint_data, enc, validation_mode)) {
-            return false;
-        }
+    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+        return false;
+    }
+
+    for (const auto& shape_key : initial_forbidden_shape_keys) {
+        std::vector<int> forbid_clause;
+        topology_sat_build_shape_blocking_clause(enc, shape_key, forbid_clause);
+        topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
     }
 
     while (all_mappings_out.size() < max_solutions) {
-        TopologySatSolver solver;
-        TopologySatHardEncoding iter_enc;
-        if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, iter_enc, validation_mode)) {
-            break;
-        }
-
-        for (const auto& bc : blocking_clauses) {
-            for (int lit : bc) {
-                solver.add(lit);
-            }
-            solver.add(0);
-        }
-
         const int status = solver.solve();
         if (status != TopologySatSolver::kSat) {
             break;
         }
 
         std::vector<int> current_mapping;
-        if (!topology_sat_decode_hard_solution(solver, iter_enc, current_mapping)) {
+        if (!topology_sat_decode_hard_solution(solver, enc, current_mapping)) {
             break;
         }
-        all_mappings_out.push_back(current_mapping);
+        all_mappings_out.push_back(std::move(current_mapping));
 
-        const size_t nt = iter_enc.assign_lit.size();
-        std::vector<int> new_blocking;
-        new_blocking.reserve(nt);
-        bool block_ok = true;
-        for (size_t t = 0; t < nt && block_ok; ++t) {
-            const int chosen_global = current_mapping[t];
-            if (chosen_global < 0) {
-                block_ok = false;
-                break;
+        if (unique_shapes) {
+            const auto shape_key = topology_mapping_shape_key(all_mappings_out.back());
+            std::vector<int> shape_clause;
+            if (!topology_sat_build_shape_blocking_clause(enc, shape_key, shape_clause)) {
+                if (!enc.assign_lit.empty() && !enc.assign_lit[0].empty()) {
+                    const int lit = enc.assign_lit[0][0];
+                    solver.add(lit);
+                    solver.add(0);
+                    solver.add(-lit);
+                    solver.add(0);
+                } else {
+                    solver.add(1);
+                    solver.add(0);
+                    solver.add(-1);
+                    solver.add(0);
+                }
+            } else {
+                for (int lit : shape_clause) {
+                    solver.add(lit);
+                }
+                solver.add(0);
             }
-            const auto& globs = iter_enc.allowed_global_idx[t];
-            const auto& lits = iter_enc.assign_lit[t];
-            bool found_k = false;
-            for (size_t k = 0; k < globs.size(); ++k) {
-                if (static_cast<int>(globs[k]) == chosen_global) {
-                    new_blocking.push_back(-lits[k]);
-                    found_k = true;
+        } else {
+            const size_t nt = enc.assign_lit.size();
+            std::vector<int> new_blocking;
+            new_blocking.reserve(nt);
+            bool block_ok = true;
+            for (size_t t = 0; t < nt && block_ok; ++t) {
+                const int chosen_global = all_mappings_out.back()[t];
+                if (chosen_global < 0) {
+                    block_ok = false;
                     break;
                 }
+                const auto& globs = enc.allowed_global_idx[t];
+                const auto& lits = enc.assign_lit[t];
+                bool found_k = false;
+                for (size_t k = 0; k < globs.size(); ++k) {
+                    if (static_cast<int>(globs[k]) == chosen_global) {
+                        new_blocking.push_back(-lits[k]);
+                        found_k = true;
+                        break;
+                    }
+                }
+                if (!found_k) {
+                    block_ok = false;
+                }
             }
-            if (!found_k) {
-                block_ok = false;
+            if (!block_ok) {
+                break;
             }
+            for (int lit : new_blocking) {
+                solver.add(lit);
+            }
+            solver.add(0);
         }
-        if (!block_ok) {
-            break;
-        }
-        blocking_clauses.push_back(std::move(new_blocking));
     }
 
     if (!all_mappings_out.empty()) {

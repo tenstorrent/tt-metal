@@ -1172,7 +1172,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     size_t max_solutions,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
-    TopologyMappingSolverEngine solver_engine) {
+    TopologyMappingSolverEngine solver_engine,
+    bool unique_shapes) {
     using namespace tt::tt_fabric::detail;
 
     if (max_solutions == 0 || max_solutions > kTopologyMappingEnumerateSolutionsHardCap) {
@@ -1187,18 +1188,33 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     std::vector<std::vector<int>> raw_mappings;
     raw_mappings.reserve(max_solutions);
 
-    const bool use_sat_single =
-        topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global) &&
-        max_solutions <= 1;
+    const bool use_sat_engine =
+        topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global);
 
-    // Kissat forbids kissat_add after kissat_solve; listing multiple SAT models would require a full CNF re-encode per
-    // blocking clause (topology_sat_search_n). For max_solutions > 1, enumerate with DFS instead — same embedding rules.
-    if (use_sat_single) {
+    // Kissat forbids kissat_add after kissat_solve; enumerate models with a fresh solver + full re-encode per blocking
+    // step (topology_sat_search_n). When SAT is requested (Auto→SAT or Sat), use that path for every max_solutions.
+    if (use_sat_engine) {
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
-        sat_engine.search_n(graph_data, constraint_data, connection_validation_mode, max_solutions, raw_mappings, quiet_mode);
+        sat_engine.search_n(
+            graph_data,
+            constraint_data,
+            connection_validation_mode,
+            max_solutions,
+            raw_mappings,
+            quiet_mode,
+            unique_shapes,
+            {});
     } else {
         DFSSearchEngine<TargetNode, GlobalNode> dfs_engine;
-        dfs_engine.search_n(graph_data, constraint_data, connection_validation_mode, max_solutions, raw_mappings, quiet_mode);
+        dfs_engine.search_n(
+            graph_data,
+            constraint_data,
+            connection_validation_mode,
+            max_solutions,
+            raw_mappings,
+            quiet_mode,
+            unique_shapes,
+            {});
     }
 
     std::vector<MappingResult<TargetNode, GlobalNode>> results;
@@ -1232,7 +1248,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
-    TopologyMappingSolverEngine solver_engine) {
+    TopologyMappingSolverEngine solver_engine,
+    bool unique_shapes) {
     std::vector<MappingResult<TargetNode, GlobalNode>> results = solve_topology_mapping_n<TargetNode, GlobalNode>(
         target_graph,
         global_graph,
@@ -1240,7 +1257,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
         0,
         connection_validation_mode,
         quiet_mode,
-        solver_engine);
+        solver_engine,
+        unique_shapes);
     if (results.size() == kTopologyMappingEnumerateSolutionsHardCap) {
         log_warning(
             tt::LogFabric,
@@ -1263,7 +1281,8 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
     const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
-    TopologyMappingSolverEngine solver_engine) {
+    TopologyMappingSolverEngine solver_engine,
+    bool unique_shapes) {
     using namespace tt::tt_fabric::detail;
 
     constraints.set_quiet_mode(quiet_mode);
@@ -1297,14 +1316,30 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
         excluded_idx.push_back(to_index_mapping(em));
     }
 
+    std::set<std::vector<int>> excluded_shape_keys;
+    std::vector<std::vector<int>> initial_forbidden_shape_keys;
+    if (unique_shapes) {
+        for (const auto& row : excluded_idx) {
+            excluded_shape_keys.insert(topology_mapping_shape_key(row));
+        }
+        initial_forbidden_shape_keys.assign(excluded_shape_keys.begin(), excluded_shape_keys.end());
+    }
+    const size_t need =
+        unique_shapes ? (excluded_shape_keys.size() + 1) : (excluded_mappings.size() + 1);
+
     if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
-        // SAT engine: encode each excluded mapping as an upfront blocking clause, then solve once.
+        // SAT engine: excluded assignments (or their image sets) are enforced as CNF side constraints.
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
         std::vector<std::vector<int>> raw_mappings;
-        // We need to use search_n with the excluded mappings encoded as pre-blocking clauses.
-        // For simplicity: run search_n(excluded.size()+1) then filter.
-        const size_t need = excluded_mappings.size() + 1;
-        sat_engine.search_n(graph_data, constraint_data, connection_validation_mode, need, raw_mappings, quiet_mode);
+        sat_engine.search_n(
+            graph_data,
+            constraint_data,
+            connection_validation_mode,
+            need,
+            raw_mappings,
+            quiet_mode,
+            unique_shapes,
+            initial_forbidden_shape_keys);
 
         for (const auto& raw : raw_mappings) {
             bool is_excluded = false;
@@ -1313,6 +1348,10 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
                     is_excluded = true;
                     break;
                 }
+            }
+            if (!is_excluded && unique_shapes &&
+                excluded_shape_keys.count(topology_mapping_shape_key(raw)) != 0) {
+                is_excluded = true;
             }
             if (!is_excluded) {
                 TopologySearchState dummy_state;
@@ -1328,11 +1367,18 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
             }
         }
     } else {
-        // DFS engine: run search_n(excluded.size()+1) then return the first non-excluded result.
+        // DFS engine: run search_n then return the first non-excluded result.
         DFSSearchEngine<TargetNode, GlobalNode> dfs_engine;
         std::vector<std::vector<int>> raw_mappings;
-        const size_t need = excluded_mappings.size() + 1;
-        dfs_engine.search_n(graph_data, constraint_data, connection_validation_mode, need, raw_mappings, quiet_mode);
+        dfs_engine.search_n(
+            graph_data,
+            constraint_data,
+            connection_validation_mode,
+            need,
+            raw_mappings,
+            quiet_mode,
+            unique_shapes,
+            initial_forbidden_shape_keys);
 
         for (const auto& raw : raw_mappings) {
             bool is_excluded = false;
@@ -1341,6 +1387,10 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
                     is_excluded = true;
                     break;
                 }
+            }
+            if (!is_excluded && unique_shapes &&
+                excluded_shape_keys.count(topology_mapping_shape_key(raw)) != 0) {
+                is_excluded = true;
             }
             if (!is_excluded) {
                 TopologySearchState dummy_state;
@@ -2924,7 +2974,9 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
     ConnectionValidationMode validation_mode,
     size_t max_solutions,
     std::vector<std::vector<int>>& all_mappings_out,
-    bool quiet_mode) {
+    bool quiet_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys) {
     // Reset state to a clean slate; we do NOT use memoization here because a state that
     // leads to one valid solution is not "failed" — disabling failed_states caching lets
     // the DFS enumerate all paths.
@@ -2943,6 +2995,71 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
         return true;
     }
 
+    std::set<std::vector<int>> accepted_shapes;
+    for (const auto& k : initial_forbidden_shape_keys) {
+        accepted_shapes.insert(k);
+    }
+
+    auto is_sorted_subset = [](const std::vector<int>& small, const std::vector<int>& big_sorted) -> bool {
+        for (int x : small) {
+            if (!std::binary_search(big_sorted.begin(), big_sorted.end(), x)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto prune_locked_into_forbidden_shape = [&]() -> bool {
+        if (!unique_shapes || accepted_shapes.empty()) {
+            return false;
+        }
+        std::vector<int> assigned_globals;
+        for (int g : state_.mapping) {
+            if (g >= 0) {
+                assigned_globals.push_back(g);
+            }
+        }
+        std::sort(assigned_globals.begin(), assigned_globals.end());
+        std::vector<size_t> unassigned_targets;
+        unassigned_targets.reserve(graph_data.n_target);
+        for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+            if (state_.mapping[ti] < 0) {
+                unassigned_targets.push_back(ti);
+            }
+        }
+        if (unassigned_targets.empty()) {
+            return false;
+        }
+        for (const auto& F : accepted_shapes) {
+            if (F.size() != graph_data.n_target) {
+                continue;
+            }
+            if (!is_sorted_subset(assigned_globals, F)) {
+                continue;
+            }
+            bool locked = true;
+            for (size_t ti : unassigned_targets) {
+                auto cands = SearchHeuristic::generate_ordered_candidates(
+                    ti, graph_data, constraint_data, state_.mapping, state_.used, validation_mode);
+                bool has_outside_F = false;
+                for (size_t gidx : cands) {
+                    if (!std::binary_search(F.begin(), F.end(), static_cast<int>(gidx))) {
+                        has_outside_F = true;
+                        break;
+                    }
+                }
+                if (has_outside_F) {
+                    locked = false;
+                    break;
+                }
+            }
+            if (locked) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     // Inner recursive lambda that enumerates all solutions. It mirrors dfs_recursive but:
     //   1. At the base case it records the mapping and returns WITHOUT stopping.
     //   2. Memoization (failed_states) is intentionally not used.
@@ -2954,7 +3071,18 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
 
         // Base case: all targets assigned — record this solution.
         if (pos >= graph_data.n_target) {
+            if (unique_shapes) {
+                const auto key = topology_mapping_shape_key(state_.mapping);
+                if (accepted_shapes.count(key) != 0) {
+                    return;
+                }
+                accepted_shapes.insert(key);
+            }
             all_mappings_out.push_back(state_.mapping);
+            return;
+        }
+
+        if (prune_locked_into_forbidden_shape()) {
             return;
         }
 
@@ -3526,7 +3654,9 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
     ConnectionValidationMode validation_mode,
     size_t max_solutions,
     std::vector<std::vector<int>>& all_mappings_out,
-    bool quiet_mode) {
+    bool quiet_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys) {
     quiet_mode_ = quiet_mode;
     return topology_sat_search_n(
         TopologySatGraphView(graph_data),
@@ -3535,6 +3665,8 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
         max_solutions,
         all_mappings_out,
         quiet_mode,
+        unique_shapes,
+        initial_forbidden_shape_keys,
         state_);
 }
 
