@@ -11,6 +11,7 @@
 #include "ttnn/common/constants.hpp"
 #include <numeric>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -56,6 +57,7 @@ ttnn::Tensor conv3d(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::experimental::conv3d");
     // Conservative default blocking: minimal spatial blocks, smallest valid C_in_block.
     // C_in_block must satisfy: kernel_vol * C_in_block ≡ 0 (mod TILE_WIDTH) for weight tile
     // alignment, and C_in_block % l1_alignment == 0 for L1 alignment.

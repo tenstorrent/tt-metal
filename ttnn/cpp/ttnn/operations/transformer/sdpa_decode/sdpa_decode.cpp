@@ -13,6 +13,7 @@
 #include "device/sdpa_decode_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 using namespace tt::tt_metal;
 
 namespace {
@@ -53,6 +54,7 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<bool> share_cache) {
+    TT_OP_SCOPE("ttnn::transformer::scaled_dot_product_attention_decode");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -115,6 +117,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     std::optional<uint32_t> block_size_override,
     std::optional<uint32_t> num_kv_heads_override,
     std::optional<uint32_t> cache_position_modulo) {
+    TT_OP_SCOPE("ttnn::transformer::paged_scaled_dot_product_attention_decode");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -195,6 +198,7 @@ ttnn::Tensor flash_multi_latent_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::transformer::flash_multi_latent_attention_decode");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -263,6 +267,7 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::transformer::paged_flash_multi_latent_attention_decode");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();

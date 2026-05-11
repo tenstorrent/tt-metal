@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "unary.hpp"
-#include "device/unary_device_operation.hpp"
+#include "unary_ng.hpp"
+#include "device/unary_ng_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/graph/composite_trace.hpp"
 
-namespace ttnn::operations::unary::detail {
+namespace ttnn::operations::unary_ng::detail {
 
-Tensor unary_impl(
+Tensor unary_ng_impl(
     const Tensor& input_tensor,
     const std::vector<unary::EltwiseUnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config,
@@ -37,7 +37,7 @@ Tensor unary_impl(
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
 
-    return prim::unary(
+    return prim::unary_ng(
         input_tensor,
         op_chain,
         output_dtype,
@@ -49,7 +49,7 @@ Tensor unary_impl(
         sub_core_grids);
 }
 
-}  // namespace ttnn::operations::unary::detail
+}  // namespace ttnn::operations::unary_ng::detail
 
 namespace ttnn {
 
@@ -58,16 +58,18 @@ Tensor abs(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::abs");
     using namespace operations::unary;
     UnaryOpType op_type = UnaryOpType::ABS;
     if (input_tensor.dtype() == DataType::INT32) {
         op_type = UnaryOpType::ABS_INT32;
     }
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
+    TT_OP_SCOPE("ttnn::abs");
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
@@ -85,15 +87,16 @@ ComplexTensor reciprocal(const ComplexTensor& input, const MemoryConfig& output_
     return operations::complex::ComplexTensor({conj_re, conj_im});
 }
 
-// Helper macro: most basic ops just forward a single UnaryOpType to unary_impl.
-#define DEFINE_UNARY_OP(op_name, OP_TYPE)                    \
+// Helper macro: most basic ops just forward a single UnaryOpType to unary_ng_impl.
+#define DEFINE_UNARY_NG_OP(op_name, OP_TYPE)                 \
     Tensor op_name(                                          \
         const Tensor& input_tensor,                          \
         const std::optional<MemoryConfig>& memory_config,    \
         const std::optional<Tensor>& optional_output_tensor, \
         const std::optional<CoreRangeSet>& sub_core_grids) { \
+        TT_OP_SCOPE("ttnn::" #op_name, input_tensor);        \
         using namespace operations::unary;                   \
-        return operations::unary::detail::unary_impl(        \
+        return operations::unary_ng::detail::unary_ng_impl(  \
             input_tensor,                                    \
             {UnaryWithParam{UnaryOpType::OP_TYPE}},          \
             memory_config,                                   \
@@ -101,73 +104,73 @@ ComplexTensor reciprocal(const ComplexTensor& input, const MemoryConfig& output_
             sub_core_grids);                                 \
     }
 
-DEFINE_UNARY_OP(neg, NEG)
-DEFINE_UNARY_OP(acos, ACOS)
-DEFINE_UNARY_OP(asin, ASIN)
-DEFINE_UNARY_OP(asinh, ASINH)
-DEFINE_UNARY_OP(atan, ATAN)
-DEFINE_UNARY_OP(atanh, ATANH)
-DEFINE_UNARY_OP(cos, COS)
-DEFINE_UNARY_OP(acosh, ACOSH)
-DEFINE_UNARY_OP(cosh, COSH)
-DEFINE_UNARY_OP(sinh, SINH)
-DEFINE_UNARY_OP(erfinv, ERFINV)
-DEFINE_UNARY_OP(exp2, EXP2)
-DEFINE_UNARY_OP(expm1, EXPM1)
-DEFINE_UNARY_OP(gez, GEZ)
-DEFINE_UNARY_OP(gtz, GTZ)
-DEFINE_UNARY_OP(i0, I0)
-DEFINE_UNARY_OP(i1, I1)
-DEFINE_UNARY_OP(isfinite, ISFINITE)
-DEFINE_UNARY_OP(isinf, ISINF)
-DEFINE_UNARY_OP(isnan, ISNAN)
-DEFINE_UNARY_OP(isneginf, ISNEGINF)
-DEFINE_UNARY_OP(isposinf, ISPOSINF)
-DEFINE_UNARY_OP(lez, LEZ)
-DEFINE_UNARY_OP(logical_not, LOGICAL_NOT_UNARY)
-DEFINE_UNARY_OP(ltz, LTZ)
-DEFINE_UNARY_OP(nez, NEZ)
-DEFINE_UNARY_OP(reciprocal, RECIP)
-DEFINE_UNARY_OP(relu, RELU)
-DEFINE_UNARY_OP(relu6, RELU6)
-DEFINE_UNARY_OP(sign, SIGN)
-DEFINE_UNARY_OP(signbit, SIGNBIT)
-DEFINE_UNARY_OP(silu, SILU)
-DEFINE_UNARY_OP(sin, SIN)
-DEFINE_UNARY_OP(square, SQUARE)
-DEFINE_UNARY_OP(tan, TAN)
-DEFINE_UNARY_OP(tiled_prod, TILED_PROD)
-DEFINE_UNARY_OP(bitwise_not, BITWISE_NOT)
-DEFINE_UNARY_OP(alt_complex_rotate90, ALT_COMPLEX_ROTATE90)
-DEFINE_UNARY_OP(floor, FLOOR)
-DEFINE_UNARY_OP(ceil, CEIL)
-DEFINE_UNARY_OP(trunc, TRUNC)
-DEFINE_UNARY_OP(frac, FRAC)
-DEFINE_UNARY_OP(hardsigmoid, HARDSIGMOID)
-DEFINE_UNARY_OP(hardswish, HARDSWISH)
-DEFINE_UNARY_OP(softsign, SOFTSIGN)
-DEFINE_UNARY_OP(cbrt, CBRT)
-DEFINE_UNARY_OP(lgamma, LGAMMA)
-DEFINE_UNARY_OP(digamma, DIGAMMA)
-DEFINE_UNARY_OP(eqz, EQZ)
-DEFINE_UNARY_OP(hardmish, HARDMISH)
-DEFINE_UNARY_OP(identity, IDENTITY)
-DEFINE_UNARY_OP(log_sigmoid, LOGSIGMOID)
-DEFINE_UNARY_OP(swish, SILU)
-DEFINE_UNARY_OP(tanhshrink, TANHSHRINK)
-DEFINE_UNARY_OP(erfc, ERFC)
+DEFINE_UNARY_NG_OP(neg, NEG)
+DEFINE_UNARY_NG_OP(acos, ACOS)
+DEFINE_UNARY_NG_OP(asin, ASIN)
+DEFINE_UNARY_NG_OP(asinh, ASINH)
+DEFINE_UNARY_NG_OP(atan, ATAN)
+DEFINE_UNARY_NG_OP(atanh, ATANH)
+DEFINE_UNARY_NG_OP(cos, COS)
+DEFINE_UNARY_NG_OP(acosh, ACOSH)
+DEFINE_UNARY_NG_OP(cosh, COSH)
+DEFINE_UNARY_NG_OP(sinh, SINH)
+DEFINE_UNARY_NG_OP(erfinv, ERFINV)
+DEFINE_UNARY_NG_OP(exp2, EXP2)
+DEFINE_UNARY_NG_OP(expm1, EXPM1)
+DEFINE_UNARY_NG_OP(gez, GEZ)
+DEFINE_UNARY_NG_OP(gtz, GTZ)
+DEFINE_UNARY_NG_OP(i0, I0)
+DEFINE_UNARY_NG_OP(i1, I1)
+DEFINE_UNARY_NG_OP(isfinite, ISFINITE)
+DEFINE_UNARY_NG_OP(isinf, ISINF)
+DEFINE_UNARY_NG_OP(isnan, ISNAN)
+DEFINE_UNARY_NG_OP(isneginf, ISNEGINF)
+DEFINE_UNARY_NG_OP(isposinf, ISPOSINF)
+DEFINE_UNARY_NG_OP(lez, LEZ)
+DEFINE_UNARY_NG_OP(logical_not, LOGICAL_NOT_UNARY)
+DEFINE_UNARY_NG_OP(ltz, LTZ)
+DEFINE_UNARY_NG_OP(nez, NEZ)
+DEFINE_UNARY_NG_OP(reciprocal, RECIP)
+DEFINE_UNARY_NG_OP(relu, RELU)
+DEFINE_UNARY_NG_OP(relu6, RELU6)
+DEFINE_UNARY_NG_OP(sign, SIGN)
+DEFINE_UNARY_NG_OP(signbit, SIGNBIT)
+DEFINE_UNARY_NG_OP(silu, SILU)
+DEFINE_UNARY_NG_OP(sin, SIN)
+DEFINE_UNARY_NG_OP(square, SQUARE)
+DEFINE_UNARY_NG_OP(tan, TAN)
+DEFINE_UNARY_NG_OP(tiled_prod, TILED_PROD)
+DEFINE_UNARY_NG_OP(bitwise_not, BITWISE_NOT)
+DEFINE_UNARY_NG_OP(alt_complex_rotate90, ALT_COMPLEX_ROTATE90)
+DEFINE_UNARY_NG_OP(floor, FLOOR)
+DEFINE_UNARY_NG_OP(ceil, CEIL)
+DEFINE_UNARY_NG_OP(trunc, TRUNC)
+DEFINE_UNARY_NG_OP(frac, FRAC)
+DEFINE_UNARY_NG_OP(hardsigmoid, HARDSIGMOID)
+DEFINE_UNARY_NG_OP(hardswish, HARDSWISH)
+DEFINE_UNARY_NG_OP(softsign, SOFTSIGN)
+DEFINE_UNARY_NG_OP(cbrt, CBRT)
+DEFINE_UNARY_NG_OP(lgamma, LGAMMA)
+DEFINE_UNARY_NG_OP(digamma, DIGAMMA)
+DEFINE_UNARY_NG_OP(eqz, EQZ)
+DEFINE_UNARY_NG_OP(hardmish, HARDMISH)
+DEFINE_UNARY_NG_OP(identity, IDENTITY)
+DEFINE_UNARY_NG_OP(log_sigmoid, LOGSIGMOID)
+DEFINE_UNARY_NG_OP(swish, SILU)
+DEFINE_UNARY_NG_OP(tanhshrink, TANHSHRINK)
 
-#undef DEFINE_UNARY_OP
+#undef DEFINE_UNARY_NG_OP
 
-#define DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(op_name, OP_TYPE)                           \
+#define DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(op_name, OP_TYPE)                        \
     Tensor op_name(                                                                                \
         const Tensor& input_tensor,                                                                \
         bool fast_and_approximate_mode,                                                            \
         const std::optional<MemoryConfig>& memory_config,                                          \
         const std::optional<Tensor>& optional_output_tensor,                                       \
         const std::optional<CoreRangeSet>& sub_core_grids) {                                       \
+        TT_OP_SCOPE("ttnn::" #op_name, input_tensor);                                              \
         using namespace operations::unary;                                                         \
-        return operations::unary::detail::unary_impl(                                              \
+        return operations::unary_ng::detail::unary_ng_impl(                                        \
             input_tensor,                                                                          \
             {UnaryWithParam{UnaryOpType::OP_TYPE, static_cast<float>(fast_and_approximate_mode)}}, \
             memory_config,                                                                         \
@@ -175,28 +178,30 @@ DEFINE_UNARY_OP(erfc, ERFC)
             sub_core_grids);                                                                       \
     }
 
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT)
+DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
 
-#undef DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE
+#undef DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE
 
-#define DEFINE_UNARY_OP_WITH_FLOAT_PARAM(op_name, OP_TYPE)                         \
+#define DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(op_name, OP_TYPE)                      \
     Tensor op_name(                                                                \
         const Tensor& input_tensor,                                                \
         float parameter,                                                           \
         const std::optional<MemoryConfig>& memory_config,                          \
         const std::optional<Tensor>& optional_output_tensor,                       \
         const std::optional<CoreRangeSet>& sub_core_grids) {                       \
+        TT_OP_SCOPE("ttnn::" #op_name, input_tensor);                              \
         using namespace operations::unary;                                         \
-        return operations::unary::detail::unary_impl(                              \
+        return operations::unary_ng::detail::unary_ng_impl(                        \
             input_tensor,                                                          \
             {UnaryWithParam{UnaryOpType::OP_TYPE, static_cast<float>(parameter)}}, \
             memory_config,                                                         \
@@ -204,22 +209,22 @@ DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
             sub_core_grids);                                                       \
     }
 
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(heaviside, HEAVISIDE)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(leaky_relu, LEAKY_RELU)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(relu_max, RELU_MAX)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(relu_min, RELU_MIN)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(unary_remainder, REMAINDER)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(celu, CELU)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(rpow, RPOW)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(unary_fmod, FMOD)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(prelu_sfpu, PRELU_SFPU)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(hardshrink, HARDSHRINK)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(elu, ELU)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(softshrink, SOFTSHRINK)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(heaviside, HEAVISIDE)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(leaky_relu, LEAKY_RELU)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(relu_max, RELU_MAX)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(relu_min, RELU_MIN)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(unary_remainder, REMAINDER)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(celu, CELU)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(rpow, RPOW)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(unary_fmod, FMOD)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(prelu_sfpu, PRELU_SFPU)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(hardshrink, HARDSHRINK)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(elu, ELU)
+DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(softshrink, SOFTSHRINK)
 
-#undef DEFINE_UNARY_OP_WITH_FLOAT_PARAM
+#undef DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM
 
-#define DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(op_name, OP_TYPE)                 \
+#define DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(op_name, OP_TYPE)              \
     Tensor op_name(                                                             \
         const Tensor& input_tensor,                                             \
         float parameter_a,                                                      \
@@ -227,8 +232,9 @@ DEFINE_UNARY_OP_WITH_FLOAT_PARAM(softshrink, SOFTSHRINK)
         const std::optional<MemoryConfig>& memory_config,                       \
         const std::optional<Tensor>& optional_output_tensor,                    \
         const std::optional<CoreRangeSet>& sub_core_grids) {                    \
+        TT_OP_SCOPE("ttnn::" #op_name, input_tensor);                           \
         using namespace operations::unary;                                      \
-        return operations::unary::detail::unary_impl(                           \
+        return operations::unary_ng::detail::unary_ng_impl(                     \
             input_tensor,                                                       \
             {UnaryWithParam{UnaryOpType::OP_TYPE, {parameter_a, parameter_b}}}, \
             memory_config,                                                      \
@@ -236,24 +242,25 @@ DEFINE_UNARY_OP_WITH_FLOAT_PARAM(softshrink, SOFTSHRINK)
             sub_core_grids);                                                    \
     }
 
-DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(threshold, THRESHOLD)
-DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(softplus, SOFTPLUS)
-DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(hardtanh, HARDTANH)
-DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(selu, SELU)
+DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(threshold, THRESHOLD)
+DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(softplus, SOFTPLUS)
+DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(hardtanh, HARDTANH)
+DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(selu, SELU)
 
-#undef DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS
+#undef DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS
 
-#define DEFINE_UNARY_OP_SCALAR_VARIANT(op_name, OP_TYPE)                    \
+#define DEFINE_UNARY_NG_OP_SCALAR_VARIANT(op_name, OP_TYPE)                 \
     Tensor op_name(                                                         \
         const Tensor& input_tensor,                                         \
         operations::unary::ScalarVariant parameter,                         \
         const std::optional<MemoryConfig>& memory_config,                   \
         const std::optional<Tensor>& optional_output_tensor,                \
         const std::optional<CoreRangeSet>& sub_core_grids) {                \
+        TT_OP_SCOPE("ttnn::" #op_name, input_tensor);                       \
         return std::visit(                                                  \
             [&](auto param) {                                               \
                 using namespace operations::unary;                          \
-                return operations::unary::detail::unary_impl(               \
+                return operations::unary_ng::detail::unary_ng_impl(         \
                     input_tensor,                                           \
                     {EltwiseUnaryWithParam{UnaryOpType::OP_TYPE, (param)}}, \
                     memory_config,                                          \
@@ -263,16 +270,16 @@ DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(selu, SELU)
             parameter);                                                     \
     }
 
-DEFINE_UNARY_OP_SCALAR_VARIANT(fill, FILL)
-DEFINE_UNARY_OP_SCALAR_VARIANT(power, POWER)
-DEFINE_UNARY_OP_SCALAR_VARIANT(gt_unary, UNARY_GT)
-DEFINE_UNARY_OP_SCALAR_VARIANT(lt_unary, UNARY_LT)
-DEFINE_UNARY_OP_SCALAR_VARIANT(ne_unary, UNARY_NE)
-DEFINE_UNARY_OP_SCALAR_VARIANT(eq_unary, UNARY_EQ)
-DEFINE_UNARY_OP_SCALAR_VARIANT(ge_unary, UNARY_GE)
-DEFINE_UNARY_OP_SCALAR_VARIANT(le_unary, UNARY_LE)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(fill, FILL)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(power, POWER)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(gt_unary, UNARY_GT)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(lt_unary, UNARY_LT)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(ne_unary, UNARY_NE)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(eq_unary, UNARY_EQ)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(ge_unary, UNARY_GE)
+DEFINE_UNARY_NG_OP_SCALAR_VARIANT(le_unary, UNARY_LE)
 
-#undef DEFINE_UNARY_OP_SCALAR_VARIANT
+#undef DEFINE_UNARY_NG_OP_SCALAR_VARIANT
 
 // -----------------------------------------------------------------------------
 // Ops with unique parameter signatures
@@ -285,8 +292,9 @@ Tensor xielu(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::xielu");
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input,
         {UnaryWithParam{UnaryOpType::XIELU, {alpha_p, alpha_n}}},
         memory_config,
@@ -301,7 +309,7 @@ Tensor round(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::ROUND, parameter.value_or(0)}},
         memory_config,
@@ -315,8 +323,9 @@ Tensor logit(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::logit");
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {UnaryWithParam{UnaryOpType::LOGIT, {eps.value_or(-1.0f)}}},
         memory_config,
@@ -340,6 +349,7 @@ Tensor deg2rad(
         {},
         {},
         std::nullopt,
+        std::nullopt,
         sub_core_grids);
 }
 
@@ -359,6 +369,7 @@ Tensor rad2deg(
         {},
         {},
         std::nullopt,
+        std::nullopt,
         sub_core_grids);
 }
 
@@ -370,7 +381,7 @@ Tensor clamp_tss(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {UnaryWithParam{UnaryOpType::CLAMP_TSS, {min_val, max_val}}},
         memory_config,
@@ -386,7 +397,7 @@ Tensor clamp_tss(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::CLAMP_TSS, {min_val, max_val}}},
         memory_config,
@@ -401,7 +412,7 @@ Tensor tanh(
     bool approx,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input,
         {UnaryWithParam{UnaryOpType::TANH, static_cast<float>(approx)}},
         memory_config,
@@ -432,7 +443,8 @@ Tensor where_tss(
         value_true,
         value_false);
 
-    return operations::unary::detail::unary_impl(input, {param}, memory_config, optional_output_tensor, sub_core_grids);
+    return operations::unary_ng::detail::unary_ng_impl(
+        input, {param}, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor bitcast(
@@ -441,6 +453,7 @@ Tensor bitcast(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::bitcast");
     using namespace operations::unary;
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
@@ -449,7 +462,7 @@ Tensor bitcast(
     }
     EltwiseUnaryWithParam bitcast_op(
         UnaryOpType::BITCAST, {static_cast<float>(input_tensor.dtype()), static_cast<float>(output_dtype)});
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor, {bitcast_op}, memory_config, optional_output_tensor, sub_core_grids);
 }
 
@@ -465,7 +478,7 @@ Tensor rdiv(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     uint32_t rounding_mode_value = !rounding_mode ? 0 : (*rounding_mode == "trunc" ? 1 : 2);
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {UnaryWithParam{UnaryOpType::RDIV, {value, rounding_mode_value}}},
         memory_config,
@@ -480,7 +493,7 @@ Tensor power_iterative(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::POWER_ITERATIVE, exponent}},
         memory_config,
@@ -495,6 +508,7 @@ Tensor sigmoid(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::sigmoid");
     using namespace operations::unary;
     std::vector<EltwiseUnaryWithParam> op_chain;
     switch (mode) {
@@ -511,7 +525,7 @@ Tensor sigmoid(
         case SigmoidMode::ACCURATE: [[fallthrough]];
         default: op_chain = {UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 0.0f})};
     }
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input, op_chain, memory_config, optional_output_tensor, sub_core_grids);
 }
 
@@ -521,6 +535,7 @@ Tensor sigmoid_accurate(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::sigmoid_accurate");
     using namespace operations::unary;
     auto op_chain =
         fast_and_approximate_mode
@@ -528,7 +543,7 @@ Tensor sigmoid_accurate(
                   EltwiseUnaryWithParam>{UnaryWithParam(UnaryOpType::NEG), UnaryWithParam(UnaryOpType::EXP, 1.0f), UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f), UnaryWithParam(UnaryOpType::RECIP)}
             : std::vector<EltwiseUnaryWithParam>{
                   UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), 0.0f})};
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input, op_chain, memory_config, optional_output_tensor, sub_core_grids);
 }
 
@@ -538,7 +553,8 @@ Tensor unary_chain(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::unary::detail::unary_impl(
+    TT_OP_SCOPE("ttnn::unary_chain");
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor, ops_chain, memory_config, optional_output_tensor, sub_core_grids);
 }
 
@@ -550,7 +566,7 @@ Tensor rsub_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::RSUB, {param}}},
         memory_config,
@@ -579,7 +595,7 @@ Tensor add_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, param)},
         memory_config,
@@ -594,7 +610,7 @@ Tensor add_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, param)},
         memory_config,
@@ -609,7 +625,7 @@ Tensor mul_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, param)},
         memory_config,
@@ -624,7 +640,7 @@ Tensor mul_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, param)},
         memory_config,
@@ -639,7 +655,7 @@ Tensor sub_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, param}},
         memory_config,
@@ -654,7 +670,7 @@ Tensor sub_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::RSUB, param}},
         memory_config,
@@ -669,7 +685,7 @@ Tensor div_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::DIV_UNARY_SFPU, param}},
         memory_config,
@@ -684,7 +700,7 @@ Tensor div_sfpu(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::RDIV, param}},
         memory_config,
@@ -700,7 +716,7 @@ Tensor unary_with_int32_param(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return operations::unary_ng::detail::unary_ng_impl(
         input_tensor, {EltwiseUnaryWithParam{op_type, param}}, memory_config, optional_output_tensor, sub_core_grids);
 }
 

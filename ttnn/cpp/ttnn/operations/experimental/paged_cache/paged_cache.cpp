@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -25,6 +26,7 @@ ttnn::Tensor paged_update_cache(
     std::optional<uint32_t> block_size_override,
     std::optional<uint32_t> num_kv_heads_override,
     std::optional<uint32_t> cache_position_modulo) {
+    TT_OP_SCOPE("ttnn::experimental::paged_update_cache");
     return ttnn::prim::paged_update_cache(
         cache_tensor,
         input_tensor,
@@ -52,6 +54,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> paged_fused_update_cache(
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
+    TT_OP_SCOPE("ttnn::experimental::paged_fused_update_cache");
     return ttnn::prim::paged_fused_update_cache(
         cache_tensor1,
         input_tensor1,
@@ -76,6 +79,7 @@ ttnn::Tensor paged_fill_cache(
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
     std::optional<uint32_t> cache_position_modulo) {
+    TT_OP_SCOPE("ttnn::experimental::paged_fill_cache");
     // Note: compute_kernel_config is not used by fill_cache operation
     (void)compute_kernel_config;
 

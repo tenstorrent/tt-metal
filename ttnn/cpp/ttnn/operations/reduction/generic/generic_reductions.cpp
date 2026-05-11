@@ -19,6 +19,7 @@
 #include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -776,6 +777,7 @@ Tensor std(
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool use_legacy) {
+    TT_OP_SCOPE("ttnn::std");
     return operations::reduction::reduce<reduction_common::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
@@ -798,6 +800,7 @@ Tensor var(
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool use_legacy) {
+    TT_OP_SCOPE("ttnn::var");
     return operations::reduction::reduce<reduction_common::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,

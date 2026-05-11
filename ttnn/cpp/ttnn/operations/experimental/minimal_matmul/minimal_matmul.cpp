@@ -6,6 +6,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -20,6 +21,7 @@ ttnn::Tensor minimal_matmul(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::experimental::minimal_matmul");
     // Call device operation with chunks=1 (default), which returns a vector with 1 element
     auto outputs = ttnn::prim::minimal_matmul(
         input_tensor,

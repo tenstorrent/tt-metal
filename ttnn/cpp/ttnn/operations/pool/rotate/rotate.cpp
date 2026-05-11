@@ -4,6 +4,7 @@
 
 #include <ttnn/operations/pool/rotate/rotate.hpp>
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::rotate {
 
@@ -15,6 +16,7 @@ Tensor rotate(
     bool expand,
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::rotate");
     return ttnn::prim::rotate(input_tensor, angle, center, fill, expand, interpolation_mode, memory_config);
 }
 

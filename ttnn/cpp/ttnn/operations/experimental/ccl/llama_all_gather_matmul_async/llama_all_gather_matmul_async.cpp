@@ -7,6 +7,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -27,6 +28,7 @@ ttnn::Tensor llama_all_gather_matmul_async(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype,
     const std::optional<const GlobalCircularBuffer>& global_cb) {
+    TT_OP_SCOPE("ttnn::experimental::llama_all_gather_matmul_async");
     auto output_tensors = ttnn::prim::llama_all_gather_matmul_async(
         input_tensor0,
         input_tensor1,

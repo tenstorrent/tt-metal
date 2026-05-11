@@ -31,6 +31,7 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::conv {
 using namespace tt;
@@ -1741,6 +1742,7 @@ ttnn::Tensor prepare_conv_weights(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    TT_OP_SCOPE("ttnn::prepare_conv_weights", weight_tensor);
     if (weights_format != "OIHW") {
         log_warning(
             tt::LogOp,
@@ -1808,6 +1810,7 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& /*dram_slice_config_*/) {
+    TT_OP_SCOPE("ttnn::prepare_conv_bias", bias_tensor);
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 

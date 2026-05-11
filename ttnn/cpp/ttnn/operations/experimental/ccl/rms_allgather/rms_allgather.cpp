@@ -6,6 +6,7 @@
 #include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.hpp"
 
 #include <ttnn/device.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -27,6 +28,7 @@ ttnn::Tensor fused_rms_minimal(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool use_noc1_only) {
+    TT_OP_SCOPE("ttnn::fused_rms_minimal");
     return ttnn::prim::rms_allgather(
         input_tensor,
         program_config,

@@ -4,6 +4,7 @@
 ///
 #include "device/host/point_to_point_device_op.hpp"
 #include "point_to_point.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -14,6 +15,7 @@ ttnn::Tensor point_to_point(
     const ccl::Topology topology,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
+    TT_OP_SCOPE("ttnn::point_to_point");
     // first output tensor in list is intermediate and is discarded
     return ttnn::prim::point_to_point(
                input_tensor,

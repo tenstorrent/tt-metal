@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;
@@ -26,6 +27,7 @@ std::array<ttnn::Tensor, 2> all_to_all_dispatch(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<uint32_t>& output_concat_dim) {
+    TT_OP_SCOPE("ttnn::all_to_all_dispatch");
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);

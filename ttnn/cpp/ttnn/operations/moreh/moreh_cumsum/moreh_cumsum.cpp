@@ -4,6 +4,7 @@
 
 #include <cpp/ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp>
 #include "moreh_cumsum.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -12,6 +13,7 @@ Tensor moreh_cumsum(
     const int64_t dim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::moreh_cumsum");
     return ttnn::cumsum(
         input, dim, input.dtype(), false, output, memory_config.has_value() ? *memory_config : input.memory_config());
 }
@@ -21,6 +23,7 @@ Tensor moreh_cumsum_backward(
     const int64_t dim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::moreh_cumsum_backward");
     return ttnn::cumsum(
         output_grad,
         dim,

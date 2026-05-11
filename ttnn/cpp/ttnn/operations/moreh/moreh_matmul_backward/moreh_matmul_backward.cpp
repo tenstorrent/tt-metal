@@ -10,6 +10,7 @@
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul_backward {
 
@@ -35,6 +36,7 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
     const std::optional<const Tensor>& other_grad,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::moreh_matmul_backward");
     if (operations::moreh::moreh_matmul_backward::is_dot_backward(output_grad, input, other)) {
         return ttnn::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, memory_config);
     }

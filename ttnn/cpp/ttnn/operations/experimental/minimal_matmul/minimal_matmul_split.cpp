@@ -8,6 +8,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -25,6 +26,7 @@ std::vector<ttnn::Tensor> minimal_matmul_split(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::experimental::minimal_matmul_split");
     // Validate chunks
     TT_FATAL(chunks >= 1, "minimal_matmul_split requires chunks >= 1, got chunks={}", chunks);
 

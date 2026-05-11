@@ -11,6 +11,7 @@
 #include <optional>
 #include <vector>
 #include <deque>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;
@@ -23,6 +24,7 @@ std::vector<ttnn::Tensor> all_broadcast(
     std::optional<uint32_t> num_links,
     std::optional<ttnn::ccl::Topology> topology,
     bool use_l1_small_for_semaphores) {
+    TT_OP_SCOPE("ttnn::all_broadcast");
     // Default values for num_links and topology
     if (cluster_axis == std::nullopt) {
         auto mesh_shape = input_tensor.device()->get_view().shape();

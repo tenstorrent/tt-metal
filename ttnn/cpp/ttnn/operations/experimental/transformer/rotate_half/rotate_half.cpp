@@ -7,10 +7,12 @@
 #include "device/rotate_half_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
 Tensor rotate_half(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::experimental::rotate_half");
     using namespace tt::constants;
     using tt::tt_metal::PadValue;
 

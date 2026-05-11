@@ -7,6 +7,7 @@
 #include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -21,6 +22,7 @@ ttnn::Tensor rms_norm_post_all_gather(
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid) {
+    TT_OP_SCOPE("ttnn::rms_norm_post_all_gather");
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =

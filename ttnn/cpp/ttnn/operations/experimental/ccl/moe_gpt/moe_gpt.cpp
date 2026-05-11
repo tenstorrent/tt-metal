@@ -4,6 +4,7 @@
 
 #include "moe_gpt.hpp"
 #include "device/moe_gpt_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -18,6 +19,7 @@ std::vector<ttnn::Tensor> moe_gpt(
     uint32_t output_width_shard_dim,
     uint32_t hidden_size,
     std::optional<uint32_t> cluster_axis) {
+    TT_OP_SCOPE("ttnn::experimental::moe_gpt");
     return ttnn::prim::moe_gpt(
         input_tensor,
         expert_indices,

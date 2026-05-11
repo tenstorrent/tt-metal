@@ -4,6 +4,7 @@
 
 #include "moe_grouped_topk.hpp"
 #include "device/moe_grouped_topk_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
 
@@ -18,6 +19,7 @@ std::array<Tensor, 2> moe_grouped_topk(
     float epsilon,
     bool stable_sort,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_OP_SCOPE("ttnn::experimental::deepseek_prefill::moe_grouped_topk");
     return ttnn::prim::moe_grouped_topk(
         scores,
         bias,

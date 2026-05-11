@@ -6,6 +6,7 @@
 #include "device/interleaved_to_sharded_op.hpp"
 #include "interleaved_to_sharded.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -17,6 +18,7 @@ ttnn::Tensor interleaved_to_sharded(
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned,
     const std::optional<Tensor>& preallocated_output) {
+    TT_OP_SCOPE("ttnn::interleaved_to_sharded");
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
         sharded_memory_config,
@@ -33,6 +35,7 @@ ttnn::Tensor interleaved_to_sharded(
     const ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned) {
+    TT_OP_SCOPE("ttnn::interleaved_to_sharded");
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;

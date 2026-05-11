@@ -14,6 +14,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -124,6 +125,7 @@ Tensor tosa_scatter(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config) {
+    TT_OP_SCOPE("ttnn::tosa_scatter");
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& index_shape{index_tensor.logical_shape()};
     const auto& source_shape{source_tensor.logical_shape()};

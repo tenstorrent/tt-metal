@@ -5,6 +5,7 @@
 #include "rotary_embedding_hf.hpp"
 
 #include "device/rotary_embedding_hf_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::prim {
 
@@ -27,6 +28,7 @@ Tensor rotary_embedding_hf(
     const bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::experimental::rotary_embedding_hf");
     // Device-only op: kernel config needs arch() and the primitive enqueues on device.
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,

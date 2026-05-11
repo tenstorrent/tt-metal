@@ -7,6 +7,7 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
@@ -36,6 +37,7 @@ Tensor moreh_matmul(
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::moreh_matmul");
     if (operations::moreh::moreh_matmul::is_dot_forward(input, other, transpose_input, transpose_other)) {
         return ttnn::moreh_dot(input, other, output, input.dtype(), memory_config, compute_kernel_config);
     }

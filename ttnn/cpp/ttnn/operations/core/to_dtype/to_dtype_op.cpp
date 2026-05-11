@@ -4,10 +4,12 @@
 
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype) {
+    TT_OP_SCOPE("ttnn::to_dtype");
     return tt::tt_metal::to_dtype(input_tensor, dtype);
 }
 

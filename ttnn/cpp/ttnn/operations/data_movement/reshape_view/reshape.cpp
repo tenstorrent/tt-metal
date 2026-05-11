@@ -31,6 +31,7 @@
 #include "reshape.hpp"
 #include "reshape_common.hpp"
 #include "device/reshape_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -512,6 +513,7 @@ ttnn::Tensor ttnn::reshape(
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
+    TT_OP_SCOPE("ttnn::reshape");
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     const bool explicit_memory_config = memory_config.has_value();
     auto layout = tensor.layout();
@@ -615,6 +617,7 @@ ttnn::Tensor ttnn::reshape(
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
+    TT_OP_SCOPE("ttnn::reshape");
     return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid, skip_padding_fill);
 }
 
@@ -626,6 +629,7 @@ ttnn::Tensor ttnn::reshape(
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
+    TT_OP_SCOPE("ttnn::reshape");
     return reshape(
         tensor,
         operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector),

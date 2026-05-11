@@ -13,6 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/repeat_device_operation.hpp"
 #include "repeat.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -122,6 +123,7 @@ ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<uint32_t>& repetition_vector,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::repeat");
     auto [working_tensor, working_repetition_vector] =
         operations::data_movement::detail::match_input_rank(input_tensor, repetition_vector);
     MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
@@ -195,6 +197,7 @@ ttnn::Tensor repeat(
 }
 
 ttnn::Tensor repeat(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
+    TT_OP_SCOPE("ttnn::repeat");
     return ttnn::repeat(input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
 }
 

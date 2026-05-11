@@ -14,6 +14,7 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -251,6 +252,7 @@ Tensor to_memory_config(
     const MemoryConfig& memory_config,
     std::optional<DataType> dtype,
     const std::optional<Tensor>& output_tensor) {
+    TT_OP_SCOPE("ttnn::to_memory_config");
     using namespace tt::tt_metal;
 
     // Temporary until we see why buffer data not being populated
