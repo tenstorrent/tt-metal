@@ -10,6 +10,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.tt.tt_pixtral_seq_chunk import pixtral_vision_seq_chunk_len
 
 
 class MistralTTVisionMLP(LightweightModule):
@@ -53,34 +54,57 @@ class MistralTTVisionMLP(LightweightModule):
         self.compute_kernel_config = args.compute_kernel_config_hifi2
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        fused = ttnn.linear(
-            x,
-            self.w1_w3,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        b0, b1, seq, tw = fused.shape
-        half = tw // 2
-        w1_out = ttnn.slice(fused, (0, 0, 0, 0), (b0, b1, seq, half))
-        w3_out = ttnn.slice(fused, (0, 0, 0, half), (b0, b1, seq, tw))
-        w1_out = ttnn.silu(w1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        """Fused SwiGLU (w1/w3) with optional sequence-axis chunking (same policy as ``tt_pixtralattn``)."""
+        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        seq_len = int(x.shape[-2])
+        chunk = pixtral_vision_seq_chunk_len(self.args)
+        hidden_w = int(x.shape[-1])
 
-        w2_in = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat16)
+        def run_chunk(xc: ttnn.Tensor) -> ttnn.Tensor:
+            fused = ttnn.linear(
+                xc,
+                self.w1_w3,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            b0, b1, sl, tw = fused.shape
+            half = tw // 2
+            w1_out = ttnn.slice(fused, (0, 0, 0, 0), (b0, b1, sl, half))
+            w3_out = ttnn.slice(fused, (0, 0, 0, half), (b0, b1, sl, tw))
+            w1_out = ttnn.silu(w1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            w2_in = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat16)
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(fused)
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w2_in)
+            return w2_out
 
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        if seq_len <= chunk:
+            return run_chunk(x)
 
-        ttnn.deallocate(fused)
-        ttnn.deallocate(w1_out)
-        ttnn.deallocate(w3_out)
-        ttnn.deallocate(w2_in)
-        return w2_out
+        parts: list[ttnn.Tensor] = []
+        start = 0
+        while start < seq_len:
+            end = min(start + chunk, seq_len)
+            xc = ttnn.slice(x, (0, 0, start, 0), (1, 1, end, hidden_w))
+            parts.append(run_chunk(xc))
+            ttnn.deallocate(xc)
+            start = end
+
+        if len(parts) == 1:
+            return parts[0]
+        out = ttnn.concat(parts, dim=2)
+        for p in parts:
+            ttnn.deallocate(p)
+        return out
 
 
 __all__ = ["MistralTTVisionMLP"]
