@@ -95,6 +95,18 @@ std::vector<std::pair<int, int>> build_mesh_coords(int TP, int SP) {
 }  // namespace
 
 NB_MODULE(_planar_concat, m) {
+    // Refuse to load on hosts lacking AVX2.  The kernel is built with
+    // -march=x86-64-v3 (AVX2/FMA/BMI2), so on a pre-Haswell CPU the import
+    // would succeed and SIGILL on the first call instead.  By throwing here
+    // we let the Python wrapper's try/except set HAS_CPP_PLANAR_CONCAT=False
+    // and fall back to the torch_threaded path.
+    if (!__builtin_cpu_supports("avx2")) {
+        throw std::runtime_error(
+            "_planar_concat requires AVX2 but the running CPU does not "
+            "support it. Rebuild with a softer -march, or rely on the "
+            "Python torch_threaded fallback.");
+    }
+
     m.doc() = "Vectorized YUV 4:2:0 planar concat (AVX2 + std::thread pool).";
 
     m.def(

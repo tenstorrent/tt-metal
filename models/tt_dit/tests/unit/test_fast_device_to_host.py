@@ -1291,6 +1291,238 @@ def test_yuv_planar_concat_speed():
 
 
 # ---------------------------------------------------------------------------
+# C++ planar concat — extended correctness coverage
+# ---------------------------------------------------------------------------
+#
+# The benchmark above asserts byte-equality vs the naive reference for the
+# single 720p / 4×8 mesh shape.  The tests below extend coverage to:
+#
+#   - Smaller meshes (TP*SP < 32) — exercises shorter task lists / load
+#     balancing edges.
+#   - Non-720p resolutions — confirms shape-resize handling.
+#   - w_tail in {0, 16, !=16} — fast path vs bounce-buffer fallback in
+#     scatter_one_chwt.
+#   - T < 32 — only-t_tail path (n_t_full_tiles == 0).
+#   - Buffer reuse with different inputs — guards against stale bytes
+#     from a previous call leaking into the next result.
+#   - Buffer reuse across shape changes — the singleton-buffer pattern
+#     that production wiring will use.
+#
+# Cases are kept tiny so the full sweep completes in a few seconds even on
+# slow hosts.
+
+
+def _planar_concat_naive(y_shards, u_shards, v_shards, dim_order, TP, SP):
+    """Scalar reference: per-shard strided scatter into a planar buffer.
+
+    Shape is inferred from the first Y shard so the helper works for any
+    (H, W, T, TP, SP) the C++ kernel supports.
+    """
+    if dim_order == "CHWT":
+        _, h_per_y, w_per_y, T = y_shards[0].shape
+        _, h_per_uv, w_per_uv, _ = u_shards[0].shape
+    elif dim_order == "CTHW":
+        _, T, h_per_y, w_per_y = y_shards[0].shape
+        _, _, h_per_uv, w_per_uv = u_shards[0].shape
+    else:
+        raise ValueError(dim_order)
+
+    H, W = TP * h_per_y, SP * w_per_y
+    Hu, Wu = TP * h_per_uv, SP * w_per_uv
+    hw = H * W
+    uv = Hu * Wu
+    row_stride = hw + 2 * uv
+
+    out = np.empty((T, row_stride), dtype=np.uint8)
+    y_view = np.lib.stride_tricks.as_strided(out, shape=(T, H, W), strides=(row_stride, W, 1), writeable=True)
+    u_view = np.lib.stride_tricks.as_strided(
+        out[:, hw:], shape=(T, Hu, Wu), strides=(row_stride, Wu, 1), writeable=True
+    )
+    v_view = np.lib.stride_tricks.as_strided(
+        out[:, hw + uv :], shape=(T, Hu, Wu), strides=(row_stride, Wu, 1), writeable=True
+    )
+
+    mesh_coords = [(r, c) for r in range(TP) for c in range(SP)]
+
+    def to_thw(shard):
+        v = shard.squeeze(0).numpy()
+        return v.transpose(2, 0, 1) if dim_order == "CHWT" else v
+
+    def scatter(shards, view, h_per, w_per):
+        for (r, c), shard in zip(mesh_coords, shards):
+            view[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per] = to_thw(shard)
+
+    scatter(y_shards, y_view, h_per_y, w_per_y)
+    scatter(u_shards, u_view, h_per_uv, w_per_uv)
+    scatter(v_shards, v_view, h_per_uv, w_per_uv)
+    return out
+
+
+def _make_shards(H, W, T, TP, SP, dim_order, seed):
+    """Generate deterministic per-shard YUV tensors for testing."""
+    h_per_y, w_per_y = H // TP, W // SP
+    h_per_uv, w_per_uv = (H // 2) // TP, (W // 2) // SP
+
+    y_shape = (1, h_per_y, w_per_y, T) if dim_order == "CHWT" else (1, T, h_per_y, w_per_y)
+    uv_shape = (1, h_per_uv, w_per_uv, T) if dim_order == "CHWT" else (1, T, h_per_uv, w_per_uv)
+
+    n_shards = TP * SP
+    gen = torch.Generator().manual_seed(seed)
+    y = [torch.randint(0, 256, y_shape, generator=gen, dtype=torch.uint8) for _ in range(n_shards)]
+    u = [torch.randint(0, 256, uv_shape, generator=gen, dtype=torch.uint8) for _ in range(n_shards)]
+    v = [torch.randint(0, 256, uv_shape, generator=gen, dtype=torch.uint8) for _ in range(n_shards)]
+    return y, u, v
+
+
+class _ReusableCppCaller:
+    """Singleton-buffer wrapper around planar_concat_cpp.
+
+    Mirrors the production pattern: hold one np.empty buffer across calls,
+    reallocate only when (T, row_stride) changes.  Use the same instance
+    across multiple calls to exercise stale-buffer / shape-change paths.
+    """
+
+    def __init__(self, cpp_impl):
+        self._cpp_impl = cpp_impl
+        self._buf = None
+        self._shape = None
+
+    def __call__(self, y, u, v, dim_order, TP, SP):
+        if dim_order == "CHWT":
+            _, h_per_y, w_per_y, T = y[0].shape
+        else:
+            _, T, h_per_y, w_per_y = y[0].shape
+        H, W = TP * h_per_y, SP * w_per_y
+        Hu, Wu = H // 2, W // 2
+        row_stride = H * W + 2 * Hu * Wu
+        shape = (T, row_stride)
+        if self._shape != shape:
+            self._buf = np.empty(shape, dtype=np.uint8)
+            self._shape = shape
+        return self._cpp_impl(y, u, v, dim_order, (TP, SP), out=self._buf)
+
+    @property
+    def buf(self):
+        return self._buf
+
+
+# (H, W, T, TP, SP, label) — chosen to span the kernel's branches:
+#   720p_4x8:    baseline.  Y w_tail=0, UV w_tail=16 (fast path).
+#   480p_4x8:    different resolution + same mesh.
+#   tail_1x4:    Y w_tail=16 (fast path) AND UV w_tail=24 (general bounce).
+#   tinyT_2x4:   T<32 — all output rows from the t_tail branch.
+#   alignedT:    T divisible by 32 — no t_tail at all.
+#   small_2x2:   small balanced mesh.
+_CPP_CORRECTNESS_CASES = [
+    (720, 1280, 81, 4, 8, "720p_4x8"),
+    (480, 832, 81, 4, 8, "480p_4x8"),
+    (96, 192, 17, 1, 4, "tail_1x4"),
+    (256, 384, 9, 2, 4, "tinyT_2x4"),
+    (128, 256, 32, 2, 4, "alignedT_2x4"),
+    (256, 256, 81, 2, 2, "small_2x2"),
+]
+
+
+@pytest.mark.parametrize("dim_order", ["CTHW", "CHWT"])
+@pytest.mark.parametrize(
+    "H,W,T,TP,SP",
+    [c[:5] for c in _CPP_CORRECTNESS_CASES],
+    ids=[c[5] for c in _CPP_CORRECTNESS_CASES],
+)
+def test_yuv_planar_concat_cpp_correctness(H, W, T, TP, SP, dim_order):
+    """Byte-exact correctness across shape, mesh, and dim_order.
+
+    Runs three checks against an independent naive reference:
+      1. Fresh-alloc path (no `out=`): kernel allocates internally.
+      2. Reused buffer path (`out=`): caller provides a pre-allocated buffer.
+      3. Stale-buffer guard: a second call with *different* inputs into the
+         same buffer must match its own ref — proves every output byte is
+         overwritten, no leak from the previous call.
+    """
+    from models.tt_dit.utils.planar_concat import HAS_CPP_PLANAR_CONCAT
+    from models.tt_dit.utils.planar_concat import planar_concat_cpp as _cpp_impl
+
+    if not HAS_CPP_PLANAR_CONCAT:
+        pytest.skip("C++ planar concat extension not built")
+
+    # Two independent seeds → two different input sets / refs.
+    y0, u0, v0 = _make_shards(H, W, T, TP, SP, dim_order, seed=0)
+    y1, u1, v1 = _make_shards(H, W, T, TP, SP, dim_order, seed=1)
+    ref0 = _planar_concat_naive(y0, u0, v0, dim_order, TP, SP)
+    ref1 = _planar_concat_naive(y1, u1, v1, dim_order, TP, SP)
+
+    # (1) Fresh-alloc path.
+    got_fresh = _cpp_impl(y0, u0, v0, dim_order, (TP, SP))
+    assert np.array_equal(ref0, got_fresh), (
+        f"cpp (fresh alloc) disagrees with naive for {dim_order} " f"{H}x{W}x{T} mesh {TP}x{SP}"
+    )
+
+    # (2) Reused-buffer path.
+    buf = np.empty(ref0.shape, dtype=np.uint8)
+    got_reused0 = _cpp_impl(y0, u0, v0, dim_order, (TP, SP), out=buf)
+    assert got_reused0 is buf, "out= path must return the caller-provided buffer"
+    assert np.array_equal(ref0, got_reused0), (
+        f"cpp (reused, first call) disagrees with naive for {dim_order} " f"{H}x{W}x{T} mesh {TP}x{SP}"
+    )
+
+    # (3) Stale-buffer guard: same buf, different inputs.  If any byte from
+    # ref0 leaks (kernel skipping a region, partial WC flush failing, etc.)
+    # this will catch it.
+    got_reused1 = _cpp_impl(y1, u1, v1, dim_order, (TP, SP), out=buf)
+    assert got_reused1 is buf
+    assert np.array_equal(ref1, got_reused1), (
+        f"cpp (reused, second call) leaks bytes from prior call for " f"{dim_order} {H}x{W}x{T} mesh {TP}x{SP}"
+    )
+
+
+def test_yuv_planar_concat_cpp_shape_change():
+    """Singleton-buffer pattern handles shape changes correctly.
+
+    Production wiring (per INTEGRATION.md) reallocates the persistent
+    output buffer only when (T, row_stride) changes.  This test drives
+    that pattern through several shape transitions and asserts byte-
+    equality vs naive at every step.
+    """
+    from models.tt_dit.utils.planar_concat import HAS_CPP_PLANAR_CONCAT
+    from models.tt_dit.utils.planar_concat import planar_concat_cpp as _cpp_impl
+
+    if not HAS_CPP_PLANAR_CONCAT:
+        pytest.skip("C++ planar concat extension not built")
+
+    caller = _ReusableCppCaller(_cpp_impl)
+
+    # Walk through shapes in an order that forces several resize transitions
+    # and at least one repeat (so the no-resize branch is also exercised).
+    walk = [
+        (128, 256, 32, 2, 4, "CTHW"),  # initial alloc
+        (128, 256, 32, 2, 4, "CHWT"),  # same shape, no resize, different dim_order
+        (256, 384, 9, 2, 4, "CTHW"),  # shrink T
+        (480, 832, 81, 4, 8, "CHWT"),  # grow to 480p
+        (256, 384, 9, 2, 4, "CTHW"),  # back to a smaller shape (resize again)
+    ]
+
+    prev_buf_id = None
+    prev_shape = None
+    for H, W, T, TP, SP, dim_order in walk:
+        y, u, v = _make_shards(H, W, T, TP, SP, dim_order, seed=7)
+        ref = _planar_concat_naive(y, u, v, dim_order, TP, SP)
+        got = caller(y, u, v, dim_order, TP, SP)
+        assert np.array_equal(ref, got), (
+            f"cpp (singleton buffer) disagrees with naive for {dim_order} " f"{H}x{W}x{T} mesh {TP}x{SP}"
+        )
+        # Singleton pattern check: the underlying buffer should be the SAME
+        # object whenever (T, row_stride) is unchanged from the prior call,
+        # and a freshly-allocated object whenever it changes.
+        buf_id = id(caller.buf)
+        if prev_buf_id is not None:
+            if ref.shape == prev_shape:
+                assert buf_id == prev_buf_id, "singleton wrapper reallocated despite unchanged shape"
+            else:
+                assert buf_id != prev_buf_id, "singleton wrapper failed to reallocate on shape change"
+        prev_buf_id, prev_shape = buf_id, ref.shape
+
+
+# ---------------------------------------------------------------------------
 # On-device permute overhead benchmark
 # ---------------------------------------------------------------------------
 
