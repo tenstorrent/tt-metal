@@ -183,7 +183,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         .remote_format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(remote_cb_index),
             .data_format = max_tile_size_df,
-            .page_size = L1_ALIGNMENT,
+            .page_size = L1_ALIGNMENT,  // set to 16B so that the infra won't update write pointers to wrong location
         }}},
         .global_circular_buffer = std::addressof(global_cb),
     });
