@@ -342,18 +342,22 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
         // xlog2 = val * (1/ln2) + 127.0f
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
 
+        // CLAMP_NEGATIVE is used for performance when callee guarantees
+        // that xlog2 < 0.0 (i.e x < 0)
+        // Numerics are identical whenever that precondition holds. The
+        // upper clamp below is unconditional because no caller advertises an
+        // upper bound on input magnitude.
         if constexpr (CLAMP_NEGATIVE)
         {
-            // Clamp xlog2 to [0, 255]. SFPSWAP cannot use the LCONST_0 fixed
-            // register directly, so we materialize 0.0 in LREG1 first.
-            // After the two SFPSWAPs (mode VEC_MIN_MAX = "max into lreg_dest"):
-            //   LREG0 = max(xlog2, 0)              (lower-clamp)
-            //   LREG0 = min(LREG0, 255)            (upper-clamp; LREG2 holds 255)
+            // Lower clamp: xlog2 <- max(xlog2, 0). SFPSWAP cannot reference
+            // the LCONST_0 fixed register directly, so we materialize 0.0 in
+            // LREG1 first. Mode VEC_MIN_MAX puts max(a, b) into the dest LReg.
             TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         }
         TTI_SFPNOP;
 
+        // Upper clamp: xlog2 <- min(xlog2, 255). LREG2 holds 255.
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         TTI_SFPNOP;
 
@@ -502,8 +506,6 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
         if constexpr (!is_fp32_dest_acc_en)
         {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
-            // CLAMP_NEGATIVE is implicit (always clamps via min/max).
-            // SCALE_EN is handled inside the TTI kernel via SFPMULI.
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         }
         else
@@ -1032,7 +1034,13 @@ inline void _init_exponential_()
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
             TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
         }
-        // fp32 scalar path (_sfpu_exp_fp32_accurate_) uses no SFPU-init-dependent state.
+        else
+        {
+            // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
+            // reciprocal LLK for negative inputs, so its constants must be
+            // primed here.
+            _init_sfpu_reciprocal_<false>();
+        }
     }
 }
 

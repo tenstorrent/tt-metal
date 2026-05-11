@@ -227,17 +227,20 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
         //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
         TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG6, p_sfpu::LREG2, 0);
 
-        // Negative-input mask: LREG3 = (xlog2 > 0) ? -1 : 0. Slots into the
-        // SFPMAD's 2-cycle latency window (independent of LREG2). xlog2 was
-        // preserved in LREG3 from the SFPMAD above.
+        // Negative-input handling: instead of clamping xlog2 with a max(0, ·)
+        // SFPSWAP, we build a mask with (SFPGT) and mask negative value using
+        // (SFPAND) below.
+        // This avoids SFPLOADI + SFPSWAP and introduced instructions
+        // can be interleaved with SFPMAD to hide their latency.
         constexpr unsigned SFPGT_MOD1_SET_VD = 8;
         TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPGT_MOD1_SET_VD);
 
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG1, 0);
 
-        // Mask the integer part *before* SETEXP: if the input was very
-        // negative (xlog2 ≤ 0), the mask is 0, zeroing the int_part. The
-        // subsequent setexp produces a bf16 subnormal (flushes to 0).
+        // Apply the mask to the integer part *before* SETEXP: for lanes with
+        // xlog2 <= 0 the mask is 0, zeroing the int_part. The subsequent
+        // SETEXP then produces a bf16 subnormal that flushes to 0, matching
+        // the scalar max(xlog2, 0) behavior on finite inputs.
         constexpr unsigned SFPAND_MOD1_USE_VB = 1;
         TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG0, SFPAND_MOD1_USE_VB);
 
@@ -511,6 +514,11 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
     {
         if constexpr (!is_fp32_dest_acc_en)
         {
+            // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
+            // CLAMP_NEGATIVE is forwarded for API symmetry with the WH kernel,
+            // but on BH the negative-input handling is applied unconditionally
+            // because the SFPGT mask hides in an SFPMAD latency window and is
+            // effectively free (no other instruction to interleave with SFPMAD).
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         }
         else
@@ -1048,7 +1056,13 @@ inline void _init_exponential_()
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
             TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
         }
-        // fp32 scalar path (_sfpu_exp_fp32_accurate_) uses no SFPU-init-dependent state.
+        else
+        {
+            // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
+            // reciprocal LLK for negative inputs, so its constants must be
+            // primed here.
+            _init_sfpu_reciprocal_<false>();
+        }
     }
 }
 
