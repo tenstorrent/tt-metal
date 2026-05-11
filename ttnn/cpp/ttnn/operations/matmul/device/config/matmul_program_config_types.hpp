@@ -35,6 +35,15 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool fuse_batch = true;
 };
 
+// 1D mcast matmul program config.
+//
+// `compute_with_storage_grid_size` describes the size of the rectangular grid of worker cores
+// that matmul will use, anchored at (0, 0) on the device, or at the bounding-box start of the
+// active sub-device when `sub_device_id` is set on the op. The 1D mcast factory targets a
+// single bounding-box rectangle for multicast and the per-core index math assumes a single
+// contiguous row-major rectangle, so when `sub_device_id` is provided the sub-device's worker
+// cores must themselves form a single rectangle. Non-rectangular sub-device grids are rejected
+// at validate time.
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
