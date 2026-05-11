@@ -25,7 +25,10 @@ import ttnn
 
 from ...parallel.manager import CCLManager
 from ...utils.tensor import (
+    _get_default_reassemble_pool,
+    _host_buffer_to_torch,
     _reassemble_2d,
+    _to_torch_zero_copy,
     _yuv_planar_d2h,
     fast_device_to_host,
     fast_device_to_host_yuv,
@@ -1359,3 +1362,220 @@ def test_device_permute_overhead():
     for r in rows:
         cells = [f"{r[key]:{align}{width}{fmt}}" for (_, width, align, fmt), key in zip(cols, keys)]
         print(" ".join(cells))
+
+
+# ---------------------------------------------------------------------------
+# YUV reassembly performance: single-host vs multi-host extraction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [[(4, 8), line_params]],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+class TestYUVReassemblyPerformance:
+    """Compare single-host vs multi-host shard extraction + scatter performance.
+
+    Both codepaths produce identical per-shard shapes (the same as a 4x8
+    mesh at 720p), but differ in how torch tensors are obtained from the
+    host ttnn tensor:
+
+      * **Single-host**: ``get_device_tensors()`` + ``_to_torch_zero_copy()``
+      * **Multi-host**: ``host_buffer()`` + ``get_shard(coord)`` +
+        ``_host_buffer_to_torch()`` (DLPack), with ``is_local()`` filtering
+        and coordinate remapping.
+
+    On a single-host 4x8 mesh every coordinate is local, so the multi-host
+    path visits the same 32 shards — the overhead measured is purely from the
+    different extraction API.
+
+    Run with:
+        pytest models/tt_dit/tests/unit/test_fast_device_to_host.py::TestYUVReassemblyPerformance -s
+    """
+
+    def test_reassembly_performance(self, mesh_device: ttnn.MeshDevice, device_params):
+        H, W, T_ = 720, 1280, 81
+        Hu, Wu = H // 2, W // 2
+        hw = H * W
+        uv = Hu * Wu
+        row_stride = hw + 2 * uv
+        n_iters = 10
+
+        TP, SP = tuple(mesh_device.shape)
+        h_per_y, w_per_y = H // TP, W // SP
+        h_per_uv, w_per_uv = Hu // TP, Wu // SP
+
+        # --- Create uint8 YUV-shaped tensors on device and transfer to host ---
+        gen = torch.Generator().manual_seed(42)
+        host_Y = torch.randint(0, 256, (1, H, W, T_), generator=gen, dtype=torch.uint8)
+        host_Cb = torch.randint(0, 256, (1, Hu, Wu, T_), generator=gen, dtype=torch.uint8)
+        host_Cr = torch.randint(0, 256, (1, Hu, Wu, T_), generator=gen, dtype=torch.uint8)
+
+        shard_map = {TP_AXIS: 1, SP_AXIS: 2}  # H on axis 0, W on axis 1
+        tt_Y = typed_tensor_2dshard(
+            host_Y, mesh_device, shard_mapping=shard_map, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint8
+        )
+        tt_Cb = typed_tensor_2dshard(
+            host_Cb, mesh_device, shard_mapping=shard_map, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint8
+        )
+        tt_Cr = typed_tensor_2dshard(
+            host_Cr, mesh_device, shard_mapping=shard_map, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint8
+        )
+
+        # D2H — shared, not timed.
+        host_tt_Y = tt_Y.cpu(blocking=False)
+        host_tt_Cb = tt_Cb.cpu(blocking=False)
+        host_tt_Cr = tt_Cr.cpu(blocking=False)
+        ttnn.synchronize_device(mesh_device)
+
+        mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
+        view = mesh_device.get_view()
+
+        pool = _get_default_reassemble_pool()
+
+        # -----------------------------------------------------------------
+        # Extraction helpers
+        # -----------------------------------------------------------------
+        def extract_single_host(host_tensor):
+            """Single-host path: get_device_tensors + _to_torch_zero_copy."""
+            host_shards = ttnn.get_device_tensors(host_tensor)
+            logical_shape = list(host_shards[0].shape)
+            trim = tuple(slice(0, d) for d in logical_shape)
+            return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+
+        def extract_multi_host(host_tensor):
+            """Multi-host path: host_buffer + get_shard + _host_buffer_to_torch."""
+            host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
+            distributed_buf = host_tensor.host_buffer()
+            tt_dtype = host_tensor.dtype
+            padded_shape = list(host_tensor.padded_shape)
+            logical_shape = list(host_tensor.shape)
+            trim = tuple(slice(0, d) for d in logical_shape)
+
+            coords_and_shards = []
+            for c in host_mesh_coords:
+                if not view.is_local(c):
+                    continue
+                buf = distributed_buf.get_shard(c)
+                if buf is not None:
+                    coords_and_shards.append((c, _host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim]))
+            return coords_and_shards
+
+        # -----------------------------------------------------------------
+        # Scatter helper (same for both paths)
+        # -----------------------------------------------------------------
+        def scatter_planar(coords, Y_shards, Cb_shards, Cr_shards, h_y, w_y, h_uv, w_uv):
+            out = np.empty((T_, row_stride), dtype=np.uint8)
+            out_t = torch.from_numpy(out)
+            y_v = out_t.as_strided((T_, H, W), (row_stride, W, 1), 0)
+            u_v = out_t.as_strided((T_, Hu, Wu), (row_stride, Wu, 1), hw)
+            v_v = out_t.as_strided((T_, Hu, Wu), (row_stride, Wu, 1), hw + uv)
+
+            def _write(plane_view, shard, r, c, hp, wp):
+                src = shard.squeeze(0).permute(2, 0, 1)
+                plane_view[:, r * hp : (r + 1) * hp, c * wp : (c + 1) * wp].copy_(src)
+
+            futures = []
+            for coord, shard in zip(coords, Y_shards):
+                r, c = int(coord[0]), int(coord[1])
+                futures.append(pool.submit(_write, y_v, shard, r, c, h_y, w_y))
+            for coord, shard in zip(coords, Cb_shards):
+                r, c = int(coord[0]), int(coord[1])
+                futures.append(pool.submit(_write, u_v, shard, r, c, h_uv, w_uv))
+            for coord, shard in zip(coords, Cr_shards):
+                r, c = int(coord[0]), int(coord[1])
+                futures.append(pool.submit(_write, v_v, shard, r, c, h_uv, w_uv))
+            for f in futures:
+                f.result()
+            return out
+
+        # -----------------------------------------------------------------
+        # Benchmark: single-host extraction + scatter
+        # -----------------------------------------------------------------
+
+        # Warmup
+        sh_Y = extract_single_host(host_tt_Y)
+        sh_Cb = extract_single_host(host_tt_Cb)
+        sh_Cr = extract_single_host(host_tt_Cr)
+        scatter_planar(mesh_coords, sh_Y, sh_Cb, sh_Cr, h_per_y, w_per_y, h_per_uv, w_per_uv)
+
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            sh_Y = extract_single_host(host_tt_Y)
+            sh_Cb = extract_single_host(host_tt_Cb)
+            sh_Cr = extract_single_host(host_tt_Cr)
+        sh_extract_ms = (time.perf_counter() - start) / n_iters * 1_000
+
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            scatter_planar(mesh_coords, sh_Y, sh_Cb, sh_Cr, h_per_y, w_per_y, h_per_uv, w_per_uv)
+        sh_scatter_ms = (time.perf_counter() - start) / n_iters * 1_000
+
+        # -----------------------------------------------------------------
+        # Benchmark: multi-host extraction + scatter
+        # -----------------------------------------------------------------
+
+        # Warmup
+        mh_Y_cs = extract_multi_host(host_tt_Y)
+        mh_Cb_cs = extract_multi_host(host_tt_Cb)
+        mh_Cr_cs = extract_multi_host(host_tt_Cr)
+        # Remap coordinates to 0-based local (on single-host, identity map).
+        all_local_coords = [c for c, _ in mh_Y_cs]
+        local_row_positions = sorted({int(c[0]) for c in all_local_coords})
+        local_col_positions = sorted({int(c[1]) for c in all_local_coords})
+        row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
+        col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
+        mh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
+        local_TP = len(local_row_positions)
+        local_SP = len(local_col_positions)
+        mh_h_per_y, mh_w_per_y = H // local_TP, W // local_SP
+        mh_h_per_uv, mh_w_per_uv = Hu // local_TP, Wu // local_SP
+        mh_Y = [s for _, s in mh_Y_cs]
+        mh_Cb = [s for _, s in mh_Cb_cs]
+        mh_Cr = [s for _, s in mh_Cr_cs]
+        scatter_planar(mh_coords, mh_Y, mh_Cb, mh_Cr, mh_h_per_y, mh_w_per_y, mh_h_per_uv, mh_w_per_uv)
+
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            mh_Y_cs = extract_multi_host(host_tt_Y)
+            mh_Cb_cs = extract_multi_host(host_tt_Cb)
+            mh_Cr_cs = extract_multi_host(host_tt_Cr)
+            all_local_coords = [c for c, _ in mh_Y_cs]
+            local_row_positions = sorted({int(c[0]) for c in all_local_coords})
+            local_col_positions = sorted({int(c[1]) for c in all_local_coords})
+            row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
+            col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
+            mh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
+            mh_Y = [s for _, s in mh_Y_cs]
+            mh_Cb = [s for _, s in mh_Cb_cs]
+            mh_Cr = [s for _, s in mh_Cr_cs]
+        mh_extract_ms = (time.perf_counter() - start) / n_iters * 1_000
+
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            scatter_planar(mh_coords, mh_Y, mh_Cb, mh_Cr, mh_h_per_y, mh_w_per_y, mh_h_per_uv, mh_w_per_uv)
+        mh_scatter_ms = (time.perf_counter() - start) / n_iters * 1_000
+
+        # -----------------------------------------------------------------
+        # Report
+        # -----------------------------------------------------------------
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            print(f"\n--- YUV reassembly: single-host vs multi-host extraction (720p, 4x8 mesh) ---")
+            print(f"  Shards:        {TP * SP}  (Y per-shard {(1, h_per_y, w_per_y, T_)})")
+            print(f"  Iterations:    {n_iters}")
+            print()
+            header = f"  {'path':<14} {'extract (ms)':>13} {'scatter (ms)':>13} {'total (ms)':>11}"
+            print(header)
+            print("  " + "-" * (len(header) - 2))
+            print(
+                f"  {'single-host':<14} {sh_extract_ms:>13.2f} {sh_scatter_ms:>13.2f} {sh_extract_ms + sh_scatter_ms:>11.2f}"
+            )
+            print(
+                f"  {'multi-host':<14} {mh_extract_ms:>13.2f} {mh_scatter_ms:>13.2f} {mh_extract_ms + mh_scatter_ms:>11.2f}"
+            )
+            print(
+                f"  {'delta':<14} {mh_extract_ms - sh_extract_ms:>+13.2f} {mh_scatter_ms - sh_scatter_ms:>+13.2f} {(mh_extract_ms + mh_scatter_ms) - (sh_extract_ms + sh_scatter_ms):>+11.2f}"
+            )
