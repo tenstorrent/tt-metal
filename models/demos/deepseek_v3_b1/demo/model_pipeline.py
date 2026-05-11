@@ -337,5 +337,152 @@ class ModelPipeline:
     def dump_kv_cache(self, out_dir) -> None:
         self.pipeline.dump_kv_cache(out_dir)
 
+    def dump_per_token_outputs(self, out_dir) -> None:
+        self.pipeline.dump_per_token_outputs(out_dir)
+
+    def run_inference_with_capture(
+        self,
+        prompt_token_ids: list[int],
+        max_new_tokens: int,
+        eos_token_id: int | None,
+        capture_dir: Path,
+        return_generated_tokens: bool = False,
+    ) -> list[int] | None:
+        """Run inference with per-token snapshot of decoder outputs. ALL ranks must call this.
+
+        Driver rank (stage 0) runs the speculative-decode loop with embedded
+        ``barrier+snapshot+barrier`` at each iteration; non-driver ranks run a parallel
+        snapshot-only loop. Coordination via ``ttnn.distributed_context_barrier()`` and a sentinel
+        file in ``capture_dir`` (must be on shared filesystem).
+        """
+        is_driver = self.pipeline.my_stage_idx == 0
+        capture_dir = Path(capture_dir)
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        sentinel = capture_dir / ".keep_capturing"
+
+        if is_driver:
+            sentinel.touch()
+
+        ttnn.distributed_context_barrier()
+
+        if is_driver:
+            result = self._driver_loop_with_capture(
+                prompt_token_ids=prompt_token_ids,
+                max_new_tokens=max_new_tokens,
+                eos_token_id=eos_token_id,
+                sentinel=sentinel,
+            )
+            return result if return_generated_tokens else None
+        else:
+            self._capture_only_loop(sentinel)
+            return None
+
+    def _capture_only_loop(self, sentinel: Path) -> None:
+        iter_idx = 0
+        stage = self.pipeline.my_stage_idx
+        while True:
+            ttnn.distributed_context_barrier()  # barrier1
+            if not sentinel.exists():
+                logger.info(f"[stage={stage}] capture done at iter={iter_idx}")
+                break
+            self.pipeline.snapshot_outputs(iter_idx)
+            ttnn.distributed_context_barrier()  # barrier2
+            iter_idx += 1
+
+    def _driver_loop_with_capture(
+        self,
+        prompt_token_ids: list[int],
+        max_new_tokens: int,
+        eos_token_id: int | None,
+        sentinel: Path,
+    ) -> list[int]:
+        if self.pipeline.my_stage_idx != 0:
+            raise RuntimeError("_driver_loop_with_capture should only run on stage 0")
+        assert max_new_tokens >= 1
+
+        generated_tokens: list[int] = []
+        verified_spec_tokens: list[int] = []
+        unverified_spec_tokens: list[int] = []
+
+        def is_eos(token_id: int) -> bool:
+            return eos_token_id is not None and token_id == eos_token_id
+
+        def emit(token_id: int) -> None:
+            generated_tokens.append(token_id)
+
+        prefill_results = self.prefill_forward(prompt_token_ids)
+        pending: deque[DecodeResult] = deque(prefill_results)
+
+        iter_idx = 0
+        signal_to_exit = False
+        num_writes = 0
+        num_reads = 0
+
+        def do_capture(idx: int) -> None:
+            ttnn.distributed_context_barrier()
+            self.pipeline.snapshot_outputs(idx)
+            ttnn.distributed_context_barrier()
+
+        try:
+            while len(generated_tokens) < max_new_tokens or signal_to_exit:
+                if pending:
+                    result = pending.popleft()
+                else:
+                    result = self.model.read_result()
+                    num_reads += 1
+
+                do_capture(iter_idx)
+                iter_idx += 1
+
+                if not unverified_spec_tokens and not verified_spec_tokens:
+                    unverified_spec_tokens.append(result.token_1)
+                    emit(result.token_0)
+                else:
+                    if result.token_0_type == TokenType.BASE:
+                        if result.token_0 == unverified_spec_tokens[-1]:
+                            verified_spec_tokens.append(unverified_spec_tokens.pop())
+                            emit(result.token_0)
+                            signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
+                            continue
+                        else:
+                            unverified_spec_tokens.pop()
+                            unverified_spec_tokens.append(result.token_1)
+                            emit(result.token_0)
+                            signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
+
+                    if result.token_0_type == TokenType.SPEC:
+                        if verified_spec_tokens:
+                            verified_spec_tokens.pop()
+                            unverified_spec_tokens.append(result.token_1)
+                            if signal_to_exit:
+                                break
+                            emit(result.token_0)
+                        else:
+                            if signal_to_exit:
+                                break
+                            continue
+
+                if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
+                    break
+
+                self._write_spec_pair(
+                    result.token_0,
+                    result.token_0_pos,
+                    result.token_1,
+                    result.token_1_pos,
+                )
+                num_writes += 2
+
+            while num_reads < num_writes:
+                self.model.read_result()
+                num_reads += 1
+        finally:
+            if sentinel.exists():
+                sentinel.unlink()
+            ttnn.distributed_context_barrier()
+
+        logger.debug("Capture-mode generation complete ({} tokens generated)", len(generated_tokens))
+        return generated_tokens
+
     def terminate(self) -> None:
         self.pipeline.terminate()

@@ -616,6 +616,12 @@ class Pipeline:
         """Dump on-device KV cache for this rank's stage. No-op for non-decoder stages."""
         self._stage_kind.dump_kv_cache(out_dir, self._my_stage_idx)
 
+    def snapshot_outputs(self, iter_idx: int) -> None:
+        self._stage_kind.snapshot_outputs(iter_idx)
+
+    def dump_per_token_outputs(self, out_dir) -> None:
+        self._stage_kind.dump_per_token_outputs(out_dir, self._my_stage_idx)
+
     def terminate(self) -> None:
         """Terminate the pipeline block.
 

@@ -764,6 +764,11 @@ class DecoderStage(StageKind):
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
+        self._per_token_history: dict[str, list[torch.Tensor]] = {
+            "gate_indices": [],
+            "reduce_output": [],
+            "attn_output": [],
+        }
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
@@ -1021,6 +1026,47 @@ class DecoderStage(StageKind):
         out_path = out_dir / f"kv_cache_stage_{stage_idx:02d}_layer_{self._layer_idx}.pt"
         torch.save(kv_cache_torch, out_path)
         logger.info(f"[stage={stage_idx}] dumped KV cache shape={tuple(kv_cache_torch.shape)} to {out_path}")
+
+    def snapshot_outputs(self, iter_idx: int) -> None:
+        """Capture gate_indices, attn_output, reduce_output."""
+        if not self._state or "d" not in self._state:
+            return
+        d = self._state["d"]
+        mesh_device = self._state["mesh_device"]
+        mesh_rows, mesh_cols = mesh_device.shape
+
+        attn_t = d.get("ttnn_attention_block_output")
+        if attn_t is not None:
+            attn_torch = ttnn.to_torch(attn_t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            self._per_token_history["attn_output"].append(attn_torch.clone())
+
+        reduce_t = d.get("reduce_output_tensor")
+        if reduce_t is not None:
+            reduce_torch = ttnn.to_torch(
+                reduce_t,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1)),
+            )
+            self._per_token_history["reduce_output"].append(reduce_torch.clone())
+
+        gate_t = d.get("gate_output_indices_tensor")
+        if gate_t is not None:
+            gate_torch = ttnn.to_torch(gate_t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            self._per_token_history["gate_indices"].append(gate_torch.clone())
+
+    def dump_per_token_outputs(self, out_dir, stage_idx: int) -> None:
+        if not any(self._per_token_history[k] for k in self._per_token_history):
+            return
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for key, tensors in self._per_token_history.items():
+            if not tensors:
+                continue
+            stacked = torch.stack(tensors, dim=0)
+            out_path = out_dir / f"{key}_stage_{stage_idx:02d}_layer_{self._layer_idx}.pt"
+            torch.save(stacked, out_path)
+            logger.info(
+                f"[stage={stage_idx}] dumped {key} shape={tuple(stacked.shape)} ({len(tensors)} tokens) to {out_path}"
+            )
 
 
 class MoEDecoderStage(DecoderStage):

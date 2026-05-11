@@ -177,6 +177,16 @@ def create_parser() -> argparse.ArgumentParser:
             "(decoder stages only) as torch tensor binaries into this directory."
         ),
     )
+    parser.add_argument(
+        "--per-token-dump-dir",
+        type=Path,
+        default=None,
+        help=(
+            "If set, capture per-token decoder outputs (gate indices, reduce_output, attn_output) "
+            "during inference and dump as torch tensors before terminate. Output is one .pt per "
+            "stage/layer/tensor with shape (num_tokens, ...). Must be on shared filesystem."
+        ),
+    )
     return parser
 
 
@@ -203,6 +213,7 @@ def run_demo(
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
     kv_cache_dump_dir: Path | None = None,
+    per_token_dump_dir: Path | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -227,6 +238,11 @@ def run_demo(
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
+        use_per_token_capture = per_token_dump_dir is not None and not launch_only
+
+        tokenizer = None
+        prompt_ids: list[int] = []
+        eos_token_id: int | None = None
         if my_mesh_id == 0 and not launch_only:
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             messages = [{"role": "user", "content": prompt}]
@@ -241,15 +257,30 @@ def run_demo(
             if not prompt_ids:
                 raise RuntimeError("Chat template produced an empty prompt")
             logger.debug(f"Encoded prompt: {prompt_ids}")
+            eos_token_id = tokenizer.eos_token_id
 
+        if use_per_token_capture:
+            logger.info(f"[mesh {my_mesh_id}] Running inference with per-token capture")
+            generated_tokens = model_pipeline.run_inference_with_capture(
+                prompt_token_ids=prompt_ids,
+                max_new_tokens=iterations,
+                eos_token_id=eos_token_id,
+                capture_dir=per_token_dump_dir,
+                return_generated_tokens=(my_mesh_id == 0),
+            )
+            if my_mesh_id == 0 and generated_tokens is not None and tokenizer is not None:
+                generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+        elif my_mesh_id == 0 and not launch_only:
             logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
             generated_tokens = model_pipeline.run_inference(
                 prompt_token_ids=prompt_ids,
                 max_new_tokens=iterations,
-                eos_token_id=tokenizer.eos_token_id,
+                eos_token_id=eos_token_id,
                 return_generated_tokens=True,
             )
             assert generated_tokens is not None
+            assert tokenizer is not None
             generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
@@ -275,6 +306,17 @@ def run_demo(
                 except KeyboardInterrupt:
                     logger.info("Shutting down launch-only pipeline after interrupt.")
         model_pipeline.barrier()
+
+        # Dump per-token captures BEFORE terminate. The host lists were populated during
+        # run_inference_with_capture; this just stacks and writes them to disk. No device reads here,
+        # so no setup_fast_dispatch needed.
+        if per_token_dump_dir is not None:
+            try:
+                print(f"Dumping per-token outputs to {per_token_dump_dir}")
+                model_pipeline.dump_per_token_outputs(per_token_dump_dir)
+                print("Per-token outputs dumped")
+            except Exception:
+                logger.exception("Per-token dump failed on this rank")
 
         logger.info("Pod pipeline complete - terminating now...")
         model_pipeline.terminate()
@@ -329,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         bspm_variant=args.bspm_variant,
         bspm_budget=args.bspm_budget,
         kv_cache_dump_dir=args.kv_cache_dump_dir,
+        per_token_dump_dir=args.per_token_dump_dir,
     )
     print(file=sys.stdout, flush=True)
     return 0

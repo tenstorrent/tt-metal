@@ -125,6 +125,12 @@ class StageKind(ABC):
     def dump_kv_cache(self, out_dir, stage_idx: int) -> None:
         """Dump on-device KV cache to a torch binary on host. Default: no-op (only decoder stages override)."""
 
+    def snapshot_outputs(self, iter_idx: int) -> None:
+        """Capture per-token decoder outputs into host-side history. Default: no-op."""
+
+    def dump_per_token_outputs(self, out_dir, stage_idx: int) -> None:
+        """Stack accumulated per-token snapshots and write to disk. Default: no-op."""
+
 
 class PassthroughPayload(Enum):
     ACTIVATION = "activation"
