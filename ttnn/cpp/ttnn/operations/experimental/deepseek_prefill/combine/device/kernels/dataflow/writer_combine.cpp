@@ -257,7 +257,14 @@ void kernel_main() {
         noc_semaphore_set(exit_sem_ptr, 0);
     }
 
-    // Final drain: ensure any in-flight atomic-inc and writes settle before kernel exit.
+    // send_init_semaphore_to_configured_targets calls fabric_send_chip_unicast_noc_unicast_semaphore_only[_1d]
+    // which calls send_payload_flush_blocking_from_address -> send_payload_from_address_impl<FLUSH_BLOCKING>,
+    // which only calls noc_async_writes_flushed on the packet-header write. It confirms the the write departed
+    // worker's NIU but does not mean the write landed in EDM's L1 inbox.
+    // If we exit the kernel and close_direction_connections runs while the write is still mid-flight toward EDM's L1,
+    // EDM might process its slot bookkeeping before the actual packet bytes have landed.
+    // A full barrier ensures all writes have completed, as well as atomics which is purely defensive here and
+    // future-proof.
     noc_async_full_barrier();
 
     close_direction_connections(directions, fabric_connections);
