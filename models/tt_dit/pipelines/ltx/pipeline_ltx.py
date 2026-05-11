@@ -216,8 +216,17 @@ class LTXPipeline:
         Auto-configures parallel settings from mesh shape and loads checkpoint.
         """
         mesh_shape = tuple(mesh_device.shape)
-        # Default configs per mesh shape
+        # Default configs per mesh shape.
+        # BH Galaxy (4x8): sp_axis=1 (8 chips), tp_axis=0 (4 chips), Ring topology — mirrors Wan BH 4x8 config.
         device_configs = {
+            (1, 1): {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "num_links": 1,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+            },
             (2, 4): {
                 "sp_axis": 0,
                 "tp_axis": 1,
@@ -226,12 +235,12 @@ class LTXPipeline:
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             },
-            (1, 1): {
-                "sp_axis": 0,
-                "tp_axis": 1,
-                "num_links": 1,
+            (4, 8): {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 2,
                 "dynamic_load": False,
-                "topology": ttnn.Topology.Linear,
+                "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
             },
         }

@@ -35,8 +35,9 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
     [
         [(1, 1), 0, 1],
         [(2, 4), 0, 1],
+        [(4, 8), 1, 0],
     ],
-    ids=["1x1sp0tp1", "2x4sp0tp1"],
+    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -182,8 +183,9 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     [
         [(1, 1), 0, 1],
         [(2, 4), 0, 1],
+        [(4, 8), 1, 0],
     ],
-    ids=["1x1sp0tp1", "2x4sp0tp1"],
+    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -330,8 +332,9 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     [
         [(1, 1), 0, 1],
         [(2, 4), 0, 1],
+        [(4, 8), 1, 0],
     ],
-    ids=["1x1sp0tp1", "2x4sp0tp1"],
+    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

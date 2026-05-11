@@ -32,8 +32,6 @@ from safetensors.torch import load_file
 torch.cuda.synchronize = lambda *a, **kw: None
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
-from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline, euler_step
 
 # Reference sigma schedules from constants.py
@@ -286,6 +284,7 @@ def main():
     parser.add_argument("--height", type=int, default=512, help="Final video height (must be divisible by 64)")
     parser.add_argument("--width", type=int, default=768, help="Final video width (must be divisible by 64)")
     parser.add_argument("--fps", type=int, default=24, help="Frame rate")
+    parser.add_argument("--mesh", default="2,4", help="Mesh shape rows,cols (e.g. 2,4 or 4,8)")
     args = parser.parse_args()
 
     assert os.path.exists(args.checkpoint), f"Distilled checkpoint not found: {args.checkpoint}"
@@ -293,6 +292,7 @@ def main():
     assert os.path.isdir(args.gemma), f"Gemma not found: {args.gemma}"
     assert args.height % 64 == 0, f"Height must be divisible by 64 (got {args.height})"
     assert args.width % 64 == 0, f"Width must be divisible by 64 (got {args.width})"
+    mesh_rows, mesh_cols = [int(x) for x in args.mesh.split(",")]
 
     from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
 
@@ -311,21 +311,9 @@ def main():
 
     # === Text encoding ===
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), l1_small_size=16384)
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(mesh_rows, mesh_cols), l1_small_size=16384)
 
-    sp_axis, tp_axis = 0, 1
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
-    )
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    pipeline = LTXPipeline(
-        mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        ccl_manager=ccl_manager,
-        mode="av",
-    )
+    pipeline = LTXPipeline.create_pipeline(mesh_device, mode="av")
 
     t0 = time.time()
     results = pipeline.encode_prompts_reference([args.prompt], args.checkpoint, args.gemma)
