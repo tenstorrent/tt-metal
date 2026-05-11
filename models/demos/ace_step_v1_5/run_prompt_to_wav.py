@@ -107,6 +107,13 @@ def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, 
     return t
 
 
+_WELL_KNOWN_REPO_ROOTS = [
+    Path.home() / "proj_sdk" / "ACE-Step-1.5",
+    Path.home() / "ACE-Step-1.5",
+    Path("/opt") / "ACE-Step-1.5",
+]
+
+
 def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str | None) -> Path | None:
     candidates: list[Path] = []
     if ace_step_repo_root:
@@ -121,6 +128,7 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
             if cur.parent == cur:
                 break
             cur = cur.parent
+    candidates.extend(_WELL_KNOWN_REPO_ROOTS)
     seen: set[str] = set()
     for c in candidates:
         key = str(c)
@@ -174,13 +182,77 @@ def _null_condition_emb(ace: Any) -> torch.Tensor:
     return nc
 
 
+_DEFAULT_CKPT_DIR = Path.home() / ".cache" / "huggingface" / "hub" / "ACE-Step-1.5-checkpoints"
+
+_HF_REPO_MAP = {
+    "acestep-v15-base": ("ACE-Step/acestep-v15-base", False),
+    "acestep-v15-sft": ("ACE-Step/acestep-v15-sft", False),
+    "acestep-v15-turbo": ("ACE-Step/Ace-Step1.5", True),
+    "acestep-5Hz-lm-0.6B": ("ACE-Step/acestep-5Hz-lm-0.6B", False),
+    "acestep-5Hz-lm-1.7B": ("ACE-Step/Ace-Step1.5", True),
+    "acestep-5Hz-lm-4B": ("ACE-Step/acestep-5Hz-lm-4B", False),
+    "vae": ("ACE-Step/Ace-Step1.5", True),
+    "Qwen3-Embedding-0.6B": ("ACE-Step/Ace-Step1.5", True),
+}
+
+
+def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
+    """Return the local path for *name* under *ckpt_dir*, downloading from
+    HuggingFace on first use.  Files are stored under *ckpt_dir/<name>/*."""
+    local = ckpt_dir / name
+    has_weights = any(local.glob("*.safetensors")) or any(local.glob("*.pt"))
+    if has_weights:
+        return local
+
+    entry = _HF_REPO_MAP.get(name)
+    if entry is None:
+        raise FileNotFoundError(
+            f"No HuggingFace repo mapping for variant '{name}'. " f"Known variants: {list(_HF_REPO_MAP.keys())}"
+        )
+    repo_id, is_subfolder = entry
+    from huggingface_hub import snapshot_download
+
+    print(f"[ace_step_v1_5] Downloading {name} from {repo_id} ...", flush=True)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    if is_subfolder:
+        snapshot_download(
+            repo_id,
+            allow_patterns=f"{name}/*",
+            local_dir=str(ckpt_dir),
+        )
+    else:
+        snapshot_download(repo_id, local_dir=str(local))
+    if not any(local.glob("*.safetensors")) and not any(local.glob("*.pt")):
+        raise FileNotFoundError(f"Download succeeded but no weights found in {local}")
+    print(f"[ace_step_v1_5] {name} ready at {local}", flush=True)
+    return local
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="ACE-Step v1.5: HF-style preprocessing + TTNN DiT + host VAE.",
     )
     ap.add_argument("--prompt", type=str, required=True)
-    ap.add_argument("--ckpt_dir", type=str, default="/home/ubuntu/ign-sakthi/ACE-Step-1.5/checkpoints")
-    ap.add_argument("--variant", type=str, default="acestep-v15-base")
+    ap.add_argument(
+        "--ckpt_dir",
+        type=str,
+        default=str(_DEFAULT_CKPT_DIR),
+        help="Checkpoint root dir (default: ~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints).",
+    )
+    ap.add_argument(
+        "--variant",
+        type=str,
+        default="acestep-v15-base",
+        choices=["acestep-v15-base", "acestep-v15-sft", "acestep-v15-turbo"],
+        help="DiT model variant (default: acestep-v15-base).",
+    )
+    ap.add_argument(
+        "--lm_variant",
+        type=str,
+        default="acestep-5Hz-lm-1.7B",
+        choices=["acestep-5Hz-lm-0.6B", "acestep-5Hz-lm-1.7B", "acestep-5Hz-lm-4B"],
+        help="5 Hz LM variant (default: acestep-5Hz-lm-1.7B).",
+    )
     ap.add_argument("--device_id", type=int, default=0)
     ap.add_argument("--duration_sec", type=float, default=10.0)
     ap.add_argument("--shift", type=float, default=1.0)
@@ -216,7 +288,11 @@ def main() -> None:
     ap.add_argument(
         "--fast-preprocess",
         action="store_true",
-        help="Skip 5 Hz LM + handler batching; use Qwen-only HF prepare_condition (no precomputed LM hints).",
+        help=(
+            "Skip 5 Hz LM + handler batching; use Qwen-only HF prepare_condition (no precomputed LM hints). "
+            "Avoids importing AceStepHandler (no torchaudio / full ACE-Step training stack). "
+            "If omitted and torchaudio is not installed, this path is selected automatically."
+        ),
     )
     ap.add_argument(
         "--no-ttnn-strict",
@@ -225,18 +301,40 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    fast_preprocess = bool(args.fast_preprocess)
+    if not fast_preprocess:
+        import importlib.util
+
+        if importlib.util.find_spec("torchaudio") is None:
+            print(
+                "[ace_step_v1_5] torchaudio not found; using --fast-preprocess "
+                "(install torchaudio for the 5 Hz LM / AceStepHandler path).",
+                file=sys.stderr,
+                flush=True,
+            )
+            fast_preprocess = True
+
     import torch
     from transformers import AutoModel, AutoTokenizer
 
     ckpt_dir = Path(args.ckpt_dir)
-    model_dir = ckpt_dir / args.variant
+    os.environ["ACESTEP_CHECKPOINTS_DIR"] = str(ckpt_dir)
+
+    model_dir = _ensure_variant(args.variant, ckpt_dir)
+    _ensure_variant("vae", ckpt_dir)
+    _ensure_variant("Qwen3-Embedding-0.6B", ckpt_dir)
+    if not fast_preprocess:
+        _ensure_variant(args.lm_variant, ckpt_dir)
+
     safetensors_path = model_dir / "model.safetensors"
     silence_latent_path = model_dir / "silence_latent.pt"
     vae_dir = ckpt_dir / "vae"
     text_model_dir = ckpt_dir / "Qwen3-Embedding-0.6B"
 
     if not safetensors_path.is_file():
-        raise FileNotFoundError(f"Missing checkpoint: {safetensors_path}")
+        safetensors_shards = sorted(model_dir.glob("model-*.safetensors"))
+        if not safetensors_shards:
+            raise FileNotFoundError(f"Missing checkpoint: {safetensors_path}")
     if not silence_latent_path.is_file():
         raise FileNotFoundError(f"Missing silence_latent: {silence_latent_path}")
 
@@ -258,20 +356,38 @@ def main() -> None:
 
     torch_dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    def _ensure_acestep_on_path() -> Path:
+        root = _resolve_ace_step_repo_root(ckpt_dir=str(args.ckpt_dir), ace_step_repo_root=args.ace_step_repo_root)
+        if root is None:
+            raise RuntimeError(
+                "Could not find ACE-Step-1.5 repo (needed for acestep imports). "
+                "Pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT."
+            )
+        from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+
+        ensure_acestep_repo_on_path(root)
+        return root
+
     # --- Optional: full official path (LLM), no TTNN ---
     if args.use_official_lm:
         from models.demos.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
 
         configure_acestep_logging()
-        ref_root = _resolve_ace_step_repo_root(ckpt_dir=str(args.ckpt_dir), ace_step_repo_root=args.ace_step_repo_root)
-        if ref_root is None:
-            raise RuntimeError("Could not find ACE-Step-1.5 repo. Pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT.")
-        from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+        ref_root = _ensure_acestep_on_path()
+        try:
+            from acestep.handler import AceStepHandler
+            from acestep.inference import GenerationConfig, GenerationParams, generate_music
+            from acestep.llm_inference import LLMHandler
+        except ModuleNotFoundError as e:
+            raise RuntimeError(
+                "--use-official-lm requires AceStepHandler and its deps "
+                f"(missing {e.name!r}). pip install torchaudio (match your PyTorch build), "
+                "or run without --use-official-lm and use --fast-preprocess for TTNN demos."
+            ) from e
 
-        ensure_acestep_repo_on_path(ref_root)
-        from acestep.handler import AceStepHandler
-        from acestep.inference import GenerationConfig, GenerationParams, generate_music
-        from acestep.llm_inference import LLMHandler
+        import acestep.model_downloader as _mdl
+
+        _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
 
         dit_handler = AceStepHandler()
         llm_handler = LLMHandler()
@@ -285,10 +401,10 @@ def main() -> None:
         print(status, flush=True)
         if not ok:
             raise RuntimeError("AceStepHandler.initialize_service failed")
-        lm_model = "acestep-5Hz-lm-0.6B"
+        _ensure_variant(args.lm_variant, ckpt_dir)
         status, ok = llm_handler.initialize(
             checkpoint_dir=str(ckpt_dir),
-            lm_model_path=lm_model,
+            lm_model_path=args.lm_variant,
             backend="pt",
             device=device,
         )
@@ -324,17 +440,7 @@ def main() -> None:
         print(f"Wrote (official LM, not TTNN): {dst}", flush=True)
         return
 
-    ref_root = _resolve_ace_step_repo_root(ckpt_dir=str(args.ckpt_dir), ace_step_repo_root=args.ace_step_repo_root)
-    if ref_root is None:
-        raise RuntimeError(
-            "Could not find ACE-Step-1.5 repo for preprocessing. "
-            "Pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT."
-        )
-    from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
-
-    ensure_acestep_repo_on_path(ref_root)
-
-    if args.fast_preprocess:
+    if fast_preprocess:
         # --- Lightweight: Qwen + HF prepare_condition (no 5 Hz LM / no precomputed hints) ---
         tok = AutoTokenizer.from_pretrained(str(text_model_dir))
         txt_model = AutoModel.from_pretrained(str(text_model_dir)).eval().to(torch_dev)
@@ -409,6 +515,8 @@ def main() -> None:
         null_emb = _null_condition_emb(ace).float().cpu()
     else:
         # --- Official: 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
+        ref_root = _ensure_acestep_on_path()
+
         from models.demos.ace_step_v1_5.official_lm_preprocess import (
             build_filtered_dit_kwargs_for_handler,
             configure_acestep_logging,
@@ -416,10 +524,22 @@ def main() -> None:
         )
 
         configure_acestep_logging()
-        from acestep.handler import AceStepHandler
-        from acestep.llm_inference import LLMHandler
+        try:
+            from acestep.handler import AceStepHandler
+            from acestep.llm_inference import LLMHandler
+        except ModuleNotFoundError as e:
+            raise RuntimeError(
+                "Default preprocessing imports AceStepHandler, which pulls ACE-Step training code "
+                f"(e.g. torchaudio). Missing module: {e.name!r}. "
+                "Fix: pip install torchaudio (match your torch/CUDA build from pytorch.org), "
+                "or rerun with --fast-preprocess to skip the 5 Hz LM + handler path."
+            ) from e
+
+        import acestep.model_downloader as _mdl
 
         from models.demos.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
+
+        _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
 
         dit_handler = AceStepHandler()
         llm_handler = LLMHandler()
@@ -433,10 +553,9 @@ def main() -> None:
         print(status, flush=True)
         if not ok:
             raise RuntimeError("AceStepHandler.initialize_service failed")
-        lm_model = "acestep-5Hz-lm-0.6B"
         status, ok = llm_handler.initialize(
             checkpoint_dir=str(ckpt_dir),
-            lm_model_path=lm_model,
+            lm_model_path=args.lm_variant,
             backend="pt",
             device=device,
         )
@@ -529,6 +648,7 @@ def main() -> None:
             expected_input_length=int(frames),
         )
 
+        _ensure_acestep_on_path()
         from acestep.models.common.apg_guidance import MomentumBuffer, adg_forward, apg_forward
 
         momentum_buffer = MomentumBuffer() if do_cfg and not use_adg else None
