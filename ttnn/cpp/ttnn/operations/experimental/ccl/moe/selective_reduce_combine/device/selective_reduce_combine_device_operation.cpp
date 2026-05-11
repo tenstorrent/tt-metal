@@ -39,8 +39,6 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const uint32_t expected_activations_stride_elm =
         tt::align((2 * experts_per_device + 1) * datum_size, alignment) / datum_size;
 
-    TT_FATAL(operation_attributes.axis.has_value(), "Cluster axis must be specified");
-
     TT_FATAL(
         activations_stride_elm == expected_activations_stride_elm,
         "The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token");
@@ -60,8 +58,8 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     const uint32_t seq_size = operation_attributes.seq_size;
     const uint32_t select_experts_k = operation_attributes.select_experts_k;
 
-    const auto& axis = operation_attributes.axis;
-    const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const auto axis = operation_attributes.axis;
+    const auto num_devices_cluster = (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
     auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
@@ -92,7 +90,7 @@ ttnn::Tensor selective_reduce_combine(
     uint32_t seq_size,
     uint32_t select_experts_k,
     uint32_t experts,
-    const std::optional<uint32_t>& cluster_axis,
+    uint32_t cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
     uint32_t num_token_parallel_cores,
