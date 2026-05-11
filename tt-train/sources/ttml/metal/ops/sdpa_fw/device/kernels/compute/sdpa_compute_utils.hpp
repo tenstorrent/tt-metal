@@ -35,7 +35,7 @@ void calculate_recip_first_column() {
             sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
         } else {
             sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, 0));
+            sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg += 2;
     }
@@ -194,10 +194,10 @@ void matmul_qk_by_v(
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
-    mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
-    pack_reconfig_data_format(cb_cur_mm_out);
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
+    mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
+    pack_reconfig_data_format(cb_cur_mm_out);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -256,10 +256,10 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
     cb_wait_front(cb_exp_max_diff, onetile);
 
     const uint32_t exp_sum_dst_idx = 0;
+    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_bcast_cols_init_short(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
     // multiply previous exp sum with exp_max_diff
-    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);
 
     // copy current sum exp to next register
