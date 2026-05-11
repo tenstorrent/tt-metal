@@ -1210,14 +1210,41 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 }
 
                 if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
-                    log_info(
-                        tt::LogMetal,
-                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                        "ERISC already clean (status=0x{:08x}), skipping",
-                        this->id(),
-                        eth_chan_id,
-                        status_buf[0]);
-                    phase25_already_clean_chans_.insert(eth_chan_id);  // FIX P25-CLEAN (#42429): track for Phase 3
+                    // FIX P25-CLEAN-V2 (#42429): only skip P25-CLEAN channels when peer device
+                    // is NOT in the quiesce set.  Channels terminated by a peer-device quiesce
+                    // ARE active fabric channels and must be relaunched.
+                    bool peer_is_quiescing = false;
+                    if (!quiescing_device_ids_.empty()) {
+                        try {
+                            auto [peer_chip_id, peer_core] = this->get_connected_ethernet_core(
+                                CoreCoord(eth_logical_core.x, eth_logical_core.y));
+                            peer_is_quiescing = quiescing_device_ids_.count(peer_chip_id) > 0;
+                        } catch (...) {
+                            // Cannot resolve peer — treat as non-quiescing (safe: worst case we
+                            // try to re-launch a non-participating channel, which is the old behaviour).
+                        }
+                    }
+                    if (peer_is_quiescing) {
+                        log_info(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                            "ERISC already clean (status=0x{:08x}) but peer device IS in quiesce set "
+                            "— NOT adding to P25-CLEAN skip list; Phase 3 will re-launch. "
+                            "(FIX P25-CLEAN-V2: #42429)",
+                            this->id(),
+                            eth_chan_id,
+                            status_buf[0]);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                            "ERISC already clean (status=0x{:08x}), peer not in quiesce set — skipping "
+                            "(FIX P25-CLEAN: #42429)",
+                            this->id(),
+                            eth_chan_id,
+                            status_buf[0]);
+                        phase25_already_clean_chans_.insert(eth_chan_id);  // FIX P25-CLEAN (#42429): track for Phase 3
+                    }
                     continue;
                 }
 

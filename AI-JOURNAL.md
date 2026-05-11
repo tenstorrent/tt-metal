@@ -1,5 +1,118 @@
 
 ---
+## 2026-05-11 — Cycle 9 failure: FIX P25-CLEAN-V2 (#42429): P25-CLEAN too aggressive; channels terminated by peer quiesce not re-launched
+
+**Files**: `tt_metal/impl/device/device.cpp`, `tt_metal/impl/device/device_impl.hpp`, `tt_metal/distributed/mesh_device.cpp`
+
+**Observed failure**:
+```
+TT_THROW: Fabric health check failed after quiesce restart on Device 2 — 6 ERISC channel(s) not at READY_FOR_TRAFFIC (0xa3b3c3d3) after 2000ms.
+Phase 5b: chan0=0xa1b1c1d1(REMOTE_HANDSHAKE_COMPLETE) chan1=0xa1b1c1d1(REMOTE_HANDSHAKE_COMPLETE) chan8=0xa4b4c4d4(TERMINATED) chan9=0xa4b4c4d4(TERMINATED) chan14=0xa4b4c4d4(TERMINATED) chan15=0xa4b4c4d4(TERMINATED)
+```
+
+**Root cause**:
+Pass 1a runs `quiesce_and_restart_fabric_workers` on all devices in order (non-MMIO first). Device 4 and Device 6 (ERISC-only) quiesce first, sending TERMINATE to their active channels. Those channels' ring-peers on Device 2 (channels 8, 9, 14, 15) receive TERMINATE from their peers and flip to 0xa4b4c4d4 (TERMINATED).
+
+When Device 2's Phase 2.5 runs, channels 8/9/14/15 are already TERMINATED. FIX P25-CLEAN added those to `phase25_already_clean_chans_`, which caused Phase 3 (`launch_eth_cores_for_quiesce`) to SKIP them. But these ARE active fabric channels — they got TERMINATED because their peer device quiesced first, not because they're disconnected.
+
+Result: channels 8/9/14/15 never get quiesce firmware re-launched. Channels 0/1 (MMIO-side) start successfully, reach REMOTE_HANDSHAKE_COMPLETE, and wait for peers. Channels 8/9/14/15 (the peers) stay TERMINATED. Health check times out.
+
+**Fix (FIX P25-CLEAN-V2)**:
+- Added `std::unordered_set<ChipId> quiescing_device_ids_` member to `Device` in `device_impl.hpp`
+- Added `set_quiescing_devices(std::unordered_set<ChipId>)` method to `Device`
+- In `mesh_device.cpp::quiesce_internal`, before Pass 1a: build the quiesce set (all device IDs) and call `set_quiescing_devices` on every device
+- In Phase 2.5 "already clean" path (`device.cpp` line ~1212): call `get_connected_ethernet_core` to look up the peer device ID. If peer IS in `quiescing_device_ids_`, do NOT add to `phase25_already_clean_chans_` — Phase 3 will re-launch the channel normally. If peer is NOT in the quiesce set (truly disconnected/external), add to `phase25_already_clean_chans_` as before.
+
+**Key constraint preserved**: non-participating channels (whose peers are outside the quiesce set) are still skipped in Phase 3 — no regression from Cycle 8 fix.
+
+**Commit**: TBD — appended after commit
+
+---
+## 2026-05-11 — Audit Cycle: Testing and Diagnostic Logging Gap Audit
+
+**Timestamp**: 2026-05-11 ~10:00 UTC
+**Audit report**: `/workspace/group/research/audit-2026-05-11-10.md`
+
+**Gaps found (6)**:
+1. analyze_fabric_hang_log.sh missing 15+ FIX labels (RR-NM, P25-CLEAN, EV, BU, BT, FQ, QD, QE, QS, VC, RZ2-4)
+2. No 0x49705530 (ROM boot intermediate state) detection in analyze script
+3. No dedicated analysis sections for recent fixes (P25-CLEAN, AP, EV, RR-NM)
+4. No test for FIX P25-CLEAN (Phase 3 skip for already-terminated channels)
+5. No test for FIX AP (master_router_chan stuck detection)
+6. No test for FIX EV (EventSynchronize dead-relay guard)
+
+**Fixes applied (4 commits)**:
+- `8a527b2d61d` — analyze script: 15+ FIX labels, 5 new sections, 0x49705530 detection
+- `443cedd5f97` — GAP-78: FIX P25-CLEAN test (already-terminated Phase 3 skip)
+- `12a966b30fe` — GAP-79: FIX AP test (master_router_chan stuck detection)
+- `558db2aca0c` — GAP-80: FIX EV test (EventSynchronize dead relay guard) + CMakeLists
+
+**Remaining gaps**: FIX RR-NM test (needs hardware mock), FIX BT/FQ tests (timing-dependent), WFEWS mux unbounded spin (perf-sensitive).
+
+---
+## 2026-05-11 — Cycle 8 failure: FIX P25-CLEAN (#42429): Phase 3 launches quiesce firmware on already-TERMINATED out-of-mesh channels
+
+**Files**: `tt_metal/impl/device/device.cpp`, `tt_metal/impl/device/device_impl.hpp`
+**Observed on**: tt-metal-ci-vm-t3k-10, cycle 8, test `MultiCQFabricMeshDevice2x4Fixture` (1x4 sub-mesh AllGather)
+
+**Root cause**:
+The racecondition-hunt test runs BATCH 1 (1x8 full mesh AllGather) then BATCH 2 (1x4 sub-mesh AllGather on 8-device FABRIC_1D board). In BATCH 2, `quiesce_devices()` runs on only 4 devices. The 8-device FABRIC_1D fabric means each device has channels to ALL 8 devices — including the 4 NOT in the quiesce set.
+
+**Failure sequence**:
+1. **Phase 2.5**: Terminates ACTIVE channels (at READY_FOR_TRAFFIC 0xa3b3c3d3). Also detects channels already at TERMINATED 0xa4b4c4d4 ("already clean") and SKIPs them. Device 4 chan0/chan1 are ACTIVE; chan6/chan7 are ALREADY TERMINATED (their peers on non-participating devices 5/7 had already dropped the connection).
+
+2. **Phase 3** (`launch_eth_cores_for_quiesce`): Launches quiesce firmware on ALL channels — including chan6/chan7 which Phase 2.5 found already TERMINATED. The quiesce firmware on chan6/chan7 starts but its peers (devices 5 and 7) are NOT quiescing and cannot respond to the quiesce handshake protocol. Chan6/chan7 get stuck at STARTED (0xa0b0c0d0).
+
+3. The quiesce firmware requires ALL channels to synchronize before any can advance past REMOTE_HANDSHAKE_COMPLETE. Since chan6/chan7 are stuck at STARTED, the in-mesh channels (chan0/chan1) that successfully exchanged REMOTE_HANDSHAKE with their peers get stuck at REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1).
+
+4. After Phase 5b 2001ms timeout: master_router_chan=1 is stuck at REMOTE_HANDSHAKE_COMPLETE → FIX AP fires → `fabric_relay_path_broken_=true`.
+
+5. With relay path broken: dispatch cannot operate normally → FIX FQ-1 fires → TT_THROW: "Timeout waiting for physical cores to finish".
+
+**Fix (FIX P25-CLEAN)**:
+- Added `phase25_already_clean_chans_` member (`std::unordered_set<uint32_t>`) to `device_impl.hpp`
+- Clear it at the start of each quiesce cycle alongside `pending_phase25_force_reset_chans_.clear()` (line ~1105)
+- When Phase 2.5 finds "already clean" channels (status=0 or TERMINATED), record them in `phase25_already_clean_chans_` before `continue` (line ~1220)
+- Skip these channels in **inline Phase 3 launch** (quiesce_and_restart_fabric_workers, after newly-dead check) — clear after loop (line ~1924)
+- Skip these channels in **deferred Phase 3 launch** (launch_eth_cores_for_quiesce) — take local copy via `std::move` alongside `newly_dead` and `p25_force_reset`, skip in the per-core loop
+
+**Key insight**: Channels that Phase 2.5 found "already clean" (TERMINATED before quiesce) have peers that are NOT active in the current fabric session. Launching quiesce firmware on them is both unnecessary and harmful — it causes stuck STARTED state that cascades into a full hang.
+
+---
+## 2026-05-11 — Cycle 6 failure analysis + FIX AP: master_router_chan stuck → fabric_relay_path_broken_
+
+**Files**: `tt_metal/impl/device/device.cpp`, `tt_metal/impl/device/device_impl.hpp`
+
+**Cycle 6 failure sequence** (`MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0`):
+
+1. 1x4 dispatch mesh teardown: Device 4 (non-MMIO) had base-UMD relay firmware on chan1 and chan6
+2. FIX RZ2 health check passed after ring sync
+3. 2x4 AllGather mesh fixture starts: Device 4 now has 4 channels (chan0,1,6,7)
+4. `quiesce_devices()` called on {0,2,4,5}
+5. Phase 2.5: existing ERISCs on Device 4 chan0 and chan1 terminated
+6. Phase 3: new fabric firmware written to all channels on Device 4
+7. Phase 5 handshake wait: Device 4 **chan1** (the master_router_chan — UMD relay to MMIO Device 2) stuck at `REMOTE_HANDSHAKE_COMPLETE` (0xa1b1c1d1) for 2s
+8. FIX BU early-exits Phase 5 when master chan hits timeout
+9. Phase 5b deadline check: chan0=0xa1b1c1d1, chan1=0xa1b1c1d1, chan6=0xa0b0c0d0, chan7=0xa0b0c0d0
+10. **FIX AN fires**: "all 4 truly-unhealthy channels stuck at/below LOCAL_HANDSHAKE_COMPLETE — peer device(s) not in quiesce set. NOT setting fabric_channels_not_ready_for_traffic_"
+11. Post-quiesce `fabric_eth_health`: Device 4 chan0/1/6/7 all show `status=0x00000000` (expected 0xa2b2c2d2)
+12. AllGather enqueued → dispatch to Device 4 hangs → 5s dispatch timeout → TT_THROW: TIMEOUT
+
+**Root cause**: FIX AN is correct that all stuck channels have out-of-mesh peers (non-fatal for `fabric_channels_not_ready_for_traffic_`). However, chan1 is the **master_router_chan** — the UMD ETH relay used for dispatching commands to Device 4 from the host. A stuck master_router_chan means the dispatch relay is broken, regardless of whether its peer is in the mesh. FIX AN did not check for this and returned `true` (early-exit) without setting `fabric_relay_path_broken_`.
+
+**Fix (FIX AP)**:
+- Added `master_router_chan` as a new parameter to `phase5b_erisc_health_check()` (declaration in `device_impl.hpp`, definition in `device.cpp`)
+- Call site in `wait_for_fabric_workers_ready` passes `builder_ctx.get_fabric_master_router_chan(this->id())`
+- Inside the FIX AN `if (all_handshake_incomplete)` block: `std::any_of` over truly_unhealthy checks if any stuck channel equals `master_router_chan`; if so, `fabric_relay_path_broken_ = true` with a `log_error` naming FIX AP
+- Non-master stuck channels: FIX AN behavior unchanged (no flag set, `return true`)
+- Master-chan stuck: both `fabric_relay_path_broken_ = true` AND FIX AN `return true` (the `log_warning` still fires for observability)
+
+**What was NOT changed**:
+- No test logic, tolerances, or skip thresholds
+- FIX AK-2 path (non-MMIO, unexpected states) unchanged
+- FIX AN `log_warning` kept for observability even when FIX AP fires
+
+---
 ## 2026-05-11 — FIX AN: FIX AK was wrongly setting fabric_channels_not_ready_for_traffic_ for partial-mesh teardown
 
 **File**: `tt_metal/impl/device/device.cpp`, `phase5b_erisc_health_check()`, lines ~2872–2892

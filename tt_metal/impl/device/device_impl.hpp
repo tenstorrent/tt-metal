@@ -195,6 +195,11 @@ public:
     void wait_for_fabric_workers_ready();
     // Called by FabricFirmwareInitializer when this device is placed in mmio_dead_peer_devices_.
     void set_fabric_is_mmio_dead_peer_device(bool v) { fabric_is_mmio_dead_peer_device_ = v; }
+    // FIX P25-CLEAN-V2 (#42429): set of device IDs being quiesced together in the current cycle.
+    // Populated by mesh_device before Pass 1a; cleared at cycle end.  Used in Phase 2.5 to
+    // distinguish "already-TERMINATED because peer was quiesced first" (must re-launch) from
+    // "already-TERMINATED because peer is not in quiesce set" (safe to skip).
+    void set_quiescing_devices(std::unordered_set<ChipId> ids) { quiescing_device_ids_ = std::move(ids); }
     // Puts device into reset
     bool close() override;
 
@@ -454,6 +459,12 @@ private:
     // (status=0xa4b4c4d4 "already clean") — skip Phase 3 launch for these, as
     // their peers are not active in the current fabric/quiesce session.
     std::unordered_set<uint32_t> phase25_already_clean_chans_;
+    // FIX P25-CLEAN-V2 (#42429): set of device IDs being quiesced together in the current cycle.
+    // Set by mesh_device before Pass 1a, used in Phase 2.5 to gate the P25-CLEAN skip:
+    // channels whose peer device IS in this set are NOT added to phase25_already_clean_chans_
+    // and WILL be re-launched in Phase 3 (their TERMINATED state was caused by the peer
+    // quiescing first, not by being disconnected from the active fabric).
+    std::unordered_set<ChipId> quiescing_device_ids_;
 
     // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
     // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which

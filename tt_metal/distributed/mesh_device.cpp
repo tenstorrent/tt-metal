@@ -1641,6 +1641,23 @@ void MeshDeviceImpl::quiesce_internal() {
     // NOTE: iterate get_devices() directly (not submesh_ loop) so global MMIO-last ordering
     // is respected across submesh boundaries.
     log_info(tt::LogMetal, "quiesce_internal: Pass 1a — Phase 2.5 + Phase 3 setup on all devices (ETH launch deferred)");
+    // FIX P25-CLEAN-V2 (#42429): before Pass 1a, tell every device which other devices are
+    // being quiesced together in this cycle.  Phase 2.5 uses this to avoid adding channels
+    // to phase25_already_clean_chans_ when their peer device is also being quiesced (i.e.
+    // the channel's TERMINATED state was caused by the peer quiescing first, not by the
+    // peer being outside the active fabric).  Those channels MUST be re-launched in Phase 3.
+    {
+        std::unordered_set<ChipId> quiesce_ids;
+        for (auto* idev : get_devices()) {
+            quiesce_ids.insert(idev->id());
+        }
+        for (auto* idev : get_devices()) {
+            auto* dev = dynamic_cast<Device*>(idev);
+            if (dev) {
+                dev->set_quiescing_devices(quiesce_ids);
+            }
+        }
+    }
     for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
