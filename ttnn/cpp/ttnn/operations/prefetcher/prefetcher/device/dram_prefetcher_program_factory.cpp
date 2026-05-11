@@ -114,9 +114,8 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     auto reader_core_range = CoreRangeSet{active_reader_core_range_vec};
 
     uint32_t reader_cb_single_tile_size = max_tile_size;
-    const uint32_t total_num_blocks_in_buffer = 3;
-    uint32_t reader_cb_size =
-        max_block_size_per_reader_core * total_num_blocks_in_buffer;  // reader cb is triple buffered
+    const uint32_t total_num_blocks_in_buffer = 3;  // reader cb is triple buffered
+    uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
 
     TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
 
