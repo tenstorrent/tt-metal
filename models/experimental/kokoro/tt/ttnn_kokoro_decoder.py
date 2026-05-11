@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full TTNN Kokoro ISTFTNet ``Decoder`` (front + body + generator). ``m_source`` may use CPU SineGen."""
+"""Full TTNN Kokoro ISTFTNet ``Decoder`` (front + body + generator); ``m_source`` uses device ``KokoroTtnnSineGen``."""
 
 from __future__ import annotations
 
