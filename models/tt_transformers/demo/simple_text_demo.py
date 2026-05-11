@@ -1464,13 +1464,6 @@ def test_demo_text(
         batch_size=global_batch_size,
         seq_len=input_seq_len,
     )
-    if resolved_perf_targets is None:
-        resolved_perf_targets = resolve_perf_targets(
-            model_name=model_name,
-            sku=tt_device_name,
-            batch_size=global_batch_size,
-            seq_len=None,
-        )
 
     if resolved_perf_targets:
         target_decode_tok_s_u = resolved_perf_targets.get("decode_t/s/u")
