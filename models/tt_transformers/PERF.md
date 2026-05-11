@@ -4,7 +4,7 @@ This file is deprecated as a CI source of truth. Centralized perf/accuracy targe
 
 Performance and token accuracy using teacher forcing can still be collected from [demo/simple_text_demo.py](demo/simple_text_demo.py) with the `ci-token-matching` test case for manual reporting/history. You can generate this table by running these tests with the `lt` tool (tell it to run `table` or `pareto`) and pressing `m` whilst in the results section to export to markdown.
 
-For compatibility during migration, some legacy paths may still read this document as a fallback when centralized YAML accuracy entries are missing. New or updated targets must be added to `models/model_targets.yaml` first.
+New or updated perf/accuracy targets must be added to `models/model_targets.yaml`.
 
 Also note that all the performance metrics below were taken for a maximum generation of 200 tokens, i.e., 200 decode iterations.
 
