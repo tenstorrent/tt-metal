@@ -165,7 +165,7 @@ void kernel_main() {
         }
 
         noc.async_writes_flushed<experimental::Noc::ResponseMode::POSTED>();  // wait for local writes
-        noc.async_writes_flushed();                                           // wait for Fabric writes
+        writer.flush();                                                       // wait for Fabric writes
         cb.pop_front(1);
     }
 

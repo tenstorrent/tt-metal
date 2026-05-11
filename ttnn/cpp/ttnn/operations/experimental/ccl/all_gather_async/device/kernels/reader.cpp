@@ -161,6 +161,7 @@ void kernel_main() {
                 writer.send(l1_read_addr, fabric_tensor_page_addr);
                 l1_read_addr += input_page_size;
             }
+            writer.flush();
             if (l1_read_addr == l1_end_addr) {
                 l1_read_addr = l1_base_addr;
             }
@@ -187,6 +188,7 @@ void kernel_main() {
             writer.send(l1_read_addr, fabric_tensor_page_addr);
             l1_read_addr += input_page_size;
         }
+        writer.flush();
         if (l1_read_addr == l1_end_addr) {
             l1_read_addr = l1_base_addr;
         }
