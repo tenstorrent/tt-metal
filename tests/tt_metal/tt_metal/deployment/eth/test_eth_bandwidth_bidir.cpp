@@ -156,8 +156,9 @@ static bool run_test_bandwidth_bidir(
 TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidthBidir) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
-    bool pass = true;
+    vector<LinkError> errors;
     int n = 0;
+
     vector<uint32_t> inputs = generate_uniform_random_vector<uint32_t>(0, 100, 1 << 20);
 
     for (const auto& sender_mesh_device : devices_) {
@@ -182,8 +183,12 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidthBidir) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
 
                     log_info(tt::LogTest, "    running on {}", processor);
-                    pass &= run_test_bandwidth_bidir(
+                    bool passed = run_test_bandwidth_bidir(
                         this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor, inputs);
+                    if (!passed) {
+                        errors.emplace_back(
+                            sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
+                    }
                     n++;
                 }
             }
@@ -191,7 +196,9 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidthBidir) {
     }
 
     log_info(tt::LogTest, "Ran {} tests", n);
-    ASSERT_TRUE(pass);
+
+    print_summary(errors);
+    ASSERT_TRUE(!errors.size());
 }
 
 }  // namespace tt::tt_metal
