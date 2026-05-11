@@ -72,7 +72,7 @@ def _format_response(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Radius of dots drawn on annotated images (pixels)
-_DOT_RADIUS = 20
+_DOT_RADIUS = 200
 _DOT_COLOUR = (255, 60, 60)  # bright red
 
 

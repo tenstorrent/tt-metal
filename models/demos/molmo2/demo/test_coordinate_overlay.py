@@ -317,16 +317,15 @@ def test_save_annotated_outputs_handles_truncated_track_coords(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_dot_radius_is_at_least_16px(tmp_path):
-    """The drawn dot covers pixels at least 16px from the centre."""
+def test_dot_radius_is_at_least_150px(tmp_path):
+    """The drawn dot covers pixels at least 150px from the centre (10x bigger for visibility)."""
     from models.demos.molmo2.demo.demo import annotate_image_with_points
 
-    img = _white_image(400, 400)
+    img = _white_image(500, 500)
     out = tmp_path / "out.png"
-    annotate_image_with_points(img, "0 500 500", out)  # dot at (200, 200)
+    annotate_image_with_points(img, "0 500 500", out)  # dot at (250, 250)
     result = Image.open(out).convert("RGB")
-    # A pixel 16px from centre should be covered by the dot
-    assert result.getpixel((200 + 16, 200)) != (255, 255, 255), "Dot must extend ≥16px from centre"
+    assert result.getpixel((250 + 150, 250)) != (255, 255, 255), "Dot must extend ≥150px from centre"
 
 
 # ---------------------------------------------------------------------------
