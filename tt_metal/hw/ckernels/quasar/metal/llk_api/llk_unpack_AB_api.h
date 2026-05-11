@@ -69,7 +69,7 @@ inline void llk_unpack_AB(
     const std::uint32_t l1_tile_idx_b =
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
 
-    WAYPOINT("UABW");
+    WAYPOINT("UABW");  // Test RTL CI sim hooks
     _llk_unpack_binary_operands_(l1_tile_idx_a, l1_tile_idx_b);
     WAYPOINT("UABD");
 }
