@@ -89,9 +89,9 @@
 
       echo "--- Running cluster validation ---"
       if mpirun --pernode --tag-output \
-        -x LD_LIBRARY_PATH=/home/user/tt-metal/build/lib \
-        -x TT_METAL_RUNTIME_ROOT=/home/user/tt-metal \
-        /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+        -x LD_LIBRARY_PATH=${TT_METAL_RUNTIME_ROOT}/build/lib \
+        -x TT_METAL_RUNTIME_ROOT=${TT_METAL_RUNTIME_ROOT} \
+        ${TT_METAL_RUNTIME_ROOT}/build/tools/scaleout/run_cluster_validation \
           --send-traffic \
           --hard-fail \
           --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
