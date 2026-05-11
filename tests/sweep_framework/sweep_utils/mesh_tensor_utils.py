@@ -835,6 +835,14 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     auto-detects from available hardware so that the sweep device topology
     matches the trace topology.
     """
+    # Check actual device count first — if only 1 device, always use (1,1)
+    # regardless of MESH_DEVICE_SHAPE env var or master JSON.
+    try:
+        if ttnn.get_num_devices() == 1:
+            return (1, 1)
+    except Exception:
+        pass
+
     # Read mesh shape from master JSON matching current hardware.
     # The master may contain configs from multiple devices (N300 + BH).
     # Only use mesh shape from configs whose device_series matches this machine.
