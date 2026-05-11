@@ -25,6 +25,7 @@ Owner:
     adjordjevic-TT
 """
 
+import os
 from collections import defaultdict
 from collections.abc import Callable
 from functools import cached_property
@@ -35,6 +36,7 @@ from inspector_data import run as get_inspector_data, InspectorData
 from triage import (
     triage_singleton,
     ScriptConfig,
+    TTTriageError,
     triage_field,
     recurse_field,
     run_script,
@@ -54,7 +56,6 @@ from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDev
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "metal_device_id_mapping"],
 )
 
 # Block and core types that scripts return.
@@ -111,27 +112,44 @@ class PerCoreCheckResult(PerBlockCheckResult):
 def get_devices(
     devices: list[str],
     inspector_data: InspectorData | None,
-    metal_device_id_mapping: MetalDeviceIdMapping,
+    metal_device_id_mapping: MetalDeviceIdMapping | None,
     context: Context,
 ) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
-        if inspector_data is not None:
-            metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
-
-            if len(metal_device_ids) == 0:
+        if inspector_data is None or metal_device_id_mapping is None:
+            # No Inspector. Fall back to TT_METAL_VISIBLE_DEVICES - exalens sees the same subset.
+            if os.environ.get("TT_METAL_VISIBLE_DEVICES"):
                 utils.WARN(
-                    f"  No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache."
+                    f"  Inspector unavailable; using the {len(context.devices)} device(s) "
+                    f"exposed via TT_METAL_VISIBLE_DEVICES."
                 )
-                device_ids = [int(id) for id in context.devices.keys()]
+                return list(context.devices.values())
+            raise TTTriageError(
+                "Triage (with --dev=in_use) needs Inspector data or TT_METAL_VISIBLE_DEVICES set; "
+                "pass --dev=<id> or --dev=all to override and use specific or all devices correspondingly."
+            )
+        metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
+
+        if len(metal_device_ids) == 0:
+            # Live "in use" list is empty — most often because firmware init failed and
+            # devices were torn down. Fall back to the SystemMesh's configured local set.
+            system_mesh = inspector_data.getSystemMesh().systemMesh
+            metal_device_ids = [m.localChipId for m in system_mesh.mappedDevices if m.isLocal]
+            if len(metal_device_ids) > 0:
+                utils.WARN(
+                    f"  No devices in use found in inspector data — firmware init likely failed. "
+                    f"Falling back to the {len(metal_device_ids)} device(s) configured in the System Mesh."
+                )
             else:
-                device_ids = [
-                    metal_device_id_mapping.get_device_id(metal_device_id)
-                    for metal_device_id in metal_device_ids
-                    if metal_device_id_mapping.get_device_id(metal_device_id) is not None
-                ]
-        else:
-            utils.WARN(f"  Using all available devices.")
-            device_ids = [int(id) for id in context.devices.keys()]
+                raise TTTriageError(
+                    "Cannot determine which devices to inspect: no active devices in metal and the "
+                    "System Mesh has no host-local devices."
+                )
+        device_ids = [
+            metal_device_id_mapping.get_device_id(metal_device_id)
+            for metal_device_id in metal_device_ids
+            if metal_device_id_mapping.get_device_id(metal_device_id) is not None
+        ]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
@@ -159,11 +177,29 @@ def _make_device_map(devices: list[Device]) -> dict[int, Device]:
 
 def get_block_locations(
     devices: list[Device],
-    inspector_data: InspectorData,
-    metal_device_id_mapping: MetalDeviceIdMapping,
+    inspector_data: InspectorData | None,
+    metal_device_id_mapping: MetalDeviceIdMapping | None,
 ) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
-    device_map = _make_device_map(devices)
     block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = defaultdict(dict)
+
+    # Without Inspector we can't pre-aggregate active/idle eth core lists per chip,
+    # so fall back to per-device exalens helpers for every block type.
+    if inspector_data is None or metal_device_id_mapping is None:
+        for device in devices:
+            for block_type in BLOCK_TYPES:
+                if block_type == "active_eth":
+                    block_locations[device][block_type] = device.active_eth_block_locations
+                elif block_type == "idle_eth":
+                    block_locations[device][block_type] = device.idle_eth_block_locations
+                elif block_type == "dram" and not device.is_blackhole():
+                    block_locations[device][block_type] = []
+                else:
+                    block_locations[device][block_type] = device.get_block_locations(
+                        "functional_workers" if block_type == "tensix" else block_type
+                    )
+        return block_locations
+
+    device_map = _make_device_map(devices)
     chip_blocks_list = inspector_data.getBlocksByType().chips
 
     for i in range(len(chip_blocks_list)):
@@ -192,13 +228,16 @@ class RunChecks:
         self,
         devices: list[Device],
         block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]],
-        metal_device_id_mapping: MetalDeviceIdMapping,
+        metal_device_id_mapping: MetalDeviceIdMapping | None,
     ):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = block_locations
-        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
-        self._use_unique_id = metal_device_id_mapping.mismatch_exists()
+        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id.
+        if metal_device_id_mapping is not None:
+            self._use_unique_id = metal_device_id_mapping.mismatch_exists()
+        else:
+            self._use_unique_id = bool(os.environ.get("TT_METAL_VISIBLE_DEVICES"))
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
         self._session = get_triage_session()
@@ -387,8 +426,12 @@ class RunChecks:
 @triage_singleton
 def run(args, context: Context):
     devices_to_check = args["--dev"]
-    inspector_data = get_inspector_data(args, context)
-    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    try:
+        inspector_data = get_inspector_data(args, context)
+        metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    except Exception:
+        inspector_data = None
+        metal_device_id_mapping = None
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
     block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
     return RunChecks(devices, block_locations, metal_device_id_mapping)
