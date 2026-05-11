@@ -9,6 +9,30 @@ from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
+def _mesh_dp_batch_sharded(device, batch_size: int) -> bool:
+    if not hasattr(device, "get_num_devices") or int(device.get_num_devices()) <= 1:
+        return False
+    num_devices = int(device.get_num_devices())
+    if int(batch_size) != num_devices or not hasattr(device, "shape"):
+        return False
+    mesh_shape = [int(x) for x in device.shape]
+    return len(mesh_shape) == 2 and (
+        (mesh_shape[0] == num_devices and mesh_shape[1] == 1) or (mesh_shape[1] == num_devices and mesh_shape[0] == 1)
+    )
+
+
+def _take_local_dp_batch(hidden_states, device):
+    if len(hidden_states.shape) != 3 or int(hidden_states.shape[0]) <= 1:
+        return hidden_states
+    if not _mesh_dp_batch_sharded(device, int(hidden_states.shape[0])):
+        return hidden_states
+    return ttnn.slice(
+        hidden_states,
+        [0, 0, 0],
+        [1, int(hidden_states.shape[-2]), int(hidden_states.shape[-1])],
+    )
+
+
 class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
     def forward(self, inp):
         original_shape = inp.shape
@@ -74,7 +98,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         past_key_value=None,
         **kwargs,
     ):
-        hs = hidden_states
+        hs = _take_local_dp_batch(hidden_states, self.device)
 
         if hs.layout != ttnn.TILE_LAYOUT:
             hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)

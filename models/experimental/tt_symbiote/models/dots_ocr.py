@@ -56,6 +56,41 @@ def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(token, (b, 1))
 
 
+def _unwrap_ttnn_tensor(tt_hidden):
+    if hasattr(tt_hidden, "ttnn_tensor") and tt_hidden.ttnn_tensor is not None:
+        return tt_hidden.ttnn_tensor
+    return tt_hidden
+
+
+def _dp_repack_batch_sharded_hidden_for_device(device, batch_input_mapper, tt_hidden: ttnn.Tensor) -> ttnn.Tensor:
+    """Re-materialize a DP batch-sharded hidden tensor with the pipeline batch mapper.
+
+    Some TTNN ops preserve a global logical batch shape even though DP owns one
+    row per device. A host compose + re-upload makes the local shard layout
+    match the token-id/embedding mapper before traced decoder execution.
+    """
+    if batch_input_mapper is None:
+        return tt_hidden
+
+    t = _unwrap_ttnn_tensor(tt_hidden)
+    ttnn.synchronize_device(device)
+    owned = ttnn.clone(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    mesh_shape = tuple(int(x) for x in device.shape)
+    full = ttnn.to_torch(
+        owned,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape, (0, -1)),
+    )
+    ttnn.deallocate(owned)
+    return ttnn.from_torch(
+        full,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=batch_input_mapper,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 @trace_enabled
 class TTNNDotsOCRPrefillGraph(TTNNModule):
     def preprocess_weights_impl(self):
@@ -75,8 +110,9 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         h = self._p_norm.forward(h)
         sl = int(h.shape[-2])
         if sl > 1:
+            b = int(h.shape[0])
             hd = int(h.shape[-1])
-            h = ttnn.slice(h, [0, sl - 1, 0], [1, sl, hd])
+            h = ttnn.slice(h, [0, sl - 1, 0], [b, sl, hd])
         logits = self._p_lm.forward(h)
         return _argmax_token_on_device(logits)
 
@@ -98,16 +134,14 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
     def move_weights_to_device_impl(self):
         return self
 
-    def __init__(self, embedding, decoder_stack, final_norm, lm_head):
+    def __init__(self, decoder_stack, final_norm, lm_head):
         super().__init__()
-        self._d_embed = embedding
         self._d_stack = decoder_stack
         self._d_norm = final_norm
         self._d_lm = lm_head
 
-    def forward(self, token_ids, cache_position, past_key_value):
-        emb = self._d_embed.forward(token_ids)
-        h = self._d_stack.forward(emb, past_key_value=past_key_value, cache_position=cache_position)
+    def forward(self, hidden_states, cache_position, past_key_value):
+        h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
         h = self._d_norm.forward(h)
         logits = self._d_lm.forward(h)
         return _argmax_token_on_device(logits)
@@ -116,8 +150,8 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
         past_key_value = func_kwargs.get("past_key_value")
         if past_key_value is None or not hasattr(past_key_value, "update_seq_length"):
             return
-        tok = func_args[0]
-        seq_len = int(tok.shape[-1])
+        hid = func_args[0]
+        seq_len = int(hid.shape[-2])
         for layer in self._d_stack.layers:
             past_key_value.update_seq_length(layer_idx=layer.self_attn.layer_idx, seq_len=seq_len)
 
@@ -152,9 +186,12 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
         "head_dim",
         model_config.hidden_size // model_config.num_attention_heads,
     )
+    # Keep at least 64 pages per DP stream. The vision prompt is ~2.8K tokens;
+    # a fixed 256 global block pool gives only 2K tokens/stream at batch 8.
+    blocks_per_sequence = 64
     config = PagedAttentionConfig(
         block_size=64,
-        max_num_blocks=256,
+        max_num_blocks=max(256, batch_size * blocks_per_sequence),
         batch_size=batch_size,
     )
     return TTNNPagedAttentionKVCache(
@@ -296,7 +333,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         graph_prefill = TTNNDotsOCRPrefillGraph(decoder_stack, final_norm, lm_head)
         graph_prefill._unique_name = "dots_ocr_graph_prefill"
-        graph_decode = TTNNDotsOCRDecodeGraph(embedding, decoder_stack, final_norm, lm_head)
+        graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head)
         graph_decode._unique_name = "dots_ocr_graph_decode"
 
         pipeline = cls(
@@ -388,6 +425,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
         """True when batch is sharded one row per device (DP batch parallel)."""
         return self._batch_input_mapper is not None
 
+    def _dp_repack_batch_sharded_hidden(self, tt_hidden: ttnn.Tensor) -> ttnn.Tensor:
+        return _dp_repack_batch_sharded_hidden_for_device(self.device, self._batch_input_mapper, tt_hidden)
+
     # ------------------------------------------------------------------
     # Prefill
     # ------------------------------------------------------------------
@@ -441,6 +481,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             hidden_states = self._scatter_merge_on_device(text_embeds, pixel_values, image_grid_thw, input_ids)
         else:
             hidden_states = text_embeds
+        if dual and self._batch_input_mapper is not None and int(hidden_states.shape[0]) > 1:
+            hidden_states = self._dp_repack_batch_sharded_hidden(hidden_states)
 
         # --- Cache position for prefill ---
         cache_position = torch.arange(0, seq_len, dtype=torch.int32)
@@ -561,9 +603,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
             )
             ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
 
-        token_id_tt = self.graph_decode(
-            self._decode_token_buffer, self._decode_cache_position, past_key_value=self.paged_cache
-        )
+        decode_embeds = self.embedding(self._decode_token_buffer)
+        if self._mesh_dp_dual_stream() and self._batch_input_mapper is not None:
+            decode_embeds = self._dp_repack_batch_sharded_hidden(decode_embeds)
+
+        token_id_tt = self.graph_decode(decode_embeds, self._decode_cache_position, past_key_value=self.paged_cache)
 
         # --- Read to host ---
         token_id_torch = ttnn.to_torch(
