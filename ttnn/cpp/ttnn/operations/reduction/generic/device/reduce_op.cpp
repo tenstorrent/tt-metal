@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 
-#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -89,51 +88,18 @@ Tensor reduce(
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 
-    // The Metal 2.0 reduction factories (single-core HW, multi-core W, Welford)
-    // don't support sharded buffers yet. The multi-core H factory remains on the
-    // legacy ProgramDescriptor API and natively supports width-sharded I/O via
-    // its in-place borrowed-memory CB pattern, so we route H-reduce sharded I/O
-    // straight through. For everything else, reshard sharded I/O to interleaved
-    // DRAM here: convert the input to interleaved up front, run the reduction
-    // with an interleaved effective output_mem_config, and convert the result
-    // back to the user-requested sharded layout at the end. The two-resharding
-    // wrapper is a functional substitute, not a perf substitute.
-    const bool input_is_width_sharded =
-        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-    const bool output_is_width_sharded =
-        output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-    const bool h_native_sharded_path =
-        reduce_dim == tt::tt_metal::ReduceOpDim::H && input_is_width_sharded && output_is_width_sharded;
-    const bool output_was_sharded = output_mem_config.is_sharded() && !h_native_sharded_path;
-    const tt::tt_metal::MemoryConfig effective_output_mem_config =
-        output_was_sharded
-            ? tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, output_mem_config.buffer_type()}
-            : output_mem_config;
-    const Tensor effective_input =
-        (input_tensor.memory_config().is_sharded() && !h_native_sharded_path)
-            ? ttnn::to_memory_config(
-                  input_tensor,
-                  tt::tt_metal::MemoryConfig{
-                      tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()},
-                  std::nullopt)
-            : input_tensor;
-    auto convert_output = [&](Tensor result) -> Tensor {
-        return output_was_sharded ? ttnn::to_memory_config(result, output_mem_config, std::nullopt) : result;
-    };
-
-    auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(effective_input, reduce_dim);
+    auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
+    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
-        effective_input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Expected input tensor to be on device");
-    TT_FATAL(
-        effective_input.device() != nullptr,
+        input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
 
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // fp32_dest_acc_en defaults to True here, so always use HiFi3 as default on Wormhole B0.
-    const auto arch = effective_input.device()->arch();
+    const auto arch = input_tensor.device()->arch();
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         arch,
@@ -144,9 +110,9 @@ Tensor reduce(
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
     // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
-    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(effective_input.padded_shape());
+    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto tilized_input = ttnn::tilize_with_val_padding(
-        effective_input, padded_shape, pad_value, effective_input.memory_config(), std::nullopt, true, sub_core_grids);
+        input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
 
     // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
     // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
@@ -166,21 +132,20 @@ Tensor reduce(
             // Keep neg_input in h_input's memory config (pass std::nullopt) so the
             // pre-reduce negation stays in place; forcing output_mem_config here
             // could trigger a reshard before the H-reduce.  Only the final neg
-            // enforces effective_output_mem_config (the sharded→interleaved-aware
-            // version computed at the top of this function).
+            // enforces output_mem_config.
             Tensor neg_input = ttnn::neg(h_input, std::nullopt, std::nullopt, sub_core_grids);
             Tensor h_out = ttnn::prim::reduce(
                 neg_input,
                 reduce_math,
                 tt::tt_metal::ReduceOpDim::H,
                 h_scaler,
-                effective_output_mem_config,
+                output_mem_config,
                 h_out_dtype,
                 config,
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/h_post_mul);
-            return ttnn::neg(h_out, effective_output_mem_config, std::nullopt, sub_core_grids);
+            return ttnn::neg(h_out, output_mem_config, std::nullopt, sub_core_grids);
         };
 
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
@@ -191,7 +156,7 @@ Tensor reduce(
     if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
         // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
-        const auto out_final_dtype = output_dtype.value_or(effective_input.dtype());
+        const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
         const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
                                  tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
@@ -201,7 +166,7 @@ Tensor reduce(
             reduce_math,
             tt::tt_metal::ReduceOpDim::W,
             1.0f,
-            effective_output_mem_config,
+            output_mem_config,
             out_w_dtype,
             config,
             sub_core_grids,
@@ -209,40 +174,39 @@ Tensor reduce(
             /*post_mul_scaler=*/1.0f);
 
         if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
-            return convert_output(
-                h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype));
+            return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
         }
 
-        return convert_output(ttnn::prim::reduce(
+        return ttnn::prim::reduce(
             output_tensor,
             reduce_math,
             tt::tt_metal::ReduceOpDim::H,
             reduce_scaler,
-            effective_output_mem_config,
+            output_mem_config,
             out_final_dtype,
             config,
             sub_core_grids,
             negate,
-            /*post_mul_scaler=*/post_mul));
+            /*post_mul_scaler=*/post_mul);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
         !ttnn::prim::h_reduce_negate_fits_in_l1(tilized_input, sub_core_grids)) {
-        return convert_output(h_reduce_with_external_negate(
-            tilized_input, reduce_scaler, post_mul, output_dtype.value_or(effective_input.dtype())));
+        return h_reduce_with_external_negate(
+            tilized_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
     }
 
-    return convert_output(ttnn::prim::reduce(
+    return ttnn::prim::reduce(
         tilized_input,
         reduce_math,
         reduce_dim,
         reduce_scaler,
-        effective_output_mem_config,
-        output_dtype.value_or(effective_input.dtype()),
+        output_mem_config,
+        output_dtype.value_or(input_tensor.dtype()),
         config,
         sub_core_grids,
         negate,
-        /*post_mul_scaler=*/post_mul));
+        /*post_mul_scaler=*/post_mul);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

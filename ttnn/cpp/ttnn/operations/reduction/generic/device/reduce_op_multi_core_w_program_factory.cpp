@@ -197,20 +197,6 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
 
-    // The Metal 2.0 TensorAccessor binding currently only supports non-sharded
-    // interleaved buffers. Sharded reductions still go through the Gen1 pipeline
-    // upstream.
-    TT_FATAL(
-        !a.memory_config().is_sharded(),
-        "ReduceMultiCoreWProgramFactory (Metal 2.0): only interleaved input buffers are supported (got memory_config "
-        "= {})",
-        a.memory_config());
-    TT_FATAL(
-        !output.memory_config().is_sharded(),
-        "ReduceMultiCoreWProgramFactory (Metal 2.0): only interleaved output buffers are supported (got memory_config "
-        "= {})",
-        output.memory_config());
-
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[3];
     const uint32_t tile_width = a.tensor_spec().tile().get_width();

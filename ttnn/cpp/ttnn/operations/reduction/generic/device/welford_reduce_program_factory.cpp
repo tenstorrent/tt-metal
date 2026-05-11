@@ -273,17 +273,6 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
 
-    TT_FATAL(
-        !a.memory_config().is_sharded(),
-        "WelfordReduceProgramFactory (Metal 2.0): only interleaved input buffers are supported (got memory_config "
-        "= {})",
-        a.memory_config());
-    TT_FATAL(
-        !output.memory_config().is_sharded(),
-        "WelfordReduceProgramFactory (Metal 2.0): only interleaved output buffers are supported (got memory_config "
-        "= {})",
-        output.memory_config());
-
     const Shape& padded_shape = a.padded_shape();
     const Shape& logical_shape = a.logical_shape();
 
