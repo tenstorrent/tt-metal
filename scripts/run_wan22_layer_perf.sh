@@ -9,23 +9,49 @@ set -euo pipefail
 #   scripts/run_wan22_layer_perf.sh sweep_2x2 ...  # run selected IDs
 #
 # Env (optional):
+#   ARCH=wh|bh        (default: wh)
 #   LOG_DIR=run-logs/w22-layer-perf
 #   OUT_DIR=perf-summaries
 #
 
+ARCH="${ARCH:-wh}"
+if [[ "${ARCH}" != "wh" && "${ARCH}" != "bh" ]]; then
+  echo "ERROR: ARCH must be 'wh' or 'bh', got '${ARCH}'" >&2
+  exit 1
+fi
+
 PYTEST_TEST="models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_mesh_sweep_1536p_wan22_block"
 
 # Param IDs from the test's @pytest.mark.parametrize(ids=[...])
-DEFAULT_IDS=(
-  sweep_2x2
-  sweep_1x4_sp0tp1
-  sweep_1x4_sp1tp0
-  sweep_2x4_sp0tp1
-  sweep_2x4_sp1tp0
-  sweep_4x4
-  sweep_4x8_sp0tp1
-  sweep_4x8_sp1tp0
+WH_IDS=(
+  wh_sweep_2x2
+  wh_sweep_1x4_sp0tp1
+  wh_sweep_1x4_sp1tp0
+  wh_sweep_2x4_sp0tp1
+  wh_sweep_2x4_sp1tp0
+  wh_sweep_4x4
+  wh_sweep_4x8_sp0tp1
+  wh_sweep_4x8_sp1tp0
 )
+
+BH_IDS=(
+  bh_sweep_2x2
+  bh_sweep_1x4_sp0tp1
+  bh_sweep_1x4_sp1tp0
+  bh_sweep_2x4_sp0tp1
+  bh_sweep_2x4_sp1tp0
+  bh_sweep_4x4
+  bh_sweep_4x8_sp0tp1
+  bh_sweep_4x8_sp1tp0
+)
+
+if [[ "${ARCH}" == "wh" ]]; then
+  DEFAULT_IDS=("${WH_IDS[@]}")
+  DEVICE_TAG="wormhole_b0"
+else
+  DEFAULT_IDS=("${BH_IDS[@]}")
+  DEVICE_TAG="blackhole"
+fi
 
 LOG_DIR="${LOG_DIR:-run-logs/w22-layer-perf}"
 OUT_DIR="${OUT_DIR:-perf-summaries}"
@@ -33,8 +59,8 @@ mkdir -p "${LOG_DIR}" "${OUT_DIR}"
 
 run_one() {
   local id="$1"
-  echo "=== Running ${id} ==="
-  local pytest_cmd="pytest -q ${PYTEST_TEST}[wormhole_b0-${id}] -s"
+  echo "=== Running ${id} (${ARCH}) ==="
+  local pytest_cmd="pytest -q ${PYTEST_TEST}[${DEVICE_TAG}-${id}] -s"
   local tracy_cmd="python -m tracy -r -m \"${pytest_cmd}\""
   echo "+ ${tracy_cmd}"
 

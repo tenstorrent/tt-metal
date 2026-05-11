@@ -437,16 +437,41 @@ def test_wan_transformer_inner_step(
         [(4, 8), (4, 8), 0, 1, 4, False, ring_params, ttnn.Topology.Ring, True],
         # SP=8, TP=4
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        #### BH
+        # SP=2, TP=2 — Linear (SP=2 uses linear all-gather)
+        [(4, 8), (2, 2), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=1, TP=4 — Linear (no ring with SP=1)
+        [(4, 8), (1, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=1
+        [(4, 8), (1, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=2, TP=4 — Linear
+        [(4, 8), (2, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=2
+        [(4, 8), (2, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=4
+        [(4, 8), (4, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # SP=4, TP=8
+        [(4, 8), (4, 8), 0, 1, 2, False, ring_params, ttnn.Topology.Ring, False],
+        # SP=8, TP=4
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
-        "sweep_2x2",
-        "sweep_1x4_sp0tp1",
-        "sweep_1x4_sp1tp0",
-        "sweep_2x4_sp0tp1",
-        "sweep_2x4_sp1tp0",
-        "sweep_4x4",
-        "sweep_4x8_sp0tp1",
-        "sweep_4x8_sp1tp0",
+        "wh_sweep_2x2",
+        "wh_sweep_1x4_sp0tp1",
+        "wh_sweep_1x4_sp1tp0",
+        "wh_sweep_2x4_sp0tp1",
+        "wh_sweep_2x4_sp1tp0",
+        "wh_sweep_4x4",
+        "wh_sweep_4x8_sp0tp1",
+        "wh_sweep_4x8_sp1tp0",
+        "bh_sweep_2x2",
+        "bh_sweep_1x4_sp0tp1",
+        "bh_sweep_1x4_sp1tp0",
+        "bh_sweep_2x4_sp0tp1",
+        "bh_sweep_2x4_sp1tp0",
+        "bh_sweep_4x4",
+        "bh_sweep_4x8_sp0tp1",
+        "bh_sweep_4x8_sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
