@@ -67,8 +67,8 @@ template <
     std::uint32_t reload_srcB = false,
     bool zero_srcA = false,
     bool zero_srcA_reduce = false>
-inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
+inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
+    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
 template <
@@ -149,10 +149,8 @@ inline void llk_unpack_tilizeA_B(
         base_address_a,
         address_b,
         tile_index_a,
-        tile_index_b,
         block_ct_dim,
-        num_faces
-    );
+        num_faces);
     WAYPOINT("UPTD");
 }
 
