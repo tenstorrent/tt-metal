@@ -813,11 +813,22 @@ class TtOlmoModelArgs(TtModelArgs):
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
+        # CREATE_HEAD_OUTPUT_MEMCFG pins to the original 50-core non-contiguous
+        # layout because its shard core count encodes the tensor's logical
+        # height (50 shards × 32 = 1600 rows = padded_n_local_heads ×
+        # n_kv_groups). Widening self.sub_core_grids to include col 4 (see
+        # task plan 2026-05-11-olmo3-free-col4.md) must not affect this op.
+        _create_head_output_sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            ]
+        )
         self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                self.sub_core_grids,
+                _create_head_output_sub_core_grids,
                 [32, 128],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
