@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, tree_map
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
 from models.experimental.tt_symbiote.modules.attention import (
     TTNNPagedAttentionKVCache,
     PagedAttentionConfig,
@@ -1007,6 +1007,7 @@ class TTNNQwen3FullAttention(TTNNModule):
         return ttnn_output, None
 
 
+@trace_enabled
 class TTNNQwen3LinearAttention(TTNNModule):
     """TTNN-accelerated Linear Attention (DeltaNet/Mamba-style) for Qwen3.5-35B-A3B.
 
@@ -1061,6 +1062,72 @@ class TTNNQwen3LinearAttention(TTNNModule):
 
         # Feature flag for TTNN projections (default: enabled)
         self.use_ttnn_projections = os.environ.get("TTNN_LINEAR_ATTN_PROJECTIONS", "1") == "1"
+
+        # Feature flag for tt-lang GDN decode kernel (default: disabled).
+        # When enabled, the decode-step `recurrent_gated_delta_rule` is replaced
+        # by a single dispatch of the gdn_step_4head/gdn_step_8head kernel on
+        # the 8-device (T3K) or 4-device (QB2) mesh. Requires tt-lang (`ttl`)
+        # to be importable; gdn_kernel.py is imported lazily inside forward()
+        # so the default-off path has no ttl dependency.
+        self.use_ttnn_gdn_kernel = os.environ.get("TTNN_GDN_KERNEL", "0") == "1"
+
+        # Feature flag for the trace-compatible GDN pipeline (default: disabled).
+        # When enabled (and TTNN_GDN_KERNEL=1), the decode-step kernel call goes
+        # through gdn_recurrent_step_traced, which keeps the GDN dispatch on
+        # device end-to-end (gather + exp + pack + kernel + unpack via 3 tt-lang
+        # kernels). Inputs to that pipeline are still uploaded from torch in
+        # this initial wire-up; subsequent work will move the upstream
+        # split/reshape/repeat_interleave/l2norm to TTNN ops too.
+        self.use_ttnn_gdn_kernel_trace = os.environ.get("TTNN_GDN_KERNEL_TRACE", "0") == "1"
+
+        # Persistent on-device scratch buffers for the GDN kernel path.
+        # Lazy-allocated on first kernel invocation; reused across decode steps
+        # so we pay per-step state-allocation cost zero times instead of once.
+        # Cache_params holds the "current" state TTNN tensor; we ping-pong
+        # between cache_params.recurrent_states[layer_idx] and self._gdn_state_scratch.
+        self._gdn_state_scratch = None
+        self._gdn_out_buffer = None
+
+        # Pre-uploaded TTNN-resident decode-op weights/biases. Lazy-uploaded
+        # on first kernel invocation so the default-off path doesn't pay the
+        # mesh upload cost. See `_ensure_gdn_decode_weights()`.
+        self._gdn_decode_weights_uploaded = False
+        self._gdn_norm_weight_tt = None  # [1, head_v_dim]
+        self._gdn_conv_weights_per_k = None  # list of K [1, conv_dim]
+        self._gdn_conv_bias_tt = None  # [1, conv_dim]
+        self._gdn_A_log_neg_exp_tt = None  # [1, num_v_heads]
+        self._gdn_dt_bias_tt = None  # [1, num_v_heads]
+        # Conv1d circular-buffer state (lives on the layer when the kernel
+        # path owns the decode loop; cache_params.conv_states[layer_idx] is
+        # the source on first kernel call after prefill).
+        self._gdn_conv_slots = None
+        self._gdn_conv_p = 0
+
+        # Pre-uploaded TTNN replicated weights for in_proj_a / in_proj_b.
+        # On the TTNN-native decode path we replace the host nn.Linear path
+        # (which forces _to_pytorch_replicated of hidden_states) with on-device
+        # ttnn.linear. Output dim = num_v_heads (= 32 for Qwen3.5-35B-A3B,
+        # TILE-aligned). Lazy-uploaded in _ensure_gdn_decode_weights.
+        self._tt_in_proj_a_weight = None
+        self._tt_in_proj_a_bias = None
+        self._tt_in_proj_b_weight = None
+        self._tt_in_proj_b_bias = None
+
+        # Pre-allocated constants and scratch for the trace-compatible GDN
+        # pipeline (TTNN_GDN_KERNEL_TRACE=1). Lazy-uploaded in
+        # move_weights_to_device_impl when the flag is set.
+        self._trace_shift_matrix = None  # [H_PER_DEV*TILE, TILE]
+        self._trace_K_const = None  # [TILE, TILE]
+        self._trace_L_per_head = None  # [H_PER_DEV*TILE, TILE]
+        self._trace_head_idx_d_qk = None  # [1, 1, NUM_V_HEADS, head_k_dim] sharded dim=2
+        self._trace_head_idx_d_v = None  # [1, 1, NUM_V_HEADS, head_v_dim] sharded dim=2
+        self._trace_head_idx_scalar = None  # [1, 1, NUM_V_HEADS] sharded dim=2
+        self._trace_q_pack = None  # [H_PER_DEV*D_K, TILE] sharded dim=0
+        self._trace_k_pack = None
+        self._trace_v_pack = None
+        self._trace_alpha_pack = None  # [H_PER_DEV*TILE, TILE] sharded dim=0
+        self._trace_beta_pack = None
+        self._trace_core_out = None  # [HEADS_PER_DEV, D_V_DIM] sharded dim=0
 
     @classmethod
     def from_torch(cls, torch_layer, distributed: bool = True):
@@ -1136,6 +1203,48 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # They don't have deallocate_weights() method
         if self.out_proj is not None:
             self.out_proj.deallocate_weights()
+
+    def move_weights_to_device_impl(self):
+        """Move weights to device, including the TTNN-decode-path scratch.
+
+        For the tt-lang GDN kernel path (TTNN_GDN_KERNEL=1), pre-allocate the
+        per-layer decode-op weights and the state/output scratch buffers here
+        rather than lazy-allocating in forward(). Allocations inside the
+        traced region break Metal Trace capture; hoisting them to this
+        lifecycle hook (called once before any forward) keeps forward
+        allocation-free for trace.
+        """
+        super().move_weights_to_device_impl()
+
+        if (
+            self.use_ttnn_gdn_kernel
+            and self.device is not None
+            and hasattr(self.device, "get_num_devices")
+            and self.device.get_num_devices() in (4, 8)
+            and self.num_v_heads == 32
+            and self.head_k_dim == 128
+            and self.head_v_dim == 128
+        ):
+            from models.experimental.tt_symbiote.modules.gdn_kernel import (
+                alloc_state_buffer,
+                alloc_out_buffer,
+            )
+
+            # Upload per-layer norm/conv/A_log/dt_bias and in_proj_a/b weights.
+            self._ensure_gdn_decode_weights()
+            # Pre-allocate one state-scratch and one out-buffer. The first
+            # decode-after-prefill still allocates a fresh state-scratch
+            # (because prefill returns its state as a host torch tensor and
+            # the existing ping-pong falls into the else branch); steady-state
+            # decode reuses these without allocating.
+            if self._gdn_state_scratch is None:
+                self._gdn_state_scratch = alloc_state_buffer(self.device)
+            if self._gdn_out_buffer is None:
+                self._gdn_out_buffer = alloc_out_buffer(self.device)
+
+            # Trace-compatible kernel pipeline scratch + constants.
+            if self.use_ttnn_gdn_kernel_trace:
+                self._alloc_trace_pipeline_scratch()
 
     def set_output_tensors_config_impl(self, output_tensors):
         """Set output tensor config for col-sharded output.
@@ -1416,6 +1525,145 @@ class TTNNQwen3LinearAttention(TTNNModule):
             return tensor.contiguous()
         return tensor
 
+    def _alloc_trace_pipeline_scratch(self):
+        """Pre-allocate constants + scratch buffers for the trace-compatible GDN
+        pipeline. Called once at warm-up from move_weights_to_device_impl.
+        """
+        from models.experimental.tt_symbiote.modules.gdn_kernel_trace import (
+            alloc_shift_matrix,
+            alloc_K_const,
+            alloc_L_per_head,
+            alloc_head_idx_d,
+            alloc_head_idx_scalar,
+            HEADS_PER_DEVICE_BY_MESH,
+        )
+        from models.experimental.tt_symbiote.modules.gdn_kernel import D_K, D_V_DIM, TILE
+
+        n_dev = self.device.get_num_devices()
+        h_per_dev = HEADS_PER_DEVICE_BY_MESH[n_dev]
+
+        # Constants (replicated across mesh).
+        self._trace_shift_matrix = alloc_shift_matrix(self.device)
+        self._trace_K_const = alloc_K_const(self.device)
+        self._trace_L_per_head = alloc_L_per_head(self.device)
+
+        # Per-device gather indices (sharded dim=2 -- each device gets its head ids).
+        self._trace_head_idx_d_qk = alloc_head_idx_d(self.device, head_dim=self.head_k_dim)
+        self._trace_head_idx_d_v = alloc_head_idx_d(self.device, head_dim=self.head_v_dim)
+        self._trace_head_idx_scalar = alloc_head_idx_scalar(self.device)
+
+        # Pack output buffers (sharded dim=0; each device holds its h_per_dev*D rows).
+        self._trace_q_pack = ttnn.from_torch(
+            torch.zeros(self.num_v_heads * D_K, TILE, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0) if n_dev > 1 else None,
+        )
+        self._trace_k_pack = ttnn.from_torch(
+            torch.zeros(self.num_v_heads * D_K, TILE, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0) if n_dev > 1 else None,
+        )
+        self._trace_v_pack = ttnn.from_torch(
+            torch.zeros(self.num_v_heads * D_V_DIM, TILE, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0) if n_dev > 1 else None,
+        )
+        self._trace_alpha_pack = ttnn.from_torch(
+            torch.zeros(self.num_v_heads * TILE, TILE, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0) if n_dev > 1 else None,
+        )
+        self._trace_beta_pack = ttnn.from_torch(
+            torch.zeros(self.num_v_heads * TILE, TILE, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0) if n_dev > 1 else None,
+        )
+
+        # Unpack output buffer (head-sharded core_out). Per-device shape
+        # [h_per_dev, head_v_dim]; aggregate [num_v_heads, head_v_dim] sharded dim=0.
+        # We allocate as a 4D tensor [1, 1, num_v_heads, head_v_dim] sharded dim=2
+        # so the all_gather afterwards has clean semantics.
+        self._trace_core_out = ttnn.from_torch(
+            torch.zeros(1, 1, self.num_v_heads, self.head_v_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=2) if n_dev > 1 else None,
+        )
+
+    def _ensure_gdn_decode_weights(self):
+        """One-time upload of per-layer weights used by the TTNN-native decode path.
+
+        Called from `forward()` the first time the kernel path runs. Weights
+        come from the original PyTorch layer (`self._fallback_torch_layer` /
+        `self.norm`, `self.conv1d`, `self.A_log`, `self.dt_bias`).
+        """
+        if self._gdn_decode_weights_uploaded:
+            return
+
+        from models.experimental.tt_symbiote.modules.ttnn_decode_ops import (
+            upload_replicated,
+            upload_conv1d_weights,
+        )
+
+        # norm.weight: [head_v_dim]
+        norm_weight = self.norm.weight.detach().to(torch.bfloat16)
+        self._gdn_norm_weight_tt = upload_replicated(norm_weight.unsqueeze(0), self.device)
+        self._gdn_norm_eps = float(self.norm.variance_epsilon)
+
+        # conv1d weight + bias
+        conv_weight = self.conv1d.weight.detach().to(torch.bfloat16)  # [dim, 1, K]
+        self._gdn_conv_weights_per_k = upload_conv1d_weights(conv_weight, self.device)
+        if self.conv1d.bias is not None:
+            conv_bias = self.conv1d.bias.detach().to(torch.bfloat16).unsqueeze(0)  # [1, dim]
+            self._gdn_conv_bias_tt = upload_replicated(conv_bias, self.device)
+        else:
+            self._gdn_conv_bias_tt = None
+
+        # Pre-compute -A_log.exp() once (constant across decode steps).
+        A_log = self.A_log.detach().float()
+        A_log_neg_exp = (-A_log.exp()).to(torch.bfloat16).unsqueeze(0)  # [1, num_v_heads]
+        self._gdn_A_log_neg_exp_tt = upload_replicated(A_log_neg_exp, self.device)
+
+        dt_bias = self.dt_bias.detach().to(torch.bfloat16).unsqueeze(0)  # [1, num_v_heads]
+        self._gdn_dt_bias_tt = upload_replicated(dt_bias, self.device)
+
+        # in_proj_a / in_proj_b: small replicated TTNN linears. Output dim =
+        # num_v_heads (= 32, TILE-aligned). Replaces host nn.Linear so a/b can
+        # stay on device and feed ttnn_compute_g_beta directly without the
+        # _to_pytorch_replicated of hidden_states. Weight is preprocessed as
+        # [in, out] (transpose of nn.Linear weight) to match ttnn.linear.
+        def _upload_replicated_linear(linear):
+            w = linear.weight.detach().to(torch.bfloat16).t().contiguous()  # [in, out]
+            w_tt = upload_replicated(w, self.device)
+            if linear.bias is not None:
+                b = linear.bias.detach().to(torch.bfloat16).unsqueeze(0)  # [1, out]
+                b_tt = upload_replicated(b, self.device)
+            else:
+                b_tt = None
+            return w_tt, b_tt
+
+        self._tt_in_proj_a_weight, self._tt_in_proj_a_bias = _upload_replicated_linear(self.in_proj_a)
+        self._tt_in_proj_b_weight, self._tt_in_proj_b_bias = _upload_replicated_linear(self.in_proj_b)
+
+        self._gdn_decode_weights_uploaded = True
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1528,6 +1776,23 @@ class TTNNQwen3LinearAttention(TTNNModule):
             conv_state = cache_params.conv_states.get(self.layer_idx)
             recurrent_state = cache_params.recurrent_states.get(self.layer_idx)
 
+        # Decide whether to take the TTNN-native decode path. When True, we skip
+        # the early host downloads of mixed_qkv and z, run the decode-step ops on
+        # device (conv1d_update / g-beta / gated RMS norm), and only download at
+        # the GDN kernel boundary. Set up the per-layer TTNN weights once.
+        _use_ttnn_decode_path = (
+            self.use_ttnn_gdn_kernel
+            and use_precomputed_states
+            and self.device is not None
+            and hasattr(self.device, "get_num_devices")
+            and self.device.get_num_devices() in (4, 8)
+            and self.num_v_heads == 32
+            and self.head_k_dim == 128
+            and self.head_v_dim == 128
+        )
+        if _use_ttnn_decode_path:
+            self._ensure_gdn_decode_weights()
+
         # === TTNN Linear Projections ===
         # Ensure tile layout for TTNN operations
         if hidden_states_ttnn.layout != ttnn.TILE_LAYOUT:
@@ -1546,10 +1811,17 @@ class TTNNQwen3LinearAttention(TTNNModule):
         z_ttnn = self._maybe_all_gather(z_ttnn)
 
         # === Convert to PyTorch for DeltaNet kernel ===
-        # Use explicit replicated conversion since all_gather makes them replicated
-        # The _to_pytorch_replicated method properly handles multi-device extraction
-        mixed_qkv = self._to_pytorch_replicated(mixed_qkv_ttnn)
-        z = self._to_pytorch_replicated(z_ttnn)
+        # Use explicit replicated conversion since all_gather makes them replicated.
+        # On the TTNN-native decode path we keep both tensors on device; the
+        # download is deferred until just before the GDN kernel input split (for
+        # mixed_qkv) and avoided entirely for z (it's consumed by the on-device
+        # gated RMS norm).
+        if _use_ttnn_decode_path:
+            mixed_qkv = None  # placeholder; mixed_qkv_ttnn is the source
+            z = None  # placeholder; z_ttnn is the source
+        else:
+            mixed_qkv = self._to_pytorch_replicated(mixed_qkv_ttnn)
+            z = self._to_pytorch_replicated(z_ttnn)
 
         # DEBUG: Compare with PyTorch reference
         import os
@@ -1582,16 +1854,34 @@ class TTNNQwen3LinearAttention(TTNNModule):
             z_diff = (z.float() - z_ref.float()).abs()
             print(f"[DEBUG] z max diff: {z_diff.max().item():.6f}, mean: {z_diff.mean().item():.6f}")
 
-        # Get hidden_states as PyTorch tensor for small projections
-        # in_proj_a and in_proj_b are PyTorch nn.Linear layers (not TTNN) to avoid
-        # distributed weight replication issues - they have tiny output dims (num_v_heads=4)
-        # hidden_states_ttnn was converted via _to_ttnn which replicates, so use replicated conversion
-        hidden_states_pt = self._to_pytorch_replicated(hidden_states_ttnn)
-        b = self.in_proj_b(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
-        a = self.in_proj_a(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
+        # On the TTNN-native decode path we keep a/b on device by running the
+        # tiny in_proj_a / in_proj_b linears as replicated ttnn.linear (output
+        # dim = num_v_heads = 32 is TILE-aligned). Otherwise fall back to the
+        # host nn.Linear, which requires downloading hidden_states first.
+        if _use_ttnn_decode_path:
+            a_tt_proj = ttnn.linear(
+                hidden_states_ttnn,
+                self._tt_in_proj_a_weight,
+                bias=self._tt_in_proj_a_bias,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            b_tt_proj = ttnn.linear(
+                hidden_states_ttnn,
+                self._tt_in_proj_b_weight,
+                bias=self._tt_in_proj_b_bias,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            a = None  # consumed as a_tt_proj below
+            b = None  # consumed as b_tt_proj below
+        else:
+            hidden_states_pt = self._to_pytorch_replicated(hidden_states_ttnn)
+            b = self.in_proj_b(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
+            a = self.in_proj_a(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
+            a_tt_proj = None
+            b_tt_proj = None
 
-        # DEBUG: Compare a and b projections with PyTorch reference
-        if os.environ.get("DEBUG_LINEAR_ATTN", "0") == "1":
+        # DEBUG: Compare a and b projections with PyTorch reference (host path only)
+        if os.environ.get("DEBUG_LINEAR_ATTN", "0") == "1" and a is not None:
             # Get hs_pt for reference if not already available
             if "hs_pt" not in dir():
                 if (
@@ -1607,37 +1897,94 @@ class TTNNQwen3LinearAttention(TTNNModule):
             print(f"[DEBUG] a max diff: {(a.float() - a_ref.float()).abs().max().item():.6f}")
             print(f"[DEBUG] b max diff: {(b.float() - b_ref.float()).abs().max().item():.6f}")
 
-        # Correct batch_size based on actual converted tensor shapes (not input shape which may be inflated)
-        # The _to_pytorch with replicated=True extracts data for a single batch from all devices
-        actual_batch_size = mixed_qkv.shape[0]
-        if actual_batch_size != batch_size:
-            batch_size = actual_batch_size
+        # Correct batch_size based on actual converted tensor shapes. On the TTNN
+        # path mixed_qkv stays on device, so we trust the input shape (batch=1 is
+        # required for the kernel anyway and was checked by _use_ttnn_decode_path).
+        if not _use_ttnn_decode_path:
+            actual_batch_size = mixed_qkv.shape[0]
+            if actual_batch_size != batch_size:
+                batch_size = actual_batch_size
 
-        # If tensors have 8x batch from mesh replication, take first slice
-        if mixed_qkv.shape[0] > batch_size:
-            mixed_qkv = mixed_qkv[:batch_size]
-            z = z[:batch_size]
-            b = b[:batch_size]
-            a = a[:batch_size]
+            # If tensors have 8x batch from mesh replication, take first slice
+            if mixed_qkv.shape[0] > batch_size:
+                mixed_qkv = mixed_qkv[:batch_size]
+                z = z[:batch_size]
+                b = b[:batch_size]
+                a = a[:batch_size]
+
+        # On the TTNN-decode path a/b are TTNN tensors (no host slicing needed);
+        # the per-device shape is already [1, 1, num_v_heads]. The legacy host
+        # slicing only applied when a/b were torch tensors with a mesh-replicated
+        # batch dim (which only happens on the non-TTNN-decode fallback path,
+        # already handled above).
+        # No-op here.
 
         # Reshape z for gated norm: [batch, seq, num_v_heads, head_v_dim]
-        # Call contiguous() to ensure memory layout is correct for DeltaNet kernel
-        z = z.reshape(batch_size, seq_len, -1, self.head_v_dim).contiguous()
+        # On the TTNN path z stays as a TTNN tensor; the gated-norm ttnn op
+        # handles its own shape and we never produce a torch z.
+        if not _use_ttnn_decode_path:
+            z = z.reshape(batch_size, seq_len, -1, self.head_v_dim).contiguous()
 
-        # Transpose mixed_qkv for conv1d: [batch, key_dim * 2 + value_dim, seq]
-        # Call contiguous() after transpose to ensure memory layout is correct
-        mixed_qkv = mixed_qkv.transpose(1, 2).contiguous()
+        # Transpose mixed_qkv for conv1d: [batch, key_dim * 2 + value_dim, seq].
+        # On the TTNN path we apply the conv1d update directly on mixed_qkv_ttnn
+        # ([1, 1, conv_dim]) without going through this torch transpose.
+        if not _use_ttnn_decode_path:
+            mixed_qkv = mixed_qkv.transpose(1, 2).contiguous()
 
         # === PyTorch DeltaNet Kernel ===
         if use_precomputed_states:
-            # Decode path: use causal_conv1d_update
-            mixed_qkv = self.causal_conv1d_update(
-                mixed_qkv,
-                conv_state,
-                self.conv1d.weight.squeeze(1),
-                self.conv1d.bias,
-                self.activation,
-            )
+            if _use_ttnn_decode_path:
+                # TTNN-native depthwise causal conv1d update via circular buffer.
+                # Input is mixed_qkv_ttnn ([1, 1, conv_dim]) directly off the
+                # all-gathered projection -- no torch download, no re-upload.
+                # The downstream Q/K/V split is still on torch in this turn so
+                # we download `y_tt` after the kernel.
+                from models.experimental.tt_symbiote.modules.ttnn_decode_ops import (
+                    init_conv_slots_from_torch_state,
+                    ttnn_causal_conv1d_update_step,
+                )
+
+                if self._gdn_conv_slots is None:
+                    torch_conv_state = (
+                        conv_state
+                        if conv_state is not None
+                        else torch.zeros(1, self.conv_dim, self.conv_kernel_size, dtype=torch.bfloat16)
+                    )
+                    self._gdn_conv_slots = init_conv_slots_from_torch_state(
+                        torch_conv_state.to(torch.bfloat16),
+                        self.device,
+                    )
+
+                # Reshape [1, 1, conv_dim] -> [1, conv_dim] on device for the
+                # shift-register elementwise ops. Slots are mutated in place.
+                x_tt = ttnn.reshape(mixed_qkv_ttnn, [1, self.conv_dim])
+                y_tt = ttnn_causal_conv1d_update_step(
+                    x_tt,
+                    self._gdn_conv_slots,
+                    self._gdn_conv_weights_per_k,
+                    self._gdn_conv_bias_tt,
+                )
+                # Single download for downstream split. Replace mixed_qkv torch
+                # tensor (which was None on the TTNN path) with the conv output
+                # in [1, conv_dim, 1] shape so the existing transpose/split code
+                # below works as-is.
+                y_torch = ttnn.to_torch(
+                    y_tt,
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                )[
+                    0:1
+                ]  # [1, conv_dim]
+                mixed_qkv = y_torch.unsqueeze(-1).to(torch.bfloat16)  # [1, conv_dim, 1]
+            else:
+                # Decode path (PyTorch fallback): causal_conv1d_update mutates
+                # cache_params.conv_states[layer_idx] in place via `conv_state`.
+                mixed_qkv = self.causal_conv1d_update(
+                    mixed_qkv,
+                    conv_state,
+                    self.conv1d.weight.squeeze(1),
+                    self.conv1d.bias,
+                    self.activation,
+                )
         else:
             # Prefill path: use causal_conv1d_fn or fallback
             if is_linear_attn_cache:
@@ -1671,8 +2018,24 @@ class TTNNQwen3LinearAttention(TTNNModule):
         value = value.reshape(batch_size, seq_len, -1, self.head_v_dim).contiguous()
 
         # Compute gating parameters
-        beta = b.sigmoid()
-        g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
+        if _use_ttnn_decode_path:
+            from models.experimental.tt_symbiote.modules.ttnn_decode_ops import (
+                ttnn_compute_g_beta,
+            )
+
+            # a_tt_proj / b_tt_proj are the TTNN outputs of in_proj_a / in_proj_b
+            # (computed on device above; no host roundtrip).
+            g_tt, beta_tt = ttnn_compute_g_beta(
+                a_tt_proj,
+                b_tt_proj,
+                self._gdn_A_log_neg_exp_tt,
+                self._gdn_dt_bias_tt,
+            )
+            g = ttnn.to_torch(g_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))[0:1]
+            beta = ttnn.to_torch(beta_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))[0:1]
+        else:
+            beta = b.sigmoid()
+            g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
 
         # Repeat Q, K for value heads if needed
         if self.num_v_heads // self.num_k_heads > 1:
@@ -1692,16 +2055,180 @@ class TTNNQwen3LinearAttention(TTNNModule):
                 use_qk_l2norm_in_kernel=True,
             )
         else:
-            core_attn_out, last_recurrent_state = self.recurrent_gated_delta_rule(
-                query,
-                key,
-                value,
-                g=g,
-                beta=beta,
-                initial_state=recurrent_state,
-                output_final_state=is_linear_attn_cache,
-                use_qk_l2norm_in_kernel=True,
+            # Decode path: prefer tt-lang GDN kernel when enabled and applicable,
+            # otherwise fall back to the PyTorch recurrent rule.
+            use_gdn_kernel = (
+                self.use_ttnn_gdn_kernel
+                and self.device is not None
+                and hasattr(self.device, "get_num_devices")
+                and self.device.get_num_devices() in (4, 8)
+                and query.shape[0] == 1
+                and query.shape[1] == 1
+                and query.shape[2] == 32
+                and query.shape[-1] == 128
+                and value.shape[-1] == 128
             )
+            if use_gdn_kernel and self.use_ttnn_gdn_kernel_trace:
+                # Trace-compatible kernel pipeline: gather + exp + pack + kernel
+                # + unpack via 3 tt-lang kernels. Inputs are still uploaded from
+                # torch (q_norm/k_norm/value/g/beta) in this initial wire-up;
+                # the upstream split/reshape/repeat_interleave/l2norm will move
+                # to TTNN ops in a subsequent step to fully eliminate host
+                # crossings inside the traced region.
+                from models.experimental.tt_symbiote.modules.gdn_kernel_trace import (
+                    gdn_recurrent_step_traced,
+                )
+                from models.experimental.tt_symbiote.modules.gdn_kernel import (
+                    alloc_state_buffer,
+                    _to_mesh,
+                    BF16,
+                    D_K as _D_K,
+                    D_V_DIM as _D_V_DIM,
+                    NUM_V_HEADS as _NUM_V_HEADS,
+                )
+
+                q_norm = F.normalize(query.float(), p=2, dim=-1, eps=1e-6).to(query.dtype)
+                k_norm = F.normalize(key.float(), p=2, dim=-1, eps=1e-6).to(key.dtype)
+
+                def _replicated(t):
+                    return ttnn.from_torch(
+                        t.to(torch.bfloat16).contiguous(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=(
+                            ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+                        ),
+                    )
+
+                # Q/K/V are [1, 1, num_v_heads, head_dim] as torch; upload as replicated TTNN.
+                q_replicated = _replicated(q_norm)
+                k_replicated = _replicated(k_norm)
+                v_replicated = _replicated(value)
+                # g, beta are [1, 1, num_v_heads]; upload as replicated.
+                g_replicated = _replicated(g)
+                beta_replicated = _replicated(beta)
+
+                # State input: TTNN if previously written by us, else upload from torch.
+                if isinstance(recurrent_state, ttnn.Tensor):
+                    state_in_tt = recurrent_state
+                else:
+                    if recurrent_state is None:
+                        state_packed = torch.zeros(_NUM_V_HEADS * _D_K, _D_V_DIM, dtype=BF16)
+                    else:
+                        state_packed = recurrent_state[0].to(BF16).reshape(_NUM_V_HEADS * _D_K, _D_V_DIM).contiguous()
+                    state_in_tt = _to_mesh(state_packed, self.device)
+
+                # The buffer we'll write to this step (scratch flips after).
+                state_we_wrote = self._gdn_state_scratch
+
+                core_out_tt_head_sharded = gdn_recurrent_step_traced(
+                    mesh_device=self.device,
+                    q_replicated=q_replicated,
+                    k_replicated=k_replicated,
+                    v_replicated=v_replicated,
+                    g_replicated=g_replicated,
+                    beta_replicated=beta_replicated,
+                    state_in=state_in_tt,
+                    state_out=state_we_wrote,
+                    out_buf=self._gdn_out_buffer,
+                    core_out=self._trace_core_out,
+                    head_idx_d_qk=self._trace_head_idx_d_qk,
+                    head_idx_d_v=self._trace_head_idx_d_v,
+                    head_idx_scalar=self._trace_head_idx_scalar,
+                    shift_matrix=self._trace_shift_matrix,
+                    K_const=self._trace_K_const,
+                    L_per_head=self._trace_L_per_head,
+                    q_pack=self._trace_q_pack,
+                    k_pack=self._trace_k_pack,
+                    v_pack=self._trace_v_pack,
+                    alpha_pack=self._trace_alpha_pack,
+                    beta_pack=self._trace_beta_pack,
+                )
+
+                # core_out is head-sharded [1, 1, num_v_heads, head_v_dim] across mesh.
+                # All-gather along dim=2 to make it replicated for downstream gated_rms_norm.
+                core_out_replicated = ttnn.all_gather(
+                    core_out_tt_head_sharded,
+                    dim=2,
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                )
+                # Download to torch to feed the existing core_attn_out path that follows.
+                # (TODO: keep on device once gated_rms_norm + out_proj are also traced.)
+                core_attn_out = ttnn.to_torch(
+                    core_out_replicated,
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                )[0:1].to(torch.bfloat16)
+                # Shape returned by all_gather is [1, 1, num_v_heads, head_v_dim].
+                core_attn_out = core_attn_out.reshape(1, 1, self.num_v_heads, self.head_v_dim)
+
+                # Ping-pong state scratch (same logic as non-trace path).
+                if isinstance(recurrent_state, ttnn.Tensor):
+                    self._gdn_state_scratch = recurrent_state
+                else:
+                    self._gdn_state_scratch = alloc_state_buffer(self.device)
+                last_recurrent_state = state_we_wrote
+            elif use_gdn_kernel:
+                from models.experimental.tt_symbiote.modules.gdn_kernel import (
+                    gdn_recurrent_step,
+                    alloc_state_buffer,
+                    alloc_out_buffer,
+                )
+
+                # Kernel does NOT apply qk-l2norm internally; do it here so the
+                # behavior matches `use_qk_l2norm_in_kernel=True` in the PyTorch path.
+                q_norm = F.normalize(query.float(), p=2, dim=-1, eps=1e-6).to(query.dtype)
+                k_norm = F.normalize(key.float(), p=2, dim=-1, eps=1e-6).to(key.dtype)
+
+                # Lazy-allocate scratch state buffer and output buffer once per layer.
+                # Reusing them across decode steps avoids ~1MB of state upload+alloc
+                # and ~250KB of output alloc per call.
+                if self._gdn_state_scratch is None:
+                    self._gdn_state_scratch = alloc_state_buffer(self.device)
+                if self._gdn_out_buffer is None:
+                    self._gdn_out_buffer = alloc_out_buffer(self.device)
+
+                # Pass the current state directly. On the first decode after prefill
+                # `recurrent_state` is a torch tensor (from chunk_gated_delta_rule);
+                # `gdn_recurrent_step` uploads it once. On every subsequent decode
+                # `recurrent_state` is the TTNN tensor we wrote on the previous step,
+                # so it stays on device.
+                core_attn_out, new_state_tt = gdn_recurrent_step(
+                    self.device,
+                    q_norm,
+                    k_norm,
+                    value,
+                    g,
+                    beta,
+                    recurrent_state,
+                    state_out_buf=self._gdn_state_scratch,
+                    out_buf=self._gdn_out_buffer,
+                    return_state_as_ttnn=True,
+                )
+
+                # Ping-pong: the buffer that received the new state becomes
+                # `last_recurrent_state` (cache_params will store it just below).
+                # The previous state TTNN tensor (if any) becomes the new scratch.
+                if isinstance(recurrent_state, ttnn.Tensor):
+                    self._gdn_state_scratch = recurrent_state
+                else:
+                    # First call: previous state was a torch tensor (no buffer to recycle).
+                    # Allocate a fresh scratch for next step.
+                    self._gdn_state_scratch = alloc_state_buffer(self.device)
+                last_recurrent_state = new_state_tt
+            else:
+                core_attn_out, last_recurrent_state = self.recurrent_gated_delta_rule(
+                    query,
+                    key,
+                    value,
+                    g=g,
+                    beta=beta,
+                    initial_state=recurrent_state,
+                    output_final_state=is_linear_attn_cache,
+                    use_qk_l2norm_in_kernel=True,
+                )
 
         # Update cache (only for linear attention-compatible caches)
         if is_linear_attn_cache:
@@ -1711,15 +2238,44 @@ class TTNNQwen3LinearAttention(TTNNModule):
         if os.environ.get("DEBUG_LINEAR_ATTN", "0") == "1":
             print(f"[DEBUG] core_attn_out shape: {core_attn_out.shape}, sample: {core_attn_out[0,0,:3].tolist()}")
 
-        # Apply gated RMS norm
-        core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)
-        z = z.reshape(-1, self.head_v_dim)
-        core_attn_out = self.norm(core_attn_out, z)
-        core_attn_out = core_attn_out.reshape(batch_size, seq_len, -1)
+        # Apply gated RMS norm. On the TTNN-native decode path:
+        #   - core_attn_out came back from the GDN kernel as torch [1, 1, H, D_v];
+        #     upload it once.
+        #   - z stayed on device the whole time (z_ttnn) -- no upload needed.
+        #   - reshape both to [1, H, D_v] for ttnn.rms_norm (normalises last dim).
+        #   - feed the result straight into out_proj (TTNN). No download/re-upload.
+        if _use_ttnn_decode_path:
+            from models.experimental.tt_symbiote.modules.ttnn_decode_ops import (
+                ttnn_gated_rms_norm,
+                upload_replicated,
+            )
+
+            core_flat = core_attn_out.reshape(1, self.num_v_heads, self.head_v_dim).to(torch.bfloat16)
+            core_tt = upload_replicated(core_flat, self.device)
+
+            # z_ttnn is [1, 1, value_dim]; reshape to [1, num_v_heads, head_v_dim]
+            # so the last dim matches the norm weight ([head_v_dim]).
+            z_for_norm = ttnn.reshape(z_ttnn, [1, self.num_v_heads, self.head_v_dim])
+
+            normed = ttnn_gated_rms_norm(
+                core_tt,
+                z_for_norm,
+                self._gdn_norm_weight_tt,
+                self._gdn_norm_eps,
+            )
+            # out_proj expects [batch, seq, value_dim].
+            core_attn_out_ttnn = ttnn.reshape(
+                normed,
+                [batch_size, seq_len, self.num_v_heads * self.head_v_dim],
+            )
+        else:
+            core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)
+            z = z.reshape(-1, self.head_v_dim)
+            core_attn_out = self.norm(core_attn_out, z)
+            core_attn_out = core_attn_out.reshape(batch_size, seq_len, -1)
+            core_attn_out_ttnn = self._to_ttnn(core_attn_out)
 
         # === TTNN Output Projection ===
-        # Convert back to TTNN for output projection
-        core_attn_out_ttnn = self._to_ttnn(core_attn_out)
         if core_attn_out_ttnn.layout != ttnn.TILE_LAYOUT:
             core_attn_out_ttnn = ttnn.to_layout(
                 core_attn_out_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
