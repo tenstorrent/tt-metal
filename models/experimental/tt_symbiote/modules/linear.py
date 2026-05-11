@@ -291,7 +291,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 num_links=1,
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Ring,
+                topology=ttnn.Topology.Linear,
             )
             tt_output = ttnn.all_gather(
                 tt_output,
@@ -299,7 +299,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 num_links=1,
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Ring,
+                topology=ttnn.Topology.Linear,
             )
         if self.tt_bias is not None:
             tt_output += self.tt_bias

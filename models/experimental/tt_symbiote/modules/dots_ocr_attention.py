@@ -124,8 +124,8 @@ class TTNNDotsOCRAttention(TTNNModule):
         if self.sdpa.program_config is None:
             self.sdpa.program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=192,
-                k_chunk_size=192,
+                q_chunk_size=128,
+                k_chunk_size=128,
                 exp_approx_mode=False,
             )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
@@ -138,8 +138,8 @@ class TTNNDotsOCRAttention(TTNNModule):
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
             )
             self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -263,7 +263,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             num_heads=self.num_attention_heads,
             num_kv_heads=self.num_key_value_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv_states)
 

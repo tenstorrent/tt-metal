@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -17,6 +19,14 @@ from models.experimental.tt_symbiote.modules.linear import (
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
 )
+
+
+def _mlp_bfp8_activation_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_MLP_BFP8_ACT", "1").lower() not in {"0", "false", "no", "off"}
+
+
+def _mlp_down_bfp8_output_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_MLP_DOWN_BFP8_OUT", "1").lower() not in {"0", "false", "no", "off"}
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -89,6 +99,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
+            dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
@@ -144,6 +155,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
+            dtype=ttnn.bfloat8_b if _mlp_down_bfp8_output_enabled() else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
@@ -220,7 +232,11 @@ class TTNNDotsOCRMLP(TTNNModule):
         ttnn.deallocate(gate_up)
 
         gate_up_mul = ttnn.mul(
-            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)

@@ -14,6 +14,9 @@ path in practice for this pipeline).
 
 from __future__ import annotations
 
+import contextlib
+import os
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
@@ -43,9 +46,8 @@ from models.experimental.tt_symbiote.utils.device_management import timed_call
 
 
 def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
-    """Greedy token from logits (float32 argmax for stable ties vs bf16-only)."""
-    logits_rm = ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    logits_rm = ttnn.typecast(logits_rm, ttnn.float32)
+    """Greedy token from logits."""
+    logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
     token = ttnn.argmax(
         logits_rm,
         dim=-1,
@@ -60,6 +62,48 @@ def _unwrap_ttnn_tensor(tt_hidden):
     if hasattr(tt_hidden, "ttnn_tensor") and tt_hidden.ttnn_tensor is not None:
         return tt_hidden.ttnn_tensor
     return tt_hidden
+
+
+def _sync_profile_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_PROFILE_SYNC", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _defer_decode_readback_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_DEFER_DECODE_READBACK", "1").lower() not in {"0", "false", "no", "off"}
+
+
+def _deep_sync_profile_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_PROFILE_DECODE_GRAPH", "").lower() in {"1", "true", "yes", "on"}
+
+
+@contextlib.contextmanager
+def _profile_stage(device, name: str):
+    if not _sync_profile_enabled():
+        yield
+        return
+    ttnn.synchronize_device(device)
+    start = time.time()
+    try:
+        yield
+    finally:
+        ttnn.synchronize_device(device)
+        elapsed_ms = (time.time() - start) * 1000.0
+        print(f"[DOTS_OCR_PROFILE_SYNC] {name}: {elapsed_ms:.3f} ms")
+
+
+@contextlib.contextmanager
+def _profile_graph_stage(device, name: str):
+    if not _deep_sync_profile_enabled():
+        yield
+        return
+    ttnn.synchronize_device(device)
+    start = time.time()
+    try:
+        yield
+    finally:
+        ttnn.synchronize_device(device)
+        elapsed_ms = (time.time() - start) * 1000.0
+        print(f"[DOTS_OCR_PROFILE_SYNC] {name}: {elapsed_ms:.3f} ms")
 
 
 def _dp_repack_batch_sharded_hidden_for_device(device, batch_input_mapper, tt_hidden: ttnn.Tensor) -> ttnn.Tensor:
@@ -134,24 +178,30 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
     def move_weights_to_device_impl(self):
         return self
 
-    def __init__(self, decoder_stack, final_norm, lm_head):
+    def __init__(self, decoder_stack, final_norm, lm_head, embedding=None):
         super().__init__()
         self._d_stack = decoder_stack
         self._d_norm = final_norm
         self._d_lm = lm_head
+        self._d_embedding = embedding
 
-    def forward(self, hidden_states, cache_position, past_key_value):
-        h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
-        h = self._d_norm.forward(h)
-        logits = self._d_lm.forward(h)
-        return _argmax_token_on_device(logits)
+    def forward(self, decode_input, cache_position, past_key_value):
+        with _profile_graph_stage(self.device, "decode.graph.embedding"):
+            hidden_states = self._d_embedding.forward(decode_input) if self._d_embedding is not None else decode_input
+        with _profile_graph_stage(self.device, "decode.graph.layer_stack"):
+            h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
+        with _profile_graph_stage(self.device, "decode.graph.final_norm"):
+            h = self._d_norm.forward(h)
+        with _profile_graph_stage(self.device, "decode.graph.lm_head"):
+            logits = self._d_lm.forward(h)
+        with _profile_graph_stage(self.device, "decode.graph.argmax"):
+            return _argmax_token_on_device(logits)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
         past_key_value = func_kwargs.get("past_key_value")
         if past_key_value is None or not hasattr(past_key_value, "update_seq_length"):
             return
-        hid = func_args[0]
-        seq_len = int(hid.shape[-2])
+        seq_len = 1
         for layer in self._d_stack.layers:
             past_key_value.update_seq_length(layer_idx=layer.self_attn.layer_idx, seq_len=seq_len)
 
@@ -256,9 +306,16 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Decode-loop buffer (allocated on first decode call, reused thereafter)
         self._decode_cache_position: Optional[ttnn.Tensor] = None
         self._decode_token_buffer: Optional[ttnn.Tensor] = None
+        self._decode_token_buffer_has_next: bool = False
         self._decode_token_host: Optional[torch.Tensor] = None
         self._decode_cache_pos_host: Optional[torch.Tensor] = None
         self._decode_seq_counter: int = 0
+        self._scatter_cache_input_ids: Optional[torch.Tensor] = None
+        self._scatter_cache_key: Optional[tuple] = None
+        self._scatter_cache_idx: Optional[ttnn.Tensor] = None
+        self._scatter_cache_mask: Optional[ttnn.Tensor] = None
+        self._scatter_zero_row_key: Optional[tuple] = None
+        self._scatter_zero_row: Optional[ttnn.Tensor] = None
 
     # ------------------------------------------------------------------
     # Factory
@@ -333,7 +390,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         graph_prefill = TTNNDotsOCRPrefillGraph(decoder_stack, final_norm, lm_head)
         graph_prefill._unique_name = "dots_ocr_graph_prefill"
-        graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head)
+        graph_decode_embedding = embedding if batch_size == 1 else None
+        graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head, embedding=graph_decode_embedding)
         graph_decode._unique_name = "dots_ocr_graph_decode"
 
         pipeline = cls(
@@ -467,42 +525,49 @@ class TTNNDotsOCRPipeline(TTNNModule):
             if self._batch_input_mapper is not None
             else ttnn.ReplicateTensorToMesh(self.device)
         )
-        tt_input_ids = ttnn.from_torch(
-            input_ids.to(torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=id_mapper,
-        )
-        text_embeds = self.embedding(tt_input_ids)
+        with _profile_stage(self.device, "prefill.input_ids_h2d"):
+            tt_input_ids = ttnn.from_torch(
+                input_ids.to(torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=id_mapper,
+            )
+        with _profile_stage(self.device, "prefill.text_embedding"):
+            text_embeds = self.embedding(tt_input_ids)
 
         # --- Vision scatter-merge (if applicable) ---
         if pixel_values is not None:
-            hidden_states = self._scatter_merge_on_device(text_embeds, pixel_values, image_grid_thw, input_ids)
+            with _profile_stage(self.device, "prefill.vision_scatter_merge"):
+                hidden_states = self._scatter_merge_on_device(text_embeds, pixel_values, image_grid_thw, input_ids)
         else:
             hidden_states = text_embeds
         if dual and self._batch_input_mapper is not None and int(hidden_states.shape[0]) > 1:
-            hidden_states = self._dp_repack_batch_sharded_hidden(hidden_states)
+            with _profile_stage(self.device, "prefill.dp_repack_hidden"):
+                hidden_states = self._dp_repack_batch_sharded_hidden(hidden_states)
 
         # --- Cache position for prefill ---
-        cache_position = torch.arange(0, seq_len, dtype=torch.int32)
-        tt_cache_position = ttnn.from_torch(
-            cache_position,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        with _profile_stage(self.device, "prefill.cache_position_h2d"):
+            cache_position = torch.arange(0, seq_len, dtype=torch.int32)
+            tt_cache_position = ttnn.from_torch(
+                cache_position,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Traced prefill graph includes decoder stack, final norm, lm_head, and argmax.
-        token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
+        with _profile_stage(self.device, "prefill.graph_prefill_sync"):
+            token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
 
         # --- Read to host ---
-        token_id_torch = ttnn.to_torch(
-            token_id_tt,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-        )
+        with _profile_stage(self.device, "prefill.first_token_readback"):
+            token_id_torch = ttnn.to_torch(
+                token_id_tt,
+                mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+            )
         flat_ids = [int(x) for x in token_id_torch.reshape(-1).tolist()]
         if dual:
             if len(flat_ids) != int(self.config.batch_size):
@@ -540,6 +605,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             device=self.device,
             mesh_mapper=token_mapper,
         )
+        self._decode_token_buffer_has_next = True
         self._decode_seq_counter = self.paged_cache.get_seq_length(layer_idx=0)
         self._decode_cache_pos_host = torch.tensor([self._decode_seq_counter], dtype=torch.int32)
         # Scalar cache position: always replicate (same global index on every
@@ -554,7 +620,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def decode_step(self, prev_token_id: Union[int, List[int]]) -> Union[int, List[int]]:
+    def decode_step(
+        self, prev_token_id: Union[int, List[int]], read_from_device: bool = True
+    ) -> Union[int, List[int], ttnn.Tensor]:
         """Execute one decode step entirely on device.
 
         Args:
@@ -566,54 +634,87 @@ class TTNNDotsOCRPipeline(TTNNModule):
             DP batch mode is active.
         """
         if self._decode_token_buffer is None:
-            self._init_decode_buffers(prev_token_id)
+            with _profile_stage(self.device, "decode.init_buffers"):
+                self._init_decode_buffers(prev_token_id)
         else:
-            if isinstance(prev_token_id, int):
-                self._decode_token_host[0][0] = prev_token_id
-            else:
-                for row, tid in enumerate(prev_token_id):
-                    self._decode_token_host[row][0] = tid
-            if self._batch_input_mapper is not None:
+            upload_prev_token = self._batch_input_mapper is not None or not self._decode_token_buffer_has_next
+            if upload_prev_token:
+                if isinstance(prev_token_id, int):
+                    self._decode_token_host[0][0] = prev_token_id
+                else:
+                    for row, tid in enumerate(prev_token_id):
+                        self._decode_token_host[row][0] = tid
+            if upload_prev_token and self._batch_input_mapper is not None:
                 # Mesh-sharded device buffer does not match host logical shape [B,1];
                 # upload with the same mapper, then device-to-device copy into the
                 # preallocated decode buffer (for trace-stable tensor identity).
-                token_upload = ttnn.from_torch(
-                    self._decode_token_host,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.device,
-                    mesh_mapper=self._batch_input_mapper,
-                )
-                ttnn.copy(token_upload, self._decode_token_buffer)
-                ttnn.deallocate(token_upload)
-            else:
-                token_host_tt = ttnn.from_torch(
-                    self._decode_token_host,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                ttnn.copy_host_to_device_tensor(token_host_tt, self._decode_token_buffer)
+                with _profile_stage(self.device, "decode.prev_token_h2d_dp"):
+                    token_upload = ttnn.from_torch(
+                        self._decode_token_host,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.device,
+                        mesh_mapper=self._batch_input_mapper,
+                    )
+                    ttnn.copy(token_upload, self._decode_token_buffer)
+                    ttnn.deallocate(token_upload)
+            elif upload_prev_token:
+                with _profile_stage(self.device, "decode.prev_token_h2d"):
+                    token_host_tt = ttnn.from_torch(
+                        self._decode_token_host,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    ttnn.copy_host_to_device_tensor(token_host_tt, self._decode_token_buffer)
 
             self._decode_seq_counter += 1
-            self._decode_cache_pos_host[0] = self._decode_seq_counter
-            cache_host_tt = ttnn.from_torch(
-                self._decode_cache_pos_host,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
+            if self._batch_input_mapper is not None:
+                with _profile_stage(self.device, "decode.cache_position_h2d"):
+                    self._decode_cache_pos_host[0] = self._decode_seq_counter
+                    cache_host_tt = ttnn.from_torch(
+                        self._decode_cache_pos_host,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
+            else:
+                with _profile_stage(self.device, "decode.cache_position_device_inc"):
+                    cache_next = ttnn.add(self._decode_cache_position, 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.copy(cache_next, self._decode_cache_position)
+                    ttnn.deallocate(cache_next)
 
-        decode_embeds = self.embedding(self._decode_token_buffer)
-        if self._mesh_dp_dual_stream() and self._batch_input_mapper is not None:
-            decode_embeds = self._dp_repack_batch_sharded_hidden(decode_embeds)
+        trace_decode_tokens = getattr(self.graph_decode, "_d_embedding", None) is not None
+        if trace_decode_tokens:
+            decode_input = self._decode_token_buffer
+        else:
+            with _profile_stage(self.device, "decode.embedding"):
+                decode_input = self.embedding(self._decode_token_buffer)
+            if self._mesh_dp_dual_stream() and self._batch_input_mapper is not None:
+                with _profile_stage(self.device, "decode.dp_repack_hidden"):
+                    decode_input = self._dp_repack_batch_sharded_hidden(decode_input)
 
-        token_id_tt = self.graph_decode(decode_embeds, self._decode_cache_position, past_key_value=self.paged_cache)
+        with _profile_stage(self.device, "decode.graph_decode_sync"):
+            token_id_tt = self.graph_decode(decode_input, self._decode_cache_position, past_key_value=self.paged_cache)
+        token_id_snapshot = None
+        if self._batch_input_mapper is None:
+            ttnn.copy(token_id_tt, self._decode_token_buffer)
+            self._decode_token_buffer_has_next = True
+            if not read_from_device:
+                token_id_snapshot = token_id_tt.cpu(blocking=False)
+
+        if not read_from_device:
+            if self._batch_input_mapper is not None:
+                raise RuntimeError("Deferred decode readback is only supported for non-DP single-stream decode")
+            if token_id_snapshot is None:
+                raise RuntimeError("Deferred decode readback did not produce a token snapshot")
+            return token_id_snapshot
 
         # --- Read to host ---
-        token_id_torch = ttnn.to_torch(
-            token_id_tt,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-        )
+        with _profile_stage(self.device, "decode.token_readback"):
+            token_id_torch = ttnn.to_torch(
+                token_id_tt,
+                mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+            )
         flat_ids = [int(x) for x in token_id_torch.reshape(-1).tolist()]
         if self._mesh_dp_dual_stream():
             return flat_ids
@@ -649,6 +750,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self.paged_cache.reset()
         self._decode_cache_position = None
         self._decode_token_buffer = None
+        self._decode_token_buffer_has_next = False
         self._decode_seq_counter = 0
 
         # Prefill
@@ -680,6 +782,29 @@ class TTNNDotsOCRPipeline(TTNNModule):
         first_token_id = first_out
         generated_single: List[int] = [first_token_id]
         current_token = first_token_id
+
+        if _defer_decode_readback_enabled() and max_new_tokens > 1:
+            if self._batch_input_mapper is not None:
+                raise RuntimeError("DOTS_OCR_DEFER_DECODE_READBACK is only supported for non-DP single-stream decode")
+            deferred_tokens: List[ttnn.Tensor] = []
+            for _ in range(max_new_tokens - 1):
+                token_tt = self.decode_step(current_token, read_from_device=False)
+                if not isinstance(token_tt, ttnn.Tensor):
+                    raise RuntimeError("Deferred decode step must return a TTNN token tensor")
+                deferred_tokens.append(token_tt)
+            with _profile_stage(self.device, "decode.deferred_token_readback"):
+                ttnn.synchronize_device(self.device)
+                for token_tt in deferred_tokens:
+                    token_torch = ttnn.to_torch(
+                        token_tt,
+                        mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                    )
+                    generated_single.append(int(token_torch.reshape(-1)[0].item()))
+                    ttnn.deallocate(token_tt)
+            for idx, token in enumerate(generated_single):
+                if token in self.config.eos_token_ids:
+                    return generated_single[: idx + 1]
+            return generated_single
 
         for _ in range(max_new_tokens - 1):
             next_tok = self.decode_step(current_token)
@@ -756,17 +881,21 @@ class TTNNDotsOCRPipeline(TTNNModule):
         else:
             zero_row_mapper = ttnn.ReplicateTensorToMesh(self.device)
 
-        zero_row_tt = ttnn.from_torch(
-            torch.zeros(1, H, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=zero_row_mapper,
-        )
+        zero_row_key = (int(H), int(num_devices), self._batch_input_mapper is not None)
+        if self._scatter_zero_row is None or self._scatter_zero_row_key != zero_row_key:
+            if self._scatter_zero_row is not None:
+                ttnn.deallocate(self._scatter_zero_row)
+            self._scatter_zero_row = ttnn.from_torch(
+                torch.zeros(1, H, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=zero_row_mapper,
+            )
+            self._scatter_zero_row_key = zero_row_key
 
         # B.4: Concat zero row + vision embeddings -> vision table
-        vision_table = ttnn.concat([zero_row_tt, vision_2d], dim=0)
-        ttnn.deallocate(zero_row_tt)
+        vision_table = ttnn.concat([self._scatter_zero_row, vision_2d], dim=0)
         ttnn.deallocate(vision_2d)
 
         # =====================================================================
@@ -774,26 +903,56 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # gather_idx[0, pos] = 0 for non-image tokens (gathers zero row)
         #                    = 1..N_vision for image tokens
         # =====================================================================
-        B = int(input_ids.shape[0])
-        gather_idx = torch.zeros(B, S, dtype=torch.int32)
-        for b in range(B):
-            img_mask_b = input_ids[b] == self.config.image_token_id
-            img_positions = img_mask_b.nonzero(as_tuple=True)[0]
-            n_img = min(len(img_positions), N_vision)
-            gather_idx[b, img_positions[:n_img]] = torch.arange(1, n_img + 1, dtype=torch.int32)
-
         idx_mapper = (
             self._batch_input_mapper
             if self._batch_input_mapper is not None
             else ttnn.ReplicateTensorToMesh(self.device)
         )
-        tt_idx = ttnn.from_torch(
-            gather_idx,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=idx_mapper,
+        B = int(input_ids.shape[0])
+        cache_key = (B, int(S), int(N_vision), int(H_per_device), self._batch_input_mapper is not None)
+        cache_hit = (
+            self._scatter_cache_key == cache_key
+            and self._scatter_cache_input_ids is not None
+            and torch.equal(self._scatter_cache_input_ids, input_ids)
+            and self._scatter_cache_idx is not None
+            and self._scatter_cache_mask is not None
         )
+        if cache_hit:
+            tt_idx = self._scatter_cache_idx
+            tt_mask = self._scatter_cache_mask
+        else:
+            gather_idx = torch.zeros(B, S, dtype=torch.int32)
+            for b in range(B):
+                img_mask_b = input_ids[b] == self.config.image_token_id
+                img_positions = img_mask_b.nonzero(as_tuple=True)[0]
+                n_img = min(len(img_positions), N_vision)
+                gather_idx[b, img_positions[:n_img]] = torch.arange(1, n_img + 1, dtype=torch.int32)
+
+            tt_idx = ttnn.from_torch(
+                gather_idx,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=idx_mapper,
+            )
+
+            img_mask = input_ids == self.config.image_token_id
+            mask_float = img_mask.float().unsqueeze(-1)  # [B, S, 1]
+            tt_mask = ttnn.from_torch(
+                mask_float,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=idx_mapper,
+            )
+            if self._scatter_cache_idx is not None:
+                ttnn.deallocate(self._scatter_cache_idx)
+            if self._scatter_cache_mask is not None:
+                ttnn.deallocate(self._scatter_cache_mask)
+            self._scatter_cache_key = cache_key
+            self._scatter_cache_input_ids = input_ids.detach().clone()
+            self._scatter_cache_idx = tt_idx
+            self._scatter_cache_mask = tt_mask
 
         # =====================================================================
         # Step D: Device-side gather via ttnn.embedding
@@ -804,22 +963,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # =====================================================================
         full_vision_col_sharded = ttnn.embedding(tt_idx, vision_table, layout=ttnn.TILE_LAYOUT)
         # full_vision_col_sharded: [1, S, H/num_devices] col-sharded, TILE_LAYOUT
-        ttnn.deallocate(tt_idx)
         ttnn.deallocate(vision_table)
 
         # =====================================================================
         # Step E: Build mask and merge
         # =====================================================================
-        img_mask = input_ids == self.config.image_token_id
-        mask_float = img_mask.float().unsqueeze(-1)  # [B, S, 1]
-        tt_mask = ttnn.from_torch(
-            mask_float,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=idx_mapper,
-        )
-
         fused = ttnn.where(tt_mask, full_vision_col_sharded, text_embeds)
 
         return fused
@@ -874,3 +1022,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
         """Release all traced runs and deallocate pre-allocated buffers."""
         TracedRun.release_all()
         self._decode_cache_position = None
+        if self._scatter_cache_idx is not None:
+            ttnn.deallocate(self._scatter_cache_idx)
+            self._scatter_cache_idx = None
+        if self._scatter_cache_mask is not None:
+            ttnn.deallocate(self._scatter_cache_mask)
+            self._scatter_cache_mask = None
+        if self._scatter_zero_row is not None:
+            ttnn.deallocate(self._scatter_zero_row)
+            self._scatter_zero_row = None
+            self._scatter_zero_row_key = None
+        self._scatter_cache_input_ids = None
+        self._scatter_cache_key = None

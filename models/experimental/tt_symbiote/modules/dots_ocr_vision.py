@@ -15,6 +15,8 @@ vision block, patch merger, and the top-level vision tower.
 from __future__ import annotations
 
 
+import os
+
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -131,6 +133,9 @@ class TTNNDotsVision2DRoPE:
             raise ValueError(f"rotary_dim must be even, got {self.rotary_dim}")
 
         self._inv_freq = 1.0 / (theta ** (torch.arange(0, self.rotary_dim, 2, dtype=torch.float32) / self.rotary_dim))
+        self._padded_cache_key = None
+        self._padded_cache_rot_mats = None
+        self._padded_cache_cu_seqlens = None
 
     def build(
         self,
@@ -247,6 +252,11 @@ class TTNNDotsVision2DRoPE:
         bucket_size: int,
     ) -> tuple[tuple, list[int]]:
         """Build 2D RoPE cos/sin padded to bucket_size for trace compatibility."""
+        g = grid_thw.detach().cpu() if getattr(grid_thw, "is_cuda", False) else grid_thw
+        cache_key = (tuple(int(x) for x in g.reshape(-1).tolist()), int(actual_seq_len), int(bucket_size))
+        if cache_key == self._padded_cache_key and self._padded_cache_rot_mats is not None:
+            return self._padded_cache_rot_mats, self._padded_cache_cu_seqlens
+
         rot_mats, cu_seqlens = self.build(grid_thw, actual_seq_len)
         cos_tt, sin_tt = rot_mats
 
@@ -255,7 +265,10 @@ class TTNNDotsVision2DRoPE:
             cos_tt = ttnn.pad(cos_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
             sin_tt = ttnn.pad(sin_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
 
-        return (cos_tt, sin_tt), cu_seqlens
+        self._padded_cache_key = cache_key
+        self._padded_cache_rot_mats = (cos_tt, sin_tt)
+        self._padded_cache_cu_seqlens = cu_seqlens
+        return self._padded_cache_rot_mats, cu_seqlens
 
 
 # ---------------------------------------------------------------------------
@@ -1309,7 +1322,23 @@ class TTNNDotsVisionBlockStack(TTNNLayerStack):
     via the cache key mechanism in TracedRun.
     """
 
-    SEQ_LEN_BUCKETS = [256, 1024, 2048, 4096, 8192, 12288, 16384, 20480, 24576]
+    SEQ_LEN_BUCKETS = [
+        256,
+        512,
+        768,
+        1024,
+        1536,
+        2048,
+        2560,
+        3072,
+        3584,
+        4096,
+        8192,
+        12288,
+        16384,
+        20480,
+        24576,
+    ]
 
     def __init__(self, blocks, *, post_trunk_norm=None, patch_merger=None):
         super().__init__(blocks)
@@ -1546,6 +1575,8 @@ class TTNNDotsOCRVisionTower(TTNNModule):
             if self._trace_enabled and self.block_stack is not None
             else -1
         )
+        if os.environ.get("DOTS_OCR_PROFILE_SYNC", "").lower() in {"1", "true", "yes", "on"}:
+            print(f"[DOTS_OCR_PROFILE_SYNC] vision.actual_seq_len={actual_seq_len} bucket={bucket}")
 
         if bucket == -1:
             rot_mats, cu_seqlens = self.rope.build(grid_thw, actual_seq_len)
