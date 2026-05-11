@@ -87,6 +87,12 @@ jobs:
   multihost-tests:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
+    env:
+      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
     strategy:
       max-parallel: 1  # Run tests sequentially to avoid resource contention
       fail-fast: false
@@ -146,24 +152,12 @@ jobs:
 
       - name: Print hostnames
         working-directory: /tmp
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
         run: |
           mpirun --tag-output --pernode hostname
 
       - name: Reset cards for ${{ matrix.test-group.name }}
         working-directory: /tmp
         timeout-minutes: 10
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
         run: |
           mpirun --tag-output --pernode \
             bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 300'
@@ -217,23 +211,12 @@ jobs:
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
           mpirun --pernode pip install $(find /ci/artifacts | grep whl)
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
         working-directory: /ci/tt-metal
         env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
           LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
           TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
           TT_METAL_CACHE: /home/user/.cache
