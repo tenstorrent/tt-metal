@@ -202,7 +202,7 @@ static bool run_test_integrity_dram_bidir(
 }
 
 TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDramBidir) {
-    bool pass = true;
+    vector<LinkError> errors;
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -222,13 +222,17 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDramBidir) {
                 }
 
                 log_info(tt::LogTest, "  sender core: {}, receiver core: {}", sender_core, receiver_core);
-                pass &= run_test_integrity_dram_bidir(
+                bool passed = run_test_integrity_dram_bidir(
                     this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core);
+                if (!passed) {
+                    errors.emplace_back(sender_device->id(), receiver_device->id(), sender_core, receiver_core);
+                }
             }
         }
     }
 
-    ASSERT_TRUE(pass);
+    print_summary(errors);
+    ASSERT_TRUE(!errors.size());
 }
 
 }  // namespace tt::tt_metal
