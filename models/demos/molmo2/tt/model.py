@@ -819,18 +819,23 @@ class TtMolmo2Model(LightweightModule):
 
         Only tok_id and cur_pos updated per step (8 bytes H2D total).
         cos/sin are looked up inside the trace from pre-uploaded device tables.
-        Pre-allocated torch buffers (t_tok_id, t_cur_pos) are updated in-place;
-        from_torch(device=None) wraps without new allocation or mesh replication.
+
+        t_tok_id and t_cur_pos are pre-allocated torch buffers (init-time); updated
+        in-place here and passed directly to copy_host_to_device_tensor — no
+        from_torch call in the forward path (follows tt_dit / tt_transformers pattern).
 
         Returns next token ID (int) via on-device argmax.
         """
         tt = self._decode_trace_tensors
 
-        # In-place update of pre-allocated torch buffers (no new tensor allocation)
+        # In-place update of pre-allocated torch buffers — zero allocation
         tt["t_tok_id"][0, 0, 0] = token_id
         tt["t_cur_pos"][0] = position
 
-        # DMA into stable device buffers — single-buffer host (no mesh_mapper needed)
+        # Wrap in TTNN host tensor (no mesh_mapper → single buffer, no N-copy duplication)
+        # then DMA to device. copy_host_to_device_tensor(torch.Tensor, ttnn.Tensor) is
+        # supported in newer TTNN (tt_dit pattern) but not in this version; the
+        # from_torch(device=None) wrapper is the current workaround.
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(tt["t_tok_id"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None),
             tt["tok_id"],
