@@ -112,6 +112,8 @@ class MoEGate(AbstractModule):
             mesh_device: TTNN mesh device the model will be placed later on
         Returns:
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
+
+        Note: to deal with the long-sequence OOM problem, we move the shared state to DRAM for prefill mode.
         """
         grid = mesh_device.compute_with_storage_grid_size()
         num_device_cores_prefill = grid.x * grid.y
