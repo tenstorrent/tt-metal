@@ -112,7 +112,7 @@ jobs:
       PYTHON_ENV_DIR: /opt/venv
       PYTHONPATH: /opt/venv/lib/python3.10/site-packages:/ci/tt-metal
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
-      TT_METAL_CACHE: /home/user/.cache
+      TT_METAL_CACHE: /ci/tt-metal/.cache
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -222,12 +222,13 @@ jobs:
           # Move the cloned directory to workers. TODO: Clone directly to NFS
           rm -rf /ci/tt-metal
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
-          mpirun --pernode git -C /ci/tt-metal submodule update --init --recursive --force
+          # /ci is a shared volume in this environment; run git operations once to avoid .git/config lock races
+          git -C /ci/tt-metal submodule update --init --recursive --force
 
           # Unpack artifacts
-          mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /ci/tt-metal
-          mpirun --pernode bash -lc 'mkdir -p /home/user/.cache/pip'
-          mpirun --pernode bash -lc 'HOME=/home/user PIP_CACHE_DIR=/home/user/.cache/pip /opt/venv/bin/python -m pip install --no-input $(find /ci/artifacts -name "*.whl")'
+          tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /ci/tt-metal
+          mpirun --pernode bash -lc 'mkdir -p /ci/tt-metal/.cache/pip'
+          mpirun --pernode bash -lc 'HOME=/ci/tt-metal PIP_CACHE_DIR=/ci/tt-metal/.cache/pip /opt/venv/bin/python -m pip install --no-input --no-cache-dir $(find /ci/artifacts -name "*.whl")'
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
