@@ -1,5 +1,36 @@
 
 ---
+## 2026-05-11 — FIX AN: FIX AK was wrongly setting fabric_channels_not_ready_for_traffic_ for partial-mesh teardown
+
+**File**: `tt_metal/impl/device/device.cpp`, `phase5b_erisc_health_check()`, lines ~2872–2892
+
+**Root cause of over-skipping AllGather tests (Issue #42429)**:
+
+FIX AK identifies channels stuck at or below `LOCAL_HANDSHAKE_COMPLETE` during partial-mesh teardown
+(e.g., a 1x4 mesh on a T3K 2x4 system). These channels connect to out-of-mesh peers that never
+participated in EDM handshake — the peers run base-UMD firmware and never respond. This is
+**non-fatal** and explicitly noted in the FIX AK comment as "Phase 2.5 will TERMINATE these in the
+next quiesce."
+
+However, FIX AK was also setting `fabric_channels_not_ready_for_traffic_ = true`. FIX AA in the
+test code checks this flag and issues `GTEST_SKIP()` for AllGather tests. This was wrong: the stuck
+channels are cross-row connections to out-of-mesh devices, entirely unrelated to the within-mesh
+channels used by the 1x4 AllGather operation.
+
+**Fix (FIX AN)**:
+- Removed `fabric_channels_not_ready_for_traffic_ = true` from the `all_handshake_incomplete` sub-path in FIX AK
+- Also removed the stale "FIX AM" comment that incorrectly described why the flag was being set
+- Updated the log message to note that within-mesh AllGather channels are unaffected
+- The FIX AK-2 path (non-MMIO partial mesh) at line ~2909 is a **separate** sub-path and was left unchanged
+
+**Lines changed**: `device.cpp` block at the `if (all_handshake_incomplete)` branch (~line 2872)
+
+**What was NOT changed**:
+- FIX AK-2 (non-MMIO path) — still sets the flag, different scenario
+- No test logic, tolerances, or skip thresholds modified
+- No header changes needed
+
+---
 ## 2026-05-11 — FIX EV: EventSynchronize infinite spin on dead-relay device
 
 **File**: `tt_metal/distributed/distributed.cpp`, `EventSynchronize()` lines 45-59
@@ -1499,3 +1530,28 @@ Three defensive fixes addressing the stale go_msg=0x02 root cause and ERISC tear
 **Fix**: After the force-reset loop, poll MMIO channels that were force-reset for heartbeat confirmation (same pattern as FIX TV in run_launch_phase). Uses PCIe direct reads (no relay needed). Waits up to 3s for heartbeat to become non-zero or show the 0xABCDxxxx UMD static marker. This ensures the next session always sees fully-booted base-UMD ERISC channels.
 
 FIX TV in run_launch_phase provides the same defense on the next session's init side, but FIX XZ eliminates the race at the source — in teardown itself.
+
+
+---
+
+## 2026-05-11 — Testing-Gap & Diagnostic-Logging Audit
+
+**Commit**: `090dc5156f4`
+**Report**: `/workspace/group/research/audit-2026-05-11-08.md`
+
+### Gaps Found
+
+1. **Analyze script**: Missing `FIX_BH_DEGRADE` counter (PCIe-direct soft reset failure case). FIX_XX grep pattern didn't match actual log text.
+2. **Diagnostic logging**: `configure_fabric_cores` (fabric_init.cpp) had no entry/exit summary log. FIX SC log didn't distinguish MMIO vs non-MMIO devices.
+3. **Testing**: No tests for FIX XX, FIX XZ, FIX BH — deferred because they require hardware state simulation.
+
+### Fixes Applied
+
+- `scripts/analyze_fabric_hang_log.sh`: Added FIX_BH_DEGRADE counter + fixed FIX_XX grep pattern
+- `tt_metal/fabric/fabric_init.cpp`: Added entry/exit diagnostic logs to configure_fabric_cores
+- `tt_metal/impl/device/firmware/risc_firmware_initializer.cpp`: FIX SC now logs (MMIO) or (non-MMIO)
+
+### Open Items
+
+- FIX XX/XZ/BH tests require UMD mocking or hardware state simulation — not feasible in current test harness
+- 0x49705530 intermediate ROM postcode is adequately covered by INVALID_EDMSTATUS counter

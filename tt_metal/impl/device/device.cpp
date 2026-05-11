@@ -2876,14 +2876,18 @@ bool Device::phase5b_erisc_health_check(
                     "channel(s) stuck at or below LOCAL_HANDSHAKE_COMPLETE — "
                     "peer device(s) not in quiesce set (partial-mesh teardown).  "
                     "Non-fatal: Phase 2.5 will TERMINATE these in the next quiesce.  "
+                    "FIX AN: within-mesh AllGather channels are unaffected by these cross-row "
+                    "out-of-mesh peers; NOT setting fabric_channels_not_ready_for_traffic_.  "
                     "(FIX AK: #42429)\n{}",
                     this->id(),
                     truly_unhealthy.size(),
                     details);
-                // FIX AM (#42429): Record that ETH channels are not at READY_FOR_TRAFFIC so
-                // callers (e.g. tests) can distinguish this state from relay-path-broken and
-                // skip AllGather operations that require full fabric readiness.
-                fabric_channels_not_ready_for_traffic_ = true;
+                // FIX AN (#42429): Do NOT set fabric_channels_not_ready_for_traffic_ here.
+                // The stuck channels are cross-row connections to out-of-mesh peers that never
+                // participated in the EDM handshake.  They are irrelevant to within-mesh
+                // AllGather operations.  Setting the flag here was causing FIX AA to
+                // GTEST_SKIP() AllGather tests unnecessarily.  The comment above already
+                // says this is Non-fatal — Phase 2.5 will TERMINATE these channels next cycle.
                 return true;  // early exit — caller should return
             }
             // Truly unexpected states (L1 corrupt, init postcodes, garbage) — throw.
