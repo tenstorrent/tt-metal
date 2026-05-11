@@ -801,8 +801,9 @@ class TtMolmo2Model(LightweightModule):
         _upload(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["cos"])
         _upload(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["sin"])
 
-        # Replay the captured trace — reads from the stable buffers updated above
-        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=True)
+        # Replay the captured trace — non-blocking so CPU can continue while device runs.
+        # The to_torch call below syncs implicitly via the D2H transfer.
+        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
 
         # Read logits from the trace output buffer (written by lm_head inside trace)
         logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(self._decode_trace_output)[0]).float()
