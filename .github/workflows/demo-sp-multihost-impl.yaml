@@ -110,8 +110,6 @@ jobs:
       PYTHONPATH: /tmp/tt-pydeps:/opt/venv/lib/python3.10/site-packages:/tmp/tt-metal
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
       TT_METAL_CACHE: /tmp/tt-metal-cache
-      HOME: /tmp/tt-home
-      PIP_CACHE_DIR: /tmp/tt-pip-cache
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
