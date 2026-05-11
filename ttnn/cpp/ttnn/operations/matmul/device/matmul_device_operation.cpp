@@ -37,8 +37,7 @@ void validate_matmul_foundational_matrix_dimensions(
     const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
-    const tt::tt_metal::Tile& in1_tile,
-    bool transpose_b) {
+    const tt::tt_metal::Tile& in1_tile) {
     TT_FATAL(b_shape.rank() >= 2, "Matmul expects input B rank >= 2, got {}", b_shape.rank());
     TT_FATAL(
         a_shape[-1] == b_shape[-2] && a_shape[-1] > 0,
@@ -51,9 +50,11 @@ void validate_matmul_foundational_matrix_dimensions(
         TT_FATAL(a_shape[-2] > 0, "Matmul requires M (rows of A) > 0, got {}", a_shape[-2]);
     }
 
+    // Both a_shape_padded and b_shape_padded are already in post-transpose form
+    // (get_matmul_tensor_padded_shape swaps the last two dims when transpose=true),
+    // so K is always at [-1] for A and [-2] for B regardless of the original transpose flags.
     const uint32_t Kt_a = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
-    const uint32_t Kt_b = transpose_b ? operations::matmul::utilities::get_K_dim(b_shape_padded, in1_tile)
-                                      : b_shape_padded[-2] / in1_tile.get_height();
+    const uint32_t Kt_b = b_shape_padded[-2] / in1_tile.get_height();
     TT_FATAL(
         Kt_a > 0 && Kt_b > 0, "Matmul contracted dimension in tiles must be positive (Kt_a={}, Kt_b={})", Kt_a, Kt_b);
     TT_FATAL(
@@ -292,6 +293,9 @@ void check_output_shard_grid_within_extent(
     if (!output_mem_config.is_sharded() || output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return;
     }
+    if (!output_mem_config.shard_spec().has_value()) {
+        return;
+    }
     const auto& shard_grid = output_mem_config.shard_spec().value().grid;
     const tt::tt_metal::CoreRange bbox(tt::tt_metal::CoreCoord(0, 0), extent);
     TT_FATAL(
@@ -303,14 +307,11 @@ void check_output_shard_grid_within_extent(
 }
 
 void validate_matmul_basic_compute_grid_and_per_core_sanity(
-    const Tensor& input_tensor_a,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const Tensor& input_tensor_a, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     const CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
-    auto* device = input_tensor_a.device();
 
     std::visit(
-        [device_grid, device, sub_device_id](const auto& program_config) {
+        [device_grid](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig>) {
                 return;
@@ -334,14 +335,6 @@ void validate_matmul_basic_compute_grid_and_per_core_sanity(
                     device_grid.y);
                 validate_matmul_nonzero_k_block_and_per_core_dims(
                     program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
-                if constexpr (
-                    std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                    std::is_same_v<
-                        ProgramConfigType,
-                        operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                    operations::matmul::utilities::validate_matmul_compute_grid_within_subdevice_tensix_workers(
-                        device, sub_device_id, grid, "Matmul multicast (1D/2D) compute grid vs sub-device");
-                }
                 return;
             }
             if constexpr (std::is_same_v<
@@ -622,7 +615,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
     validate_matmul_foundational_matrix_dimensions(
-        a_shape, b_shape, a_shape_padded, b_shape_padded, in0_tile, in1_tile, attributes.transpose_b);
+        a_shape, b_shape, a_shape_padded, b_shape_padded, in0_tile, in1_tile);
 
     const bool is_optional_output_tensor =
         !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
@@ -751,8 +744,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.output_tile.value().get_tile_shape()[1]);
     validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
 
-    validate_matmul_basic_compute_grid_and_per_core_sanity(
-        input_tensor_a, chosen_program_config, attributes.sub_device_id);
+    validate_matmul_basic_compute_grid_and_per_core_sanity(input_tensor_a, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_work_distribution_and_gather_ring_topology(

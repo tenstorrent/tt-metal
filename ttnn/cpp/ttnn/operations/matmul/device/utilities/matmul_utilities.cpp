@@ -9,7 +9,6 @@
 
 #include "tt-metalium/allocator.hpp"
 #include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -263,35 +262,6 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
         curr_tile.get_transpose_within_face(),
         curr_tile.get_transpose_of_faces());
     return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
-}
-
-void validate_matmul_compute_grid_within_subdevice_tensix_workers(
-    const tt::tt_metal::IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const tt::tt_metal::CoreCoord& compute_with_storage_grid_size,
-    const char* context_label) {
-    if (!sub_device_id.has_value()) {
-        return;
-    }
-    if (compute_with_storage_grid_size.x == 0 || compute_with_storage_grid_size.y == 0) {
-        return;
-    }
-    const auto tensix_workers =
-        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-    const auto bbox = tensix_workers.bounding_box();
-    const tt::tt_metal::CoreCoord program_end{
-        bbox.start_coord.x + static_cast<int32_t>(compute_with_storage_grid_size.x) - 1,
-        bbox.start_coord.y + static_cast<int32_t>(compute_with_storage_grid_size.y) - 1};
-    const tt::tt_metal::CoreRangeSet program_grid_on_device({tt::tt_metal::CoreRange(bbox.start_coord, program_end)});
-    TT_FATAL(
-        tensix_workers.contains(program_grid_on_device),
-        "{}: compute_with_storage_grid_size ({}, {}) anchored at sub-device origin {} must lie within sub-device "
-        "TENSIX worker cores {}",
-        context_label,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        bbox.start_coord,
-        tensix_workers);
 }
 
 void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(

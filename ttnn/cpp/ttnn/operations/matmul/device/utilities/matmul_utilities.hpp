@@ -341,12 +341,6 @@ void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
 
-void validate_matmul_compute_grid_within_subdevice_tensix_workers(
-    const tt::tt_metal::IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const tt::tt_metal::CoreCoord& compute_with_storage_grid_size,
-    const char* context_label);
-
 }  // namespace ttnn::operations::matmul::utilities
 
 namespace ttnn::prim::dram_sharded_helpers {
