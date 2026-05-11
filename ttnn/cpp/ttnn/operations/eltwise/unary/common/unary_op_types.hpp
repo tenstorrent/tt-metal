@@ -131,7 +131,6 @@ enum class UnaryOpType {
     LOGSIGMOID,
     LOGIT,
     XIELU,
-    LGAMMA,
     DIGAMMA,
     POLYGAMMA,
 };

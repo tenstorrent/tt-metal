@@ -1931,12 +1931,6 @@ void py_module(nb::module_& mod) {
     bind_sigmoid(mod);
 
     bind_unary_chain(mod);
-    bind_unary_operation_subcoregrids<"lgamma">(
-        mod,
-        &ttnn::lgamma,
-        R"doc(Computes natural logarithm of the gamma function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, FLOAT32)doc");
     bind_identity(mod);
 
     // unary composite imported into ttnn

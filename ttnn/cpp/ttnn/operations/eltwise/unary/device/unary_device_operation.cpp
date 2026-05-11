@@ -44,21 +44,6 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
-    for (const auto& op : args.op_chain) {
-        if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
-            TT_FATAL(
-                input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32,
-                "Unary: LGAMMA requires BFLOAT16 or FLOAT32 input, got dtype {}",
-                static_cast<int>(input_tensor.dtype()));
-            const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
-            TT_FATAL(
-                effective_out == DataType::BFLOAT16 || effective_out == DataType::FLOAT32,
-                "Unary: LGAMMA requires BFLOAT16 or FLOAT32 output, got dtype {}",
-                static_cast<int>(effective_out));
-            break;
-        }
-    }
-
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
