@@ -17,12 +17,29 @@ Validated 2026-05-08: traced production demo with TT_QWEN3_CP_FP32=1 gives
 RTF 0.733× (steady 58.7 ms/frame, vs baseline bf16 47.8 ms/frame). ECAPA
 voice similarity vs reference: Jim 0.9188 → 0.9786, Ashley 0.9722 → 0.9727.
 """
+import os
 from typing import List, Optional, Tuple
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+
+def _parse_fp32_layer_set(num_layers: int) -> set:
+    env = os.environ.get("TT_QWEN3_CP_FP32_LAYERS", None)
+    if env is None:
+        return set(range(num_layers))
+    if env.strip() == "":
+        return set()
+    try:
+        s = {int(x.strip()) for x in env.split(",") if x.strip()}
+    except ValueError as e:
+        raise ValueError(f"TT_QWEN3_CP_FP32_LAYERS must be a comma-separated list of ints, got {env!r}") from e
+    for li in s:
+        if not (0 <= li < num_layers):
+            raise ValueError(f"TT_QWEN3_CP_FP32_LAYERS index {li} out of range [0, {num_layers})")
+    return s
 
 
 class CodePredictorFp32(LightweightModule):
@@ -69,10 +86,11 @@ class CodePredictorFp32(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        # Per-layer / lm_head precision seams. Defaults preserve current behavior
-        # (all 5 layers + lm_head in fp32 + HiFi4). Task 4 wires env knobs.
-        self._fp32_layer_set: set = set(range(self.num_layers))
-        self._lmhead_fp32: bool = True
+        # Per-layer / lm_head precision. Default (no env vars): all 5 layers
+        # + lm_head in fp32 + HiFi4 — matches the original fp32 path.
+        self._fp32_layer_set: set = _parse_fp32_layer_set(self.num_layers)
+        self._lmhead_fp32: bool = os.environ.get("TT_QWEN3_CP_LMHEAD_FP32", "1") == "1"
+        print(f"  CodePredictorFp32: fp32_layers={sorted(self._fp32_layer_set)} " f"lmhead_fp32={self._lmhead_fp32}")
 
         # --- weight format helpers ---
         def _perm_rope_rows(w_2d: torch.Tensor, head_dim: int) -> torch.Tensor:
@@ -499,7 +517,13 @@ class CodePredictorFp32(LightweightModule):
 
         # Apply lm_head over full hidden (caller indexes last position).
         lm_idx = generation_step - 1
-        logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        lm_dtype = self._lmhead_dtype()
+        lm_kcfg = self._lmhead_kcfg()
+        if h_norm.dtype != lm_dtype:
+            h_norm_cast = ttnn.typecast(h_norm, dtype=lm_dtype)
+            ttnn.deallocate(h_norm)
+            h_norm = h_norm_cast
+        logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=lm_dtype, compute_kernel_config=lm_kcfg)
         ttnn.deallocate(h_norm)
         return logits, updated_kvs
 
