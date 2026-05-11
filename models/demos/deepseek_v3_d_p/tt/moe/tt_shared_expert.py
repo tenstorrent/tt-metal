@@ -71,11 +71,9 @@ def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
     grid = ttnn.CoreCoord(8, 8)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
-        in0_block_w=1,
+        in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=1,
-        out_block_h=1,
-        out_block_w=1,
+        out_subblock_w=8,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
@@ -84,11 +82,9 @@ def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
     )
     up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
-        in0_block_w=1,
+        in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=1,
-        out_block_h=1,
-        out_block_w=1,
+        out_subblock_w=8,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
