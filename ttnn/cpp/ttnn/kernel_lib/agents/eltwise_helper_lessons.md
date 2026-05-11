@@ -239,7 +239,6 @@ Examples:
 
 - `CopyTile + Exp` (single input) — hoist-safe. Both inits hoisted out, loop runs `exec` only.
 - `CopyTile + Exp + Sqrt` — chain length > 2, **not** hoist-safe even though all SFPU, **is** hoist safe for copy tile.
-- `CopyTile<cbA> + CopyTile<cbB> + Add` — multiple CB inputs, **not** hoist-safe. Init per tile.
 - `CopyTile + DestReuseOp` — FPU dest-reuse clobbers unpack MOP each iteration, **not** hoist-safe.
 
 Wrong output from an over-eager hoist is not a perf optimization. When in doubt, init per tile.
