@@ -187,8 +187,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     // The matmul region is the rectangle of size `compute_with_storage_grid_size`
     // anchored at `start_core`. The sparse 1D matmul path does not yet anchor at a sub-device
     // start, but keeping the rectangle expression here keeps the API uniform with the dense 1D
-    // path and is safe (sub_device_cores == full compute grid when start_core == (0, 0)).
-    CoreRangeSet sub_device_cores(CoreRange(
+    // path and is safe (matmul_core_rect == full compute grid when start_core == (0, 0)).
+    CoreRangeSet matmul_core_rect(CoreRange(
         start_core,
         CoreCoord(
             start_core.x + compute_with_storage_grid_size.x - 1, start_core.y + compute_with_storage_grid_size.y - 1)));
@@ -200,13 +200,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, sub_device_cores, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, sub_device_cores, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, sub_device_cores, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
@@ -237,7 +237,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
                                                                         : CoreCoord{start_core.x, start_core.y + 1};
         in0_mcast_receivers =
-            num_cores_to_corerangeset_in_subcoregrids(receiver_start_core, num_cores - 1, sub_device_cores, row_major);
+            num_cores_to_corerangeset_in_subcoregrids(receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
     // Mcast args
