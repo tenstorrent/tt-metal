@@ -45,9 +45,7 @@ REFERENCE_MESSAGES: list = [
             {
                 "type": "text",
                 "text": (
-                    "Can you implement in Python a method to compute the fibonnaci sequence at the `n`th element "
-                    "with `n` a parameter passed to the function ? You should start the sequence from 1, previous "
-                    "values are invalid.\nThen run the Python code for the function for n=5 and give the answer."
+                    "Write a Python one-liner or short function factorial(n). Use the python tool to run factorial(6) and report the integer result only (no prose)."
                 ),
             }
         ],
