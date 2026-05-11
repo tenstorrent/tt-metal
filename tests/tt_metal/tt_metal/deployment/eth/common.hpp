@@ -600,6 +600,7 @@ void print_summary(std::span<struct LinkError> errors) {
             e.send_core,
             e.recv_core);
     }
+    log_critical(tt::LogTest, "{} failing links in total", errors.size());
 }
 
 }  // namespace tt::tt_metal
