@@ -111,17 +111,25 @@ def run(
     # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
     absent_keys = set(kwargs.get("__absent_keys__") or [])
     if "memory_config" not in absent_keys:
-        if memory_config is not None:
+        if memory_config is not None and memory_config != "__ABSENT__":
             parsed_mc = (
                 parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
             )
             if parsed_mc is not None:
                 op_kwargs["memory_config"] = parsed_mc
+            else:
+                op_kwargs["memory_config"] = None
+        elif memory_config is None:
+            op_kwargs["memory_config"] = None
     if "dtype" not in absent_keys:
-        if dtype is not None:
+        if dtype is not None and dtype != "__ABSENT__":
             parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
             if parsed_dt is not None:
                 op_kwargs["dtype"] = parsed_dt
+            else:
+                op_kwargs["dtype"] = None
+        elif dtype is None:
+            op_kwargs["dtype"] = None
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
