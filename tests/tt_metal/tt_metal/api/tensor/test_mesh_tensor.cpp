@@ -162,6 +162,46 @@ TEST_F(MeshTensorDeviceTest, TensorProperties) {
     EXPECT_EQ(tensor.memory_config().buffer_type(), BufferType::DRAM);
 }
 
+TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsFalse) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    // A freshly constructed tensor is not valueless.
+    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+}
+
+TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveConstruction) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    auto original = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    MeshTensor moved(std::move(original));
+
+    EXPECT_TRUE(original.is_valueless_after_move());
+    EXPECT_FALSE(moved.is_valueless_after_move());
+}
+
+TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec1 = TensorSpec(Shape{1, 32}, tensor_layout);
+    auto spec2 = TensorSpec(Shape{2, 64}, tensor_layout);
+
+    auto source = MeshTensor::allocate_on_device(*mesh_device_, spec1, TensorTopology());
+    auto target = MeshTensor::allocate_on_device(*mesh_device_, spec2, TensorTopology());
+
+    target = std::move(source);
+
+    EXPECT_TRUE(source.is_valueless_after_move());
+    EXPECT_FALSE(target.is_valueless_after_move());
+}
+
 TEST_F(MeshTensorDeviceTest, ConstructionWithTooSmallBufferFails) {
     // Create a TensorSpec that requires multiple pages, then create a buffer
     // that's too small to hold the tensor but still valid (multiple of page_size).

@@ -259,5 +259,40 @@ TEST(HostTensorTest, NdShardSpecNotSet) {
     EXPECT_FALSE(tensor.nd_shard_spec().has_value());
 }
 
+TEST(HostTensorTest, IsValuelessAfterMoveReturnsFalse) {
+    // A freshly constructed tensor is not valueless.
+    auto tensor = create_simple_host_tensor(Shape{4, 32});
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+
+    // Copy construction leaves neither source nor destination valueless.
+    HostTensor copy(tensor);  // NOLINT(performance-unnecessary-copy-initialization)
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+    EXPECT_FALSE(copy.is_valueless_after_move());
+
+    // Copy assignment leaves neither source nor destination valueless.
+    auto target = create_simple_host_tensor(Shape{1, 8});
+    target = tensor;
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+    EXPECT_FALSE(target.is_valueless_after_move());
+}
+
+TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveConstruction) {
+    auto tensor = create_simple_host_tensor(Shape{4, 32});
+    HostTensor moved(std::move(tensor));
+
+    EXPECT_TRUE(tensor.is_valueless_after_move());
+    EXPECT_FALSE(moved.is_valueless_after_move());
+}
+
+TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
+    auto source = create_simple_host_tensor(Shape{4, 32});
+    auto target = create_simple_host_tensor(Shape{1, 8});
+
+    target = std::move(source);
+
+    EXPECT_TRUE(source.is_valueless_after_move());
+    EXPECT_FALSE(target.is_valueless_after_move());
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

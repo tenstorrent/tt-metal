@@ -40,6 +40,8 @@ const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 
 const TensorTopology& MeshTensor::tensor_topology() const { return impl().topology(); }
 
+bool MeshTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+
 DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
 
 DataType MeshTensor::dtype() const { return tensor_spec().data_type(); }

@@ -68,6 +68,8 @@ const TensorTopology& HostTensor::tensor_topology() const {
     return impl_->topology();
 }
 
+bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+
 const DistributedHostBuffer& HostTensor::buffer() const {
     TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
     return impl_->buffer();

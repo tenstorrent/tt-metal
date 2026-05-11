@@ -156,6 +156,15 @@ public:
     const TensorTopology& tensor_topology() const;
 
     /**
+     * Returns true if this HostTensor was left in a moved-from state.
+     *
+     * A HostTensor becomes valueless when it is the source of a move construction or move assignment.
+     * Unlike every other member function (except destruction and assignment), this function is safe to
+     * call on a moved-from instance; it is in fact the intended way to detect that state.
+     */
+    bool is_valueless_after_move() const;
+
+    /**
      * Returns the DistributedHostBuffer of the HostTensor.
      */
     const DistributedHostBuffer& buffer() const;
