@@ -61,6 +61,7 @@
 #include <thread>
 
 #include <experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -135,9 +136,9 @@ TEST(DistributedUnitTests, Gap78_FixP25Clean_SkipAlreadyTerminatedPhase3) {
     if (pred_pid == 0) {
         // Child: PREDECESSOR
         try {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
-                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)},
-                                 tt::tt_fabric::FabricConfig::FABRIC_1D));
+                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
             auto range = mesh->shape().to_mesh_coordinate_range();
             auto workload = make_blank_workload_gap78(range);
             mesh->execute(workload);
@@ -165,9 +166,9 @@ TEST(DistributedUnitTests, Gap78_FixP25Clean_SkipAlreadyTerminatedPhase3) {
         // Child: TESTEE — open sub-mesh
         try {
             // Open sub-mesh on first 4 devices — channels to devices 4-7 should be TERMINATED
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
-                MeshDeviceConfig(MeshShape{1, 4},
-                                 tt::tt_fabric::FabricConfig::FABRIC_1D));
+                MeshDeviceConfig(MeshShape{1, 4}));
             // If we get here without hanging, P25-CLEAN is working
             log_info(LogTest, "GAP-78 TESTEE: sub-mesh init succeeded — FIX P25-CLEAN is working.");
             mesh->close();

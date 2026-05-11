@@ -51,6 +51,7 @@
 #include <thread>
 
 #include <experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -122,9 +123,9 @@ TEST(DistributedUnitTests, Gap80_FixEV_EventSynchronizeDeadRelayGuard) {
     ASSERT_NE(pred_pid, -1) << "fork failed: " << strerror(errno);
     if (pred_pid == 0) {
         try {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
-                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)},
-                                 tt::tt_fabric::FabricConfig::FABRIC_1D));
+                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
             auto range = mesh->shape().to_mesh_coordinate_range();
             auto workload = make_blank_workload_gap80(range);
             mesh->execute(workload);
@@ -161,9 +162,9 @@ TEST(DistributedUnitTests, Gap80_FixEV_EventSynchronizeDeadRelayGuard) {
     ASSERT_NE(testee_pid, -1) << "fork failed: " << strerror(errno);
     if (testee_pid == 0) {
         try {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
-                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)},
-                                 tt::tt_fabric::FabricConfig::FABRIC_1D));
+                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
 
             // Check relay status — if broken, FIX EV will guard EventSynchronize
             bool has_broken_relay = false;

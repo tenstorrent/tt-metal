@@ -59,6 +59,7 @@
 #include <thread>
 
 #include <experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -130,9 +131,9 @@ TEST(DistributedUnitTests, Gap79_FixAP_MasterRouterChanRelayBroken) {
     ASSERT_NE(pred_pid, -1) << "fork failed: " << strerror(errno);
     if (pred_pid == 0) {
         try {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
-                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)},
-                                 tt::tt_fabric::FabricConfig::FABRIC_1D));
+                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
             auto range = mesh->shape().to_mesh_coordinate_range();
             auto workload = make_blank_workload_gap79(range);
             mesh->execute(workload);
@@ -170,9 +171,9 @@ TEST(DistributedUnitTests, Gap79_FixAP_MasterRouterChanRelayBroken) {
     ASSERT_NE(testee_pid, -1) << "fork failed: " << strerror(errno);
     if (testee_pid == 0) {
         try {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
-                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)},
-                                 tt::tt_fabric::FabricConfig::FABRIC_1D));
+                MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
             // Check: if any non-MMIO device has relay_path_broken, FIX AP did its job.
             // If cluster is healthy (no stuck master), that's also fine — the fix is a guard.
             bool found_broken = false;
