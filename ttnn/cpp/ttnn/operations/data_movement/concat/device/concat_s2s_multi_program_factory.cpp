@@ -135,13 +135,26 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
     }
 
+    // Match the legacy CachedProgram path: SetRuntimeArgs(..., all_cores, args).
+    // These values must live in per-core runtime args, not common_runtime_args.
+    // BRISC (writer) and NCRISC (reader) each have their own RTA region; using
+    // common_runtime_args for both kernels made both RISCs observe the same
+    // offsets (precision failures in sharded concat).
+    KernelDescriptor::CoreRuntimeArgs reader_rt_args(runtime_args_0.begin(), runtime_args_0.end());
+    KernelDescriptor::CoreRuntimeArgs writer_rt_args(runtime_args_1.begin(), runtime_args_1.end());
+
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = compile_time_args;
-    reader_desc.common_runtime_args = runtime_args_0;
+    reader_desc.runtime_args.reserve(all_cores.num_cores());
+    for (const auto& range : all_cores.ranges()) {
+        for (const CoreCoord& core : range) {
+            reader_desc.runtime_args.emplace_back(core, reader_rt_args);
+        }
+    }
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
@@ -150,7 +163,12 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = compile_time_args;
-    writer_desc.common_runtime_args = runtime_args_1;
+    writer_desc.runtime_args.reserve(all_cores.num_cores());
+    for (const auto& range : all_cores.ranges()) {
+        for (const CoreCoord& core : range) {
+            writer_desc.runtime_args.emplace_back(core, writer_rt_args);
+        }
+    }
     writer_desc.config = WriterConfigDescriptor{};
 
     desc.kernels.push_back(std::move(reader_desc));
