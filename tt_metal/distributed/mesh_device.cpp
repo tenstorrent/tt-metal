@@ -1577,7 +1577,7 @@ void MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() {
         all_devices.begin(), all_devices.end(), [](IDevice* d) { return d->is_fabric_base_umd_fixm_init(); });
     if (any_stale_base_umd) {
         log_info(
-            tt::LogMesh,
+            tt::LogMetal,
             "wait_for_fabric_workers_ready_for_quiesce: FIX FX-1 (#42429) — {} device(s) have "
             "fabric_base_umd_fixm_init set; propagating fabric_stale_base_umd_channels to all "
             "{} devices to enable extended Phase 5 (120s) and Phase 5b (24s) timeouts.",
