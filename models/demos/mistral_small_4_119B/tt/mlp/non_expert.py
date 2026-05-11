@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ from models.demos.mistral_small_4_119B.tt_utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     dram_sharded_weight_config,
     even_int_div,
+    get_activation_sharding_core_counts_for_dram_matmul,
+    get_dram_sharded_matmul_config,
     get_state_dicts,
     shard_and_save,
 )
@@ -162,6 +165,30 @@ class NonExpert:
         del fabric_config
         return cls._model_config(hf_config, mesh_device)
 
+    @staticmethod
+    def _decode_activation_memory_config(
+        per_device_width: int,
+        activation_sharding_num_cores: int,
+        mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
+    ) -> ttnn.MemoryConfig:
+        """WIDTH-sharded L1 activations for decode DRAM-sharded matmul (DeepSeek ``MLP`` parity)."""
+        return ttnn.create_sharded_memory_config_(
+            shape=(
+                ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
+                ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
+            ),
+            core_grid=ttnn.num_cores_to_corerangeset(
+                activation_sharding_num_cores,
+                mesh_device.compute_with_storage_grid_size(),
+                row_wise=True,
+            ),
+            strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     @classmethod
     def decode_model_config(
         cls,
@@ -170,8 +197,57 @@ class NonExpert:
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
     ) -> dict[str, Any]:
-        del batch_size_per_row, fabric_config
-        return cls._model_config(hf_config, mesh_device)
+        del fabric_config
+        base = cls._model_config(hf_config, mesh_device)
+        _, mesh_width = mesh_device.shape
+        if mesh_width > 1:
+            return base
+
+        dim = hf_config.hidden_size
+        hidden_dim = hf_config.intermediate_size
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        max_num_cores = grid_size.x * grid_size.y
+        input_num_cores = max(get_activation_sharding_core_counts_for_dram_matmul(dim, max_num_cores))
+        inner_num_cores = max(get_activation_sharding_core_counts_for_dram_matmul(hidden_dim, max_num_cores))
+        output_num_cores = max(get_activation_sharding_core_counts_for_dram_matmul(dim, max_num_cores))
+        assert dim % input_num_cores == 0, (dim, input_num_cores)
+        assert dim % output_num_cores == 0, (dim, output_num_cores)
+
+        m = batch_size_per_row
+        pc_w1 = get_dram_sharded_matmul_config(m, dim, hidden_dim, input_num_cores, inner_num_cores)
+        pc_w3 = get_dram_sharded_matmul_config(m, dim, hidden_dim, input_num_cores, inner_num_cores)
+        pc_w2 = get_dram_sharded_matmul_config(m, hidden_dim, dim, inner_num_cores, output_num_cores)
+
+        input_memory_config = cls._decode_activation_memory_config(
+            dim, input_num_cores, mesh_device, batch_size_per_row
+        )
+        output_memory_config = cls._decode_activation_memory_config(
+            dim, output_num_cores, mesh_device, batch_size_per_row
+        )
+
+        w1, w2, w3, mul = base["w1"], base["w2"], base["w3"], base["mul"]
+        return {
+            **base,
+            "all_gather": replace(base["all_gather"], memory_config=input_memory_config),
+            "input_memory_config": input_memory_config,
+            "output_memory_config": output_memory_config,
+            "w1": replace(
+                w1,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=pc_w1,
+            ),
+            "w2": replace(
+                w2,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=pc_w2,
+            ),
+            "w3": replace(
+                w3,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=pc_w3,
+            ),
+            "mul": replace(mul, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG),
+        }
 
     @classmethod
     def create_state(
@@ -190,7 +266,8 @@ class NonExpert:
         tp = int(cfg["tp_size"])
         expected_sharded_width = even_int_div(dim, tp)
 
-        if int(x.shape[-1]) == expected_sharded_width:
+        # ``all_gather_async`` consults fabric link counts even when TP mesh width is 1; skip the op.
+        if tp > 1 and int(x.shape[-1]) == expected_sharded_width:
             x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         w1_out = ttnn.linear(x, **cfg["w1"])

@@ -20,6 +20,7 @@ from models.demos.mistral_small_4_119B.tt_utils.config_dataclass import (
 )
 from models.demos.mistral_small_4_119B.tt_utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
+    all_gather_mesh_extent_on_cluster_axis,
     get_state_dicts,
     shard_and_save,
 )
@@ -123,8 +124,12 @@ class DistributedRMSNorm(RMSNormBase):
         return ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
 
     @staticmethod
-    def _fwd_all_gather_stats(stats: ttnn.Tensor, cfg: dict, ccl: CCL) -> ttnn.Tensor:
-        return ttnn.experimental.all_gather_async(stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+    def _fwd_all_gather_stats(stats: ttnn.Tensor, cfg: dict, ccl: CCL | None) -> ttnn.Tensor:
+        ag = cfg["all_gather"]
+        if all_gather_mesh_extent_on_cluster_axis(ag) <= 1:
+            return stats
+        assert ccl is not None
+        return ttnn.experimental.all_gather_async(stats, **ccl.populate_all_gather_runtime_args(ag))
 
     @staticmethod
     def _fwd_rms_norm_post_all_gather(
@@ -138,7 +143,8 @@ class DistributedRMSNorm(RMSNormBase):
         tt_stats = cls._fwd_rms_norm_pre_all_gather(x, cfg, program_config=program_config)
         ccl = cfg["ccl"]
         tt_gathered_stats = cls._fwd_all_gather_stats(tt_stats, cfg, ccl)
-        ttnn.deallocate(tt_stats)
+        if tt_gathered_stats is not tt_stats:
+            ttnn.deallocate(tt_stats)
         tt_out = cls._fwd_rms_norm_post_all_gather(x, tt_gathered_stats, cfg, program_config=program_config)
         ttnn.deallocate(tt_gathered_stats)
         return tt_out

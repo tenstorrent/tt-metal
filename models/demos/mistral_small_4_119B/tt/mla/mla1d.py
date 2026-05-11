@@ -721,7 +721,7 @@ class MistralSmall4MLA1D(AbstractModule):
 
             return ttnn.CoreGrid(y=1, x=1)
 
-        input_core_grid = _pick_width_shard_grid(hidden_size_per_device)
+        input_core_grid = _pick_width_shard_grid(hidden_size_per_device, require_tile_divisible=True)
 
         input_memory_config = ttnn.create_sharded_memory_config(
             shape=(

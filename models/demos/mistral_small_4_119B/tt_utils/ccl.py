@@ -22,29 +22,40 @@ class CCL:
         self.gather_sems = []
         self.reduce_scatter_sems = []
         self.barrier_sems = []
+
+        # On a single-device mesh, fabric is not available and all collectives short-circuit
+        # (mesh extent <= 1 on every axis). Skip semaphore creation to avoid requiring fabric.
+        needs_semaphores = mesh_device.get_num_devices() > 1
+
         for _ in range(len(list(mesh_device.shape))):
             self.gather_sems.append([])
             self.reduce_scatter_sems.append([])
             self.barrier_sems.append([])
             for _ in range(self.sems_per_axis):
-                self.gather_sems[-1].append(
-                    [
-                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
-                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
-                    ]
-                )  # use two semaphores to use minimal version of all_gather_async
+                if needs_semaphores:
+                    self.gather_sems[-1].append(
+                        [
+                            ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                            ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                        ]
+                    )  # use two semaphores to use minimal version of all_gather_async
 
-                self.reduce_scatter_sems[-1].append(
-                    [
-                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
-                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
-                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
-                    ]
-                )
-                self.barrier_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+                    self.reduce_scatter_sems[-1].append(
+                        [
+                            ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                            ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                            ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                        ]
+                    )
+                    self.barrier_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+                else:
+                    self.gather_sems[-1].append([None, None])
+                    self.reduce_scatter_sems[-1].append([None, None, None])
+                    self.barrier_sems[-1].append(None)
 
-        # Synchronize the device to ensure that the semaphores are created
-        ttnn.synchronize_device(self.mesh_device)
+        if needs_semaphores:
+            # Synchronize the device to ensure that the semaphores are created
+            ttnn.synchronize_device(self.mesh_device)
 
         # Each semaphore type needs its own independent counter for each cluster axis
         self.gather_sem_cnt = [0 for _ in range(self.num_axes)]

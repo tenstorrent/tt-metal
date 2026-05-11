@@ -6,10 +6,40 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
+
+
+def pytest_configure(config):
+    """Tune Open MPI / PRRTE before libtt_metal may call ``MPI_Init_thread`` (singleton ``pytest`` runs).
+
+    Bare ``python -m pytest`` (not under ``mpirun``) uses MPI "singleton" mode; ORTE can fork a prted
+    tree until the OS hits max-children / ``RLIMIT_NPROC``. See ``tests/scripts/ompi_singleton_env.py``.
+    Opt out with ``TT_METAL_OMPI_SINGLETON_WORKAROUND=0`` if your site needs a different PLM.
+    """
+    del config  # unused
+    try:
+        from tests.scripts.ompi_singleton_env import apply_ompi_singleton_workaround_env
+
+        apply_ompi_singleton_workaround_env()
+    except ImportError:
+        _repo_root = Path(__file__).resolve().parents[4]
+        if str(_repo_root) not in sys.path:
+            sys.path.insert(0, str(_repo_root))
+        try:
+            from tests.scripts.ompi_singleton_env import apply_ompi_singleton_workaround_env
+
+            apply_ompi_singleton_workaround_env()
+        except ImportError:
+            if os.environ.get("TT_METAL_OMPI_SINGLETON_WORKAROUND", "1") != "0":
+                os.environ.setdefault("OMPI_MCA_plm", "isolated")
+                os.environ.setdefault("PRTE_MCA_plm", "isolated")
+                os.environ.setdefault("OMPI_MCA_plm_ssh_agent", "false")
+                os.environ.setdefault("OMPI_MCA_plm_rsh_agent", "false")
 
 
 def pytest_addoption(parser):
@@ -55,9 +85,10 @@ def _mistral_text_config_store(mistral_snapshot_dir: Path):
 
     return Mistral4Config(
         vocab_size=256,
-        hidden_size=64,
-        intermediate_size=128,
-        moe_intermediate_size=32,
+        # Geometry constraints for ``mla1d.decode_model_config`` on BH: see ``test_text_stack._tiny_mistral4_config_for_fast_decode``.
+        hidden_size=512,
+        intermediate_size=2048,
+        moe_intermediate_size=512,
         num_hidden_layers=2,
         num_attention_heads=4,
         num_key_value_heads=4,
@@ -67,11 +98,11 @@ def _mistral_text_config_store(mistral_snapshot_dir: Path):
         n_group=1,
         topk_group=1,
         max_position_embeddings=4096,
-        kv_lora_rank=8,
-        q_lora_rank=16,
-        qk_rope_head_dim=8,
-        v_head_dim=16,
-        qk_nope_head_dim=8,
+        kv_lora_rank=32,
+        q_lora_rank=512,
+        qk_rope_head_dim=64,
+        v_head_dim=256,
+        qk_nope_head_dim=64,
     )
 
 

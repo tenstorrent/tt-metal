@@ -8,6 +8,7 @@ from enum import Enum
 from types import NoneType
 from typing import Any, overload
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -21,10 +22,10 @@ from models.demos.mistral_small_4_119B.tt_utils.config_dataclass import (
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | ttnn.Tensor | SavedWeight | None"]
-    | list["WeightConfig | ttnn.Tensor | SavedWeight | None"]
+    dict[str, "WeightConfig | torch.Tensor | ttnn.Tensor | SavedWeight | None"]
+    | list["WeightConfig | torch.Tensor | ttnn.Tensor | SavedWeight | None"]
     | tuple[
-        "WeightConfig | ttnn.Tensor | SavedWeight | None", ...
+        "WeightConfig | torch.Tensor | ttnn.Tensor | SavedWeight | None", ...
     ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
@@ -186,6 +187,11 @@ def _merge_run_config(
     if model_state_config_item is None and isinstance(weight_config_item, SavedWeight):
         logger.warning(f"Cached weight {weight_config_item.path} is not needed by the model config, ignoring it.")
         return None
+
+    # Host-held weights (e.g. ``TtMistral4MoE`` bridge ``bridge_torch_state_dict``) have no
+    # ``FromWeightConfig`` leaves in decode ``model_config``; still merge them into the run config.
+    if model_state_config_item is None and isinstance(weight_config_item, torch.Tensor):
+        return weight_config_item
 
     if model_state_config_item is None and isinstance(weight_config_item, ttnn.Tensor):
         logger.warning("Resolved TTNN weight is not needed by the model config, ignoring it.")

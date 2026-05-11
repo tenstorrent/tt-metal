@@ -420,17 +420,18 @@ def _torch_cache_from_transformers_single_layer(cache, layer_idx: int) -> torch.
     return cache.layers[layer_idx].keys
 
 
-def _transformers_cache_single_layer_from_torch(torch_cache: torch.Tensor, layer_idx: int):
-    """Create a ``DynamicCache`` with one populated layer from a raw torch tensor."""
+def _transformers_cache_single_layer_from_torch(key_cache: torch.Tensor, value_cache: torch.Tensor, layer_idx: int):
+    """Create a ``DynamicCache`` with one populated layer from separate key/value tensors."""
     from transformers import DynamicCache
 
     cache = DynamicCache()
-    empty = torch.empty((*torch_cache.shape[:-1], 0), dtype=torch_cache.dtype)
+    empty_k = torch.empty((*key_cache.shape[:-1], 0), dtype=key_cache.dtype)
+    empty_v = torch.empty((*value_cache.shape[:-1], 0), dtype=value_cache.dtype)
     for i in range(layer_idx):
-        cache.update(key_states=empty, value_states=empty, layer_idx=i)
+        cache.update(key_states=empty_k, value_states=empty_v, layer_idx=i)
     cache.update(
-        key_states=torch_cache,
-        value_states=torch_cache,
+        key_states=key_cache,
+        value_states=value_cache,
         layer_idx=layer_idx,
     )
     return cache
@@ -447,6 +448,7 @@ def _run_mistral4_reference_decode(
     batch_size = activation.shape[0]
     num_kv_heads = hf_config.num_key_value_heads
     head_dim = hf_config.hidden_size // hf_config.num_attention_heads
+    v_head_dim = getattr(hf_config, "v_head_dim", None) or head_dim
     max_position_id = int(position_ids.max().item())
 
     mask = torch.full((batch_size, 1, 1, max_position_id + 1), float("-inf"), dtype=torch.bfloat16)
@@ -454,8 +456,9 @@ def _run_mistral4_reference_decode(
         row[:, :, :pid] = 0.0
     mask[:, :, :, -1] = 0.0
 
-    input_cache_tensor = torch.randn((batch_size, num_kv_heads, max_position_id, head_dim), dtype=torch.bfloat16)
-    input_cache = _transformers_cache_single_layer_from_torch(input_cache_tensor, layer_idx)
+    input_cache_keys = torch.randn((batch_size, num_kv_heads, max_position_id, head_dim), dtype=torch.bfloat16)
+    input_cache_values = torch.randn((batch_size, num_kv_heads, max_position_id, v_head_dim), dtype=torch.bfloat16)
+    input_cache = _transformers_cache_single_layer_from_torch(input_cache_keys, input_cache_values, layer_idx)
 
     pos_ids_2d = position_ids.unsqueeze(1)
     rope = Mistral4RotaryEmbedding(hf_config).to(dtype=torch.bfloat16).eval()
@@ -736,7 +739,10 @@ def test_mode_decode_forward_pass_batch_8_users_per_row_tt_mesh_native(
             paged_config=paged_config,
             mesh_device=mesh_device,
         )
-        rope_tensors = _get_mistral4_rope_tensors(cfg, batch_size_per_row, position_ids, mesh_device)
+        from models.demos.mistral_small_4_119B.tt.rope import TtMistral4Rotary
+
+        rotary = TtMistral4Rotary(mesh_device, batch_size_per_row, cfg)
+        rope_tensors = rotary.get_rot_mats(position_ids)
 
         tt_output = DecoderBlock2D.forward_decode(
             tt_input,

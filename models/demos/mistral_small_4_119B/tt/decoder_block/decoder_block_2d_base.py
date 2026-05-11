@@ -86,10 +86,15 @@ class DecoderBlock2DBase(DecoderBlockBase):
         hf_config: PretrainedConfig,
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
-        ccl: CCL,
+        ccl: CCL | None,
         mla_cache: torch.Tensor | None = None,
         kv_cache_override: KvCacheConfig | None = None,
     ) -> ModelState:
+        # ``DistributedRMSNorm``, MLA decode, and dense MLP all call ``ccl.populate_*`` even on a 1×1 mesh
+        # (e.g. ``all_gather_async`` with one rank); callers that pass ``None`` for "no multi-device" still
+        # need a real ``CCL`` for semaphores and link metadata.
+        if ccl is None:
+            ccl = CCL(mesh_device)
         return {
             "mla_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "mla": cls.create_mla_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override),

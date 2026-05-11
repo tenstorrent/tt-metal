@@ -54,6 +54,34 @@ def get_fabric_config():
     )
 
 
+def all_gather_mesh_extent_on_cluster_axis(all_gather_cfg: Any) -> int:
+    """Return the mesh size along ``cluster_axis`` for an ``AllGatherAsyncConfig`` (or merged dict).
+
+    When this is ``1``, ``all_gather_async`` is logically a no-op, but the op still queries
+    ``get_num_links`` / fabric on some targets (e.g. Blackhole) where fabric may be unset in
+    lightweight tests—callers should skip the gather and keep the input tensor.
+    """
+    if all_gather_cfg is None:
+        return 1
+    if isinstance(all_gather_cfg, dict):
+        axis = all_gather_cfg.get("cluster_axis")
+        mesh_dev = all_gather_cfg.get("mesh_device")
+    else:
+        axis = getattr(all_gather_cfg, "cluster_axis", None)
+        mesh_dev = getattr(all_gather_cfg, "mesh_device", None)
+    if axis is None or mesh_dev is None:
+        return 1
+    try:
+        shape = tuple(mesh_dev.shape)
+    except Exception:
+        return 1
+    if axis < 0:
+        axis += len(shape)
+    if not (0 <= axis < len(shape)):
+        return 1
+    return max(1, int(shape[axis]))
+
+
 # We can't warmup prefill for all possible prompt lengths, only warmup for the selective prompt lengths.
 # LINEAR_ADDITIVE: tile, 2*tile, 3*tile, ... hf_config.max_seq_len
 # LINEAR_MULTIPLES: tile, 2*tile, 4*tile, 8*tile, ... hf_config.max_seq_len
