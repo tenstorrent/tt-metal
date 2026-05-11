@@ -9,6 +9,8 @@
 
 // Informed by tt_metal/hw/inc/internal/tt-{1,2}xx/risc_common.h.
 // The original headers are too heavy (and this is marginally more efficient.)
+#include <cstdint>
+
 inline __attribute__((always_inline)) void invalidate_l1_cache()
 {
 #ifdef ARCH_BLACKHOLE
@@ -20,11 +22,11 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 }
 
 // This mirrors hostdevcommon/api/hostdevcommon/dprint_common.h.
-static constexpr uint32_t DPRINT_BUFFER_SIZE                = 204;
-static constexpr uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
-static constexpr uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xF8F8F8F8;
-static constexpr uint32_t DEVICE_PRINT_RESET_BUFFER_MAGIC   = 0xF0E1D2C3;
-static constexpr uint32_t DEVICE_PRINT_WRITE_STALL_FLAG     = 1u << 31;
+static constexpr std::uint32_t DPRINT_BUFFER_SIZE                = 204;
+static constexpr std::uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
+static constexpr std::uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xF8F8F8F8;
+static constexpr std::uint32_t DEVICE_PRINT_RESET_BUFFER_MAGIC   = 0xF0E1D2C3;
+static constexpr std::uint32_t DEVICE_PRINT_WRITE_STALL_FLAG     = 1u << 31;
 
 #define DEBUG_PRINT_ENABLED
 #define USE_DEVICE_PRINT
