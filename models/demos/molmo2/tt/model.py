@@ -683,6 +683,8 @@ class TtMolmo2Model(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
         # Token ID input for embedding (inside trace) — [1, 1, 1] uint32
         tok_id = _tt(torch.zeros(1, 1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         # Current decode position — [1] int32
@@ -690,7 +692,8 @@ class TtMolmo2Model(LightweightModule):
         # RoPE cos/sin for current position — [1, 1, 1, head_dim]
         cos_buf = _tt(torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16))
         sin_buf = _tt(torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16))
-        return {"tok_id": tok_id, "cur_pos": cur_pos, "cos": cos_buf, "sin": sin_buf}
+
+        return {"tok_id": tok_id, "cur_pos": cur_pos, "cos": cos_buf, "sin": sin_buf, "mapper": mapper}
 
     def _capture_decode_trace(self, tt, prefill_seq_len: int):
         """Warm-up + trace capture for single-token decode.
@@ -771,41 +774,49 @@ class TtMolmo2Model(LightweightModule):
     def _execute_decode_trace(self, token_id: int, position: int) -> int:
         """Update stable input buffers and execute the captured decode trace.
 
-        Uses copy_host_to_device_tensor (direct DMA into pre-allocated device buffers)
-        instead of creating intermediate staging device tensors. This matches the
-        tt_transformers pattern (prepare_decode_inputs_host + copy_host_to_device) and
-        eliminates 4x device alloc/copy/dealloc per step.
-
+        Uses copy_host_to_device_tensor (direct DMA into pre-allocated device buffers).
         Returns next token ID (int) via on-device argmax.
         """
         tt = self._decode_trace_tensors
-        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mapper = tt["mapper"]
 
-        def _host(t_cpu, dtype, layout):
-            return ttnn.from_torch(t_cpu, dtype=dtype, layout=layout, device=None, mesh_mapper=mapper)
-
-        # Build host tensors (no device allocation) then DMA directly into stable buffers
+        cos_p = self._cos_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        sin_p = self._sin_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
         ttnn.copy_host_to_device_tensor(
-            _host(torch.tensor([[[token_id]]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(
+                torch.tensor([[[token_id]]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=mapper,
+            ),
             tt["tok_id"],
         )
         ttnn.copy_host_to_device_tensor(
-            _host(torch.tensor([position], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(
+                torch.tensor([position], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=mapper,
+            ),
             tt["cur_pos"],
         )
-        cos_p = self._cos_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        sin_p = self._sin_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        ttnn.copy_host_to_device_tensor(_host(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT), tt["cos"])
-        ttnn.copy_host_to_device_tensor(_host(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT), tt["sin"])
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(cos_p, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=mapper),
+            tt["cos"],
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(sin_p, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=mapper),
+            tt["sin"],
+        )
 
         # Replay the captured trace — non-blocking so CPU can continue while device runs.
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
 
-        # Argmax on device: reduces 300KB D2H (full logits) to 4 bytes (one token ID).
-        # TTNN schedules argmax after execute_trace due to data dependency on the output.
+        # Argmax on device: 4-byte D2H instead of 300KB full-logits transfer.
         logits_device = ttnn.get_device_tensors(self._decode_trace_output)[0]
         tok_device = ttnn.argmax(logits_device, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # D2H of token ID (4 bytes) — this call syncs the device.
         tok_cpu = ttnn.to_torch(tok_device)
         ttnn.deallocate(tok_device)
         return int(tok_cpu.reshape(-1)[0].item())
