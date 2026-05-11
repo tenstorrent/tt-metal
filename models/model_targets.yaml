@@ -157,7 +157,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_t/s: 45.0
+              prefill_t/s: 48.0
               decode_t/s/u: 16.0
               decode_t/s: 16.0
             accuracy: {}
