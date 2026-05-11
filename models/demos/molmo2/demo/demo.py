@@ -260,9 +260,8 @@ def run_demo(
         t_warmup = time.time()
         warmup_ids = input_ids[:1, :32]  # first 32 tokens, text path only
         _ = model.forward_prefill(input_ids=warmup_ids, pixel_values=None, user_id=0)
-        # One decode step to compile the decode kernels
-        warmup_tok = int(warmup_ids[0, -1].item())
-        _ = model.forward_decode_step(warmup_tok, 32)
+        # Capture decode trace (covers JIT compile + trace capture)
+        model.warmup_decode_trace(prefill_seq_len=32)
         model._demo_warmed_up = True
         logger.info(f"  Warm-up done in {time.time()-t_warmup:.2f}s (not counted in timing)")
 
@@ -313,7 +312,11 @@ def run_demo(
         for u in range(batch_size):
             tok = int(next_tokens[u].item())
             if not user_done[u]:
-                logits_u = model.forward_decode_step(tok, current_pos)
+                if batch_size == 1 and model._decode_trace_id is not None:
+                    logits_1d = model._execute_decode_trace(tok, current_pos)
+                    logits_u = logits_1d.unsqueeze(0)  # [1, vocab_size]
+                else:
+                    logits_u = model.forward_decode_step(tok, current_pos)
                 new_logits_list.append(logits_u)
             else:
                 new_logits_list.append(None)
