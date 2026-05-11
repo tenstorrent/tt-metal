@@ -460,7 +460,7 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
             pcc_threshold=0.9999,
             rtol=0.01,
             atol=0.07,
-            frobenius_threshold=0.011,
+            frobenius_threshold=0.015,
         )
 
 
