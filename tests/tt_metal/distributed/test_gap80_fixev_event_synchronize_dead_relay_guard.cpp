@@ -126,10 +126,10 @@ TEST(DistributedUnitTests, Gap80_FixEV_EventSynchronizeDeadRelayGuard) {
             tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
                 MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
-            auto range = mesh->shape().to_mesh_coordinate_range();
+            auto range = MeshCoordinateRange(mesh->shape());
             auto workload = make_blank_workload_gap80(range);
-            mesh->execute(workload);
-            mesh->finish();
+            EnqueueMeshWorkload(mesh->mesh_command_queue(0), workload, false);
+            Finish(mesh->mesh_command_queue(0));
             shm->predecessor_ready.store(1, std::memory_order_release);
             while (true) { std::this_thread::sleep_for(std::chrono::seconds(1)); }
         } catch (const std::exception& e) {
@@ -183,10 +183,10 @@ TEST(DistributedUnitTests, Gap80_FixEV_EventSynchronizeDeadRelayGuard) {
                 // The key regression check: EventSynchronize must NOT infinite-loop on the
                 // dead device.  If we reach the catch block within budget, FIX EV is working.
                 try {
-                    auto range = mesh->shape().to_mesh_coordinate_range();
+                    auto range = MeshCoordinateRange(mesh->shape());
                     auto workload = make_blank_workload_gap80(range);
-                    mesh->execute(workload);
-                    mesh->finish();
+                    EnqueueMeshWorkload(mesh->mesh_command_queue(0), workload, false);
+                    Finish(mesh->mesh_command_queue(0));
                 } catch (const std::exception& e) {
                     log_info(LogTest,
                              "GAP-80 TESTEE: dispatch threw as expected on degraded cluster: {}",

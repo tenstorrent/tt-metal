@@ -134,10 +134,10 @@ TEST(DistributedUnitTests, Gap79_FixAP_MasterRouterChanRelayBroken) {
             tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
                 MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
-            auto range = mesh->shape().to_mesh_coordinate_range();
+            auto range = MeshCoordinateRange(mesh->shape());
             auto workload = make_blank_workload_gap79(range);
-            mesh->execute(workload);
-            mesh->finish();
+            EnqueueMeshWorkload(mesh->mesh_command_queue(0), workload, false);
+            Finish(mesh->mesh_command_queue(0));
             shm->predecessor_ready.store(1, std::memory_order_release);
             // Spin until SIGKILL
             while (true) { std::this_thread::sleep_for(std::chrono::seconds(1)); }

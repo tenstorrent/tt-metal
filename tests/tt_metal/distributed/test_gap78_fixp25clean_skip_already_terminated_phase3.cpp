@@ -139,10 +139,10 @@ TEST(DistributedUnitTests, Gap78_FixP25Clean_SkipAlreadyTerminatedPhase3) {
             tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
             auto mesh = MeshDevice::create(
                 MeshDeviceConfig(MeshShape{1, static_cast<size_t>(num_devices)}));
-            auto range = mesh->shape().to_mesh_coordinate_range();
+            auto range = MeshCoordinateRange(mesh->shape());
             auto workload = make_blank_workload_gap78(range);
-            mesh->execute(workload);
-            mesh->finish();
+            EnqueueMeshWorkload(mesh->mesh_command_queue(0), workload, false);
+            Finish(mesh->mesh_command_queue(0));
             // Signal ready
             shm->predecessor_ready.store(1, std::memory_order_release);
             // Close cleanly — channels transition to TERMINATED
