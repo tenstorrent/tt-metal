@@ -1237,7 +1237,11 @@ class Generator(WarmupForwardMixin):
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         if not return_logits:
             sampling_module = getattr(self.model, "sampling", None)
-            if sampling_module is not None and getattr(sampling_module, "enable_internal_trace", False):
+            if (
+                sampling_module is not None
+                and getattr(sampling_module, "enable_internal_trace", False)
+                and not getattr(sampling_module, "_penalties_active", False)
+            ):
                 # Pre-capture the split sampling trace so the first live decode
                 # step does not lazily enter sampling trace capture.
                 sampling_module.capture_trace(logits=tt_out_tok[0], tt_out_tok=tokens_tt)

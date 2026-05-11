@@ -374,7 +374,11 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
-        use_internal_trace = enable_trace and self.enable_internal_trace
+        # Penalty sampling reads mutable prompt/output masks and updates
+        # persistent output-count state after sampling. Keep that path
+        # untraced so each decode step observes the current penalty buffers
+        # through normal op dependencies.
+        use_internal_trace = enable_trace and self.enable_internal_trace and not penalties_on
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
