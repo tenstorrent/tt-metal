@@ -39,6 +39,33 @@ def _get_default_reassemble_pool() -> ThreadPoolExecutor:
     return _DEFAULT_REASSEMBLE_POOL
 
 
+# Try to load the C++/AVX2 planar concat extension (see
+# models/tt_dit/utils/cpp/).  When available, _yuv_planar_d2h uses it as a
+# drop-in replacement for the Python thread-pool scatter — same byte layout,
+# ~2× faster end-to-end with a persistent output buffer.  The wrapper sets
+# HAS_CPP_PLANAR_CONCAT=False on unbuilt / non-AVX2 hosts; the existing
+# torch_threaded path remains the fallback.
+from .planar_concat import HAS_CPP_PLANAR_CONCAT
+from .planar_concat import planar_concat_cpp as _planar_concat_cpp_impl
+
+# Persistent output buffer for the C++ planar concat fast path.  The Wan VAE
+# encode loop allocates a 112 MB buffer per frame batch otherwise — fresh
+# np.empty pays ~6–8 ms of first-touch page-fault overhead on hosts without
+# THP=always, which dwarfs the kernel itself.  Reuse across calls eliminates
+# that tax; shape changes (e.g. switching resolutions) reallocate lazily.
+_PLANAR_OUT_BUF: np.ndarray | None = None
+_PLANAR_OUT_SHAPE: tuple[int, int] | None = None
+
+
+def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
+    global _PLANAR_OUT_BUF, _PLANAR_OUT_SHAPE
+    shape = (T, row_stride)
+    if _PLANAR_OUT_SHAPE != shape:
+        _PLANAR_OUT_BUF = np.empty(shape, dtype=np.uint8)
+        _PLANAR_OUT_SHAPE = shape
+    return _PLANAR_OUT_BUF
+
+
 def typed_tensor(
     x: torch.Tensor,
     dtype: ttnn.DataType,
@@ -686,12 +713,20 @@ def _yuv_planar_d2h(
     ``[Y plane | Cb plane | Cr plane]`` in row-major.
 
     Kicks off all three ``cpu(blocking=False)`` calls before a single
-    ``synchronize_device`` so the reads overlap, then dispatches the
-    per-shard scatters across the shared reassembly thread pool using
-    torch's strided-copy backend.  Each scatter is a strided->strided copy
-    (T innermost in source, W innermost in dest) — the ideal would be an
-    on-device permute BHWT->BCTHW so the source becomes contiguous, but
-    ``ttnn.permute`` is currently broken on uint8 multi-device tensors.
+    ``synchronize_device`` so the reads overlap.  Per-shard scatters then
+    take one of two paths:
+
+      * **C++/AVX2 fast path** (when ``HAS_CPP_PLANAR_CONCAT`` is True and
+        the local mesh is rectangular): one ``planar_concat_cpp`` call into
+        a module-level persistent output buffer.  ~2× faster than the
+        Python path on warm calls, but the returned buffer is **reused
+        across calls** — copy out (or feed ffmpeg) before the next call.
+      * **Python fallback**: per-shard ``_write`` tasks on the shared
+        reassembly ThreadPoolExecutor (torch's strided-copy backend).
+        Each scatter is a strided->strided copy; allocates a fresh output
+        per call.
+
+    Either way, the byte layout is identical.
 
     Args:
         view: Optional mesh device view for multi-host environments.
@@ -738,11 +773,11 @@ def _yuv_planar_d2h(
         local_col_positions = sorted({int(c[1]) for c in all_local_coords})
         row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
         col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
-        local_TP = len(local_row_positions)
-        local_SP = len(local_col_positions)
+        TP_eff = len(local_row_positions)
+        SP_eff = len(local_col_positions)
 
-        h_per_y, w_per_y = H // local_TP, W // local_SP
-        h_per_uv, w_per_uv = Hu // local_TP, Wu // local_SP
+        h_per_y, w_per_y = H // TP_eff, W // SP_eff
+        h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
 
         mesh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
         Y_shards = [s for _, s in Y_coords_shards]
@@ -750,9 +785,9 @@ def _yuv_planar_d2h(
         Cr_shards = [s for _, s in Cr_coords_shards]
     else:
         # --- Single-host: extract all shards via get_device_tensors ---
-        TP, SP = tuple(mesh_device.shape)
-        h_per_y, w_per_y = H // TP, W // SP
-        h_per_uv, w_per_uv = Hu // TP, Wu // SP
+        TP_eff, SP_eff = tuple(mesh_device.shape)
+        h_per_y, w_per_y = H // TP_eff, W // SP_eff
+        h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
 
         mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
 
@@ -766,6 +801,31 @@ def _yuv_planar_d2h(
         Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
         Cr_shards = _extract(host_Cr)
 
+    # --- C++/AVX2 fast path ---------------------------------------------
+    #
+    # Drop-in replacement for the torch_threaded scatter below: same byte
+    # layout, ~2× faster with the persistent output buffer.  The C++
+    # binding assumes shards are passed in row-major (r, c) order, so we
+    # sort by coord first.  The fast path requires a complete TP_eff ×
+    # SP_eff rectangular submesh; if the local coords are sparse (could
+    # happen on irregular multi-host topologies), we fall through to the
+    # Python path which handles arbitrary coord sets.
+    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
+        triples = sorted(
+            zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
+            key=lambda t: (int(t[0][0]), int(t[0][1])),
+        )
+        out = _get_planar_out_buf(T, row_stride)
+        return _planar_concat_cpp_impl(
+            [t[1] for t in triples],
+            [t[2] for t in triples],
+            [t[3] for t in triples],
+            "CHWT",
+            (TP_eff, SP_eff),
+            out=out,
+        )
+
+    # --- Python fallback (torch_threaded scatter) ------------------------
     # Allocate the planar output and view each plane region as a (T, h, w)
     # strided torch tensor (no copy, shares storage with `out`).
     out = np.empty((T, row_stride), dtype=np.uint8)
