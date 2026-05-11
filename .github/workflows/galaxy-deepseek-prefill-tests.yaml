@@ -39,6 +39,7 @@ on:
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
     needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
