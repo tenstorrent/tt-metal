@@ -439,7 +439,8 @@ def calculate_tile_and_face_counts(
 ) -> tuple[int, int, int]:
     """
     Calculate tile counts and faces to generate based on input dimensions and face configuration.
-    This is the ORIGINAL function that always uses 32x32 tiles.
+    Uses 32x32 tiles in the full-face case; falls back to a single-tile
+    partial-face layout when face_r_dim < MAX_FACE_R_DIM.
 
     Args:
         input_dimensions_A: [height, width] in elements for input A
