@@ -40,7 +40,9 @@ jobs:
           # Using --max-time 10 to prevent hanging if Harbor is partially responsive
 
           # First, try to get health endpoint response
-          HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null)
+          # Use `|| true` so curl failures (e.g. exit 28 timeout, exit 22 HTTP error)
+          # don't trip `set -e` before we emit the fallback error annotation below.
+          HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null || true)
 
           if [ -n "$HEALTH_RESPONSE" ]; then
             echo "$HEALTH_RESPONSE" | jq -r '.components[] | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
