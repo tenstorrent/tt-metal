@@ -121,10 +121,16 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
     env = os.environ.get("ACE_STEP_REPO_ROOT")
     if env:
         candidates.append(Path(env).expanduser().resolve())
+    _this_file = Path(__file__).resolve()
+    for parent in _this_file.parents:
+        candidates.append(parent / "ACE-Step-1.5")
+        if parent.parent == parent:
+            break
     if ckpt_dir:
         cur = Path(ckpt_dir).expanduser().resolve()
         for _ in range(8):
             candidates.append(cur)
+            candidates.append(cur / "ACE-Step-1.5")
             if cur.parent == cur:
                 break
             cur = cur.parent
@@ -200,8 +206,8 @@ def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
     """Return the local path for *name* under *ckpt_dir*, downloading from
     HuggingFace on first use.  Files are stored under *ckpt_dir/<name>/*."""
     local = ckpt_dir / name
-    has_weights = any(local.glob("*.safetensors")) or any(local.glob("*.pt"))
-    if has_weights:
+    has_safetensors = any(local.glob("*.safetensors"))
+    if has_safetensors:
         return local
 
     entry = _HF_REPO_MAP.get(name)
@@ -222,8 +228,8 @@ def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
         )
     else:
         snapshot_download(repo_id, local_dir=str(local))
-    if not any(local.glob("*.safetensors")) and not any(local.glob("*.pt")):
-        raise FileNotFoundError(f"Download succeeded but no weights found in {local}")
+    if not any(local.glob("*.safetensors")):
+        raise FileNotFoundError(f"Download succeeded but no .safetensors weights found in {local}")
     print(f"[ace_step_v1_5] {name} ready at {local}", flush=True)
     return local
 

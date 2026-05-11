@@ -1,1 +1,2 @@
 torchaudio==2.7.1+cpu
+vector_quantize_pytorch
