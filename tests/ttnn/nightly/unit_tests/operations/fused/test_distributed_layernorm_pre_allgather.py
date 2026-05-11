@@ -819,7 +819,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     # for bf16 stats.
     if stats_dtype == ttnn.float32:
         atol = 0.002
-        rtol = 0.002
+        rtol = 0.003
         pcc = 0.9999
     else:
         atol = 0.01

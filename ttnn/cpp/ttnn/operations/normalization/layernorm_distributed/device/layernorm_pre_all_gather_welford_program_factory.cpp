@@ -12,6 +12,7 @@
 
 #include <bit>
 #include <map>
+#include <numeric>
 #include <string>
 
 using uint32_t = std::uint32_t;
@@ -54,7 +55,14 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    uint32_t block_size = 1;
+    // The welford kernel does the pre-add and welford passes in blk-sized chunks, spilling the
+    // welford accumulator to a small CB between chunks. Per-chunk overhead (state spill +
+    // tile_regs scope switch) amortizes over more tiles when blk is larger; the upper bound is
+    // how many tiles fit in DST in a single tile_regs scope (4 in fp32_dest_acc, 8 otherwise).
+    // Constrain blk to divide Wt so the reader and compute kernel stay aligned without a
+    // partial last block.
+    const uint32_t dst_capacity = fp32_dest_acc_en ? 4u : 8u;
+    uint32_t block_size = std::gcd(Wt, dst_capacity);
     uint32_t writer_block_size = 1;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -77,11 +85,18 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     auto dst_addr = output.buffer()->address();
     auto b_addr = fuse_pre_add ? b->buffer()->address() : 0;
 
-    const uint32_t in0_tiles = 2;
-    const uint32_t res_tiles = 2;
-    // cb_fused must hold all Wt tiles produced by the pre-add loop before the welford loop
-    // begins consuming them; the welford pass cannot run interleaved with the add pass.
-    const uint32_t fused_tiles = Wt;
+    // Sized for double-buffered block-sized chunks: the welford compute kernel waits on
+    // block_size tiles at a time, so the reader must be able to fill that many while the
+    // compute side processes the previous batch.
+    const uint32_t in0_tiles = block_size * 2;
+    const uint32_t res_tiles = block_size * 2;
+    // The pre-add and welford passes are interleaved in block_size-sized chunks in the welford
+    // kernel: each chunk's tiles are added into cb_fused and then immediately consumed by
+    // welford, with the welford accumulator spilled to cb_welford_mean / cb_welford_m2 between
+    // chunks. So cb_fused only needs to hold block_size * 2 tiles (double-buffered for producer/
+    // consumer overlap), not the full Wt row.
+    const uint32_t fused_tiles = block_size * 2;
+    const uint32_t welford_spill_tiles = 1;
 
     uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
@@ -121,7 +136,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
 
-    std::vector<uint32_t> compute_args = {Wt, W};
+    std::vector<uint32_t> compute_args = {Wt, W, block_size};
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
@@ -244,6 +259,22 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
+        // c_4 -> welford mean accumulator spill (one tile, ping-pongs each iteration)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = welford_spill_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
+        // c_6 -> welford M2 accumulator spill (one tile, ping-pongs each iteration)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = welford_spill_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
                 .data_format = cb_data_format,
                 .page_size = single_tile_size}}}});
     }
