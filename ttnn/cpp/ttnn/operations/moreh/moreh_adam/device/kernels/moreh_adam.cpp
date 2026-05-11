@@ -267,30 +267,19 @@ void kernel_main() {
         // denom = sqrt(max_exp_avg_sq) / sqrt(bias_correction2) + eps;
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
-        // cb_tmp1 = pow(beta2, step);  (T1.32)
-        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp1));  // H2 workaround
-        {
-            using namespace compute_kernel_lib;
-            auto copy_elt = CopyTile<
-                cb_scalar_args,
-                Dst::D0,
-                CopyTilePolicy::NoWaitNoPop,
-                CbIndexMode::Pinned,
-                CopyTileReconfig::Input>{};
-            copy_elt.cb_tile_idx = beta2_tile;
-            auto power_elt = Power<Dst::D0>{};
-            power_elt.exponent = step;
-            eltwise_chain(
-                onetile,
-                copy_elt,
-                power_elt,
-                PackTile<
-                    cb_tmp1,
-                    Dst::D0,
-                    PackTilePolicy::PerTileReserveAndPush,
-                    PackTileIndexMode::FirstTile,
-                    PackTileReconfig::Output>{});
-        }
+        // cb_tmp1 = pow(beta2, step);  (T1.32 — raw LLK swap for bisect)
+        tile_regs_acquire();
+        copy_tile_init_with_dt(cb_scalar_args);
+        copy_tile(cb_scalar_args, beta2_tile, dst0);
+        power_tile_init();
+        power_tile(dst0, step);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        cb_reserve_back(cb_tmp1, onetile);
+        pack_tile_with_dt(dst0, cb_tmp1);
+        cb_push_back(cb_tmp1, onetile);
+        tile_regs_release();
 
         // cb_tmp1 = 1 / (1 - cb_tmp1);
         tile_regs_acquire();
@@ -376,30 +365,19 @@ void kernel_main() {
         tile_regs_release();
 
         // bias_correction1 = 1 - pow(beta1, step);
-        // cb_tmp2 = pow(beta1, step);  (T1.33)
-        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp2));  // H2 workaround
-        {
-            using namespace compute_kernel_lib;
-            auto copy_elt = CopyTile<
-                cb_scalar_args,
-                Dst::D0,
-                CopyTilePolicy::NoWaitNoPop,
-                CbIndexMode::Pinned,
-                CopyTileReconfig::Input>{};
-            copy_elt.cb_tile_idx = beta1_tile;
-            auto power_elt = Power<Dst::D0>{};
-            power_elt.exponent = step;
-            eltwise_chain(
-                onetile,
-                copy_elt,
-                power_elt,
-                PackTile<
-                    cb_tmp2,
-                    Dst::D0,
-                    PackTilePolicy::PerTileReserveAndPush,
-                    PackTileIndexMode::FirstTile,
-                    PackTileReconfig::Output>{});
-        }
+        // cb_tmp2 = pow(beta1, step);  (T1.33 — raw LLK swap for bisect)
+        tile_regs_acquire();
+        cb_reserve_back(cb_tmp2, onetile);
+        copy_tile_init_with_dt(cb_scalar_args);
+        copy_tile(cb_scalar_args, beta1_tile, dst0);
+        power_tile_init();
+        power_tile(dst0, step);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp2);
+        cb_push_back(cb_tmp2, onetile);
+        tile_regs_release();
 
         // cb_tmp2 = 1 / (1 - cb_tmp2);
         tile_regs_acquire();
