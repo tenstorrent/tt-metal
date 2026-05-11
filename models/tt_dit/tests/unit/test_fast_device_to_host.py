@@ -1194,6 +1194,41 @@ def test_yuv_planar_concat_speed():
         HAS_NUMBA = False
         planar_concat_numba = None  # type: ignore[assignment]
 
+    # --- Variant 6: C++/AVX2 extension (if built) ---------------------------
+    from models.tt_dit.utils.planar_concat import HAS_CPP_PLANAR_CONCAT
+    from models.tt_dit.utils.planar_concat import planar_concat_cpp as _cpp_impl
+
+    if HAS_CPP_PLANAR_CONCAT:
+
+        def planar_concat_cpp(y_shards, u_shards, v_shards, dim_order):
+            return _cpp_impl(y_shards, u_shards, v_shards, dim_order, (TP, SP))
+
+        # `cpp_reused`: same kernel as `cpp`, but the (T, row_stride) output
+        # buffer is allocated once and passed back in via the `out=` kwarg on
+        # every call.  Reveals the production-realistic ceiling: the per-call
+        # `np.empty` allocation pays a one-time first-touch / page-fault tax
+        # that the persistent on-device pipeline only pays once.
+        _cpp_reused_buf = [None]
+
+        def planar_concat_cpp_reused(y_shards, u_shards, v_shards, dim_order):
+            arr0 = y_shards[0]
+            shape0 = tuple(arr0.shape)
+            if dim_order == "CHWT":
+                _, hp, wp, T_l = shape0
+            else:
+                _, T_l, hp, wp = shape0
+            H_l, W_l = hp * TP, wp * SP
+            row_stride_l = H_l * W_l + 2 * (H_l // 2) * (W_l // 2)
+            buf = _cpp_reused_buf[0]
+            if buf is None or buf.shape != (T_l, row_stride_l):
+                buf = np.empty((T_l, row_stride_l), dtype=np.uint8)
+                _cpp_reused_buf[0] = buf
+            return _cpp_impl(y_shards, u_shards, v_shards, dim_order, (TP, SP), out=buf)
+
+    else:
+        planar_concat_cpp = None  # type: ignore[assignment]
+        planar_concat_cpp_reused = None  # type: ignore[assignment]
+
     variants = [
         ("naive", planar_concat_naive),
         ("vectorized", planar_concat_vectorized),
@@ -1202,6 +1237,9 @@ def test_yuv_planar_concat_speed():
     ]
     if HAS_NUMBA:
         variants.append(("numba", planar_concat_numba))
+    if HAS_CPP_PLANAR_CONCAT:
+        variants.append(("cpp", planar_concat_cpp))
+        variants.append(("cpp_reused", planar_concat_cpp_reused))
 
     configs = [
         # name, Y shard shape, UV shard shape
@@ -1242,7 +1280,7 @@ def test_yuv_planar_concat_speed():
                 rows.append((variant_name, name, avg_ms, gbs, str(out.shape)))
 
         print()
-        print(f"  threads = {n_workers},  numba = {HAS_NUMBA}")
+        print(f"  threads = {n_workers},  numba = {HAS_NUMBA},  cpp = {HAS_CPP_PLANAR_CONCAT}")
         header = f"  {'variant':<16} {'dim_order':<10} {'avg (ms)':>10} {'GB/s':>8} {'output shape':>20}"
         print(header)
         print("  " + "-" * (len(header) - 2))
