@@ -7,10 +7,12 @@
 
 #include "core/not_null.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "schedulers/cosine_annealing_scheduler.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/sequential_scheduler.hpp"
 #include "schedulers/step_scheduler.hpp"
+#include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 class MockOptimizer : public OptimizerBase {
@@ -153,6 +155,91 @@ TEST(LinearSchedulerTest, DecreasingLR) {
 }
 
 // ----------------------------------
+// Tests for CosineAnnealingScheduler
+// ----------------------------------
+//
+// Closed-form formula (matches PyTorch CosineAnnealingLR):
+//   lr(s) = eta_min + 0.5 * (base_lr - eta_min) * (1 + cos(pi * s / T_max))
+//
+// Notable values:
+//   s = 0          -> lr = base_lr
+//   s = T_max / 2  -> lr = (base_lr + eta_min) / 2
+//   s = T_max      -> lr = eta_min
+//   s = 2 * T_max  -> lr = base_lr (cosine cycles every 2*T_max steps; no
+//                                   modulo / restart is performed)
+TEST(CosineAnnealingSchedulerTest, MatchesClosedFormTrajectory) {
+    constexpr float kBaseLr = 0.1F;
+    constexpr size_t kTMax = 20;
+    constexpr float kEtaMin = 1e-4F;
+
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(kBaseLr);
+    ttml::schedulers::CosineAnnealingScheduler scheduler(optimizer.get(), kTMax, kEtaMin);
+
+    // Before any step, the optimizer keeps its initial LR.
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), kBaseLr);
+
+    // Walk through 2 * T_max + a few extra steps and compare against the
+    // closed form at every step.
+    for (size_t s = 1; s <= 2 * kTMax + 5; ++s) {
+        scheduler.step();
+        const float expected =
+            kEtaMin +
+            0.5F * (kBaseLr - kEtaMin) *
+                (1.F + std::cos(static_cast<float>(M_PI) * static_cast<float>(s) / static_cast<float>(kTMax)));
+
+        EXPECT_FLOAT_EQ(optimizer->get_lr(), expected) << "step " << s;
+        EXPECT_FLOAT_EQ(scheduler.get_last_lr(), optimizer->get_lr()) << "step " << s;
+    }
+}
+
+TEST(CosineAnnealingSchedulerTest, LrAtTMaxIsEtaMin) {
+    constexpr float kBaseLr = 0.1F;
+    constexpr size_t kTMax = 20;
+    constexpr float kEtaMin = 1e-4F;
+
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(kBaseLr);
+    ttml::schedulers::CosineAnnealingScheduler scheduler(optimizer.get(), kTMax, kEtaMin);
+
+    for (size_t i = 0; i < kTMax; ++i) {
+        scheduler.step();
+    }
+    EXPECT_NEAR(optimizer->get_lr(), kEtaMin, 1e-7F);
+}
+
+TEST(CosineAnnealingSchedulerTest, LrAtTwoTMaxReturnsToBase) {
+    constexpr float kBaseLr = 0.1F;
+    constexpr size_t kTMax = 20;
+    constexpr float kEtaMin = 1e-4F;
+
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(kBaseLr);
+    ttml::schedulers::CosineAnnealingScheduler scheduler(optimizer.get(), kTMax, kEtaMin);
+
+    for (size_t i = 0; i < 2 * kTMax; ++i) {
+        scheduler.step();
+    }
+    EXPECT_NEAR(optimizer->get_lr(), kBaseLr, 1e-7F);
+}
+
+TEST(CosineAnnealingSchedulerTest, EtaMinDefaultsToZero) {
+    constexpr float kBaseLr = 0.1F;
+    constexpr size_t kTMax = 20;
+
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(kBaseLr);
+    // eta_min defaults to 0 -> at step T_max the LR should be exactly 0.
+    ttml::schedulers::CosineAnnealingScheduler scheduler(optimizer.get(), kTMax);
+
+    for (size_t i = 0; i < kTMax; ++i) {
+        scheduler.step();
+    }
+    EXPECT_NEAR(optimizer->get_lr(), 0.0F, 1e-7F);
+}
+
+TEST(CosineAnnealingSchedulerDeathTest, ZeroTMaxIsRejected) {
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(0.1F);
+    EXPECT_ANY_THROW(ttml::schedulers::CosineAnnealingScheduler(optimizer.get(), /*T_max=*/0));
+}
+
+// ----------------------------------
 // Tests for SequentialScheduler
 // ----------------------------------
 TEST(SequentialSchedulerTest, ChainSchedulers) {
@@ -225,5 +312,132 @@ TEST(SequentialSchedulerTest, WarmupSetup) {
         // Linear decay: 50 steps from start_lr to 0.1F * start_lr
         seq_scheduler.step();
         EXPECT_NEAR(optimizer->get_lr(), start_lr * (1.0F - 0.9F * (i + 1) / 50.F), 1e-5);
+    }
+}
+
+// ----------------------------------
+// State-dict round-trip tests
+// ----------------------------------
+//
+// Each test verifies two things:
+//   1. The state dict produced by ``get_state_dict`` contains the new
+//      hyperparameter keys with the correct values.
+//   2. ``set_state_dict`` restores those hyperparameters into a destination
+//      scheduler that was deliberately constructed with different ones.
+
+TEST(CosineAnnealingSchedulerTest, StateDictRoundTripRestoresHyperparameters) {
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(0.1F);
+    ttml::schedulers::CosineAnnealingScheduler src(src_opt.get(), /*T_max=*/20, /*eta_min=*/1e-4F);
+    for (int i = 0; i < 7; ++i) {
+        src.step();
+    }
+
+    auto state = src.get_state_dict();
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "m_T_max"), 20U);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "m_eta_min"), 1e-4F);
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "m_last_step"), 7U);
+
+    // Destination intentionally uses different hyperparameters; they must be
+    // overwritten by ``set_state_dict``.
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(0.1F);
+    ttml::schedulers::CosineAnnealingScheduler dst(dst_opt.get(), /*T_max=*/100, /*eta_min=*/0.0F);
+    dst.set_state_dict(state);
+
+    auto dst_state = dst.get_state_dict();
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(dst_state, "m_T_max"), 20U);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_eta_min"), 1e-4F);
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(dst_state, "m_last_step"), 7U);
+
+    // Continuing src and dst from this point must produce the same trajectory.
+    for (int i = 0; i < 10; ++i) {
+        src.step();
+        dst.step();
+        EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+    }
+}
+
+TEST(StepLRSchedulerTest, StateDictRoundTripRestoresHyperparameters) {
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(0.2F);
+    ttml::schedulers::StepScheduler src(src_opt.get(), /*step_size=*/3, /*gamma=*/0.5F);
+    for (int i = 0; i < 4; ++i) {
+        src.step();
+    }
+
+    auto state = src.get_state_dict();
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "m_step_size"), 3U);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "m_gamma"), 0.5F);
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "m_last_step"), 4U);
+
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(0.2F);
+    ttml::schedulers::StepScheduler dst(dst_opt.get(), /*step_size=*/10, /*gamma=*/0.9F);
+    dst.set_state_dict(state);
+
+    auto dst_state = dst.get_state_dict();
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(dst_state, "m_step_size"), 3U);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_gamma"), 0.5F);
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(dst_state, "m_last_step"), 4U);
+
+    for (int i = 0; i < 10; ++i) {
+        src.step();
+        dst.step();
+        EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+    }
+}
+
+TEST(LinearSchedulerTest, StateDictRoundTripRestoresHyperparameters) {
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(0.2F);
+    ttml::schedulers::LinearScheduler src(src_opt.get(), /*start_factor=*/1.0F, /*end_factor=*/0.0F, /*total_steps=*/4);
+    for (int i = 0; i < 2; ++i) {
+        src.step();
+    }
+
+    auto state = src.get_state_dict();
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "m_start_factor"), 1.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "m_end_factor"), 0.0F);
+    EXPECT_EQ(ttml::serialization::get_value_type<int>(state, "m_total_steps"), 4);
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "m_last_step"), 2U);
+
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(0.2F);
+    ttml::schedulers::LinearScheduler dst(
+        dst_opt.get(), /*start_factor=*/0.25F, /*end_factor=*/0.5F, /*total_steps=*/100);
+    dst.set_state_dict(state);
+
+    auto dst_state = dst.get_state_dict();
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_start_factor"), 1.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_end_factor"), 0.0F);
+    EXPECT_EQ(ttml::serialization::get_value_type<int>(dst_state, "m_total_steps"), 4);
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(dst_state, "m_last_step"), 2U);
+
+    for (int i = 0; i < 5; ++i) {
+        src.step();
+        dst.step();
+        EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+    }
+}
+
+TEST(LambdaSchedulerTest, StateDictRoundTripRestoresStepAndLR) {
+    // ``std::function`` cannot be introspected, so the lambda itself is not
+    // part of the saved state. The destination must be reconstructed with the
+    // same callable; only ``m_last_step`` and ``m_last_lr`` are restored.
+    auto lr_lambda = [](int epoch) { return 1.0F / static_cast<float>(epoch + 1); };
+
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(1.0F);
+    ttml::schedulers::LambdaScheduler src(src_opt.get(), lr_lambda);
+    for (int i = 0; i < 3; ++i) {
+        src.step();
+    }
+
+    auto state = src.get_state_dict();
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "m_last_step"), 3U);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "m_last_lr"), src.get_last_lr());
+
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(1.0F);
+    ttml::schedulers::LambdaScheduler dst(dst_opt.get(), lr_lambda);
+    dst.set_state_dict(state);
+
+    for (int i = 0; i < 5; ++i) {
+        src.step();
+        dst.step();
+        EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
     }
 }
