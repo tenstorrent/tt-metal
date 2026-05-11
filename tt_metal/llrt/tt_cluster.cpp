@@ -748,6 +748,12 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::
     this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
 }
 
+tt::umd::RiscType Cluster::get_risc_reset_state_at_core(const tt_cxy_pair& core) const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    return this->driver_->get_risc_reset_state(core.chip, core_coord);
+}
+
 void Cluster::write_dram_vec(
     const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);

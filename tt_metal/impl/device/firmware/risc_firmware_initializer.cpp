@@ -1254,9 +1254,87 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             }
         }
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
+
+        // Verify the deassert write landed. deassert\_risc_reset issues a posted PCIe write with no
+        // hardware ACK. Reading back SOFT_RESET_0 forces a PCIe completion that orders all prior
+        // posted writes, surfacing any silently-dropped deassert. Retry up to 3 times on failure.
+        // Skip on Quasar (different reset model).
+        if (cluster_.arch() != ARCH::QUASAR) {
+            constexpr int max_retries = 3;
+            for (int attempt = 0; attempt < max_retries; ++attempt) {
+                auto actual_reset_state = cluster_.get_risc_reset_state_at_core(tt_cxy_pair(device_id, worker_core));
+                log_debug(
+                    LogDevice,
+                    "Device {} core {}: reset state readback after deassert: RiscType={:#010x} "
+                    "(BRISC={}, NCRISC={}, TRISC0={}, TRISC1={}, TRISC2={})",
+                    device_id,
+                    worker_core.str(),
+                    static_cast<uint32_t>(actual_reset_state),
+                    (actual_reset_state & tt::umd::RiscType::BRISC) != tt::umd::RiscType::NONE ? "RESET" : "RUN",
+                    (actual_reset_state & tt::umd::RiscType::NCRISC) != tt::umd::RiscType::NONE ? "RESET" : "RUN",
+                    (actual_reset_state & tt::umd::RiscType::TRISC0) != tt::umd::RiscType::NONE ? "RESET" : "RUN",
+                    (actual_reset_state & tt::umd::RiscType::TRISC1) != tt::umd::RiscType::NONE ? "RESET" : "RUN",
+                    (actual_reset_state & tt::umd::RiscType::TRISC2) != tt::umd::RiscType::NONE ? "RESET" : "RUN");
+                if ((actual_reset_state & reset_val) == tt::umd::RiscType::NONE) {
+                    break;  // Success — requested bits are deasserted.
+                }
+                if (attempt < max_retries - 1) {
+                    log_warning(
+                        LogDevice,
+                        "Device {} core {}: deassert did not land (attempt {}/{}, SOFT_RESET_0={:#x}). Retrying.",
+                        device_id,
+                        worker_core.str(),
+                        attempt + 1,
+                        max_retries,
+                        static_cast<uint32_t>(actual_reset_state));
+                    cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
+                } else {
+                    log_warning(
+                        LogDevice,
+                        "Device {} core {}: deassert FAILED after {} retries (SOFT_RESET_0={:#x}). "
+                        "FW init timeout likely.",
+                        device_id,
+                        worker_core.str(),
+                        max_retries,
+                        static_cast<uint32_t>(actual_reset_state));
+                }
+            }
+        }
     }
     for (const auto& dram_core : dram_not_done_cores) {
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+
+        constexpr int max_retries = 3;
+        for (int attempt = 0; attempt < max_retries; ++attempt) {
+            auto actual_reset_state = cluster_.get_risc_reset_state_at_core(tt_cxy_pair(device_id, dram_core));
+            log_debug(
+                LogDevice,
+                "Device {} DRAM core {}: reset state readback after deassert: RiscType={:#010x} (BRISC={})",
+                device_id,
+                dram_core.str(),
+                static_cast<uint32_t>(actual_reset_state),
+                (actual_reset_state & tt::umd::RiscType::BRISC) != tt::umd::RiscType::NONE ? "RESET" : "RUN");
+            if ((actual_reset_state & tt::umd::RiscType::BRISC) == tt::umd::RiscType::NONE) {
+                break;
+            }
+            if (attempt < max_retries - 1) {
+                log_warning(
+                    LogDevice,
+                    "Device {} DRAM core {}: deassert did not land (attempt {}/{}). Retrying.",
+                    device_id,
+                    dram_core.str(),
+                    attempt + 1,
+                    max_retries);
+                cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+            } else {
+                log_warning(
+                    LogDevice,
+                    "Device {} DRAM core {}: deassert FAILED after {} retries.",
+                    device_id,
+                    dram_core.str(),
+                    max_retries);
+            }
+        }
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
@@ -1264,6 +1342,33 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     try {
         llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error&) {
+        // Probe each hung core's L1 to distinguish a NIU TX queue hang (returns 0xFFFFFFFF
+        // because the PCIe bridge times out when the NIU is stuck) from a genuine FW bug.
+        static constexpr uint32_t NOC_HANG_SENTINEL = 0xFFFFFFFF;
+        DeviceAddr probe_addr = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+        bool noc_hang_detected = false;
+        for (const auto& core : not_done_cores) {
+            uint32_t val = 0;
+            cluster_.read_core(&val, sizeof(val), tt_cxy_pair(device_id, core), probe_addr);
+            if (val == NOC_HANG_SENTINEL) {
+                log_warning(
+                    LogDevice,
+                    "Device {} core {}-{}: NOC hang detected (read 0xFFFFFFFF from L1) — "
+                    "NIU TX queue likely stuck from previous run. Root cause: posted writes "
+                    "in NIU TX pipeline when RISC-V was reset. Fix: drain NIU TX queue in "
+                    "firmware before signaling RUN_MSG_DONE.",
+                    device_id,
+                    core.x,
+                    core.y);
+                noc_hang_detected = true;
+            }
+        }
+        if (noc_hang_detected) {
+            TT_THROW(
+                "Device {} init: NOC hang on one or more worker cores (see warnings above). "
+                "NIU TX queue stuck from previous kernel run. Board reset required.",
+                device_id);
+        }
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");
