@@ -105,10 +105,12 @@ void kernel_main() {
         }
     }
     if (num_tokens < num_tokens_x32) {
-        // Fill remaining Face 2 with 0
+        // Fill remaining Face 2 with 0. Clamp the start to 16 so that the
+        // (t - 16) row offset cannot underflow for num_tokens < 16 cases.
+        const uint32_t face_2_start = num_tokens < 16 ? 16 : num_tokens;
         for (uint32_t k = 0; k < reduction_dim_size; ++k) {
             volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
-            for (uint32_t t = num_tokens; t < 32; ++t) {
+            for (uint32_t t = face_2_start; t < 32; ++t) {
                 expert_tile[512 + (t - 16) * 16] = 0;
             }
         }
