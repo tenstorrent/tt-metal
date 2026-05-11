@@ -246,6 +246,9 @@ struct CopyTile : CopyTileTag {
     /// Runtime tile index — set by user only when IndexMode == Pinned / Absolute.
     uint32_t cb_tile_idx = 0;
 
+    constexpr CopyTile() noexcept = default;
+    constexpr explicit CopyTile(uint32_t cb_tile_idx_) noexcept : cb_tile_idx(cb_tile_idx_) {}
+
     // ---- chain pipeline hooks ----
     static ALWI void init() {
         if constexpr (Reconfig == CopyTileReconfig::Input) {
@@ -338,6 +341,9 @@ struct PackTile : PackTileTag {
 
     /// Runtime output-tile index for Pinned / Absolute modes.
     uint32_t output_tile_idx = 0;
+
+    constexpr PackTile() noexcept = default;
+    constexpr explicit PackTile(uint32_t output_tile_idx_) noexcept : output_tile_idx(output_tile_idx_) {}
 
     static ALWI void init() {
         // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
@@ -503,6 +509,10 @@ struct BinaryFpu : BinaryFpuTag {
     uint32_t a_tile_idx = 0;
     uint32_t b_tile_idx = 0;
 
+    constexpr BinaryFpu() noexcept = default;
+    constexpr BinaryFpu(uint32_t a_tile_idx_, uint32_t b_tile_idx_) noexcept
+        : a_tile_idx(a_tile_idx_), b_tile_idx(b_tile_idx_) {}
+
     // ---- init / reconfig ----
     // F-PERF-3: srca / srcb / pack reconfig are now fold-driven (compile-time-elided
     // when prev_*_cb == cur_*_cb). init() programs only the per-op LLK shape.
@@ -628,6 +638,9 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
     uint32_t cb_tile_idx = 0;
+
+    constexpr DestReuseBinary() noexcept = default;
+    constexpr explicit DestReuseBinary(uint32_t cb_tile_idx_) noexcept : cb_tile_idx(cb_tile_idx_) {}
 
     // F-PERF-3: srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
