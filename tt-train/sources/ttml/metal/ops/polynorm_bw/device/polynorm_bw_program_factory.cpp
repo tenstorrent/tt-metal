@@ -50,9 +50,6 @@ constexpr auto kInvRmsX2CbIndex = tt::CBIndex::c_16;
 constexpr auto kInvRmsX3CbIndex = tt::CBIndex::c_17;
 
 // Per-row correction coefficients γ_k = inv_rms_k² · g_k · (1/N), bfloat16 storage.
-// Replaces the previous coeff_k = inv_rms_k³ · w_k · g_k · (1/N) under the algebraic
-// refactor that pulls α_k = w_k · inv_rms_k outside the (dout − γ·x^k) cancellation
-// in Pass 2 (see kernel docstring).
 constexpr auto kGamma1CbIndex = tt::CBIndex::c_18;
 constexpr auto kGamma2CbIndex = tt::CBIndex::c_19;
 constexpr auto kGamma3CbIndex = tt::CBIndex::c_20;
@@ -61,12 +58,6 @@ constexpr auto kGamma3CbIndex = tt::CBIndex::c_20;
 //   c_24 = w2 * inv_rms_x    (linear)
 //   c_25 = w1 * inv_rms_x2   (quadratic)
 //   c_26 = w0 * inv_rms_x3   (cubic)
-//
-// Default unpack mode: α_k is loaded via FPU SrcA (TF32 fan-out). Under the algebraic
-// refactor α multiplies the post-cancellation result, so its TF32 fan-out error is no
-// longer amplified by cancellation depth — TF32 is sufficient. Using the SrcA path
-// (instead of UnpackToDestFp32 + DMA) also avoids TEN-3868 stale-DVALID hazards on the
-// next FPU op, since FPU MVDBGA's MOP end-op clears SrcA DVALID cleanly.
 constexpr auto kWeightedInvRmsXCbIndex = tt::CBIndex::c_24;
 constexpr auto kWeightedInvRmsX2CbIndex = tt::CBIndex::c_25;
 constexpr auto kWeightedInvRmsX3CbIndex = tt::CBIndex::c_26;
@@ -226,7 +217,7 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     [[maybe_unused]] auto cb_gamma_3 =
         create_circular_buffer(program, all_cores, kGamma3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
 
-    // Preweighted inv_rms tiles (Float32, Default unpack mode, one per branch).
+    // Preweighted inv_rms tiles (Float32, one per branch).
     [[maybe_unused]] auto cb_weighted_inv_rms_x = create_circular_buffer(
         program, all_cores, kWeightedInvRmsXCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_weighted_inv_rms_x2 = create_circular_buffer(
@@ -288,13 +279,6 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     kernels.dL_dx_writer =
         create_writer_kernel(program, all_cores, dL_dx_writer_compile_time_args, defines, kDLdxWriterKernelPath);
 
-    // All CBs use Default unpack mode under the algebraic refactor: α_k is now applied
-    // OUTSIDE the (dout − γ·x^k) cancellation, so its TF32 fan-out error is not amplified.
-    // Keeping the FPU SrcA path everywhere also sidesteps TEN-3868 stale-DVALID hazards
-    // that previously could arise from unpack-to-dest copy_tile of the preweighted tiles.
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-
     std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size};
     kernels.compute_group_1 = tt::tt_metal::CreateKernel(
         program,
@@ -303,7 +287,6 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
         tt::tt_metal::ComputeConfig{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = true,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
             .defines = defines});
@@ -316,7 +299,6 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,
                 .defines = defines});

@@ -25,15 +25,9 @@
 //       α_k = f_k · inv_rms_k                          (per-row scalar)
 //       γ_k = inv_rms_k² · g_k · (1/N)                 (per-row scalar)
 //
-// Algebraic-refactor note: writing the bracket as α·(dout − γ·x^k) instead of
-// (α·dout − coeff·x^k) (with coeff = α·γ = f·inv_rms³·g/N) puts α OUTSIDE the
-// cancellation. The cancellation `dout − γ·x^k` is the precision-critical step
-// of the polynorm gradient (it's the same "remove the radial component"
-// structure as RMSNorm backward); keeping α outside means α's TF32 fan-out
-// error multiplies the small post-cancellation result rather than the large
-// pre-cancellation operands, so it is no longer amplified by cancellation
-// depth. γ also drops one factor of inv_rms (square, not cube) and the f_k
-// factor compared to the previous coeff form.
+// The α/γ form is algebraically equivalent to the previous coeff form, but was
+// experimentally more stable for dL/dx because the shared α factor is applied
+// after the cancellation in `dout − γ·x^k`.
 //
 // Algorithm (per row, executed on each Tensix core):
 //
@@ -111,9 +105,8 @@ constexpr auto cb_sum_x3dout = tt::CBIndex::c_14;
 constexpr auto cb_inv_rms_x = tt::CBIndex::c_15;
 constexpr auto cb_inv_rms_x2 = tt::CBIndex::c_16;
 constexpr auto cb_inv_rms_x3 = tt::CBIndex::c_17;
-// γ_k = inv_rms_k² · g_k · (1/N) — correction coefficient used inside the Pass-2
-// cancellation `dout − γ_k · x^k`. Stored as bfloat16 (col 0 only meaningful;
-// fanned out via FPU bcast<COL> at use time, TF32 in DST).
+// γ_k = inv_rms_k² · g_k · (1/N), used inside the Pass-2 cancellation
+// `dout − γ_k · x^k`.
 constexpr auto cb_gamma_1 = tt::CBIndex::c_18;
 constexpr auto cb_gamma_2 = tt::CBIndex::c_19;
 constexpr auto cb_gamma_3 = tt::CBIndex::c_20;
@@ -124,11 +117,7 @@ constexpr auto cb_packed_partials_output = tt::CBIndex::c_22;
 //   c_25 = w1 * inv_rms_x2   (quadratic branch)
 //   c_26 = w0 * inv_rms_x3   (cubic branch)
 //
-// PRECISION NOTE: stored as Float32 with Default unpack mode. α_k now multiplies the
-// post-cancellation result (see header docstring), so its TF32 fan-out via SrcA is
-// adequate — TF32 (10-bit mantissa) is well below the bf16-input precision floor of
-// the cancelled value, and the error is no longer amplified by cancellation depth.
-// FPU SrcA path also avoids TEN-3868 stale-DVALID hazards.
+// Stored as Float32 because these row scalars are reused across every Pass-2 tile.
 constexpr auto cb_weighted_inv_rms_x = tt::CBIndex::c_24;
 constexpr auto cb_weighted_inv_rms_x2 = tt::CBIndex::c_25;
 constexpr auto cb_weighted_inv_rms_x3 = tt::CBIndex::c_26;
@@ -163,10 +152,7 @@ inline bool use_one_block_precision_path() {
 }
 
 // Load the preweighted-inv_rms tile (α_k = f_k · inv_rms_k, tile-broadcast) into a DST
-// register via the FPU SrcA path. cb_alpha is Float32 with Default unpack mode, so SrcA
-// truncates to TF32 — acceptable here because α multiplies the post-cancellation result
-// in the new algebra (its fan-out error is no longer amplified). Using FPU MVDBGA also
-// keeps SrcA DVALID flow clean (no TEN-3868 hazard for the next FPU op).
+// register for use across the current Pass-2 tile.
 inline void load_alpha_tile(const uint32_t cb_alpha, const uint32_t reg_dst) {
     reconfig_data_format(cb_alpha, cb_alpha);
     copy_tile_to_dst_init_short(cb_alpha);
@@ -248,7 +234,7 @@ void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
 // Multiply one inv_rms tile by its matching weight scalar and push an fp32 tile that
 // has valid data in every column. We broadcast inv_rms's col-0 to all columns, then
 // multiply by the uniform weight tile — the result α_k = w_k · inv_rms_k is a per-row
-// scalar replicated across the tile. Pass-2 reloads it via FPU SrcA (TF32 fan-out).
+// scalar replicated across the tile.
 inline void emit_weighted_inv_rms(const uint32_t cb_inv, const uint32_t cb_w, const uint32_t cb_out) {
     constexpr uint32_t reg_inv = 0U;
     constexpr uint32_t reg_weight = 1U;
@@ -487,7 +473,7 @@ void emit_output_for_row() {
             copy_tile_to_reg(cb_dout, block_idx, reg1);  // dout
             sub_binary_tile_init();
             sub_binary_tile(reg1, reg0, reg0);             // dout − γ_1 · x
-            load_alpha_tile(cb_weighted_inv_rms_x, reg1);  // α_1 (FPU SrcA, TF32)
+            load_alpha_tile(cb_weighted_inv_rms_x, reg1);  // α_1
             mul_binary_tile_init();
             mul_binary_tile(reg1, reg0, reg_acc);  // α_1 · (dout − γ_1·x)
 

@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/polynorm_bw/polynorm_bw.hpp"
 #include "ops/losses.hpp"
@@ -42,8 +41,6 @@ constexpr float kForwardRtol = 2.5e-2F;
 constexpr float kForwardAtol = 2.5e-2F;
 constexpr float kBackwardRtol = 2.0e-2F;
 constexpr float kBackwardAtol = 2.0e-2F;
-constexpr float kRemainderBackwardRtol = 2.0e-2F;
-constexpr float kRemainderBackwardAtol = 2.0e-2F;
 
 struct PolyNormCaseData {
     xt::xarray<float> input;
@@ -364,14 +361,10 @@ TEST_F(PolyNormOpTest, PolyNorm_Compare_FusedVsCompositeForward_Small) {
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_Compare_BlockSizeRemainders) {
-    CompareKernelVsReferenceWithShape(
-        {1, 1, 1, 32}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=1, Wt%4=1
-    CompareKernelVsReferenceWithShape(
-        {1, 1, 1, 64}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=2, Wt%4=2
-    CompareKernelVsReferenceWithShape(
-        {1, 1, 1, 96}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=3, Wt%4=3
-    CompareKernelVsReferenceWithShape(
-        {1, 1, 1, 128}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=4, Wt%4=0
+    CompareKernelVsReferenceWithShape({1, 1, 1, 32});   // Wt=1, Wt%4=1
+    CompareKernelVsReferenceWithShape({1, 1, 1, 64});   // Wt=2, Wt%4=2
+    CompareKernelVsReferenceWithShape({1, 1, 1, 96});   // Wt=3, Wt%4=3
+    CompareKernelVsReferenceWithShape({1, 1, 1, 128});  // Wt=4, Wt%4=0
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_Compare_EpsilonVariants) {
