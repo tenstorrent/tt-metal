@@ -75,6 +75,15 @@ on:
         type: string
         default: "false"
 
+      max-candidates:
+        description: "Detection mode: max confirmed failures before Phase 2 stops (keeps runs short)"
+        type: string
+        default: "999"
+      max-log-bytes:
+        description: "Detection mode: per-run log truncation in bytes"
+        type: string
+        default: "100000"
+
 permissions:
   contents: write
   actions: write
@@ -93,6 +102,8 @@ jobs:
       auto-verify: ${{ inputs.auto-verify }}
       verify-budget-hours: ${{ inputs.verify-budget-hours }}
       mock-verify: ${{ inputs.mock-verify }}
+      max-candidates: ${{ inputs.max-candidates }}
+      max-log-bytes: ${{ inputs.max-log-bytes }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
@@ -116,3 +127,4 @@ jobs:
       GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
       COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+
