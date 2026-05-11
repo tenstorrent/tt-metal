@@ -57,6 +57,7 @@
 #include "../../../unified_kernels/gated_reduce.hpp"
 #include "../../../unified_kernels/residual_add.hpp"
 #include "../../../unified_kernels/persistent_loop.hpp"
+#include "api/debug/dprint.h"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
@@ -2961,6 +2962,23 @@ void kernel_main() {
             DeviceZoneScopedN("GATE");
             deepseek_b1_ops::DeepseekMoeGate::Op<Moe::Routed::GateCTArgs, Core::is_sender_core> gate;
             gate();
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::is_sender_core) {
+                constexpr uint32_t gate_output_indices_cb = get_named_compile_time_arg_val("gate_output_indices_cb");
+                cb_wait_front(gate_output_indices_cb, 1);
+                invalidate_l1_cache();
+                DPRINT << "token position: " << metadata_ptr->position_id << " selected expert indices: "
+                       << TileSlice(
+                              gate_output_indices_cb,
+                              0,
+                              SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1},
+                              TSLICE_INPUT_CB,
+                              TSLICE_RD_PTR,
+                              true,
+                              true)
+                       << ENDL();
+            }
+#endif
         }
 
         // 5. Mcast Index: Broadcast expert indices to all matmul-streamer cores.
