@@ -14,6 +14,7 @@ vision block, patch merger, and the top-level vision tower.
 
 from __future__ import annotations
 
+import math
 
 import torch
 import ttnn
@@ -36,7 +37,67 @@ def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -
         math_fidelity=math_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        packer_l1_acc=True,
+    )
+
+
+def _vision_l1_friendly_linear_program_config(
+    device,
+    *,
+    seq_len: int,
+    n: int,
+    tile: int = ttnn.TILE_SIZE,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
+    """Prefill-style matmul tiling tuned for Wormhole L1 CB limits and mcast2d grid rules.
+
+    Uses ``in0_block_w=1`` and 1×1 output subblocks (narrow K-blocks, like Llama QKV prefill).
+
+    The 2D reuse-mcast factory requires
+    ``num_blocks_y = (Mt - 1) // per_core_M + 1 <= grid_y`` (same for x). Vision runs long
+    sequences without Llama's seq-chunk reshape, so ``per_core_M`` must scale with ``Mt`` —
+    a fixed ``per_core_M=8`` on ~350+ M-tiles yields 40+ Y-blocks and TT_FATAL.
+
+    Returns ``None`` for very wide ``n``, or when grid-safe tiling needs ``per_core_M`` so
+    large that static CBs exceed Wormhole L1 (~1.5 MiB/core); caller uses TTNN auto config.
+    """
+    gx = device.compute_with_storage_grid_size().x
+    gy = device.compute_with_storage_grid_size().y
+    core_grid = ttnn.CoreCoord(gx, gy)
+
+    max_fuse_seq = 2048
+    # Above this per-core M tile count, reuse-mcast 2D linear exceeds L1 CB budget (e.g. Mt≈384 → M/gy=48).
+    max_per_core_m_for_l1 = 22
+
+    nt_tiles = int(math.ceil(n / tile))
+    per_core_n_tiles = int(math.ceil(nt_tiles / gx))
+    num_blocks_x = (nt_tiles - 1) // per_core_n_tiles + 1
+    if num_blocks_x > gx:
+        per_core_n_tiles = int(math.ceil((nt_tiles - 1) / max(1, gx - 1)))
+    if per_core_n_tiles > 28:
+        return None
+
+    mt_est = int(math.ceil(seq_len / tile))
+    # Spread M across grid rows: enough tiles per core so Y-blocks fit on the mesh.
+    per_core_m_tiles = max(1, int(math.ceil(mt_est / gy)))
+    num_blocks_y = (mt_est - 1) // per_core_m_tiles + 1
+    if num_blocks_y > gy:
+        per_core_m_tiles = int(math.ceil((mt_est - 1) / max(1, gy - 1)))
+
+    if per_core_m_tiles > max_per_core_m_for_l1:
+        return None
+
+    fuse_batch = seq_len <= max_fuse_seq
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=core_grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=per_core_m_tiles,
+        per_core_N=per_core_n_tiles,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=fuse_batch,
     )
 
 
@@ -477,17 +538,22 @@ class TTNNDotsVisionMLP(TTNNModule):
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         mem = ttnn.DRAM_MEMORY_CONFIG
+        s = int(hidden_states.shape[2])
 
         if self.tt_fused_gate_up_weight is not None:
+            assert self._intermediate_size is not None
+            I = self._intermediate_size
+            pc_gu = _vision_l1_friendly_linear_program_config(self.device, seq_len=s, n=2 * I)
+            kw_gu = {} if pc_gu is None else {"program_config": pc_gu}
             gate_up = ttnn.linear(
                 hidden_states,
                 self.tt_fused_gate_up_weight,
                 bias=self.tt_fused_gate_up_bias,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
+                **kw_gu,
             )
             in_shape = list(gate_up.shape)
-            I = self._intermediate_size
             slice_lo_gate = [0] * len(in_shape)
             slice_hi_gate = list(in_shape)
             slice_hi_gate[-1] = I
@@ -503,12 +569,17 @@ class TTNNDotsVisionMLP(TTNNModule):
             ttnn.deallocate(gate)
             ttnn.deallocate(up)
         else:
+            assert self._intermediate_size is not None
+            I = self._intermediate_size
+            pc_g = _vision_l1_friendly_linear_program_config(self.device, seq_len=s, n=I)
+            kw_g = {} if pc_g is None else {"program_config": pc_g}
             gate = ttnn.linear(
                 hidden_states,
                 self.tt_fc1_weight,
                 bias=self.tt_fc1_bias,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
+                **kw_g,
             )
             gate = ttnn.silu(gate, memory_config=mem)
 
@@ -518,18 +589,25 @@ class TTNNDotsVisionMLP(TTNNModule):
                 bias=self.tt_fc3_bias,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
+                **kw_g,
             )
 
             gate_up_mul = ttnn.multiply(gate, up)
             ttnn.deallocate(gate)
             ttnn.deallocate(up)
 
+        I = self._intermediate_size
+        assert I is not None
+        h_sz = int(hidden_states.shape[-1])
+        pc_down = _vision_l1_friendly_linear_program_config(self.device, seq_len=s, n=h_sz)
+        kw_down = {} if pc_down is None else {"program_config": pc_down}
         output = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            **kw_down,
         )
         ttnn.deallocate(gate_up_mul)
 
@@ -902,12 +980,15 @@ class TTNNDotsVisionAttention(TTNNModule):
         h = self.num_heads
         hd = self.head_dim
 
+        pc_qkv = _vision_l1_friendly_linear_program_config(self.device, seq_len=s, n=3 * self.hidden_size)
+        kw_qkv = {} if pc_qkv is None else {"program_config": pc_qkv}
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
             bias=self.tt_qkv_bias,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            **kw_qkv,
         )
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -942,12 +1023,15 @@ class TTNNDotsVisionAttention(TTNNModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ctx = self._concat_heads(ctx)
+            pc_o = _vision_l1_friendly_linear_program_config(self.device, seq_len=s, n=self.hidden_size)
+            kw_o = {} if pc_o is None else {"program_config": pc_o}
             return ttnn.linear(
                 ctx,
                 self.tt_o_proj_weight,
                 bias=self.tt_o_proj_bias,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
+                **kw_o,
             )
 
         cu_host = self._cu_seqlens_to_list(cu_seqlens, s)
@@ -992,12 +1076,15 @@ class TTNNDotsVisionAttention(TTNNModule):
             ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
 
         ctx = self._concat_heads(ctx)
+        pc_o = _vision_l1_friendly_linear_program_config(self.device, seq_len=s, n=self.hidden_size)
+        kw_o = {} if pc_o is None else {"program_config": pc_o}
         return ttnn.linear(
             ctx,
             self.tt_o_proj_weight,
             bias=self.tt_o_proj_bias,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            **kw_o,
         )
 
     def _cu_seqlens_to_list(self, cu_seqlens, expected_total: int) -> list[int]:
