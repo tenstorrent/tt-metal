@@ -14,10 +14,12 @@
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
 #include "waypoint.h"
+#include "internal/risc_attribs.h"
 #include "internal/debug/dprint_buffer.h"
-#include "noc_overlay_parameters.h"
+
+#if !defined(ENV_LLK_INFRA)
 #include "risc_common.h"
-#include "stream_io_map.h"
+#endif
 
 #if defined(KERNEL_BUILD)
 #include "dprint_tile.h"
@@ -1362,9 +1364,13 @@ void acquire_lock() {
         auto risc_state = device_print_buffer->aux.risc_state[PROCESSOR_INDEX];
         if (risc_state != DevicePrintRiscCoreState::PrintingDisabled) {
             if (risc_state == DevicePrintRiscCoreState::KernelNotPrinted) {
+#ifndef ENV_LLK_INFRA  // LLK test infra has no metal mailbox; kernel id is not tracked.
                 uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
                 tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
                 auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
+#else
+                uint16_t kernel_id = 0;
+#endif
                 structures::DevicePrintHeader new_kernel_message = {};
                 new_kernel_message.is_kernel = 1;
                 new_kernel_message.risc_id = PROCESSOR_INDEX;

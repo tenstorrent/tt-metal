@@ -221,6 +221,14 @@ class TestConfig:
         _PERF_COUNTERS_BUFFER_SIZE + 4
     )  # +4 for sync control word
 
+    # Device print buffer base address (must match dprint.h).
+    # Sits right after perf data and before TRISC start addresses (0x16DFF0).
+    # Not entirely sure about this address; we could alias the perf memory I think?
+    # I imagine dprint and profiling won't be used at the same time.
+    DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x16D400
+    # DPRINT_BUFFER_SIZE * PROCESSOR_COUNT
+    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 204 * 5
+
     @staticmethod
     def setup_arch():
         TestConfig.CHIP_ARCH = get_chip_architecture()
@@ -393,6 +401,7 @@ class TestConfig:
             "-I../../hw/inc",
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
+            "-I../../hostdevcommon/api",
         ] + hw_specific_includes
 
     @staticmethod
@@ -1209,6 +1218,14 @@ class TestConfig:
             else self.boot_mode
         )
 
+        # Zero the device print buffer before each kernel run so the
+        # first DEVICE_PRINT() observes a clean wpos=rpos=0 state.
+        write_words_to_device(
+            TestConfig.TENSIX_LOCATION,
+            TestConfig.DEVICE_PRINT_BUFFER_BASE,
+            [0] * (TestConfig.DEVICE_PRINT_BUFFER_SIZE // 4),
+        )
+
         if (
             TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
             and boot_mode != BootMode.TRISC
@@ -1305,12 +1322,13 @@ class TestConfig:
 
         return
 
-    def wait_for_tensix_operations_finished(self, timeout=2):
+    def wait_for_tensix_operations_finished(self, timeout=2, poll_callback=None):
         """
         Args:
             elfs: List of ELF file paths (used for assert diagnostics).
             location: The location of the core to poll.
             timeout: Maximum time to wait (in seconds) before timing out.
+            poll_callback: Optional callable invoked each iteration (used for device print drain).
         """
 
         mailboxes = {core for core in device_module.Mailboxes}
@@ -1335,6 +1353,9 @@ class TestConfig:
                 ):
                     completed.add(mailbox)
 
+            if poll_callback is not None:
+                poll_callback()
+
             if completed == mailboxes:
                 return
 
@@ -1348,7 +1369,7 @@ class TestConfig:
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )
 
-    def run(self):
+    def run(self, poll_callback=None):
         self.generate_variant_hash()
 
         logger.debug(
@@ -1380,7 +1401,7 @@ class TestConfig:
             self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
 
         self.run_elf_files()
-        self.wait_for_tensix_operations_finished()
+        self.wait_for_tensix_operations_finished(poll_callback=poll_callback)
 
         if self.coverage_build == CoverageBuild.Yes:
             self.read_coverage_data_from_device()

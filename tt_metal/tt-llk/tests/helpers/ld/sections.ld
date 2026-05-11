@@ -157,6 +157,21 @@ SECTIONS
    . += __firmware_stack_size;
     __stack_top = .;
   } > REGION_STACK
+  /* device print strtab; not loaded to device, they just sit in the ELF for the host */
+  .device_print_strings 0x6400000 :
+  {
+    __device_print_strings_start = .;
+    KEEP(*(.device_print_strings))
+    __device_print_strings_end = .;
+    . = ALIGN(4);
+  }
+  .device_print_strings_info 0x6500000 :
+  {
+    __device_print_strings_info_start = .;
+    KEEP(*(.device_print_strings_info))
+    __device_print_strings_info_end = .;
+    . = ALIGN(4);
+  }
   .profiler_meta 0 : { *(.profiler_meta) }
   .stab 0 : { *(.stab) }
   .stabstr 0 : { *(.stabstr) }

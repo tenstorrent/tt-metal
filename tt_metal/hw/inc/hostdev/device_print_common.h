@@ -16,7 +16,7 @@ enum class DevicePrintRiscCoreState : uint8_t {
     PrintingDisabled = 2,
 };
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
+#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD) || defined(ENV_LLK_INFRA)
 
 #include "core_config.h"
 
