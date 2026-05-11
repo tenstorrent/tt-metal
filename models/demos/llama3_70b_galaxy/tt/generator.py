@@ -415,6 +415,14 @@ class Generator(WarmupForwardMixin):
             and (start_pos is None or all(x == 0 for x in start_pos))
         ):
             use_batched_prefill = True
+        if use_batched_prefill and sampling_params is not None:
+            seed_values = getattr(sampling_params, "seed", None)
+            if isinstance(seed_values, torch.Tensor):
+                seed_values = seed_values.tolist()
+            elif not isinstance(seed_values, list):
+                seed_values = [seed_values] * batch
+            if any(seed is not None for seed in seed_values[:batch]):
+                use_batched_prefill = False
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
@@ -427,6 +435,18 @@ class Generator(WarmupForwardMixin):
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
         all_users = [0] if use_batched_prefill else empty_slots
+        penalty_prompt_tokens = None
+        if do_device_sampling:
+            max_prompt_len = max(int(seq_len) for seq_len in prompt_lens) if prompt_lens else 0
+            penalty_prompt_tokens = torch.full(
+                (self.model_args.max_batch_size, max_prompt_len),
+                -1,
+                dtype=torch.int32,
+                device=tokens.device,
+            )
+            for local_idx, slot in enumerate(empty_slots):
+                seq_len_local = int(prompt_lens[local_idx])
+                penalty_prompt_tokens[slot, :seq_len_local] = tokens[local_idx, :seq_len_local].to(torch.int32)
 
         for id, user_id in enumerate(all_users):
             logger.info(
@@ -580,8 +600,7 @@ class Generator(WarmupForwardMixin):
             sampling_module = self.model.sampling
 
             sampling_module.reset_sampling_params(slot_sampling_params)
-            # if prompt_tokens is not None:  # Guard for warmup
-            sampling_module.reset_prompt_tokens(prefill_ids)
+            sampling_module.reset_prompt_tokens(penalty_prompt_tokens)
             sampling_module.reset_output_state()
             sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
             sampling_module.seed_manager.get_new_values(empty_slots)
