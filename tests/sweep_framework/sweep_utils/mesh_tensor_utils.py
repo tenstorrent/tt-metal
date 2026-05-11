@@ -838,6 +838,43 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     shape = get_mesh_shape()
     if shape:
         return shape
+    # Read mesh shape from master JSON — use the shape the model was traced on.
+    try:
+        _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
+        if not _master_path:
+            _auto = os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "..",
+                "..",
+                "model_tracer",
+                "traced_operations",
+                "ttnn_operations_master.json",
+            )
+            if os.path.isfile(_auto):
+                _master_path = _auto
+        if _master_path and os.path.isfile(_master_path):
+            import json as _json_ms
+
+            with open(_master_path) as _f_ms:
+                _m_ms = _json_ms.load(_f_ms)
+            for _op_ms in _m_ms.get("operations", {}).values():
+                for _cfg_ms in _op_ms.get("configurations", []):
+                    _mi_ms = _cfg_ms.get("traced_machine_info") or {}
+                    if not _mi_ms:
+                        _execs = _cfg_ms.get("executions", [])
+                        if _execs and isinstance(_execs[0], dict):
+                            _mi_ms = _execs[0].get("machine_info", {})
+                    _ms_val = _mi_ms.get("mesh_device_shape")
+                    if _ms_val:
+                        import ast as _ast_ms
+
+                        if isinstance(_ms_val, str):
+                            _ms_val = _ast_ms.literal_eval(_ms_val)
+                        if isinstance(_ms_val, list) and len(_ms_val) == 2:
+                            return tuple(_ms_val)
+    except Exception:
+        pass
     # Auto-detect mesh shape from available hardware when env var not set.
     # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
     # mesh matching the topology used during model tracing.
