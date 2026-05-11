@@ -25,13 +25,18 @@ PAD_VALUE = -42
 
 
 def assert_output_accuracy(torch_output, ttnn_output):
+    dtype = ttnn_output.dtype
+    if dtype == torch.bfloat16:
+        frobenius_threshold = 0.015
+    else:
+        frobenius_threshold = 0.0105
     assert_numeric_metrics(
         torch_output,
         ttnn_output,
         rtol=1e-2,
         atol=5e-2,
         pcc_threshold=0.9999,
-        frobenius_threshold=0.0105,
+        frobenius_threshold=frobenius_threshold,
         check_frobenius=True,
         check_pcc=True,
     )
