@@ -33,9 +33,15 @@ void kernel_main() {
     cb_wait_front(cb_divisor, onetile);
     eltwise_chain(
         onetile,
-        CopyTile<cb_divisor, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
+        CopyTile<cb_divisor, Dst::D0, CopyTilePolicy::NoWaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::Input>{},
         Recip<Dst::D0>{},
-        PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_tmp1,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 #endif
 
     cb_wait_front(cb_output_grad, onetile);
@@ -55,9 +61,16 @@ void kernel_main() {
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::NoWaitNoPop,
                 CbIndexMode::FirstTile,
-                Dst::D0>{},
+                Dst::D0,
+                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
             Negative<Dst::D0>{},
-            PackTile<cb_tmp2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            PackTile<
+                cb_tmp2,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::Output,
+                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 
         // T1.26: cb_input_grad = cb_tmp2 * cb_tmp1  (bcast scalar, B=tmp1 held)
         eltwise_chain(
@@ -72,8 +85,15 @@ void kernel_main() {
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::WaitNoPop,
                 CbIndexMode::FirstTile,
-                Dst::D0>{},
-            PackTile<cb_input_grad, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                Dst::D0,
+                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
+            PackTile<
+                cb_input_grad,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::Output,
+                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 #else
         // T1.27 (no-DIVISOR branch): cb_input_grad = -(cb_tmp_weight * cb_output_grad)
         eltwise_chain(
@@ -88,9 +108,16 @@ void kernel_main() {
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::NoWaitNoPop,
                 CbIndexMode::FirstTile,
-                Dst::D0>{},
+                Dst::D0,
+                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
             Negative<Dst::D0>{},
-            PackTile<cb_input_grad, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            PackTile<
+                cb_input_grad,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::Output,
+                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 #endif
     }
 
