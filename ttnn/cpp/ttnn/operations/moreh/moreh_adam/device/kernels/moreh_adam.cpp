@@ -270,12 +270,25 @@ void kernel_main() {
         // cb_tmp1 = pow(beta2, step);  (T1.32)
         {
             using namespace compute_kernel_lib;
-            auto copy_elt = CopyTile<cb_scalar_args, Dst::D0, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{};
+            auto copy_elt = CopyTile<
+                cb_scalar_args,
+                Dst::D0,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::Pinned,
+                CopyTileReconfig::Input>{};
             copy_elt.cb_tile_idx = beta2_tile;
             auto power_elt = Power<Dst::D0>{};
             power_elt.exponent = step;
             eltwise_chain(
-                onetile, copy_elt, power_elt, PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                onetile,
+                copy_elt,
+                power_elt,
+                PackTile<
+                    cb_tmp1,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
 
         // cb_tmp1 = 1 / (1 - cb_tmp1);
@@ -365,12 +378,25 @@ void kernel_main() {
         // cb_tmp2 = pow(beta1, step);  (T1.33)
         {
             using namespace compute_kernel_lib;
-            auto copy_elt = CopyTile<cb_scalar_args, Dst::D0, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{};
+            auto copy_elt = CopyTile<
+                cb_scalar_args,
+                Dst::D0,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::Pinned,
+                CopyTileReconfig::Input>{};
             copy_elt.cb_tile_idx = beta1_tile;
             auto power_elt = Power<Dst::D0>{};
             power_elt.exponent = step;
             eltwise_chain(
-                onetile, copy_elt, power_elt, PackTile<cb_tmp2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                onetile,
+                copy_elt,
+                power_elt,
+                PackTile<
+                    cb_tmp2,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
 
         // cb_tmp2 = 1 / (1 - cb_tmp2);
