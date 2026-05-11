@@ -34,6 +34,11 @@ import ttnn
 import ttml
 import ttml.common.muon_optimizer
 
+# C++-RNG-backed helpers: bound nanobind submodule.  We use it for the
+# dataloader shuffle so Python and the C++ trainer's DataLoader pull
+# from the same std::mt19937 stream in the autograd context.
+from _ttml import init as _ttml_init_module
+
 ttml.common.muon_optimizer.register()
 from ttml.models.nanogpt import (
     NanoGPT,
@@ -479,13 +484,16 @@ def train_step(
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
 
-    # Under DDP each rank produced loss on its own microbatch, so the
-    # printed/accumulated value must be the mean across the "dp" axis.
-    # get_loss_over_devices internally builds a concat_mesh_to_tensor
-    # composer and takes the mean, mirroring how the C++ trainer logs
-    # per-rank loss when DDP is on.
+    # Any multi-device mesh - DDP, TP-only, or DP+TP - produces a loss tensor
+    # with one host buffer per device (per-rank values under DDP; TP-reduced
+    # replicas under TP). Tensor.item() asserts buffers.size()==1, so we
+    # must compose across the mesh before reading to host.
+    # get_loss_over_devices builds a concat_mesh_to_tensor composer and takes
+    # the mean, mirroring the C++ trainer's IdentityComposer-then-average path
+    # in main.cpp::get_loss_value (works for replicas too, since mean of N
+    # identical values equals any one).
     mesh = ttml.mesh()
-    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
+    if mesh.num_devices() > 1:
         loss_float = float(get_loss_over_devices(loss))
     else:
         loss_float = get_loss_value(loss)
@@ -1400,6 +1408,11 @@ def main():
         memory_guard = MemoryUsageTracker.begin_capture()
 
     ttml.autograd.AutoContext.get_instance().set_seed(training_config.seed)
+    # NOTE: weight initialization and dataloader shuffle now route through the
+    # autograd-context RNG (std::mt19937) via _ttml.init bindings, matching the
+    # C++ trainer.  np.random.seed only matters for residual np.random callers
+    # (currently none in the init/shuffle hot paths), but we still seed it
+    # defensively in case downstream Python code calls into np.random.
     np.random.seed(training_config.seed)
 
     # Handle inference-only mode: load model from checkpoint
@@ -1669,10 +1682,11 @@ def main():
                 MemoryUsageTracker.snapshot(name)
 
         for epoch in range(training_config.num_epochs):
-            # Shuffle indices,
-            # avoids copying token data unlike shuffling a list of tuples.
+            # Shuffle indices using the C++ autograd-context std::mt19937 so
+            # the sample order matches the C++ trainer's DataLoader.shuffle_indices.
+            # Avoids copying token data unlike shuffling a list of tuples.
             indices = np.arange(dataset_len, dtype=np.int64)
-            np.random.shuffle(indices)
+            _ttml_init_module.shuffle_indices(indices)
 
             for batch_start in range(0, dataset_len, batch_size):
                 batch_end = min(batch_start + batch_size, dataset_len)

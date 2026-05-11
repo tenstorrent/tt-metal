@@ -129,6 +129,7 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
+        # Resolve the padded vocab size up front so tok_emb and fc agree.
         if config.use_tp:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
@@ -138,31 +139,20 @@ class Llama(AbstractModuleBase):
             tp_size = ttml.mesh().axis_size("tp")
             align = lcm(32, tp_size)
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
-            # gather_output=True: the LM head must produce full-vocab logits
-            # on every device so the loss can be computed without further CCL.
-            self.fc = ColumnParallelLinear(
-                config.hidden_size,
-                self.padded_vocab_size,
-                has_bias=False,
-                gather_output=True,
-                axis_name="tp",
-            )
         else:
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
-            self.fc = LinearLayer(
-                config.hidden_size,
-                self.padded_vocab_size,
-                False,
-            )
 
+        # IMPORTANT: module construction order matches C++ DistributedLlama
+        # (tok_emb -> blocks -> ln_fc -> fc).  This matters because every
+        # init draws from the shared autograd-context RNG, so a different
+        # order would produce a different sequence of weight values even
+        # when the per-tensor init params are identical.
+        # 1) Token embedding (use std=1.0 to match C++ Embedding::initialize_tensors).
         self.tok_emb = Embedding(
             self.padded_vocab_size,
             config.hidden_size,
-            weight_init=ttml.init.normal(0.0, 0.02),
+            weight_init=ttml.init.normal(0.0, 1.0),
         )
-
-        if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -180,7 +170,7 @@ class Llama(AbstractModuleBase):
             rope_scaling_params,
         )
 
-        # Transformer blocks (ModuleList auto-registers all blocks)
+        # 2) Transformer blocks (ModuleList auto-registers all blocks).
         self.blocks = ModuleList(
             [
                 LlamaBlock(
@@ -198,7 +188,29 @@ class Llama(AbstractModuleBase):
             ]
         )
 
+        # 3) Final norm before LM head.
         self.ln_fc = RMSNormLayer(config.hidden_size)
+
+        # 4) LM head.
+        if config.use_tp:
+            # gather_output=True: the LM head must produce full-vocab logits
+            # on every device so the loss can be computed without further CCL.
+            self.fc = ColumnParallelLinear(
+                config.hidden_size,
+                self.padded_vocab_size,
+                has_bias=False,
+                gather_output=True,
+                axis_name="tp",
+            )
+        else:
+            self.fc = LinearLayer(
+                config.hidden_size,
+                self.padded_vocab_size,
+                False,
+            )
+
+        if config.weight_tying == ttml.models.WeightTyingType.Enabled:
+            self.tok_emb.weight = self.fc.weight
 
     def forward(
         self,

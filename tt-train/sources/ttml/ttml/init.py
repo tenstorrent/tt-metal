@@ -41,6 +41,11 @@ import numpy as np
 import ttnn
 import ttml
 
+# C++-RNG-backed numpy fillers. Routing Python init through these keeps
+# weight initialization bit-identical with the C++ trainer (both pull from
+# ttml::autograd::ctx().get_generator()).
+from _ttml import init as _cpp_init
+
 
 _NonlinearityType = Literal[
     "linear",
@@ -151,7 +156,10 @@ def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
     def uniform_init(shape, mapper=None):
-        data = np.random.uniform(low=a, high=b, size=tuple(shape)).astype(np.float32)
+        # Allocate a contiguous float32 buffer and have C++ fill it from the
+        # autograd-context RNG (same path the C++ trainer takes), then upload.
+        data = np.empty(tuple(shape), dtype=np.float32)
+        _cpp_init.fill_uniform(data, float(a), float(b))
         return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return uniform_init
@@ -161,7 +169,8 @@ def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
     def normal_init(shape, mapper=None):
-        data = np.random.normal(loc=mean, scale=std, size=tuple(shape)).astype(np.float32)
+        data = np.empty(tuple(shape), dtype=np.float32)
+        _cpp_init.fill_normal(data, float(mean), float(std))
         return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
     return normal_init

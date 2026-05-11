@@ -9,6 +9,12 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
+#include <random>
+#include <span>
+
+#include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "serialization/serializable.hpp"
 
 // Make NamedParameters opaque so we can bind it explicitly
@@ -58,6 +64,56 @@ NB_MODULE(_ttml, m) {
     ttml::nanobind::optimizers::py_module(m_optimizers);
 
     // MeshDevice binding is owned by ttnn; avoid re-registering here to prevent duplicate nanobind types.
+
+    // ---------------------------------------------------------------
+    // _ttml.init: in-place numpy fillers that draw from the C++
+    // autograd-context RNG (ttml::autograd::ctx().get_generator()).
+    // This is the same stream the C++ trainer's init::uniform_init /
+    // init::normal_init and the C++ DataLoader's std::shuffle pull from,
+    // so calling these from Python keeps Python and C++ init/shuffle
+    // bit-identical (assuming identical construction order / sizes).
+    // ---------------------------------------------------------------
+    auto m_init = m.def_submodule("init", "C++-RNG-backed numpy fillers (autograd context)");
+
+    m_init.def(
+        "fill_uniform",
+        [](nb::ndarray<float, nb::numpy, nb::c_contig> arr, float low, float high) {
+            auto& gen = ttml::autograd::ctx().get_generator();
+            uint32_t seed = gen();
+            ttml::core::parallel_generate(
+                std::span<float>{arr.data(), arr.size()},
+                [low, high]() { return std::uniform_real_distribution<float>(low, high); },
+                seed);
+        },
+        nb::arg("arr"),
+        nb::arg("low"),
+        nb::arg("high"),
+        "Fill a contiguous float32 numpy array in-place with U(low, high) using the autograd-context RNG.");
+
+    m_init.def(
+        "fill_normal",
+        [](nb::ndarray<float, nb::numpy, nb::c_contig> arr, float mean, float std) {
+            auto& gen = ttml::autograd::ctx().get_generator();
+            uint32_t seed = gen();
+            ttml::core::parallel_generate(
+                std::span<float>{arr.data(), arr.size()},
+                [mean, std]() { return std::normal_distribution<float>(mean, std); },
+                seed);
+        },
+        nb::arg("arr"),
+        nb::arg("mean"),
+        nb::arg("std"),
+        "Fill a contiguous float32 numpy array in-place with N(mean, std) using the autograd-context RNG.");
+
+    m_init.def(
+        "shuffle_indices",
+        [](nb::ndarray<int64_t, nb::ndim<1>, nb::numpy, nb::c_contig> arr) {
+            auto& gen = ttml::autograd::ctx().get_generator();
+            std::shuffle(arr.data(), arr.data() + arr.size(), gen);
+        },
+        nb::arg("arr"),
+        "Fisher-Yates shuffle of a 1D int64 numpy array using the autograd-context std::mt19937. "
+        "Matches the C++ DataLoader::shuffle_indices stream so Python and C++ trainers see the same sample order.");
 }
 
 }  // namespace ttml::nanobind
