@@ -230,8 +230,17 @@ void kernel_main() {
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
-            // dy - sum  [DEBUG: hypothesis test — raw LLK swap for Bcast::Col Sub]
-            sub_tiles_bcast_cols_to_cb(cb_dy, cb_sum, cb_inter2, /*itile0=*/0, /*itile1=*/0, /*pop0=*/1, /*pop1=*/0);
+            // dy - sum
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_dy,
+                cb_sum,
+                cb_inter2,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
 #ifdef SOFTMAX
             // (dy - sum) * y
