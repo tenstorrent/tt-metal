@@ -131,11 +131,13 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     uint32_t sync_cb_index = tt::CBIndex::c_3;
     uint32_t sync_cb_page_size = hal::get_l1_alignment();
 
+    /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
     uint32_t tensor_addrs_cb_size = num_layers * num_tensors * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CBIndex::c_1;
 
+    /* remote cb setup */
     uint32_t remote_cb_size = global_cb.size();
 
     auto L1_ALIGNMENT = tt::tt_metal::hal::get_l1_alignment();
@@ -186,6 +188,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         .global_circular_buffer = std::addressof(global_cb),
     });
 
+    // Reader kernel
     std::vector<uint32_t> reader_ct_args = {
         num_layers,
         num_tensors,
@@ -211,6 +214,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     };
     writer_ct_args.push_back(static_cast<uint32_t>(enable_performance_mode));
 
+    /* Runtime args */
     std::vector<uint32_t> page_sizes;
     std::vector<uint32_t> block_num_pages;
 
