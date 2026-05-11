@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_masked_bincount ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
@@ -28,9 +30,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/masked_bincount_device_operation.cpp
-        device/masked_bincount_program_factory.cpp
-        masked_bincount.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MASKED_BINCOUNT_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_prefill_masked_bincount PRIVATE ${FixmeOpIncDirs})

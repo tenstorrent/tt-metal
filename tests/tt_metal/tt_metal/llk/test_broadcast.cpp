@@ -23,8 +23,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -487,7 +486,7 @@ void run_single_core_broadcast(
 }  // namespace unit_tests::compute::broadcast
 
 class BroadcastParameterizedDeviceFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<unit_tests::compute::broadcast::BroadcastConfig> {};
 
 TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {

@@ -28,15 +28,6 @@
   team: scaleout
   model-name: trace stress
 
-- name: t3k_falcon40b_tests
-  cmd: run_t3000_falcon40b_tests
-  skus:
-    wh_llmbox:
-      timeout: 20
-  owner_id: U04S2UV6L8N # Sofija Jovic
-  team: models
-  model-name: falcon40b
-
 # - name: t3k_llama3.2-vision_tests
 #   cmd: run_t3000_llama3.2-11b-vision_freq_tests
 #   skus:

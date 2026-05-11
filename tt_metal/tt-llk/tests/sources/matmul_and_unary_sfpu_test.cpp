@@ -50,7 +50,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, TILE_SIZE_PACK);
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
+        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, TILE_SIZE_PACK);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0, 0, FACE_R_DIM, 4, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -114,6 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -126,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<false, false, false>(formats_array[run].pack_dst);
+    _llk_pack_init_<false, false, false>();
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
@@ -144,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, params.TILE_SIZE_PACK);
 
-    _llk_pack_init_<false, false>(formats_array[run].pack_dst);
+    _llk_pack_init_wrapper_<false, false>(formats_array[run].pack_dst);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -12,6 +12,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 constexpr uint32_t onetile = 1U;
 
@@ -124,6 +125,22 @@ inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, u
         for (uint32_t i = 0; i < num_u32_per_tile; ++i) {
             ptr[i] = 0;
         }
+    }
+}
+
+/**
+ * Zero-fill an L1 region asynchronously by issuing NoC reads from the hardware zero region
+ * (`MEM_ZEROS_BASE`).
+ *
+ * Caller must call `noc_async_read_barrier()` before consuming `write_addr`.
+ */
+inline void fill_zeros_async(uint32_t write_addr, uint32_t bytes) {
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    while (bytes > 0U) {
+        const uint32_t read_size = bytes > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes -= read_size;
     }
 }
 
@@ -324,6 +341,31 @@ inline void read_tiles_by_row(
     if constexpr (UseBarrier) {
         noc_async_read_barrier();
         cb_push_back(cb_idx, num_tiles_to_push);
+    }
+}
+
+/**
+ * Zero the width-padded region inside a tile after read_tiles_by_row (last tile of a row when
+ * logical width is not a multiple of TILE_WIDTH). DRAM delivers a full tile; padding within the
+ * tile must be numeric zero so downstream compute that uses the whole tile does not sum garbage.
+ *
+ * @tparam mask_w  logical_width % TILE_WIDTH (compile-time 0 means no call sites should invoke, or use
+ *                 if constexpr(mask_w > 0) at the caller)
+ * @param cb_id     Circular buffer containing the tile
+ * @param tile_index_in_reserved_block  Index of the tile in the current cb_reserve_back region [0, num_tiles_to_push)
+ */
+template <uint32_t mask_w>
+inline void pad_last_tile_with_zeroes(uint32_t cb_id, uint32_t tile_index_in_reserved_block) {
+    if constexpr (mask_w == 0) {
+        return;
+    }
+    const uint32_t l1_addr = get_write_ptr(cb_id) + tile_index_in_reserved_block * get_tile_size(cb_id);
+    const DataFormat df = get_dataformat(cb_id);
+    using namespace tt::constants;
+    if (df == DataFormat::Float32) {
+        fill_pad_tile<uint32_t, mask_w, TILE_HEIGHT>(l1_addr, 0u);
+    } else {
+        fill_pad_tile<uint16_t, mask_w, TILE_HEIGHT>(l1_addr, static_cast<uint16_t>(0));
     }
 }
 
