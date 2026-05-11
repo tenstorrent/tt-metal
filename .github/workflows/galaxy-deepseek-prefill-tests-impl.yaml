@@ -154,6 +154,7 @@ jobs:
     name: "AI Run Summary"
     needs: [load-test-matrix, galaxy-deepseek-tests]
     if: always()
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

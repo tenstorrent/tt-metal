@@ -221,6 +221,7 @@ jobs:
     name: "AI Run Summary"
     needs: [load-test-matrix, models-device-perf-tests]
     if: always()
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

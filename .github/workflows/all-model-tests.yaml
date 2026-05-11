@@ -401,6 +401,7 @@ jobs:
       - t3-unit-tests
       - t3-e2e-tests
     if: always()
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
