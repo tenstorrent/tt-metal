@@ -19,7 +19,7 @@ Tensor moreh_norm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (!dim.has_value()) {
-        ttnn::SmallVector<int64_t> dims(input.padded_shape().rank());
+        ttnn::SmallVector<int64_t> dims(input.logical_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
         dim = std::make_optional(dims);
     }
@@ -36,7 +36,7 @@ Tensor moreh_norm(
 
     auto dims = std::get<ttnn::SmallVector<int64_t>>(dim.value());
     if (dims.empty()) {
-        ttnn::SmallVector<int64_t> all_dims(input.padded_shape().rank());
+        ttnn::SmallVector<int64_t> all_dims(input.logical_shape().rank());
         std::iota(all_dims.begin(), all_dims.end(), 0);
         dims = all_dims;
     }
