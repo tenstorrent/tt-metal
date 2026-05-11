@@ -902,6 +902,10 @@ FIX_BG_FIRES=$(grep -cE 'stuck at host-pre-launch.*0xdeadb07e.*FIX BG|Marking de
 # Timeout: "configure_fabric_cores: device N channel N FIX BH — ERISC did not exit ROM phase within..."
 FIX_BH_SUCCESS=$(grep -cE 'FIX BH.*ERISC booted from ROM' "$CLEAN" 2>/dev/null; :)
 FIX_BH_TIMEOUT=$(grep -cE 'FIX BH.*ERISC did not exit ROM phase' "$CLEAN" 2>/dev/null; :)
+# FIX BH-DEGRADE (#42429): FIX RR PCIe-direct soft reset FAILED — channel stays in dead_channels.
+# This is distinct from FIX BH timeout (ROM boot didn't complete) — here PCIe reset itself threw.
+# Log: "FIX RR — PCIe-direct soft reset FAILED"
+FIX_BH_DEGRADE=$(grep -cE 'FIX RR.*PCIe-direct soft reset FAILED' "$CLEAN" 2>/dev/null; :)
 # FIX BO (#42429): Phase 5 kSyncTimeoutMs extended 10s→120s when stale base-UMD channels present.
 # Without FIX BO: cluster with N base-UMD channels × 10s each → "Fabric health check failed" TT_THROW.
 # Log: "wait_for_fabric_workers_ready: Device N FIX BO — stale base-UMD channels detected, extending Phase 5..."
@@ -1291,7 +1295,7 @@ FIX_BY_FIRES=$(grep -cE 'FIX BY.*fabric degraded after quiesce probe|FIX BY.*qui
 # FIX XX (#42429): deassert guard — prevents deassert_risc_reset on channels that were never
 # asserted.  Without FIX XX: deassert on non-asserted channel causes undefined ERISC behavior.
 # Log: "FIX XX: deassert guard" or "FIX XX (#42429)"
-FIX_XX_FIRES=$(grep -cE 'FIX XX.*deassert guard|FIX XX \(#42429\)' "$CLEAN" 2>/dev/null; :)
+FIX_XX_FIRES=$(grep -cE 'FIX XX.*deassert guard|FIX XX.*skipping deassert|FIX XX \(#42429\)' "$CLEAN" 2>/dev/null; :)
 # GAP-A (audit): FIX Z guard in read_completion_queue_event extended to check channels_not_ready
 # and stale_base_umd in addition to relay_path_broken.  TT_THROW fires immediately.
 # Log: "FIX Z/GAP-A: Fabric degraded on non-MMIO device"
@@ -1492,6 +1496,9 @@ if [ "${FIX_BH_SUCCESS:-0}" -gt 0 ] || [ "${FIX_BH_TIMEOUT:-0}" -gt 0 ]; then
     echo "  => [FIX BH] ERISC ROM-to-UMD boot poll after FIX RR deassert: ${FIX_BH_SUCCESS:-0} succeeded, ${FIX_BH_TIMEOUT:-0} timed out."
     if [ "${FIX_BH_TIMEOUT:-0}" -gt 0 ]; then
         echo "     TIMEOUT: ERISC did not exit ROM phase within 500ms — channel left dead, L1 init skipped."
+    fi
+    if [ "${FIX_BH_DEGRADE:-0}" -gt 0 ]; then
+        echo "     DEGRADE: PCIe-direct soft reset FAILED on ${FIX_BH_DEGRADE} channel(s) — pre-dead channel stays dead."
     fi
 fi
 if [ "${FIX_BO_FIRES:-0}" -gt 0 ]; then
@@ -1999,6 +2006,7 @@ echo "  FIX_AO_FIRES:              ${FIX_AO_FIRES:-0}  (ring-sync STARTED early-
 echo "  FIX_BG_FIRES:              ${FIX_BG_FIRES:-0}  (host-pre-launch 0xdeadb07e — ERISC not executing after FIX RR soft-reset)"
 echo "  FIX_BH_SUCCESS:            ${FIX_BH_SUCCESS:-0}  (ERISC booted from ROM after FIX RR deassert)"
 echo "  FIX_BH_TIMEOUT:            ${FIX_BH_TIMEOUT:-0}  (ERISC stuck in ROM phase after FIX RR deassert — channel dead)"
+echo "  FIX_BH_DEGRADE:            ${FIX_BH_DEGRADE:-0}  (PCIe-direct soft reset FAILED — pre-dead channel stays dead)"
 echo "  FIX_BO_FIRES:              ${FIX_BO_FIRES:-0}  (Phase 5 kSyncTimeoutMs extended 10s→120s for stale base-UMD channels)"
 echo "  FIX_BP_FIRES:              ${FIX_BP_FIRES:-0}  (fabric_context null guard — teardown ordering race recovered)"
 echo "  FIX_BF_MMIO_MASTER:        ${FIX_BF_MMIO_MASTER:-0}  (master chans selected with MMIO peer — FIX BD/BF)"

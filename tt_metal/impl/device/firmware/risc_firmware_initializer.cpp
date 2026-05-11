@@ -2814,10 +2814,11 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             if (!is_known) {
                 log_warning(
                     tt::LogAlways,
-                    "FIX SC (GAP-76): Device {} core {} ({}) has stale go_msg=0x{:02x} after firmware "
+                    "FIX SC (GAP-76): Device {} ({}) core {} ({}) has stale go_msg=0x{:02x} after firmware "
                     "multicast write — asserting BRISC reset to halt stale firmware then writing "
                     "RUN_MSG_DONE; board reset will be required",
                     device_id,
+                    (cluster_.get_associated_mmio_device(device_id) == device_id) ? "MMIO" : "non-MMIO",
                     worker_core.str(),
                     core_type_str,
                     signal);

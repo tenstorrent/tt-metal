@@ -105,6 +105,17 @@ FabricCoresHealth configure_fabric_cores(
     const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
 
+    // Diagnostic: log entry state so CI logs show exactly what configure_fabric_cores sees.
+    log_info(
+        tt::LogMetal,
+        "configure_fabric_cores: Device {} ({}) — {} active channels, {} pre_known_dead, "
+        "{} skip_soft_reset (base-UMD relay). [AUDIT #42429]",
+        device->id(),
+        device->is_mmio_capable() ? "MMIO" : "non-MMIO",
+        router_chans_and_direction.size(),
+        pre_known_dead_channels.size(),
+        skip_soft_reset_channels.size());
+
     // Fix #42429: After a cancelled CI run, SIGKILL, or normal AllGather CCL teardown, the
     // ERISC BRISC may be halted.  When an ERISC fabric router self-terminates (writes
     // EDMStatus::TERMINATED to its sync address and halts BRISC), subsequent L1 firmware
@@ -433,6 +444,17 @@ FabricCoresHealth configure_fabric_cores(
     // pre_known_dead channels.  If all pre-known dead channels were recovered (dead_channels
     // is now empty) and no new failures occurred, all channels are healthy.
     const bool all_channels_healthy = dead_channels.empty() && newly_dead_channels.empty();
+
+    // Diagnostic: log exit state so CI logs show the outcome of configure_fabric_cores.
+    log_info(
+        tt::LogMetal,
+        "configure_fabric_cores: Device {} — exit: healthy={}, dead={}, newly_dead={}, recovered={}. [AUDIT #42429]",
+        device->id(),
+        all_channels_healthy,
+        dead_channels.size(),
+        newly_dead_channels.size(),
+        recovered_channels.size());
+
     return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels), std::move(recovered_channels)};
 }
 
