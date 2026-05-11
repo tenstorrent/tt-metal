@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -253,6 +254,7 @@ Tensor zeros(
     const std::optional<Layout>& layout,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::zeros");
     return full_impl(
         shape, 0.0f, dtype, layout, device.has_value() ? &device->get() : nullptr, memory_config, std::nullopt);
 }
@@ -263,6 +265,7 @@ Tensor ones(
     const std::optional<Layout>& layout,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::ones");
     return full_impl(
         shape, 1.0f, dtype, layout, device.has_value() ? &device->get() : nullptr, memory_config, std::nullopt);
 }
@@ -277,6 +280,7 @@ Tensor full(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    TT_OP_SCOPE("ttnn::full");
     return full_impl(
         shape,
         fill_value,
@@ -293,6 +297,7 @@ Tensor empty(
     const Layout& layout,
     MeshDevice* device,
     const MemoryConfig& memory_config) {
+    TT_OP_SCOPE("ttnn::empty");
     return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
 }
 
@@ -304,6 +309,7 @@ Tensor from_buffer(
     MeshDevice* device,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::from_buffer");
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
     TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
     TensorSpec spec(
@@ -321,6 +327,7 @@ Tensor from_buffer(
     MeshDevice* device,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::from_buffer");
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
     TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
     TensorSpec spec(
@@ -340,6 +347,7 @@ Tensor full_like(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    TT_OP_SCOPE("ttnn::full_like");
     return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
 }
 
@@ -350,6 +358,7 @@ Tensor zeros_like(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    TT_OP_SCOPE("ttnn::zeros_like");
     return full_like_impl(tensor, 0.0f, dtype, layout, device, memory_config, optional_output_tensor);
 }
 
@@ -360,6 +369,7 @@ Tensor ones_like(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    TT_OP_SCOPE("ttnn::ones_like");
     return full_like_impl(tensor, 1.0f, dtype, layout, device, memory_config, optional_output_tensor);
 }
 
@@ -369,6 +379,7 @@ Tensor empty_like(
     const std::optional<Layout>& layout,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::empty_like");
     Layout layout_value = layout.value_or(tensor.layout());
     DataType dtype_value = dtype.value_or(tensor.dtype());
     MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
@@ -394,6 +405,7 @@ Tensor arange(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const MemoryConfig& memory_config,
     const Layout layout) {
+    TT_OP_SCOPE("ttnn::arange");
     auto concrete_arange = [&]<typename BufferType>() {
         return creation_detail::arange_impl<BufferType>(start, stop, step, layout, device, memory_config);
     };
@@ -414,6 +426,7 @@ Tensor arange(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const MemoryConfig& memory_config,
     const Layout layout) {
+    TT_OP_SCOPE("ttnn::arange");
     return arange(0, stop, 1, dtype, device, memory_config, layout);
 }
 

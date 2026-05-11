@@ -8,11 +8,13 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 ttnn::Tensor roll(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& input_dims) {
+    TT_OP_SCOPE("ttnn::roll");
     ttnn::Tensor result = input_tensor;
     auto size = result.logical_shape();
     int num_dims = size.rank();
@@ -79,6 +81,7 @@ ttnn::Tensor roll(
 }
 
 ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift) {
+    TT_OP_SCOPE("ttnn::roll");
     ttnn::SmallVector<int> shifts = {shift};
     ttnn::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
 
@@ -101,6 +104,7 @@ ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift) {
 }
 
 ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift, const int dim) {
+    TT_OP_SCOPE("ttnn::roll");
     ttnn::SmallVector<int> shifts = {shift};
     ttnn::SmallVector<int> dims = {dim};
 

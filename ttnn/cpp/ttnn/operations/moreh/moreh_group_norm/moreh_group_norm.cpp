@@ -5,6 +5,7 @@
 #include "moreh_group_norm.hpp"
 
 #include "device/moreh_group_norm_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -24,6 +25,7 @@ std::vector<std::optional<Tensor>> moreh_group_norm(
     const std::optional<MemoryConfig>& mean_memory_config,
     const std::optional<MemoryConfig>& rstd_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::moreh_group_norm");
     return ttnn::prim::moreh_group_norm(
         input,
         num_groups,

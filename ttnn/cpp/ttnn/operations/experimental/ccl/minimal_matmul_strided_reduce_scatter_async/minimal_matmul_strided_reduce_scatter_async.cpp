@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -33,6 +34,7 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2) {
+    TT_OP_SCOPE("ttnn::experimental::minimal_matmul_strided_reduce_scatter_async");
     auto all_outputs = ttnn::prim::minimal_matmul_strided_reduce_scatter_async(
         input_tensor,
         weight_tensor,

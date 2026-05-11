@@ -6,10 +6,12 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+    TT_OP_SCOPE("ttnn::view");
     auto tensor_shape = tensor.logical_shape();
     // First Case, No reshape Required
     if (tensor_shape == shape) {
@@ -47,6 +49,7 @@ ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, ttsl::Span<const int32_t> shape_vector) {
+    TT_OP_SCOPE("ttnn::view");
     return ttnn::view(tensor, operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector));
 }
 

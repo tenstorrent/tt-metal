@@ -6,6 +6,7 @@
 #include "uniform.hpp"
 
 #include "device/uniform_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -16,6 +17,7 @@ Tensor uniform(
     const uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::uniform");
     return ttnn::prim::uniform(input, from, to, seed, memory_config, compute_kernel_config);
 }
 

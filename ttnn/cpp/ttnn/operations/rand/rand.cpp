@@ -11,6 +11,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <ttnn/distributed/tensor_topology.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -63,6 +64,7 @@ Tensor rand(
     float to,
     uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
+    TT_OP_SCOPE("ttnn::rand");
     TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
 
     ttnn::Shape device_shape = shape;

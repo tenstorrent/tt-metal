@@ -5,6 +5,7 @@
 #include "prefix_scan.hpp"
 
 #include "device/prefix_scan_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -17,6 +18,7 @@ ttnn::Tensor prefix_scan(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
+    TT_OP_SCOPE("ttnn::experimental::prefix_scan");
     return ttnn::prim::prefix_scan(a, bx, h_prev, memory_config, dtype, math_fidelity);
 }
 

@@ -6,6 +6,7 @@
 
 #include "device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -26,6 +27,7 @@ std::vector<std::optional<Tensor>> moreh_group_norm_backward(
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::moreh_group_norm_backward");
     std::vector<std::optional<Tensor>> outputs;
 
     if (are_required_outputs[0]) {

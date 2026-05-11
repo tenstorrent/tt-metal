@@ -11,6 +11,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/expand/expand.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::tosa {
 namespace {
@@ -36,6 +37,7 @@ Tensor gather(
     const Tensor& input_tensor,
     const Tensor& input_index_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::tosa_gather");
     // TOSA Gather constraints
     constexpr int8_t dim = 1;
     constexpr bool sparse_grad = false;

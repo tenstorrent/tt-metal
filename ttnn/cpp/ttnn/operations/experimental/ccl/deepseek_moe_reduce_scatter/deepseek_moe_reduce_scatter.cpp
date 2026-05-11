@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -21,6 +22,7 @@ ttnn::Tensor deepseek_moe_reduce_scatter(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis) {
+    TT_OP_SCOPE("ttnn::experimental::deepseek_moe_reduce_scatter");
     uint32_t scatter_dim = (dim < 0) ? dim + input_tensors.at(0).logical_shape().rank() : (uint32_t)dim;
 
     // topology

@@ -9,6 +9,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "topk_router_gpt.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
@@ -19,6 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk_router_gpt_func(
     const ttnn::Tensor& bias_tensor,
     uint32_t k,
     uint32_t num_experts) {
+    TT_OP_SCOPE("ttnn::experimental::topk_router_gpt");
     return ttnn::experimental::topk_router_gpt(input_tensor, weight_tensor, bias_tensor, k, num_experts);
 }
 

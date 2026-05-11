@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_utils.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -18,6 +19,7 @@ Tensor indexed_fill(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     int64_t dim) {
+    TT_OP_SCOPE("ttnn::indexed_fill");
     const auto rank = static_cast<int64_t>(input_tensor_a.logical_shape().rank());
 
     if (dim < 0) {

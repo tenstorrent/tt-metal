@@ -5,6 +5,7 @@
 #include "routed_expert_ffn.hpp"
 #include "routed_expert_ffn_common.hpp"
 
+#include "ttnn/graph/composite_trace.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -142,6 +143,7 @@ ttnn::Tensor routed_expert_ffn(
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
+    TT_OP_SCOPE("ttnn::experimental::deepseek_prefill::routed_expert_ffn");
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
     const bool is_wormhole = x.device()->arch() == tt::ARCH::WORMHOLE_B0;
 
