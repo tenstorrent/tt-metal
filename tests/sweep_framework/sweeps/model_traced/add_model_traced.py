@@ -117,15 +117,11 @@ def run(
             )
             if parsed_mc is not None:
                 op_kwargs["memory_config"] = parsed_mc
-        else:
-            op_kwargs["memory_config"] = None
     if "dtype" not in absent_keys:
         if dtype is not None:
             parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
             if parsed_dt is not None:
                 op_kwargs["dtype"] = parsed_dt
-        else:
-            op_kwargs["dtype"] = None
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

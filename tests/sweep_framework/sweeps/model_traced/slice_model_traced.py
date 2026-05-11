@@ -128,18 +128,15 @@ def run(
     )
     # Forward slice_dim, num_devices, and output_tensor when master had them.
     absent_keys = set(kwargs.get("__absent_keys__") or [])
-    if "num_devices" not in absent_keys and "num_devices" not in op_kwargs:
-        traced_num_devices = kwargs.get("num_devices")
-        if traced_num_devices is not None and traced_num_devices != "__ABSENT__":
-            op_kwargs["num_devices"] = int(traced_num_devices)
-        else:
-            op_kwargs["num_devices"] = None
-    if "slice_dim" not in absent_keys and "slice_dim" not in op_kwargs:
-        traced_slice_dim = kwargs.get("slice_dim")
-        if traced_slice_dim is not None and traced_slice_dim != "__ABSENT__":
-            op_kwargs["slice_dim"] = int(traced_slice_dim)
-        else:
-            op_kwargs["slice_dim"] = None
+    if is_mesh_device:
+        if "num_devices" not in absent_keys and "num_devices" not in op_kwargs:
+            traced_num_devices = kwargs.get("num_devices")
+            if traced_num_devices is not None and traced_num_devices != "__ABSENT__":
+                op_kwargs["num_devices"] = int(traced_num_devices)
+        if "slice_dim" not in absent_keys and "slice_dim" not in op_kwargs:
+            traced_slice_dim = kwargs.get("slice_dim")
+            if traced_slice_dim is not None and traced_slice_dim != "__ABSENT__":
+                op_kwargs["slice_dim"] = int(traced_slice_dim)
     # Re-add memory_config kwarg when the master config recorded it. build_op_kwargs
     # strips memory_config by default; sweeps that need it must inject it here.
     # Validation-vector runs deliver memory_config as a serialized dict, parse
