@@ -326,8 +326,7 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     else:
         if len(enabled_names) != n:
             raise ValueError(
-                f"2D mesh {shape} requires both axes assigned ((DP|FSDP) and TP). "
-                f"Got enabled={enabled_names}"
+                f"2D mesh {shape} requires both axes assigned ((DP|FSDP) and TP). " f"Got enabled={enabled_names}"
             )
         # enabled_names is ordered ((dp|fsdp), tp) by construction above,
         # matching the C++ assignment order in auto_context.cpp.
@@ -493,19 +492,7 @@ def train_step(
 
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
-
-    # Under DDP each rank produced loss on its own microbatch, so the
-    # printed/accumulated value must be the mean across the "dp" axis.
-    # get_loss_over_devices internally builds a concat_mesh_to_tensor
-    # composer and takes the mean, mirroring how the C++ trainer logs
-    # per-rank loss when DDP is on.
-    mesh = ttml.mesh()
-    ddp_enabled = mesh.has_axis("dp") and mesh.axis_size("dp") > 1
-    fsdp_enabled = mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
-    if ddp_enabled or fsdp_enabled:
-        loss_float = float(get_loss_over_devices(loss))
-    else:
-        loss_float = get_loss_value(loss)
+    loss_float = float(get_loss_over_devices(loss))
 
     profiler_marker(None, "forward_pass_done")
 
