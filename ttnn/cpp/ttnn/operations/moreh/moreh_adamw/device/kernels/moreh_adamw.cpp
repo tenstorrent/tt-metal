@@ -212,17 +212,34 @@ void kernel_main() {
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg_sq = exp_avg_sq * beta2 + grad * grad * (1 - beta2);
-        // cb_tmp1 = (1 - beta2)
-        tile_regs_acquire();
-        cb_reserve_back(cb_tmp1, onetile);
-        sub_tiles_init_with_dt(cb_one, cb_scalar_args);
-        sub_tiles(cb_one, cb_scalar_args, first_tile, beta2_tile, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_push_back(cb_tmp1, onetile);
-        tile_regs_release();
+        // cb_tmp1 = (1 - beta2)  (T1.5-01)
+        {
+            using namespace compute_kernel_lib;
+            auto bin_elt = BinaryFpu<
+                cb_one,
+                cb_scalar_args,
+                cb_tmp1,
+                BinaryFpuOp::Sub,
+                BroadcastDim::None,
+                BinaryDataFormatReconfig::InputAndOutput,
+                CopyTilePolicy::NoWaitNoPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::Pinned,
+                Dst::D0,
+                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{};
+            bin_elt.a_tile_idx = first_tile;
+            bin_elt.b_tile_idx = beta2_tile;
+            eltwise_chain(
+                onetile,
+                bin_elt,
+                PackTile<
+                    cb_tmp1,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output,
+                    /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+        }
 
         // cb_tmp2 = grad * grad
         moreh_bin_chain<
