@@ -308,28 +308,21 @@ def run_demo(
 
         t_iter = time.time()
 
-        new_logits_list = []
+        new_next = []
         for u in range(batch_size):
             tok = int(next_tokens[u].item())
-            if not user_done[u]:
-                if batch_size == 1 and model._decode_trace_id is not None:
-                    logits_1d = model._execute_decode_trace(tok, current_pos)
-                    logits_u = logits_1d.unsqueeze(0)  # [1, vocab_size]
-                else:
-                    logits_u = model.forward_decode_step(tok, current_pos)
-                new_logits_list.append(logits_u)
-            else:
-                new_logits_list.append(None)
-
-        new_next = []
-        for u, lg in enumerate(new_logits_list):
-            if user_done[u] or lg is None:
+            if user_done[u]:
                 new_next.append(eos)
-            elif temperature == 0:
-                new_next.append(int(lg[0].argmax().item()))
+            elif batch_size == 1 and model._decode_trace_id is not None and temperature == 0:
+                # On-device argmax: returns int directly, no D2H of full logits
+                new_next.append(model._execute_decode_trace(tok, current_pos))
             else:
-                probs = torch.softmax(lg[0].float() / temperature, dim=-1)
-                new_next.append(int(torch.multinomial(probs, 1).item()))
+                logits_u = model.forward_decode_step(tok, current_pos)
+                if temperature == 0:
+                    new_next.append(int(logits_u[0].argmax().item()))
+                else:
+                    probs = torch.softmax(logits_u[0].float() / temperature, dim=-1)
+                    new_next.append(int(torch.multinomial(probs, 1).item()))
 
         next_tokens = torch.tensor(new_next)
         current_pos += 1

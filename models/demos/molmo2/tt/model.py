@@ -802,12 +802,16 @@ class TtMolmo2Model(LightweightModule):
         _upload(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["sin"])
 
         # Replay the captured trace — non-blocking so CPU can continue while device runs.
-        # The to_torch call below syncs implicitly via the D2H transfer.
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
 
-        # Read logits from the trace output buffer (written by lm_head inside trace)
-        logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(self._decode_trace_output)[0]).float()
-        return logits_cpu.squeeze(0).squeeze(0).squeeze(0)  # [vocab_size]
+        # Argmax on device: reduces 300KB D2H (full logits) to 4 bytes (one token ID).
+        # TTNN schedules argmax after execute_trace due to data dependency on the output.
+        logits_device = ttnn.get_device_tensors(self._decode_trace_output)[0]
+        tok_device = ttnn.argmax(logits_device, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # D2H of token ID (4 bytes) — this call syncs the device.
+        tok_cpu = ttnn.to_torch(tok_device)
+        ttnn.deallocate(tok_device)
+        return int(tok_cpu.reshape(-1)[0].item())
 
     # ------------------------------------------------------------------ #
     # Vision backbone
@@ -1335,8 +1339,7 @@ class TtMolmo2Model(LightweightModule):
         for step in range(max_new_tokens - 1):
             if eos_token_id is not None and next_token == eos_token_id:
                 break
-            logits_1 = self._execute_decode_trace(next_token, current_pos)
-            next_token = _sample(logits_1, temperature)
+            next_token = self._execute_decode_trace(next_token, current_pos)
             generated_ids.append(next_token)
             current_pos += 1
 
