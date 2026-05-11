@@ -464,20 +464,27 @@ class TtMoe(LightweightModule):
         # Squeeze the first two dimensions
 
         # Convert dispatched_buffer to TILE_LAYOUT for routed experts
-        dispatched_buffer = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0), ttnn.TILE_LAYOUT
+        dispatched_buffer_tiled = ttnn.to_layout(
+            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
+            ttnn.TILE_LAYOUT,
+            dtype=self.routed_expert.activations_dtype,
         )
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer.shape}")
 
-        expert_outputs = self.routed_expert(dispatched_buffer, tt_expert_token_counts, tt_expert_region_offsets)
-
+        # Free the original ROW_MAJOR DRAM buffer before entering routed_expert for clear state.
+        # When return_intermediates=True, keep it so the PCC check can compare against the
+        # bfloat16 torch reference (the tiled buffer may be bfloat8_b).
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        else:
-            # add squeezed dimenisions back for intermediates to match original dispatch output shape
-            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
-            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
 
+        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
+
+        # NOTE: expert_outputs aliases dispatched_buffer_tiled — TtRoutedExpert.forward sets
+        # expert_outputs = dispatched_buffer and then writes per-expert FFN results back
+        # in-place via deepseek_prefill.insert. The two names point at the same device buffer.
+        # Therefore we must NOT call ttnn.deallocate(dispatched_buffer_tiled) here; doing so
+        # would free the storage that expert_outputs still depends on, and the subsequent
+        # ttnn.unsqueeze / combine_module calls would raise "Tensor is not allocated".
+        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine

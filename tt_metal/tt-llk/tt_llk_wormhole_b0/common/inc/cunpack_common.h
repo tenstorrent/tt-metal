@@ -1028,23 +1028,23 @@ enum class UnpackerProgramType
 };
 
 /**
- * Checks whether unpacker A tile descriptor and config match the expected formats and dimensions.
+ * Checks whether the selected single-unpacker tile descriptor and config match the expected formats and dimensions.
  * On any mismatch the function fires an `LLK_ASSERT` for the offending field with a descriptive
  * message; otherwise it returns normally.
  *
- * @param unpA_src_format   Expected input data format for unpacker A (context 0)
- * @param unpA_dst_format   Expected output data format for unpacker A (context 0)
- * @param unpA_face_r_dim   Expected face row dimension for unpacker A (default FACE_R_DIM)
- * @param unpA_num_faces    Expected number of faces for unpacker A (default TILE_NUM_FACES)
- * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
+ * @param expected_src_format Expected input data format for the selected unpacker
+ * @param expected_dst_format Expected output data format for the selected unpacker
+ * @param expected_face_r_dim Expected face row dimension for the selected unpacker (default FACE_R_DIM)
+ * @param expected_num_faces  Expected number of faces for the selected unpacker (default TILE_NUM_FACES)
+ * @param nop_count           Number of nop operations to ensure configuration writes complete (default 10)
  */
-template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile>
+template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile, bool check_unpacker_b = false>
 __attribute__((noinline)) void is_unpacker_A_configured_correctly(
-    const std::uint32_t unpA_src_format,
-    const std::uint32_t unpA_dst_format,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces  = TILE_NUM_FACES,
-    const std::uint32_t nop_count       = 10)
+    const std::uint32_t expected_src_format,
+    const std::uint32_t expected_dst_format,
+    const std::uint32_t expected_face_r_dim = FACE_R_DIM,
+    const std::uint32_t expected_num_faces  = TILE_NUM_FACES,
+    const std::uint32_t nop_count           = 10)
 {
     // Ensure configuration writes complete before subsequent operations
     tensix_sync();
@@ -1055,47 +1055,89 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
 
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
-    // tile_descriptor[0] word 0: in_data_format at bits [3:0]
-    const std::uint32_t td_word0 = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32];
-    // unpack_config[0] word 0: out_data_format at bits [3:0]
-    const std::uint32_t cfg_word0 = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32];
+    constexpr std::uint32_t tile_descriptor_addr = check_unpacker_b ? THCON_SEC1_REG0_TileDescriptor_ADDR32 : THCON_SEC0_REG0_TileDescriptor_ADDR32;
+    constexpr std::uint32_t unpack_config_addr   = check_unpacker_b ? THCON_SEC1_REG2_Out_data_format_ADDR32 : THCON_SEC0_REG2_Out_data_format_ADDR32;
 
-    const std::uint32_t expected_unpA_src_format = masked_data_format(unpA_src_format);
-    const std::uint32_t actual_unpA_src_format   = masked_data_format(td_word0);
-    if (expected_unpA_src_format != actual_unpA_src_format)
+    // tile_descriptor word 0: in_data_format at bits [3:0]
+    const std::uint32_t td_word0 = cfg[tile_descriptor_addr];
+    // unpack_config word 0: out_data_format at bits [3:0]
+    const std::uint32_t cfg_word0 = cfg[unpack_config_addr];
+
+    const std::uint32_t expected_unpack_src_format = masked_data_format(expected_src_format);
+    const std::uint32_t actual_unpack_src_format   = masked_data_format(td_word0);
+    if (expected_unpack_src_format != actual_unpack_src_format)
     {
-        // DEVICE_PRINT("#2001 unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpA_src_format, actual_unpA_src_format);
-        LLK_ASSERT((expected_unpA_src_format == actual_unpA_src_format), "unp_A_src_format mismatch. Uncomment DEVICE_PRINT #2001 to inspect expected/actual.");
+        if constexpr (check_unpacker_b)
+        {
+            // DEVICE_PRINT("#2013 unp_B_src_format mismatch. expected: {}, actual: {}\n", expected_unpack_src_format, actual_unpack_src_format);
+            LLK_ASSERT(
+                expected_unpack_src_format == actual_unpack_src_format, "unp_B_src_format mismatch. Uncomment DEVICE_PRINT #2013 to inspect expected/actual.");
+        }
+        else
+        {
+            // DEVICE_PRINT("#2001 unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpack_src_format, actual_unpack_src_format);
+            LLK_ASSERT(
+                expected_unpack_src_format == actual_unpack_src_format, "unp_A_src_format mismatch. Uncomment DEVICE_PRINT #2001 to inspect expected/actual.");
+        }
     }
 
-    const std::uint32_t expected_unpA_dst_format = masked_data_format(unpA_dst_format);
-    const std::uint32_t actual_unpA_dst_format   = masked_data_format(cfg_word0);
-    if (expected_unpA_dst_format != actual_unpA_dst_format)
+    const std::uint32_t expected_unpack_dst_format = masked_data_format(expected_dst_format);
+    const std::uint32_t actual_unpack_dst_format   = masked_data_format(cfg_word0);
+    if (expected_unpack_dst_format != actual_unpack_dst_format)
     {
-        // DEVICE_PRINT("#2002 unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpA_dst_format, actual_unpA_dst_format);
-        LLK_ASSERT(expected_unpA_dst_format == actual_unpA_dst_format, "unp_A_dst_format mismatch. Uncomment DEVICE_PRINT #2002 to inspect expected/actual.");
+        if constexpr (check_unpacker_b)
+        {
+            // DEVICE_PRINT("#2014 unp_B_dst_format mismatch. expected: {}, actual: {}\n", expected_unpack_dst_format, actual_unpack_dst_format);
+            LLK_ASSERT(
+                expected_unpack_dst_format == actual_unpack_dst_format, "unp_B_dst_format mismatch. Uncomment DEVICE_PRINT #2014 to inspect expected/actual.");
+        }
+        else
+        {
+            // DEVICE_PRINT("#2002 unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpack_dst_format, actual_unpack_dst_format);
+            LLK_ASSERT(
+                expected_unpack_dst_format == actual_unpack_dst_format, "unp_A_dst_format mismatch. Uncomment DEVICE_PRINT #2002 to inspect expected/actual.");
+        }
     }
 
     if constexpr (program_type == UnpackerProgramType::ProgramByTile)
     {
-        const std::uint32_t face_dim               = unpA_face_r_dim * FACE_C_DIM;
-        const std::uint32_t tile_x_dim_cntx0_value = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
-        if (tile_x_dim_cntx0_value != (face_dim | (face_dim << 16)))
+        const std::uint32_t face_dim = expected_face_r_dim * FACE_C_DIM;
+        if constexpr (check_unpacker_b)
         {
-            // DEVICE_PRINT("#2003 unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim, tile_x_dim_cntx0_value);
-            LLK_ASSERT(
-                (tile_x_dim_cntx0_value == (face_dim | (face_dim << 16))),
-                "unp_A_face_r_dim mismatch. Uncomment DEVICE_PRINT #2003 to inspect expected/actual.");
+            if ((td_word0 >> 16) != face_dim)
+            {
+                // DEVICE_PRINT("#2015 unp_B_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim, (td_word0 >> 16));
+                LLK_ASSERT((td_word0 >> 16) == face_dim, "unp_B_face_r_dim mismatch. Uncomment DEVICE_PRINT #2015 to inspect expected/actual.");
+            }
+        }
+        else
+        {
+            const std::uint32_t tile_x_dim_cntx0_value = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
+            if (tile_x_dim_cntx0_value != (face_dim | (face_dim << 16)))
+            {
+                // DEVICE_PRINT("#2003 unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim, tile_x_dim_cntx0_value);
+                LLK_ASSERT(
+                    (tile_x_dim_cntx0_value == (face_dim | (face_dim << 16))),
+                    "unp_A_face_r_dim mismatch. Uncomment DEVICE_PRINT #2003 to inspect expected/actual.");
+            }
         }
     }
     else
     {
-        // tile_descriptor[0] word 1: z_dim at bits [31:16]
-        const std::uint32_t td_word1 = (cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1]) >> 16;
-        if (td_word1 != unpA_num_faces)
+        // tile_descriptor word 1: z_dim at bits [31:16]
+        const std::uint32_t td_word1 = (cfg[tile_descriptor_addr + 1]) >> 16;
+        if (td_word1 != expected_num_faces)
         {
-            // DEVICE_PRINT("#2004 unp_A_num_faces mismatch. expected: {}, actual: {}\n", unpA_num_faces, td_word1);
-            LLK_ASSERT((td_word1 == unpA_num_faces), "unp_A_num_faces mismatch. Uncomment DEVICE_PRINT #2004 to inspect expected/actual.");
+            if constexpr (check_unpacker_b)
+            {
+                // DEVICE_PRINT("#2016 unp_B_num_faces mismatch. expected: {}, actual: {}\n", expected_num_faces, td_word1);
+                LLK_ASSERT((td_word1 == expected_num_faces), "unp_B_num_faces mismatch. Uncomment DEVICE_PRINT #2016 to inspect expected/actual.");
+            }
+            else
+            {
+                // DEVICE_PRINT("#2004 unp_A_num_faces mismatch. expected: {}, actual: {}\n", expected_num_faces, td_word1);
+                LLK_ASSERT((td_word1 == expected_num_faces), "unp_A_num_faces mismatch. Uncomment DEVICE_PRINT #2004 to inspect expected/actual.");
+            }
         }
     }
 }
