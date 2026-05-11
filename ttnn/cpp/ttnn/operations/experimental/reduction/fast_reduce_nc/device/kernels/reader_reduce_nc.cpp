@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
     return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
@@ -32,12 +32,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t scaler = 0;
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0_obj(cb_id_in0);
-
-    generate_reduce_scaler(cb_id_in1, scaler);
+    dataflow_kernel_lib::prepare_zero_tile<cb_id_in1>();
 
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
 

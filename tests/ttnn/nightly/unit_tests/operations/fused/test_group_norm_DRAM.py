@@ -11,12 +11,12 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, run_for_blackhole
 
 import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
@@ -40,12 +40,58 @@ import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
-def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
-    base.test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode)
+@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid):
+    base.test_group_norm_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+    )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device):
+    """Regression test for GH#40912: N=2 with grid (8,5) creates num_virtual_rows=5
+    which is not divisible by num_batches=2, producing non-uniform mcast groups
+    that deadlock due to exact-equality semaphore waits in the sender kernel."""
+    torch.manual_seed(0)
+    N, C, H, W = 2, 768, 12, 12
+    num_groups = 32
+    bad_grid = ttnn.CoreGrid(y=5, x=8)
+
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+
+    input_tensor = torch_input.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor_rm = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_rm, use_multicore=True)
+
+    [gamma_t, beta_t], input_mask = ttnn.dram_group_norm_params_from_torch(
+        [torch_weight, torch_bias], C, num_groups, device, core_grid=bad_grid, return_mask=True
+    )
+
+    with pytest.raises(RuntimeError, match="core_grid"):
+        ttnn.group_norm(
+            input_tensor_tilized,
+            num_groups=num_groups,
+            input_mask=input_mask,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=bad_grid,
+            inplace=False,
+            num_out_blocks=1,
+        )
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
@@ -85,8 +131,64 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
-def test_group_norm_no_input_mask_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
-    base.run_group_norm_DRAM(
-        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, use_input_mask=False
+@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_no_input_mask_DRAM(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+):
+    base.test_group_norm_no_input_mask_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
     )
+
+
+# ---------------------------------------------------------------------------
+# Nightly wrappers: cover unit-test shapes with specify_grid=False so the
+# auto-grid path is exercised without bloating the regular CI pipeline.
+# All parametrize data is sourced from base.<CONST> so nightly stays in sync
+# when unit-test parameters change.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_DRAM_unit_shapes(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+):
+    base.test_group_norm_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+    )
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES
+)
+@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_no_input_mask_DRAM_unit_shapes(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+):
+    base.test_group_norm_no_input_mask_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+    )
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", base.SDXL_BASE_GROUP_NORM_SPLIT_SHAPES)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_sdxl_base_group_norm_split_unit_shapes(device, N, C, H, W, num_groups, num_splits, specify_grid):
+    base.test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps", base.GROUP_NORM_DRAM_OFT_PARAMS
+)
+@pytest.mark.parametrize("specify_grid", [False])
+@run_for_blackhole("blackhole specific tests")
+def test_group_norm_DRAM_oft_unit_shapes(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid
+):
+    base.test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid)

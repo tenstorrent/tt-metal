@@ -173,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         // We need to use reconfigure API to avoid race condition between hardware configuration in the second stage and unpacking in the first
                         // stage.
-                        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false /* to_from_int8 */>(
+                        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
                             unpack_src_format, unpack_dst_format, 16 * 16 * 4 /* tile_size */);
                     }
 
@@ -337,7 +337,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
-                    _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                    _llk_math_eltwise_unary_sfpu_params_(
                         ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
                         dst_index,
                         vector_mode,
@@ -350,7 +350,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 else
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                    _llk_math_eltwise_unary_sfpu_params_(
                         ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
                         dst_index,
                         vector_mode,
@@ -362,7 +362,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Always a second operation.
-                _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                _llk_math_eltwise_unary_sfpu_params_(
                     ckernel::sfpu::calculate_bitonic_topk_merge<APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT>,
                     dst_index,
                     vector_mode,
@@ -373,7 +373,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                    _llk_math_eltwise_unary_sfpu_params_(
                         ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
                         dst_index,
                         vector_mode,
@@ -396,6 +396,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ============================================================================
 
 #ifdef LLK_TRISC_PACK
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -476,7 +477,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             TILE_C_DIM,
                             4 /* num_faces */,
                             false /* partial_face */,
-                            false /* narrow_tile */,
                             1 /* num_tiles */);
 #else
                         _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
@@ -484,7 +484,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                     }
 
-                    _llk_pack_init_<false, false>(pack_dst_format);
+                    _llk_pack_init_wrapper_<false, false>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 

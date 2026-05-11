@@ -103,6 +103,9 @@ void kernel_main() {
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+
+    constexpr uint32_t num_q_chunks = local_padded_Nt / Sq_chunk_t + Lt / Sq_chunk_t;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -162,7 +165,6 @@ void kernel_main() {
 
         // Build lightweight mask context for this ring iteration
         LightweightMaskContext lw_mask;
-        lw_mask.enabled = needs_lightweight_mask;
         lw_mask.neginf_tile_idx = neginf_tile_idx;
         lw_mask.local_n_padded_tiles = local_n_padded_tiles;
         lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
@@ -208,10 +210,13 @@ void kernel_main() {
                 uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
-                cb_sum_in>(
+                cb_sum_in,
+                cb_signal,
+                needs_lightweight_mask>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
+                num_q_chunks,
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
@@ -228,7 +233,17 @@ void kernel_main() {
                 q_per_core,
                 lw_mask);
         } else {
-            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, NH, DHt, DHt, scale_fp32>(
+            sdpa_ring<
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_scale_in,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                NH,
+                DHt,
+                DHt,
+                scale_fp32,
+                needs_lightweight_mask>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,

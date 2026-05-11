@@ -25,6 +25,9 @@
 #include <cstddef>   // For SIZE_MAX
 #include <unordered_set>
 #include <map>
+#include <cctype>
+#include <cstdlib>
+#include <string>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -680,7 +683,7 @@ const std::map<TargetNode, std::set<GlobalNode>>& MappingConstraints<TargetNode,
 }
 
 template <typename TargetNode, typename GlobalNode>
-const std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>>&
+const typename MappingConstraints<TargetNode, GlobalNode>::CardinalityConstraintList&
 MappingConstraints<TargetNode, GlobalNode>::get_cardinality_constraints() const {
     return cardinality_constraints_;
 }
@@ -929,7 +932,7 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
-    const std::set<std::pair<TargetNode, GlobalNode>>& mapping_pairs, size_t min_count) {
+    const CardinalityPairSet& mapping_pairs, size_t min_count) {
     if (mapping_pairs.empty()) {
         log_info(tt::LogFabric, "Cardinality constraint requires at least one mapping pair");
         return false;
@@ -1114,7 +1117,8 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode,
-    bool quiet_mode) {
+    bool quiet_mode,
+    TopologyMappingSolverEngine solver_engine) {
     using namespace tt::tt_fabric::detail;
 
     auto start_time = std::chrono::steady_clock::now();
@@ -1128,20 +1132,24 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Build indexed constraint representation
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
-    // Run DFS search (state is now internal to the engine)
-    DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-    search_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+    MappingResult<TargetNode, GlobalNode> result;
+    if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
+        SatSearchEngine<TargetNode, GlobalNode> sat_engine;
+        sat_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+        const auto& state = sat_engine.get_state();
+        result = MappingValidator<TargetNode, GlobalNode>::build_result(
+            state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
+    } else {
+        DFSSearchEngine<TargetNode, GlobalNode> search_engine;
+        search_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+        const auto& state = search_engine.get_state();
+        result = MappingValidator<TargetNode, GlobalNode>::build_result(
+            state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
+    }
 
     // Calculate elapsed time
     auto end_time = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-    // Get state from engine and build result using validator
-    const auto& state = search_engine.get_state();
-    auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
-        state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
-
-    // Set elapsed time
     result.stats.elapsed_time = elapsed_ms;
 
     return result;
@@ -1189,6 +1197,45 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result) {
 // ============================================================================
 
 namespace tt::tt_fabric::detail {
+
+inline bool topology_mapping_env_selects_sat(const char* v) {
+    if (v == nullptr || v[0] == '\0') {
+        return false;
+    }
+    std::string s(v);
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s == "sat" || s == "1" || s == "true" || s == "yes";
+}
+
+inline bool topology_mapping_use_sat_engine() {
+    return topology_mapping_env_selects_sat(std::getenv("TT_TOPOLOGY_SOLVER_ENGINE"));
+}
+
+inline bool topology_mapping_should_use_sat_engine(
+    TopologyMappingSolverEngine engine, size_t n_target, size_t n_global) {
+    switch (engine) {
+        case TopologyMappingSolverEngine::Sat:
+            return true;
+        case TopologyMappingSolverEngine::Dfs:
+            return false;
+        case TopologyMappingSolverEngine::Auto: {
+            const char* env = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+            if (env != nullptr && env[0] != '\0') {
+                std::string s(env);
+                std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (s == "sat" || s == "1" || s == "true" || s == "yes") {
+                    return true;
+                }
+                if (s == "dfs" || s == "0" || s == "false" || s == "no") {
+                    return false;
+                }
+            }
+            static constexpr size_t kAutoSatMinAssignmentVars = 512;
+            return (n_target * n_global) >= kAutoSatMinAssignmentVars;
+        }
+    }
+    return false;
+}
 
 // Progress logging interval mask: log every 2^18 (262144) DFS calls
 // Using bit mask (2^18 - 1) to efficiently check if dfs_calls is divisible by 2^18
@@ -1642,7 +1689,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
         // Only add the constraint if we have at least min_count valid pairs
         if (indexed_pairs.size() >= min_count) {
-            cardinality_constraints.emplace_back(std::move(indexed_pairs), min_count);
+            cardinality_constraints.push_back({std::move(indexed_pairs), min_count});
         } else {
             log_warning(
                 tt::LogFabric,
@@ -2943,7 +2990,7 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     const std::vector<int>& mapping,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
+    const TopologySearchState& state,
     ConnectionValidationMode validation_mode,
     bool quiet_mode) {
     MappingResult<TargetNode, GlobalNode> result;
@@ -3129,6 +3176,35 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     // Success!
     result.success = true;
     return result;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::search(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    bool quiet_mode) {
+    return topology_sat_search(
+        TopologySatGraphView(graph_data),
+        TopologySatConstraintView(constraint_data),
+        validation_mode,
+        quiet_mode,
+        state_);
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_encode_hard_constraints(
+    TopologySatSolver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
+    return topology_sat_encode_hard_constraints(
+        solver,
+        TopologySatGraphView(graph_data),
+        TopologySatConstraintView(constraint_data),
+        enc,
+        validation_mode);
 }
 
 }  // namespace tt::tt_fabric::detail

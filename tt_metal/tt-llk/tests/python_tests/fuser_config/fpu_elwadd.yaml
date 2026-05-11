@@ -1,14 +1,20 @@
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "elwadd_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
 operations:
-  - src_a: "input_A"
-    src_b: "input_B"
-    output: "elwadd_out"
-    src_a_dims: [256, 256]
-    src_b_dims: [256, 256]
-    output_dims: [256, 256]
-    input_format: "Float16_b"
-    output_format: "Float16_b"
+  - output: "elwadd_out"
     math:
       - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"

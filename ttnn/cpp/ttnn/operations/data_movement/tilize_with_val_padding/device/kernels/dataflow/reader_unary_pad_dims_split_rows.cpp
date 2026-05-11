@@ -60,7 +60,7 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(curr_stick_id + k, s) + offset;
+            uint64_t src_noc_addr = s.get_noc_addr(curr_stick_id + k) + offset;
 
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr, l1_write_addr, block_size);

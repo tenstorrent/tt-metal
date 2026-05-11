@@ -56,7 +56,7 @@ class DeepseekSamplingArgs:
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
-ConfigWeight = ttnn.Tensor | FromWeightConfig
+ConfigWeight = ttnn.Tensor | SavedWeight | FromWeightConfig
 
 
 @dataclass
@@ -86,6 +86,7 @@ class LinearConfig(OpConfigBase):
     """Common parameters for a ttnn.linear op, weights are in input_tensor_b"""
 
     input_tensor_b: ConfigWeight
+    transpose_b: bool = False
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig | None = None
@@ -223,11 +224,12 @@ class DeepseekMoEReduceScatterConfig(OpConfigBase):
                 f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: slice_size ({slice_size}) must be divisible by number of op worker cores ({NUM_DECODE_RS_SHARD_CORES})"
             )
         per_core_shard_width = slice_size // NUM_DECODE_RS_SHARD_CORES
+        padded_users = ttnn.core.roundup(users_per_row, ttnn.TILE_SIZE)
 
         return ttnn.MemoryConfig(
             ttnn.BufferType.L1,
             ttnn.NdShardSpec(
-                ttnn.Shape([1, 1, users_per_row, per_core_shard_width]),
+                ttnn.Shape([1, 1, padded_users, per_core_shard_width]),
                 ttnn.CoreRangeSet(
                     [
                         ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),

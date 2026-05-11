@@ -1,4 +1,4 @@
-name: "⚙️ Compile for Quasar"
+name: "LLK Compile for Quasar"
 
 on:
   workflow_call:
@@ -55,7 +55,7 @@ jobs:
     container:
       image: ${{ inputs.docker_image }}
 
-    name: "🦄 Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
+    name: "Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code

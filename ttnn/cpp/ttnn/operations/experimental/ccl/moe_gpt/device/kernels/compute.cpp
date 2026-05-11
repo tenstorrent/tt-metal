@@ -143,7 +143,7 @@ void kernel_main() {
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
     // Initialize SFPU for GPT-OSS SwiGLU activation
-    PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -244,8 +244,8 @@ void kernel_main() {
 
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
-                PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
-                PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
+                PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
+                PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -408,8 +408,8 @@ void kernel_main() {
             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
             // SwiGLU activation
-            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
-            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);

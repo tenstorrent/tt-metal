@@ -483,7 +483,7 @@ void kernel_main() {
 
         // Get local CB addresses (same relative address as drain core)
         uint32_t local_indices_addr = get_read_ptr(indices_tensor_cb_id) + token_byte_offset_indices;
-        uint32_t local_scores_addr = get_read_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
+        uint32_t local_scores_addr = get_write_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
 
         // Calculate drain core's source addresses
         // Note: CB addresses are allocated at same L1 offset on all cores, so we use local get_read_ptr
@@ -492,8 +492,12 @@ void kernel_main() {
         uint64_t drain_scores_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_scores_addr);
 
         // NOC read indices and scores for this core's token range
-        noc_async_read(drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
-        noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+
+        if (num_tokens_this_core > 0) {
+            noc_async_read(
+                drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
+            noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+        }
     }
 
     // Wait for all reads to complete (mapping + indices/scores for non-drain)
@@ -786,7 +790,9 @@ void kernel_main() {
         // Write to DRAM: activated rows (num_activated_tokens) rows
         uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
         uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
-        noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        if (num_activated_tokens > 0) {
+            noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        }
         // Barrier for this write is at the very end of the kernel
 
         // DEBUG: print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
@@ -823,7 +829,7 @@ void kernel_main() {
                 per_expert_total_tokens_cb_read_ptr,
                 per_expert_counts_mcast_addr,
                 experts_per_device * sizeof(uint32_t),
-                num_tilize_cores - 1);
+                tilize_bounding_box_num_cores - 1);
 
             // Multicast total_chunks to all tilize cores
             noc_async_write_multicast(

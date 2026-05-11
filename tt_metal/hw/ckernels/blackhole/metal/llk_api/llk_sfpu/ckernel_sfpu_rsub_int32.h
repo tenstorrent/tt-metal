@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include <type_traits>
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel::sfpu {
 

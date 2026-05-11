@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/debug/dprint.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t num_tensors = get_compile_time_arg_val(0);
@@ -19,19 +22,24 @@ void kernel_main() {
     uint32_t arg_index = 5;
 
     const auto s = TensorAccessor(dst_args, dst_addr);
+    experimental::Noc noc;
 
     for (uint32_t tensor_id = 0; tensor_id < num_tensors; tensor_id++) {
-        const uint32_t input_shard_cb = get_arg_val<uint32_t>(arg_index++);
-        cb_wait_front(input_shard_cb, num_pages_per_tensor);
-        uint32_t l1_read_addr = get_read_ptr(input_shard_cb);
+        const uint32_t input_shard_cb_id = get_arg_val<uint32_t>(arg_index++);
+        experimental::CircularBuffer input_shard_cb(input_shard_cb_id);
+        input_shard_cb.wait_front(num_pages_per_tensor);
         uint32_t page_id = 0;
         for (uint32_t page_id_input = 0; page_id_input < num_pages_per_tensor; page_id_input++) {
             uint32_t input_page_id = page_id + num_pages_per_core * core_id * num_tensors + tensor_id;
-            noc_async_write_tile(input_page_id, s, l1_read_addr);
-            noc_async_write_barrier();
-            l1_read_addr += stick_size;
+            noc.async_write(
+                input_shard_cb,
+                s,
+                stick_size,
+                {.offset_bytes = page_id_input * stick_size},
+                {.page_id = input_page_id});
+            noc.async_write_barrier();
             page_id += num_tensors;
         }
-        cb_pop_front(input_shard_cb, num_pages_per_tensor);
+        input_shard_cb.pop_front(num_pages_per_tensor);
     }
 }

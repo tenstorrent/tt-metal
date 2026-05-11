@@ -68,11 +68,12 @@ metal_infra:
 # No official decision has been made yet for division of budgets per team.
 ttnn:
   sanity:
-    wh_n300_civ2: 540
-    bh_p100: 540
-    bh_p150b_civ2: 540
+    wh_n300_civ2: 545
+    bh_p100: 545
+    bh_p150b_civ2: 545
   unit:
     wh_llmbox: 50
+    wh_galaxy: 35
   e2e:
     wh_llmbox: 90
     wh_galaxy: 70
@@ -89,6 +90,9 @@ shield:
 scaleout:
   unit:
     wh_llmbox: 60
+    wh_galaxy: 25
+  stress:
+    wh_galaxy_perf: 120
   integration:
     wh_llmbox: 40
   health:
@@ -101,6 +105,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 60
     bh_sp1: 90
+    bh_sp4: 150
 
 runtime:
   sanity:
@@ -109,11 +114,11 @@ runtime:
     bh_quietbox: 5
     bh_loudbox: 5
   unit:
-    wh_n150_civ2: 152
-    wh_n300_civ2: 50
-    bh_p150b_civ2: 147
+    wh_n150_civ2: 217
+    wh_n300_civ2: 74
+    bh_p150b_civ2: 205
     bh_p150b_civ2_viommu: 5
-    bh_p100a_civ2_viommu: 50
+    bh_p100a_civ2_viommu: 74
     bh_quietbox: 20
     wh_galaxy: 35
   integration:
@@ -124,37 +129,56 @@ runtime:
     wh_n300_civ2: 55
     bh_p150_perf: 40
 
+llk:
+  unit:
+    wh_n150_civ2: 100
+    bh_p150b_civ2: 70
+  e2e:
+    wh_n150_civ2: 1800
+    bh_p150b_civ2: 1800
+  perf:
+    wh_n150_civ2: 1200
+    bh_p150b_civ2: 1200
+  smoke:
+    wh_n150_civ2: 160
+    bh_p150b_civ2: 160
+
 models:
   sanity:
     wh_galaxy_perf: 10
+  stress:
+    wh_galaxy_perf: 500
   e2e:
     wh_llmbox: 198
-    wh_llmbox_perf: 90
-    wh_n150: 30
-    wh_n300: 30
-    wh_galaxy: 30
+    wh_llmbox_perf: 312
+    wh_n150: 100
+    wh_n300: 15
+    wh_galaxy_perf: 120
   unit:
-    wh_llmbox: 370
-    wh_llmbox_perf: 60
-    wh_n150: 30
-    wh_n300: 30
-    wh_galaxy: 30
+    wh_llmbox: 175
+    wh_llmbox_perf: 230
+    wh_n150: 130
+    wh_n300: 15
+    wh_galaxy_perf: 45
   integration:
     wh_llmbox: 422
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
     wh_galaxy_perf: 150
+    # UF Galaxy perf pool (see sku_config wh_galaxy_perf_uf)
+    wh_galaxy_perf_uf: 75
   device_perf:
-    wh_n150: 100
-    bh_p150: 100
-    bh_p300: 100
+    wh_n150: 10
+    bh_p150: 10
+    bh_p300: 10
 
   demo:
-    wh_llmbox_perf: 1090
+    wh_llmbox_perf: 200
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
-    wh_galaxy_perf: 279
+    wh_galaxy_perf: 150
+    wh_galaxy_perf_uf: 45
     wh_galaxy_release: 345
     bh_galaxy: 30
     wh_n150: 500
@@ -171,8 +195,12 @@ models:
     bh_loudbox: 1200
 
     bh_p300: 800
-    bh_quietbox_2: 250
+    bh_quietbox_2: 280
   sweep:
-    wh_n150: 15
+    wh_n150: 10
     wh_llmbox_perf: 30
     wh_galaxy: 30
+
+umd:
+  unit:
+    wh_galaxy_perf_uf: 35
