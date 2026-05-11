@@ -949,7 +949,20 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         for (uint32_t pct_index = 0; pct_index < hal_for_check.get_programmable_core_type_count(); pct_index++) {
             HalProgrammableCoreType pct = hal_for_check.get_programmable_core_type(pct_index);
             uint32_t metadata_size = metadata_sizes[pct_index];
-            uint32_t window_size = hal_for_check.get_dev_size(pct, HalL1MemAddrType::KERNEL_CONFIG);
+            // TENSIX disallows hal.get_dev_size(KERNEL_CONFIG); its window is
+            // dynamic = DEFAULT_UNRESERVED_base - KERNEL_CONFIG_base. Other core
+            // types report a static KERNEL_CONFIG size directly. Mirrors the
+            // formula in program_dispatch::initialize_worker_config_buf_mgr.
+            uint32_t window_size;
+            if (pct == HalProgrammableCoreType::TENSIX) {
+                uint32_t kc_base = static_cast<uint32_t>(
+                    hal_for_check.get_dev_addr(pct, HalL1MemAddrType::KERNEL_CONFIG));
+                uint32_t unreserved_base = static_cast<uint32_t>(
+                    hal_for_check.get_dev_addr(pct, HalL1MemAddrType::DEFAULT_UNRESERVED));
+                window_size = unreserved_base - kc_base;
+            } else {
+                window_size = hal_for_check.get_dev_size(pct, HalL1MemAddrType::KERNEL_CONFIG);
+            }
             if (metadata_size > window_size) {
                 TT_THROW(
                     "Program metadata size {} exceeds reserved KERNEL_CONFIG window {} for programmable core type {}",

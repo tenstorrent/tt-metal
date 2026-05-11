@@ -192,6 +192,10 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         if (it != __emule_core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
+        fprintf(stderr,
+                "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
+                x, y);
+        abort();
     }
     return nullptr;
 }
@@ -229,6 +233,10 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
             }
             return target_core->l1_ptr(static_cast<uint32_t>(l1_offset));
         }
+        fprintf(stderr,
+                "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
+                noc_x, noc_y);
+        abort();
     }
     return nullptr;
 }
