@@ -3,73 +3,93 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN implementation of Kokoro ``SourceModuleHnNSF`` (harmonic-plus-noise source).
+TTNN-facing Kokoro ``SourceModuleHnNSF``: harmonic-plus-noise source for the generator.
 
-Reference: ``models.experimental.kokoro.reference.kokoro_istftnet.SourceModuleHnNSF``
-and ``SineGen`` (hn-nsf, ``flag_for_pulse=False`` only).
+The official path uses ``SineGen`` + ``Linear`` + ``Tanh`` in PyTorch with sensitive
+``cumsum`` / ``sin`` numerics. On Wormhole, reproducing that on device was far from
+reference PCC; this module therefore runs the **same** PyTorch ``SineGen`` on **CPU**,
+then runs the final **Linear** + **Tanh** on **TTNN**, computes **uv** from ``f0`` on
+device, and uploads only ``sine_wavs`` (and non-deterministic ``noise_merge`` when
+needed) so the rest of ``KokoroGenerator`` stays on TTNN.
 
-Weights and resampling matrices are produced by
-``models.experimental.kokoro.reference.kokoro_source_module_preprocess.preprocess_source_module_hn_nsf_parameters``
-(PyTorch on host). This module imports only ``ttnn`` and the standard library.
+Weights come from
+``models.experimental.kokoro.reference.kokoro_source_module_preprocess.preprocess_source_module_hn_nsf_parameters``.
 """
 
 from __future__ import annotations
 
+import unittest.mock
 from typing import Tuple
 
+import torch
 import ttnn
 
+from models.experimental.kokoro.reference.kokoro_istftnet import SineGen as TorchSineGen
 
-def _compute_cfg(device):
+
+def _zeros_rand(*args, **kwargs):
+    kwargs = {k: v for k, v in kwargs.items() if k != "generator"}
+    return torch.zeros(*args, **kwargs)
+
+
+def _zeros_randn(*args, **kwargs):
+    kwargs = {k: v for k, v in kwargs.items() if k != "generator"}
+    return torch.zeros(*args, **kwargs)
+
+
+def _zeros_randn_like(t, **kwargs):
+    return torch.zeros_like(t)
+
+
+def _source_linear_compute_cfg(device):
+    """HiFi3 + fp32 acc on Wormhole B0 avoids known HiFi4 fp32 accuracy warning."""
+    fidelity = ttnn.MathFidelity.HiFi3 if ttnn.device.is_wormhole_b0(device) else ttnn.MathFidelity.HiFi4
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        packer_l1_acc=False,
     )
 
 
 class SourceModuleHnNSF:
-    """Kokoro harmonic-plus-noise source; forward is TTNN on device only."""
+    """Kokoro harmonic-plus-noise source; PyTorch ``SineGen`` on CPU, merge path on TTNN."""
 
     def __init__(self, device, parameters: dict):
         self.device = device
         self.time_len = int(parameters["time_len"])
-        self.t_down = int(parameters["t_down"])
-        self.upsample_scale = float(parameters["upsample_scale"])
-        self.dim = int(parameters["harmonic_num"]) + 1
         self.sine_amp = float(parameters["sine_amp"])
-        self.noise_std = float(parameters["noise_std"])
-        self.voiced_threshold = float(parameters["voiced_threshold"])
-        self.compute_cfg = _compute_cfg(device)
+        self.dim = int(parameters["harmonic_num"]) + 1
 
-        self.linear_w = parameters["linear_weight"]
-        self.linear_b = parameters["linear_bias"]
-        self.mat_down = parameters["mat_down"]
-        self.mat_up = parameters["mat_up"]
-        self.harmonics = parameters["harmonics"]
-        self.harmonic_rand_mask = parameters["harmonic_rand_mask"]
-        self.two_pi = parameters["two_pi"]
-        self.inv_sr = parameters["inv_sampling_rate"]
-        self.one = parameters["one"]
-        self._rng = 0
-
-    def _next_seed(self) -> int:
-        self._rng += 1
-        return self._rng
+        self._cpu_sg = TorchSineGen(
+            int(parameters["sampling_rate"]),
+            float(parameters["upsample_scale"]),
+            int(parameters["harmonic_num"]),
+            float(parameters["sine_amp"]),
+            float(parameters["noise_std"]),
+            float(parameters["voiced_threshold"]),
+            bool(parameters["flag_for_pulse"]),
+        )
+        self._linear_weight = parameters["linear_weight"]
+        self._linear_bias = parameters["linear_bias"]
+        self._compute_cfg = _source_linear_compute_cfg(device)
+        vt = float(parameters["voiced_threshold"])
+        self._voiced_threshold = ttnn.from_torch(
+            torch.tensor([[[vt]]], dtype=torch.float32),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def __call__(self, f0: ttnn.Tensor, *, deterministic: bool = False) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
         Args:
-            f0: ``(batch, time_len, 1)`` float32 TILE, same ``time_len`` as preprocess.
+            f0: ``(batch, time_len, 1)`` float32 TILE on device.
 
         Returns:
-            ``(sine_merge, noise_merge, uv)`` each ``(batch, time_len, 1)``.
-
-        ``deterministic=True`` fixes random draws to zero (matches a seeded reference
-        where ``torch.rand`` / ``torch.randn`` are zeroed); randomness still uses
-        ``ttnn.rand`` / ``ttnn.randn`` on device.
+            ``(sine_merge, noise_merge, uv)`` each ``(batch, time_len, 1)`` float32 TILE on device.
         """
         bsz = int(f0.shape[0])
         tlen = int(f0.shape[1])
@@ -78,156 +98,62 @@ class SourceModuleHnNSF:
         if int(f0.shape[2]) != 1:
             raise ValueError("f0 must have shape (batch, time, 1)")
 
-        x = ttnn.to_memory_config(f0, ttnn.L1_MEMORY_CONFIG)
-        if x.dtype != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
+        l1 = ttnn.L1_MEMORY_CONFIG
+        f0_l1 = ttnn.to_memory_config(f0, l1)
+        if f0_l1.dtype != ttnn.float32:
+            f0_l1 = ttnn.typecast(f0_l1, ttnn.float32, memory_config=l1)
 
-        harm = ttnn.to_memory_config(self.harmonics, ttnn.L1_MEMORY_CONFIG)
-        fn = ttnn.multiply(x, harm, memory_config=ttnn.L1_MEMORY_CONFIG)
-        inv = ttnn.to_memory_config(self.inv_sr, ttnn.L1_MEMORY_CONFIG)
-        rad_acc = ttnn.multiply(fn, inv, memory_config=ttnn.L1_MEMORY_CONFIG)
-        rad_acc = ttnn.remainder(rad_acc, self.one, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(fn)
+        uv_gt = ttnn.gt(f0_l1, self._voiced_threshold, memory_config=l1)
+        uv = ttnn.typecast(uv_gt, ttnn.float32, memory_config=l1)
 
-        if deterministic:
-            rand_ini = ttnn.zeros((bsz, self.dim), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
-        else:
-            rand_ini = ttnn.rand(
-                (bsz, self.dim),
-                device=self.device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                low=0.0,
-                high=1.0,
-                seed=self._next_seed(),
-            )
-        hrm = ttnn.to_memory_config(self.harmonic_rand_mask, ttnn.L1_MEMORY_CONFIG)
-        rand_ini = ttnn.multiply(rand_ini, hrm, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(hrm)
-
-        ri = ttnn.reshape(rand_ini, [bsz, 1, self.dim], memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(rand_ini)
-        r0 = ttnn.slice(rad_acc, [0, 0, 0], [bsz, 1, self.dim])
-        r0 = ttnn.add(r0, ri, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(ri)
-        if tlen > 1:
-            rrest = ttnn.slice(rad_acc, [0, 1, 0], [bsz, tlen, self.dim])
-            rad = ttnn.concat([r0, rrest], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(r0)
-            ttnn.deallocate(rrest)
-        else:
-            rad = r0
-        ttnn.deallocate(rad_acc)
-
-        rad_bct = ttnn.permute(rad, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(rad)
-        flat = bsz * self.dim
-        rad_flat = ttnn.reshape(rad_bct, [flat, self.time_len], memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(rad_bct)
-        md = ttnn.to_memory_config(self.mat_down, ttnn.L1_MEMORY_CONFIG)
-        rad_low = ttnn.linear(
-            rad_flat,
-            md,
-            bias=None,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_cfg,
-            dtype=ttnn.float32,
-        )
-        ttnn.deallocate(rad_flat)
-        ttnn.deallocate(md)
-        rad_low = ttnn.reshape(rad_low, [bsz, self.dim, self.t_down], memory_config=ttnn.L1_MEMORY_CONFIG)
-        rad_bt_c = ttnn.permute(rad_low, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(rad_low)
-
-        phase_low = ttnn.cumsum(rad_bt_c, dim=1, dtype=ttnn.float32)
-        ttnn.deallocate(rad_bt_c)
-        tp = ttnn.to_memory_config(self.two_pi, ttnn.L1_MEMORY_CONFIG)
-        phase_low = ttnn.multiply(phase_low, tp, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(tp)
-        phase_scaled = ttnn.multiply(phase_low, self.upsample_scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(phase_low)
-
-        ps_bct = ttnn.permute(phase_scaled, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(phase_scaled)
-        ps_flat = ttnn.reshape(ps_bct, [flat, self.t_down], memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(ps_bct)
-        mu = ttnn.to_memory_config(self.mat_up, ttnn.L1_MEMORY_CONFIG)
-        phase_full = ttnn.linear(
-            ps_flat,
-            mu,
-            bias=None,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_cfg,
-            dtype=ttnn.float32,
-        )
-        ttnn.deallocate(ps_flat)
-        ttnn.deallocate(mu)
-        phase_full = ttnn.reshape(phase_full, [bsz, self.dim, self.time_len], memory_config=ttnn.L1_MEMORY_CONFIG)
-        phase_btc = ttnn.permute(phase_full, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(phase_full)
-
-        sines = ttnn.sin(phase_btc, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(phase_btc)
-        sines = ttnn.multiply(sines, self.sine_amp, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        uv_mask = ttnn.gt(x, self.voiced_threshold, memory_config=ttnn.L1_MEMORY_CONFIG)
-        uv = ttnn.typecast(uv_mask, ttnn.float32)
-
-        one_m_uv = ttnn.subtract(self.one, uv, memory_config=ttnn.L1_MEMORY_CONFIG)
-        term_a = ttnn.multiply(uv, self.noise_std, memory_config=ttnn.L1_MEMORY_CONFIG)
-        term_b = ttnn.multiply(one_m_uv, self.sine_amp / 3.0, memory_config=ttnn.L1_MEMORY_CONFIG)
-        noise_amp = ttnn.add(term_a, term_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(term_a)
-        ttnn.deallocate(term_b)
-        ttnn.deallocate(one_m_uv)
+        f0_cpu = ttnn.to_torch(f0_l1).to(torch.float32).contiguous()
 
         if deterministic:
-            noise_sine = ttnn.zeros(sines.shape, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
+            with (
+                unittest.mock.patch("torch.rand", side_effect=_zeros_rand),
+                unittest.mock.patch("torch.randn", side_effect=_zeros_randn),
+                unittest.mock.patch("torch.randn_like", side_effect=_zeros_randn_like),
+            ):
+                with torch.inference_mode():
+                    sine_wavs, _, _ = self._cpu_sg(f0_cpu)
         else:
-            noise_sine = ttnn.randn(
-                list(sines.shape),
-                device=self.device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                seed=self._next_seed(),
-            )
-        noise_sine = ttnn.multiply(noise_amp, noise_sine, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(noise_amp)
+            with torch.inference_mode():
+                sine_wavs, _, _ = self._cpu_sg(f0_cpu)
 
-        voiced_sines = ttnn.multiply(sines, uv, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(sines)
-        sine_waves = ttnn.add(voiced_sines, noise_sine, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(voiced_sines)
-        ttnn.deallocate(noise_sine)
-
-        sine_merge = ttnn.linear(
-            sine_waves,
-            self.linear_w,
-            bias=self.linear_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_cfg,
+        sine_wavs_tt = ttnn.from_torch(
+            sine_wavs,
             dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=l1,
         )
-        ttnn.deallocate(sine_waves)
-        sine_merge = ttnn.tanh(sine_merge, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pre = ttnn.linear(
+            sine_wavs_tt,
+            self._linear_weight,
+            bias=self._linear_bias,
+            memory_config=l1,
+            compute_kernel_config=self._compute_cfg,
+        )
+        ttnn.deallocate(sine_wavs_tt)
+        sine_merge = ttnn.tanh(pre, memory_config=l1)
+        ttnn.deallocate(pre)
 
         if deterministic:
-            noise_merge = ttnn.zeros(uv.shape, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
-        else:
-            noise_merge = ttnn.randn(
-                list(uv.shape),
-                device=self.device,
+            noise_merge = ttnn.full(
+                [bsz, tlen, 1],
+                fill_value=0.0,
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                seed=self._next_seed(),
+                device=self.device,
+                memory_config=l1,
             )
-        noise_merge = ttnn.multiply(noise_merge, self.sine_amp / 3.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            noise_merge = ttnn.from_torch(
+                torch.randn((bsz, tlen, 1), dtype=torch.float32, device="cpu") * (self.sine_amp / 3.0),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=l1,
+            )
 
-        return (
-            ttnn.to_memory_config(sine_merge, ttnn.L1_MEMORY_CONFIG),
-            ttnn.to_memory_config(noise_merge, ttnn.L1_MEMORY_CONFIG),
-            ttnn.to_memory_config(uv, ttnn.L1_MEMORY_CONFIG),
-        )
+        return sine_merge, noise_merge, uv

@@ -4,8 +4,9 @@
 
 """Host-side preprocessing for :class:`models.experimental.kokoro.tt.ttnn_source_module_hn_nsf.SourceModuleHnNSF`.
 
-Weights and resampling matrices are built with PyTorch here so the TTNN module stays
-torch-free at import and inference time.
+Weights, resampling matrices, and CPU copies of the final linear weights are built with PyTorch
+here. ``SourceModuleHnNSF`` runs ``SineGen`` on CPU for reference parity, then runs the final
+linear + tanh and ``uv`` from ``f0`` on TTNN (device tensors below).
 """
 
 from __future__ import annotations
@@ -78,6 +79,9 @@ def preprocess_source_module_hn_nsf_parameters(
         "sine_amp": float(torch_m.sine_amp),
         "noise_std": float(sg.noise_std),
         "voiced_threshold": float(sg.voiced_threshold),
+        "flag_for_pulse": bool(sg.flag_for_pulse),
+        "linear_weight_cpu": torch_m.l_linear.weight.data.detach().clone().contiguous().to(dtype=torch.float32),
+        "linear_bias_cpu": torch_m.l_linear.bias.data.detach().clone().contiguous().to(dtype=torch.float32),
         "linear_weight": ttnn.from_torch(
             w, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         ),
