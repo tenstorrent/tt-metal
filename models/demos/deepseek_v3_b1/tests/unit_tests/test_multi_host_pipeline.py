@@ -948,34 +948,43 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
     num_procs = int(ttnn.distributed_context_get_size())
 
     mesh_rows, mesh_cols = mesh_device.shape
-    num_mesh_devices = int(mesh_rows) * int(mesh_cols)
-    assert num_channels <= num_mesh_devices
+    assert num_channels <= int(mesh_rows), f"num_channels ({num_channels}) must be <= mesh_rows ({mesh_rows})"
 
-    device_coords = [ttnn.MeshCoordinate(r, c) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))][
-        :num_channels
-    ]
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+
+    exit_template = pipeline_config[0].exit_node_coord
+    loopback_entry_template = pipeline_config[num_procs].entry_node_coord
+    next_entry_template = pipeline_config[1].entry_node_coord
+
+    exit_device_coords = [ttnn.MeshCoordinate(r, int(exit_template[1])) for r in range(num_channels)]
+    loopback_entry_coords = [ttnn.MeshCoordinate(r, int(loopback_entry_template[1])) for r in range(num_channels)]
 
     core_entry = ttnn.CoreCoord(0, 0)
     core_exit = ttnn.CoreCoord(0, 1)
     core_io = ttnn.CoreCoord(0, 2)
 
+    device_coords = exit_device_coords
+
     if is_pipeline_start:
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
 
-        for dc in device_coords:
+        for i in range(num_channels):
+            exit_dc = exit_device_coords[i]
+            loopback_dc = loopback_entry_coords[i]
             h2d = ttnn.H2DSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(dc, core_io),
+                ttnn.MeshCoreCoord(exit_dc, core_io),
                 ttnn.BufferType.L1,
                 fifo_size,
                 ttnn.H2DMode.HOST_PUSH,
             )
             d2h = ttnn.D2HSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(dc, core_io),
+                ttnn.MeshCoreCoord(loopback_dc, core_io),
                 fifo_size,
             )
             hio = HostInterface(
@@ -984,15 +993,16 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
                 tensor_size_bytes,
                 tensor_size_bytes,
                 core_to_core_socket_buffer_size=fifo_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(dc, core_exit),
-                d2h_upstream_core=ttnn.MeshCoreCoord(dc, core_entry),
+                h2d_downstream_core=ttnn.MeshCoreCoord(exit_dc, core_exit),
+                d2h_upstream_core=ttnn.MeshCoreCoord(loopback_dc, core_entry),
             )
             h2d_sockets.append(h2d)
             d2h_sockets.append(d2h)
             host_ios.append(hio)
 
-        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
-        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in exit_device_coords]
+        next_entry_coords = [ttnn.MeshCoordinate(r, int(next_entry_template[1])) for r in range(num_channels)]
+        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in next_entry_coords]
 
         exit_socket_interface = ParallelSocketInterface(
             tensor_size_bytes,
@@ -1004,8 +1014,10 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
             receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
         )
 
-        entry_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
-        entry_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+        prev_exit_template = pipeline_config[num_procs - 1].exit_node_coord
+        prev_exit_coords = [ttnn.MeshCoordinate(r, int(prev_exit_template[1])) for r in range(num_channels)]
+        entry_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in prev_exit_coords]
+        entry_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in loopback_entry_coords]
 
         entry_socket_interface = ParallelSocketInterface(
             tensor_size_bytes,
@@ -1061,7 +1073,6 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
             tensor_size_bytes,
             pipeline_device_coords=device_coords,
             pipeline_exit_core_coord=core_exit,
-            exit_upstream_cores=[],
             loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(core_entry)),
         )
         pipeline_block.run()
@@ -1077,7 +1088,7 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
 )
 @pytest.mark.parametrize(
     "num_channels",
-    [1, 4, 8],
+    [1, 4],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -1104,8 +1115,9 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
 ):
     """Test loopback pipeline with N parallel channels across devices.
 
-    Each channel uses a DIFFERENT device in the mesh (not different cores on the
-    same device). Process 0 manually sets up N independent H2D/D2H pairs and
+    Each channel uses a DIFFERENT device in the same column of the mesh (not
+    different cores on the same device). Max 4 channels (one per mesh row).
+    Process 0 manually sets up N independent H2D/D2H pairs and
     ParallelSocketInterface for exit/entry (loopback). Forwarding stages (processes
     1+) use PipelineBlock with pipeline_device_coords.
 
@@ -1124,18 +1136,27 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
     num_procs = int(ttnn.distributed_context_get_size())
 
     mesh_rows, mesh_cols = mesh_device.shape
-    num_mesh_devices = int(mesh_rows) * int(mesh_cols)
-    assert num_channels <= num_mesh_devices, f"num_channels={num_channels} exceeds mesh devices={num_mesh_devices}"
+    assert num_channels <= int(mesh_rows), f"num_channels ({num_channels}) must be <= mesh_rows ({mesh_rows})"
 
-    device_coords = [ttnn.MeshCoordinate(r, c) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))][
-        :num_channels
-    ]
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+
+    exit_template = pipeline_config[0].exit_node_coord
+    entry_template = pipeline_config[0].entry_node_coord
+    loopback_entry_template = pipeline_config[num_procs].entry_node_coord
+    next_entry_template = pipeline_config[1].entry_node_coord
+
+    exit_device_coords = [ttnn.MeshCoordinate(r, int(exit_template[1])) for r in range(num_channels)]
+    entry_device_coords = [ttnn.MeshCoordinate(r, int(entry_template[1])) for r in range(num_channels)]
+    loopback_entry_coords = [ttnn.MeshCoordinate(r, int(loopback_entry_template[1])) for r in range(num_channels)]
+    device_coords = exit_device_coords
 
     core_entry = ttnn.CoreCoord(0, 0)
     core_exit = ttnn.CoreCoord(0, 1)
     core_io = ttnn.CoreCoord(0, 2)
 
-    print(f"Mesh ID {my_mesh_id}: {num_channels} channels on devices {device_coords}")
+    print(
+        f"Mesh ID {my_mesh_id}: {num_channels} channels on exit devices {exit_device_coords}, entry devices {entry_device_coords}"
+    )
 
     if is_pipeline_start:
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
@@ -1144,18 +1165,22 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
         d2h_sockets = []
         host_ios = []
 
-        for i, dev_coord in enumerate(device_coords):
-            print(f"Mesh ID {my_mesh_id}: Channel {i}: H2D/D2H on device {dev_coord} core {core_io}")
+        for i in range(num_channels):
+            exit_dc = exit_device_coords[i]
+            loopback_dc = loopback_entry_coords[i]
+            print(
+                f"Mesh ID {my_mesh_id}: Channel {i}: H2D on device {exit_dc}, D2H on device {loopback_dc}, core {core_io}"
+            )
             h2d = ttnn.H2DSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(dev_coord, core_io),
+                ttnn.MeshCoreCoord(exit_dc, core_io),
                 ttnn.BufferType.L1,
                 fifo_size,
                 ttnn.H2DMode.HOST_PUSH,
             )
             d2h = ttnn.D2HSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(dev_coord, core_io),
+                ttnn.MeshCoreCoord(loopback_dc, core_io),
                 fifo_size,
             )
             hio = HostInterface(
@@ -1164,16 +1189,17 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
                 tensor_size_bytes,
                 tensor_size_bytes,
                 core_to_core_socket_buffer_size=fifo_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(dev_coord, core_exit),
-                d2h_upstream_core=ttnn.MeshCoreCoord(dev_coord, core_entry),
+                h2d_downstream_core=ttnn.MeshCoreCoord(exit_dc, core_exit),
+                d2h_upstream_core=ttnn.MeshCoreCoord(loopback_dc, core_entry),
             )
             h2d_sockets.append(h2d)
             d2h_sockets.append(d2h)
             host_ios.append(hio)
         print(f"Mesh ID {my_mesh_id}: Created {num_channels} H2D/D2H pairs on {num_channels} devices")
 
-        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
-        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+        next_entry_coords = [ttnn.MeshCoordinate(r, int(next_entry_template[1])) for r in range(num_channels)]
+        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in exit_device_coords]
+        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in next_entry_coords]
         print(f"Mesh ID {my_mesh_id}: Creating Exit ParallelSocketInterface")
 
         exit_socket_interface = ParallelSocketInterface(
@@ -1186,8 +1212,10 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
             receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
         )
 
-        entry_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
-        entry_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+        prev_exit_template = pipeline_config[num_procs - 1].exit_node_coord
+        prev_exit_coords = [ttnn.MeshCoordinate(r, int(prev_exit_template[1])) for r in range(num_channels)]
+        entry_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in prev_exit_coords]
+        entry_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in loopback_entry_coords]
         print(f"Mesh ID {my_mesh_id}: Creating Entry ParallelSocketInterface (loopback)")
 
         entry_socket_interface = ParallelSocketInterface(
