@@ -135,14 +135,11 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     const auto& input_tensor = tensor_args.input_tensor;
 
     // --- Architecture and clock ---
-    tt::ARCH arch;
-    float clock_rate_ghz;
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
+    float clock_rate_ghz = 1.0f;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
         clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
-    } else {
-        arch = tt::ARCH::WORMHOLE_B0;
-        clock_rate_ghz = 1.0f;
     }
 
     // --- Data sizes ---
