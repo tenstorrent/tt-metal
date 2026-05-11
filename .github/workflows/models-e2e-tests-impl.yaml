@@ -28,6 +28,10 @@ on:
         required: true
         type: string
         description: "Model tier to filter tests (1, 2, or 3)"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 jobs:
   load-test-matrix:
@@ -123,8 +127,19 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          mkdir -p generated/test_reports
-          ${{ matrix.test-group.cmd }}
+          mkdir -p generated/test_reports generated/test_logs
+
+          # Mirror the matrix command's combined stdout+stderr to a per-leg
+          # log file so ai-summary can read it later. The brace group lets
+          # the cmd be multiple statements; PIPESTATUS forwards the real
+          # exit code that piping through tee would otherwise mask.
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
+          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
+
+          {
+            ${{ matrix.test-group.cmd }}
+          } 2>&1 | tee "$LOG_FILE"
+          exit "${PIPESTATUS[0]}"
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}
@@ -161,5 +176,20 @@ jobs:
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
