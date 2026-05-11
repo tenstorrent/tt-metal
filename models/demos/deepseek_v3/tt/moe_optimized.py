@@ -125,6 +125,15 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         torch_expert_mapping_tensor = (
             (torch.arange(num_experts) // num_experts_per_device).unsqueeze(0).repeat(num_devices, 1)
         )
+
+        # here we modify the mapping tensor to include the shared expert
+        shared_expert_ids_to_devices = MoEExperts.quad_ring_shared_expert_to_device_map(
+            hf_config.n_routed_experts, hf_config.n_shared_experts, mesh_device.get_num_devices()
+        )
+        torch_expert_mapping_tensor = ttnn.experimental.moe_compute_utils.map_shared_experts(
+            torch_expert_mapping_tensor, shared_expert_ids_to_devices, cluster_axis=0, mesh_shape=mesh_device.shape
+        )
+
         expert_mapping_tensor = ttnn.from_torch(
             torch_expert_mapping_tensor,
             device=mesh_device,
