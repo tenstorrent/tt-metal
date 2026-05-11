@@ -13,6 +13,7 @@ Run:
 """
 
 import os
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
@@ -395,6 +396,7 @@ def create_routed_expert_tensors(
             num_routed_experts=num_experts,
             move_to_device=True,
             compressed_tp8=compressed_tp8,
+            bspm_dir=(Path(_bspm).resolve() if (_bspm := os.getenv("BSPM_DIR")) else None),
         )
         gate_proj_expert_tensors = routed_weights.routed_gate_proj
         up_proj_expert_tensors = routed_weights.routed_up_proj
@@ -678,6 +680,35 @@ def create_reference_mlp_models(state_dict, layer_idx):
     return expert_mlp, shared_mlp
 
 
+def _accepted_experts_params():
+    """Generate pytest.param entries from accepted_experts.json for every (layer, pos) combo.
+
+    The JSON is produced by parsing compressed-pod kernel DPRINT (last occurrence wins so
+    spec-decode re-corrections override rejected attempts). Each entry runs the MoE fused test
+    with the 8 experts that were actually selected at that layer/position in the production run.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    out = [pytest.param(None, None, id="group0_32experts")]
+    # __file__ → .../tt-metal/models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py
+    # parents[5] is the tt-metal repo root.
+    json_path = _Path(__file__).resolve().parents[5] / "20260508_120A89_pod_compression_debug" / "accepted_experts.json"
+    if not json_path.is_file():
+        return out
+    try:
+        data = _json.loads(json_path.read_text())
+    except Exception:
+        return out
+    for layer_s in sorted(data, key=int):
+        for pos_s in sorted(data[layer_s], key=int):
+            experts = data[layer_s][pos_s]
+            if len(experts) != 8:
+                continue
+            out.append(pytest.param(int(layer_s), list(experts), id=f"layer{layer_s}_pos{pos_s}"))
+    return out
+
+
 def remap_experts_to_slots_0_7(state_dict, layer_idx, target_expert_ids):
     """Build a new dict where ``mlp.experts.0..7`` weights are the listed ``target_expert_ids``.
 
@@ -924,23 +955,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize(
-    "layer_idx_override,target_expert_ids",
-    [
-        pytest.param(None, None, id="group0_32experts"),
-        # Position 67 selected experts per layer (from compressed run, accepted_experts.json)
-        pytest.param(3, [101, 197, 215, 109, 119, 199, 126, 66], id="layer3_pos67"),
-        pytest.param(4, [2, 64, 77, 10, 14, 95, 7, 3], id="layer4_pos67"),
-        pytest.param(5, [16, 59, 42, 48, 78, 92, 134, 81], id="layer5_pos67"),
-        pytest.param(6, [9, 194, 3, 38, 151, 35, 140, 143], id="layer6_pos67"),
-        pytest.param(7, [151, 147, 30, 5, 26, 148, 64, 231], id="layer7_pos67"),
-        pytest.param(8, [12, 8, 26, 240, 243, 226, 245, 87], id="layer8_pos67"),
-        pytest.param(9, [61, 40, 11, 2, 204, 205, 221, 103], id="layer9_pos67"),
-        pytest.param(10, [177, 149, 135, 174, 126, 121, 31, 14], id="layer10_pos67"),
-        pytest.param(11, [5, 126, 0, 7, 77, 162, 72, 179], id="layer11_pos67"),
-        pytest.param(12, [25, 193, 195, 201, 153, 237, 228, 148], id="layer12_pos67"),
-    ],
-)
+@pytest.mark.parametrize("layer_idx_override,target_expert_ids", _accepted_experts_params())
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(
