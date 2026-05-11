@@ -708,27 +708,10 @@ struct UnaryBcast : UnaryBcastTag {
 
     static ALWI void init() {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        // Reg A fix: replace unary_bcast_init<>() (full HW configure mid-MAIN) with
-        // short-init pair llk_math_eltwise_unary_datacopy_init + llk_unpack_A_init.
-        // No hw_configure / pack_dest_init / math_pack_sync_init — preserves D8 invariant
-        // (BIG init only at compute_kernel_hw_startup boot, never per-tile mid-MAIN).
-        // The enable_unpack_to_dest branching is kept to honor SrcB-19-bit-width handling
-        // for 32-bit formats (Float32 / UInt32 / Int32 → A2D + unpack-to-dest).
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-        const std::uint32_t dst_format = get_operand_dst_format(Cb);
-        const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                           (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                           (dst_format == (std::uint32_t)DataFormat::Int32);
-        if (enable_unpack_to_dest) {
-            UNPACK((llk_unpack_A_init<bt, false, EltwiseBinaryReuseDestType::NONE, true>(
-                false, false /*transpose within 16x16 face*/, Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bt>(Cb)));
-        } else {
-            UNPACK((llk_unpack_A_init<bt, false, EltwiseBinaryReuseDestType::NONE, false>(
-                false, false /*transpose within 16x16 face*/, Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bt>(Cb)));
-        }
-#endif
+        constexpr uint32_t ocb = (CbOut != 0) ? CbOut : Cb;
+        // Reconfig path: single-arg-style — `unary_bcast_init` already does srca + ocb reconfig
+        // for the new bcast dim. No previous-CB tracking needed.
+        unary_bcast_init<bt>(Cb, ocb);
     }
 
     ALWI void wait_per_tile(uint32_t /*i*/) const {
