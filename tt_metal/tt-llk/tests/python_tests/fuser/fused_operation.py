@@ -82,5 +82,5 @@ class FusedOperation:
             f"  Output: {self.output}\n"
             f"  Block Size: {self.block_size}\n"
             f"  Dest Sync: {self.dest_sync}\n"
-            f"  Pack L1 Acc: {self.pack_l1_accumulation}\n"
+            f"  Pack L1 Accumulation: {self.pack_l1_accumulation}\n"
         )
