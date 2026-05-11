@@ -49,8 +49,19 @@ struct ReduceDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t =
-        std::variant<ReduceSingleCoreHwProgramFactory, ReduceMultiCoreHProgramFactory, ReduceMultiCoreWProgramFactory, ReduceMultiCoreWRmProgramFactory>;
+    struct ReduceMultiCoreHRmProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<
+        ReduceSingleCoreHwProgramFactory,
+        ReduceMultiCoreHProgramFactory,
+        ReduceMultiCoreWProgramFactory,
+        ReduceMultiCoreWRmProgramFactory,
+        ReduceMultiCoreHRmProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -79,6 +90,7 @@ ttnn::Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate = false,
     float post_mul_scaler = 1.0f,
-    bool row_major_w_dense_path = false);
+    bool row_major_w_dense_path = false,
+    bool row_major_h_dense_path = false);
 
 }  // namespace ttnn::prim

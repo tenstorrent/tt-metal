@@ -16,6 +16,9 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
     if (operation_attributes.row_major_w_dense_path) {
         return ReduceMultiCoreWRmProgramFactory{};
     }
+    if (operation_attributes.row_major_h_dense_path) {
+        return ReduceMultiCoreHRmProgramFactory{};
+    }
     auto parallelization_strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
 
     switch (parallelization_strategy) {
@@ -38,29 +41,42 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
-    // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W on 4D BF16/FLOAT32,
+    // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
     // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
-    if (operation_attributes.row_major_w_dense_path) {
+    TT_FATAL(
+        !(operation_attributes.row_major_w_dense_path && operation_attributes.row_major_h_dense_path),
+        "Only one of row_major_w_dense_path / row_major_h_dense_path may be set");
+    if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
+        const auto expected_dim =
+            operation_attributes.row_major_w_dense_path ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
+        const char* path_name =
+            operation_attributes.row_major_w_dense_path ? "row_major_w_dense_path" : "row_major_h_dense_path";
         TT_FATAL(
-            operation_attributes.dim == tt::tt_metal::ReduceOpDim::W,
-            "row_major_w_dense_path only supports W-dim reduce, got dim {}",
+            operation_attributes.dim == expected_dim,
+            "{} only supports {}-dim reduce, got dim {}",
+            path_name,
+            expected_dim,
             operation_attributes.dim);
-        TT_FATAL(tensor_args.layout() == Layout::ROW_MAJOR, "row_major_w_dense_path requires ROW_MAJOR input");
+        TT_FATAL(tensor_args.layout() == Layout::ROW_MAJOR, "{} requires ROW_MAJOR input", path_name);
         TT_FATAL(
             tensor_args.logical_shape().rank() == 4,
-            "row_major_w_dense_path requires 4D input, got rank {}",
+            "{} requires 4D input, got rank {}",
+            path_name,
             tensor_args.logical_shape().rank());
-        TT_FATAL(!operation_attributes.negate, "row_major_w_dense_path does not support negate (min-reduce) yet");
+        TT_FATAL(!operation_attributes.negate, "{} does not support negate (min-reduce) yet", path_name);
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32,
-            "row_major_w_dense_path only supports BFLOAT16 and FLOAT32, got {}",
+            "{} only supports BFLOAT16 and FLOAT32, got {}",
+            path_name,
             tensor_args.dtype());
         TT_FATAL(
             operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-            "row_major_w_dense_path expects SUM math_op (mean is lowered from AVG before device launch)");
+            "{} expects SUM math_op (mean is lowered from AVG before device launch)",
+            path_name);
         TT_FATAL(
             !tensor_args.memory_config().is_sharded() && !operation_attributes.output_mem_config.is_sharded(),
-            "row_major_w_dense_path requires interleaved input and output memory configs");
+            "{} requires interleaved input and output memory configs",
+            path_name);
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
         TT_FATAL(
@@ -164,7 +180,7 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             break;
     }
 
-    if (operation_attributes.row_major_w_dense_path) {
+    if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
         return build_reduce_output_row_major_tensor_spec(
             output_shape, operation_attributes.output_dtype, operation_attributes.output_mem_config);
     }
@@ -196,6 +212,7 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         operation_attributes.negate,
         operation_attributes.post_mul_scaler,
         operation_attributes.row_major_w_dense_path,
+        operation_attributes.row_major_h_dense_path,
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
@@ -214,7 +231,8 @@ ttnn::Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate,
     float post_mul_scaler,
-    bool row_major_w_dense_path) {
+    bool row_major_w_dense_path,
+    bool row_major_h_dense_path) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -226,7 +244,8 @@ ttnn::Tensor reduce(
             sub_core_grids,
             negate,
             post_mul_scaler,
-            row_major_w_dense_path},
+            row_major_w_dense_path,
+            row_major_h_dense_path},
         input_tensor);
 }
 
