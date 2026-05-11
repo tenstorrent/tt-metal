@@ -23,9 +23,9 @@ from helpers.llk_params import (
     format_dict,
     pack_relu_config,
 )
-from helpers.pack import pack_mxfp4, pack_mxfp8p, pack_mxfp8r
+from helpers.pack import pack_mxfp4, pack_mxfp8p, pack_mxfp8r, pack_mxint8
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.unpack import unpack_mxfp4, unpack_mxfp8p, unpack_mxfp8r
+from helpers.unpack import unpack_mxfp4, unpack_mxfp8p, unpack_mxfp8r, unpack_mxint8
 
 from .bfp_format_utils import bfp2b_to_float16b as _bfp2b_to_float16b
 from .bfp_format_utils import bfp4b_to_float16b as _bfp4b_to_float16b
@@ -434,6 +434,9 @@ def quantize_mx_stimuli(
     elif data_format == DataFormat.MxFp4:
         packed = pack_mxfp4(tensor, num_faces=num_faces)
         return unpack_mxfp4(packed, num_faces=num_faces)
+    elif data_format == DataFormat.MxInt8:
+        packed = pack_mxint8(tensor, num_faces=num_faces)
+        return unpack_mxint8(packed, num_faces=num_faces)
     else:
         # This should never happen due to validation above, but kept for safety
         raise ValueError(f"Unsupported MX format: {data_format}")
@@ -541,6 +544,7 @@ class SrcFormatModel:
             DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
             DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
             DataFormat.MxFp4: SrcFormatModel._mxfp4_to_tf32,
+            DataFormat.MxInt8: SrcFormatModel._mxint8_to_tf32,
             DataFormat.Fp8_e4m3: SrcFormatModel._fp8_e4m3_to_tf32,
         }
 
@@ -701,6 +705,20 @@ class SrcFormatModel:
         Golden generators work on the original stimuli data (before compression).
         MxFp4 stimuli are generated as torch.bfloat16, so we delegate to Float16_b conversion.
         The pack/unpack functions handle the MxFp4 compression/decompression separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxint8_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MxInt8 format (signed S1.6 elements with E8M0 block exponent).
+
+        MxInt8 is an L1-only storage format; hardware unpacks it into Float16/Float16_b/TF32
+        in the source registers. Golden generators work on the original stimuli stored as
+        torch.bfloat16, so we delegate to Float16_b conversion. The pack/unpack functions
+        handle the MxInt8 integer-quantization roundtrip separately.
         """
         return SrcFormatModel._fp16b_to_tf32(tensor)
 

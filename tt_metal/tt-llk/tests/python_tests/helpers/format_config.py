@@ -71,6 +71,7 @@ class DataFormat(Enum):
     MxFp4 = DataFormatInfo(
         "MxFp4", Fraction(1, 2)
     )  # QSR specific - 4 bits (0.5 bytes) per element
+    MxInt8 = DataFormatInfo("MxInt8", 1)  # QSR specific - signed S1.6 with block exp
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
@@ -146,6 +147,7 @@ class DataFormat(Enum):
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
         }
 
     def is_mx_fp_format(self) -> bool:
@@ -347,6 +349,13 @@ MX_FORMAT_MIN_MAGNITUDE = {
     DataFormat.MxFp8R: 2.44e-4,
     DataFormat.MxFp8P: 0.0625,
     DataFormat.MxFp4: 1.0,
+}
+
+# Max representable element magnitude for MxInt formats (signed S1.6 with implicit
+# 2^-6 scale per OCP spec; no normal/subnormal split). MxInt8 uses symmetric range
+# (max negative = -127/64), so |max| = 127/64.
+MX_INT_MAX = {
+    DataFormat.MxInt8: 127.0 / 64.0,
 }
 
 # ============================================================================
@@ -650,6 +659,7 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
     DataFormat.MxFp4: 22,
+    DataFormat.MxInt8: 2,
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,

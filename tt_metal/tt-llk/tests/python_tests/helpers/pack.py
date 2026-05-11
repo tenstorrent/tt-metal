@@ -751,3 +751,101 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
             out[normal_mask] = elem_bits[normal_mask]
 
     return out
+
+
+def pack_mxint8(
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Pack tensor into MxInt8 format (signed S1.6 elements with E8M0 block scale).
+
+    MxInt8 uses 32-element blocks per OCP MX spec, each with:
+    - 1 shared E8M0 scale (8 bits)
+    - 32 signed-int8 elements (8 bits each), interpreted as 2's complement with
+      an implicit 2^-6 scale. Range: ±127/64 ≈ ±1.984 (symmetric — the −2
+      encoding 0x80 is left unused per OCP "preserve symmetry" guidance).
+
+    Per OCP MX spec Section 5.3.4 and Tensix hardware documentation:
+    - NaN element → 0 (MxInt has no NaN representation)
+    - Inf element → saturating clamp (symmetric mode, no edge-mask -0)
+    - Out-of-range after rounding → saturate to ±127
+
+    Block-scale special cases match MxFp encoding:
+    - All-NaN block → scale = 0xFF (unpacker yields zero block)
+    - Block with any Inf (else all-zero/Inf) → scale = 0xFE (max scale)
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint8")
+
+    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
+
+    elements_per_face = face_r_dim * FACE_C_DIM
+    elements_to_pack = elements_per_face * num_faces
+    assert len(fp32_array) >= elements_to_pack, (
+        f"Tensor has {len(fp32_array)} elements, "
+        f"need {elements_to_pack} for {num_faces} face(s)"
+    )
+    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
+        raise ValueError(
+            "pack_mxint8 requires a block-aligned geometry: "
+            f"elements_to_pack={elements_to_pack} is not a multiple of "
+            f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
+            f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
+        )
+
+    fp32_array = fp32_array[:elements_to_pack]
+    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
+    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+
+    # Element-level NaN -> 0 (no NaN representation in MxInt).
+    blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
+
+    # Block scale: shared_exp = floor(log2(amax)) over finite values.
+    # MxInt8 max element value is in [1, 2) after scaling, so
+    # elem_exp_max_unbiased = 0.
+    elem_exp_max_unbiased = 0
+    finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
+    max_abs_values = np.max(np.abs(finite_blocks), axis=1)
+
+    max_abs_exp = np.where(max_abs_values == 0, 0, np.floor(np.log2(max_abs_values)))
+    shared_exp_adj = np.where(
+        (max_abs_exp - elem_exp_max_unbiased) >= -127,
+        max_abs_exp - elem_exp_max_unbiased,
+        -127,
+    )
+    scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
+
+    # Special-case block scales (mirror MxFp4 handling).
+    all_nan_blocks = np.all(np.isnan(blocks_raw), axis=1)
+    inf_or_zero_or_nan = np.isinf(blocks_raw) | np.isnan(blocks_raw) | (blocks_raw == 0)
+    all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
+    has_inf = np.any(np.isinf(blocks_raw), axis=1)
+    scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
+    scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+
+    scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
+
+    # Decode scale factors for applying to blocks (NaN scale -> NaN -> 0 below).
+    scale_factors = np.where(
+        scales_e8m0_array == 255,
+        np.nan,
+        np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
+    )
+
+    # Scale blocks; saturate Inf to ±2.0 and replace NaN (from NaN-block scales or
+    # 0/0 divisions) with 0 so that int conversion below can't overflow.
+    scaled_blocks = blocks / scale_factors[:, np.newaxis]
+    scaled_blocks = np.nan_to_num(scaled_blocks, nan=0.0, posinf=2.0, neginf=-2.0)
+
+    # Quantize: int_val = round(scaled * 64), symmetric clamp to [-127, +127].
+    int8_values = np.rint(scaled_blocks * 64.0).astype(np.int32)
+    int8_values = np.clip(int8_values, -127, 127).astype(np.int8)
+
+    # Layout: [scales padded to 16B][int8 elements padded to 16B].
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        list(int8_values.tobytes())
+    )

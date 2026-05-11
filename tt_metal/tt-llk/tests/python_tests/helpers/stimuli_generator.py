@@ -7,7 +7,7 @@ import torch
 
 from .bfp_format_utils import bfp4b_to_float16b
 from .deprecation import deprecated
-from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
+from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, MX_INT_MAX, DataFormat
 from .llk_params import format_dict
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -68,6 +68,11 @@ def generate_random_face(
     elif stimuli_format == DataFormat.MxFp4:
         # MXFP4 optimized stimuli generation
         return _generate_mxfp4_face(
+            size, const_face, const_value, sfpu, negative_values
+        )
+    elif stimuli_format == DataFormat.MxInt8:
+        # MxInt8 stimuli generation (no subnormal exclusion — MxInt has none)
+        return _generate_mxint8_face(
             size, const_face, const_value, sfpu, negative_values
         )
     elif stimuli_format not in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):

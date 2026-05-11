@@ -143,6 +143,7 @@ PACK_FORMATS = input_output_formats(
         DataFormat.UInt8,
         DataFormat.Int16,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
     ]
 )
 
@@ -229,7 +230,9 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
-        disable_format_inference=(formats.input_format == DataFormat.MxFp4),
+        disable_format_inference=(
+            formats.input_format in (DataFormat.MxFp4, DataFormat.MxInt8)
+        ),
     )
 
     res_from_L1 = configuration.run().result

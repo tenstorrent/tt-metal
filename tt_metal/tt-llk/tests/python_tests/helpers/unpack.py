@@ -458,6 +458,53 @@ def unpack_mxfp4(
     return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
 
 
+def unpack_mxint8(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Unpack MxInt8 format (signed S1.6 with E8M0 block scale) to bfloat16 tensor.
+
+    Layout: [scales padded to 16B][signed-int8 elements padded to 16B], one E8M0
+    scale per 32-element block. Decoded value = (int8 / 64) × 2^(scale_e8m0 − 127).
+    Block scale 0xFF yields a zero block (mirroring MxFp behavior).
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint8")
+
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
+    scale_section_len = _align16(num_scales)
+
+    expected_len = scale_section_len + _align16(num_elements)
+    if len(packed_bytes) < scale_section_len + num_elements:
+        raise ValueError(
+            "Invalid packed_bytes length for MxInt8: got "
+            f"{len(packed_bytes)} bytes, expected at least "
+            f"{scale_section_len + num_elements} bytes."
+        )
+
+    scales_e8m0 = packed_bytes[:num_scales]
+    elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
+
+    int8_blocks = np.frombuffer(bytes(elements_bytes), dtype=np.int8).reshape(
+        num_scales, MX_FORMAT_BLOCK_SIZE
+    )
+
+    scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
+    # NaN scale (0xFF) zeros the block, matching MxFp unpack behavior.
+    scale_factors = np.where(
+        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
+    )
+
+    # Decode: (int8 / 64) × scale_factor.
+    decoded = int8_blocks.astype(np.float32) * (scale_factors[:, np.newaxis] / 64.0)
+    return torch.tensor(decoded.flatten(), dtype=torch.bfloat16)
+
+
 _UNPACKERS = {
     DataFormat.Float16: unpack_fp16,
     DataFormat.Float16_b: unpack_bfp16,
@@ -518,6 +565,8 @@ def unpack_res_tiles(
         unpack_func = unpack_mxfp8p
     elif output_format == DataFormat.MxFp4:
         unpack_func = unpack_mxfp4
+    elif output_format == DataFormat.MxInt8:
+        unpack_func = unpack_mxint8
     else:
         unpack_func = _UNPACKERS[output_format]
 
@@ -533,7 +582,7 @@ def unpack_res_tiles(
             unpacked_tile = unpack_func(
                 tile_data, sfpu=sfpu, num_faces=num_faces, face_r_dim=face_r_dim
             )
-        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p, unpack_mxfp4]:
+        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p, unpack_mxfp4, unpack_mxint8]:
             unpacked_tile = unpack_func(
                 tile_data,
                 num_faces=num_faces,
