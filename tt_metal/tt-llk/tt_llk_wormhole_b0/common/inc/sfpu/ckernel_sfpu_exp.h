@@ -296,6 +296,107 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat val)
     return result;
 }
 
+/*
+ * Implementation of _sfpu_exp_21f_bf16_ (same algorithm) with TTI intrinsics
+ * This implementation is faster, and give comparable accuracy as _sfpu_exp_21f_bf16_
+ * (~< 1 ULP).
+ *
+ * Requires _init_exponential_tti_bf16_() to have been called to configure
+ *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
+ *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ */
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
+inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
+{
+    constexpr std::uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
+
+    // Iteration-invariant constants:
+    //   LREG3 = 127.0f                      (bias term in z = x/ln2 + 127)
+    //   LREG5 = 7.839635491371155e-08f      (poly coeff c1)
+    //   LREG6 = 1.0017248f                  (poly coeff c0)
+    //   LREG12 = 1/ln2                      (programmable, set in init)
+    //   LREG13 = 4.791750143340323e-15f     (poly coeff c2; programmable, set in init)
+    //   LREG2 = 255.0f                      (upper clamp threshold; refreshed in-loop)
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
+
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, 0x33a8);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, 0x5ada);
+
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
+
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+
+#pragma GCC unroll 8
+    for (std::uint32_t i = 0; i < ITERATIONS; i++)
+    {
+        // val = sfpi::dst_reg[0]
+        TTI_SFPLOAD(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
+
+        if constexpr (SCALE_EN)
+        {
+            // Multiply LREG0 by the BF16 scale immediate in-place.
+            TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;
+        }
+
+        // xlog2 = val * (1/ln2) + 127.0f
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+
+        if constexpr (CLAMP_NEGATIVE)
+        {
+            // Clamp xlog2 to [0, 255]. SFPSWAP cannot use the LCONST_0 fixed
+            // register directly, so we materialize 0.0 in LREG1 first.
+            // After the two SFPSWAPs (mode VEC_MIN_MAX = "max into lreg_dest"):
+            //   LREG0 = max(xlog2, 0)              (lower-clamp)
+            //   LREG0 = min(LREG0, 255)            (upper-clamp; LREG2 holds 255)
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        }
+        TTI_SFPNOP;
+
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPNOP;
+
+        // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0); // LREG1 = exexp(xlog2)
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, 0); // LREG0 = exman8(xlog2)
+        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // LREG0 <<= LREG1
+
+        // Extract fractional part (sfpi::exman9 with PAD9). LREG0 still holds
+        // the integer-part-as-float-encoding which feeds SETEXP later.
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
+
+        // frac = int32_to_float(fractional_part, RoundMode::NearestEven)
+        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+
+        // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
+        //   frac = c0 + frac * (c1 + frac * c2)
+        //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+
+        // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
+        // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+
+        // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
+        constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
+        TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
+
+        if constexpr (!is_fp32_dest_acc_en)
+        {
+            // Round float32 -> bfloat16 using round-to-nearest-even before
+            // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
+            TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        }
+
+        // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
+        TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);
 
@@ -393,144 +494,6 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
-/*
- * TTI-mnemonic implementation of the exp_21f algorithm (Moroz et al. 2022).
- * Numerically equivalent to _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>; the
- * algorithm and constants below mirror that function line-for-line. Expressed
- * as explicit TTI instructions for tighter scheduling. Bfloat16-accurate
- * (~< 1 ULP).
- *
- * The algorithm computes exp(x) via 2^(x / ln2):
- *   1. Compute z = x * (1/ln2) + 127, clamped to [0, 255].
- *   2. Decompose z into integer part (becomes 2^k via exponent) and fractional
- *      part (refined with a degree-2 polynomial).
- *   3. Recombine: y = setexp(poly(frac), k).
- *
- * Requires _init_exponential_tti_bf16_() to have been called to load:
- *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
- *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
- * Unlike Blackhole, the Wormhole init does not configure any addrmod; the
- * loop uses ADDR_MOD_3 (no dest auto-increment) and an explicit
- * sfpi::dst_reg++ to walk dest.
- *
- * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
- *      ( https://doi.org/10.1109/MSP.2022.3157460 )
- */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
-inline void _calculate_exponential_tti_bf16_(const std::uint16_t exp_base_scale_factor)
-{
-    constexpr std::uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
-
-    // Iteration-invariant constants:
-    //   LREG3 = 127.0f                      (bias term in z = x/ln2 + 127)
-    //   LREG5 = 7.839635491371155e-08f      (poly coeff c1)
-    //   LREG6 = 1.0017248f                  (poly coeff c0)
-    //   LREG12 = 1/ln2                      (programmable, set in init)
-    //   LREG13 = 4.791750143340323e-15f     (poly coeff c2; programmable, set in init)
-    //   LREG2 = 255.0f                      (upper clamp threshold; refreshed in-loop)
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, 0x33a8);
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, 0x5ada);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-
-    for (std::uint32_t i = 0; i < ITERATIONS; i++)
-    {
-        // val = sfpi::dst_reg[0]
-        TTI_SFPLOAD(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
-
-        if constexpr (SCALE_EN)
-        {
-            // Multiply LREG0 by the BF16 scale immediate in-place.
-            TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
-            TTI_SFPNOP;
-        }
-
-        // xlog2 = val * (1/ln2) + 127.0f
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
-
-        if constexpr (CLAMP_NEGATIVE)
-        {
-            // Clamp xlog2 to [0, 255]. SFPSWAP cannot use the LCONST_0 fixed
-            // register directly, so we materialize 0.0 in LREG1 first.
-            // After the two SFPSWAPs (mode VEC_MIN_MAX = "max into lreg_dest"):
-            //   LREG0 = max(xlog2, 0)              (lower-clamp)
-            //   LREG0 = min(LREG0, 255)            (upper-clamp; LREG2 holds 255)
-            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        }
-        TTI_SFPNOP;
-
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        TTI_SFPNOP;
-
-        // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
-        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0); // LREG1 = exexp(xlog2)
-        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, 0); // LREG0 = exman8(xlog2)
-        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // LREG0 <<= LREG1
-
-        // Extract fractional part (sfpi::exman9 with PAD9). LREG0 still holds
-        // the integer-part-as-float-encoding which feeds SETEXP later.
-        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
-
-        // frac = int32_to_float(fractional_part, RoundMode::NearestEven)
-        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
-
-        // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
-        //   frac = c0 + frac * (c1 + frac * c2)
-        //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-        TTI_SFPNOP;
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
-
-        // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
-        // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
-        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-
-        // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
-        constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
-        TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
-
-        if constexpr (!is_fp32_dest_acc_en)
-        {
-            // Round float32 -> bfloat16 using round-to-nearest-even before
-            // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
-            TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        }
-
-        // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-        TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
-        sfpi::dst_reg++;
-    }
-}
-
-/*
- * Init for _calculate_exponential_tti_bf16_. Loads two programmable constants
- * the Wormhole TTI loop depends on:
- *   - LREG12 (sfpi::vConstFloatPrgm0) = 1/ln2  — multiplier in the xlog2 SFPMAD
- *   - LREG13 (sfpi::vConstFloatPrgm1) = c2     — small poly coefficient
- *                                                4.791750143340323e-15f
- *
- * Unlike Blackhole, no addrmod is configured here: the loop uses ADDR_MOD_3
- * and an explicit sfpi::dst_reg++ to walk dest.
- *
- * Note: _init_sfpu_reciprocal_<false> sets vConstFloatPrgm0 = 2.0f, so this
- * init must run *after* any reciprocal init to win the LREG12 race. It does
- * not write vConstFloatPrgm1, so LREG13 is uncontested.
- */
-inline void _init_exponential_tti_bf16_()
-{
-    // LREG12 = 1/ln2
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
-    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-
-    // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
-    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
-}
-
 template <bool APPROXIMATION_MODE, bool SCALE_EN, int ITERATIONS, bool CLAMP_NEGATIVE = true, bool is_fp32_dest_acc_en = false>
 void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
 {
@@ -541,7 +504,7 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
             // CLAMP_NEGATIVE is implicit (always clamps via min/max).
             // SCALE_EN is handled inside the TTI kernel via SFPMULI.
-            _calculate_exponential_tti_bf16_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
+            _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         }
         else
         {
@@ -1059,10 +1022,15 @@ inline void _init_exponential_()
     {
         if constexpr (!is_fp32_dest_acc_en)
         {
-            // TTI bfloat16 path: loads programmable constants LREG12 (1/ln2)
-            // and LREG13 (c2) used by the exp_21f loop. SCALE_EN is handled
-            // inside the TTI kernel via SFPMULI.
-            _init_exponential_tti_bf16_();
+            // LREG12 = 1/ln2
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
+            TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+
+            // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
+            TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
         }
         // fp32 scalar path (_sfpu_exp_fp32_accurate_) uses no SFPU-init-dependent state.
     }
