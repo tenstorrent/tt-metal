@@ -58,22 +58,13 @@ const HostTensorImpl& HostTensor::impl() const {
     return *impl_;
 }
 
-const TensorSpec& HostTensor::tensor_spec() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
-    return impl_->spec();
-}
+const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
 
-const TensorTopology& HostTensor::tensor_topology() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
-    return impl_->topology();
-}
+const TensorTopology& HostTensor::tensor_topology() const { return impl().topology(); }
 
 bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
-const DistributedHostBuffer& HostTensor::buffer() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
-    return impl_->buffer();
-}
+const DistributedHostBuffer& HostTensor::buffer() const { return impl().buffer(); }
 
 DataType HostTensor::dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
 
@@ -118,8 +109,7 @@ HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer
 }
 
 void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
-    impl_->update_topology(std::move(tensor_topology));
+    impl().update_topology(std::move(tensor_topology));
 }
 
 }  // namespace tt::tt_metal
