@@ -280,7 +280,7 @@ class Attention(Module):
     # TODO: Standardize this usage
     def gather_if_sharded(self, x):
         if x.shape[3] < self.to_q.in_features:
-            x = vae_all_gather(self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis)
+            x = vae_all_gather(self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis, use_barrier=False)
         return x
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -491,6 +491,6 @@ class VAEDecoder(Module):
             x = up_block(x)
         x = self.conv_norm_out(x)
         x = ttnn.silu(x)
-        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis)
+        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis, use_barrier=False)
         x = self.conv_out(x)
         return x
