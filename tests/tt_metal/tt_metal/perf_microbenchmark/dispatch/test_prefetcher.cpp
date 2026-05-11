@@ -4,6 +4,7 @@
 
 #include "gtest/gtest.h"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 
@@ -28,6 +29,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <vector>
 
 /*
@@ -2495,8 +2497,11 @@ public:
         while (remaining_bytes > 0) {
             // Assumes terminate is the last command...
             uint32_t cmd = payload_generator_->get_rand<uint32_t>(0, CQ_PREFETCH_CMD_TERMINATE - 1);
-            const uint32_t limit_x = (worker_range.end_coord.x - first_worker.x - 1);
-            const uint32_t limit_y = (worker_range.end_coord.y - first_worker.y - 1);
+            // Underflow-safe: on a single-core range (Quasar) extent == 1, limit == 0, so x=y=0.
+            const uint32_t extent_x = worker_range.end_coord.x - worker_range.start_coord.x + 1;
+            const uint32_t extent_y = worker_range.end_coord.y - worker_range.start_coord.y + 1;
+            const uint32_t limit_x = extent_x > 1 ? extent_x - 1 : 0;
+            const uint32_t limit_y = extent_y > 1 ? extent_y - 1 : 0;
             uint32_t x = payload_generator_->get_rand<uint32_t>(0, limit_x);
             uint32_t y = payload_generator_->get_rand<uint32_t>(0, limit_y);
 
@@ -2533,8 +2538,11 @@ public:
                     break;
                 }
                 case CQ_PREFETCH_CMD_RELAY_INLINE: {
-                    const CoreCoord last_worker = {worker_core.x + 1, worker_core.y + 1};
-                    CoreRange multi_worker_range = {worker_core, last_worker};
+                    // On single-core arches (Quasar), collapse mcast to unicast to stay within grid.
+                    const CoreCoord multi_last = (device_->arch() == tt::ARCH::QUASAR)
+                                                     ? worker_core
+                                                     : CoreCoord{worker_core.x + 1, worker_core.y + 1};
+                    CoreRange multi_worker_range = {worker_core, multi_last};
                     auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                     if (result.has_value()) {
                         HostMemDeviceCommand& cmd = *result;
@@ -2566,6 +2574,12 @@ class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
 //
 // The upstream semaphore self-loop (MY_UPSTREAM_CB_SEM_ID == UPSTREAM_CB_SEM_ID on the prefetch_d
 // core, initialized to cmd_cb_pages) pre-signals all pages so the kernel sees them immediately.
+
+// Quasar SD DRAM layout — mirrors WH/BH PCIe hugepage sizes (256 MB issue + 256 MB completion).
+// Completion ends at exactly 1 GB (the bank size), so this is the maximum start that fits.
+static constexpr uint32_t kSdQuasarIssueBase = 0x20000000u;
+static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+
 template <typename FDFixture>
 class SDPrefetchTestBase : public FDFixture {
 public:
@@ -2608,6 +2622,10 @@ public:
         }
     }
 
+    // Called just before device_data.validate() — subclasses can override to refresh
+    // arch-specific data (e.g. read DRAM completion bytes on Quasar).
+    virtual void refresh_completion_data() {}
+
     // Launches cq_prefetch.cpp (combined IS_H_VARIANT+IS_D_VARIANT) + cq_dispatch.cpp under
     // slow dispatch by writing commands to the PCIe hugepage and notifying the prefetcher via
     // the FetchQ ring - the same mechanism used by the FD runtime.
@@ -2624,9 +2642,15 @@ public:
         bool /*wait_for_host_writes*/ = false) override {
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
-        TT_FATAL(entry_size == 4, "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
-        const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
+        const bool is_quasar = (this->device_->arch() == tt::ARCH::QUASAR);
+        TT_FATAL(
+            is_quasar || entry_size == 4,
+            "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
+
+        const CoreCoord pref_logical = Common::sd_prefetch_core;
+        const CoreCoord disp_logical = Common::dispatch_core(this->device_);
+        const bool fd_kernels_on_same_core = (pref_logical == disp_logical);
 
         // L1 layout on the prefetch_hd core comes straight from the production memmap so SD
         // mirrors the FD runtime exactly (PREFETCH_Q_RD/PCIE_RD scalar gap is L1-aligned, not 4 B).
@@ -2643,6 +2667,11 @@ public:
         const uint32_t scratch_db_base = memmap.scratch_db_base();
         const uint32_t scratch_db_size = memmap.scratch_db_size();
 
+        // On Quasar same-core, dispatch_cb stacks directly after the prefetcher's scratch_db in shared L1.
+        const uint32_t dispatch_cb_base = fd_kernels_on_same_core
+                                              ? tt::align(scratch_db_base + scratch_db_size, page_size)
+                                              : memmap.dispatch_buffer_base();
+
         // Hugepage addressing
         // Use the same hugepage region that the FD runtime uses for the issue queue
         // (safe since SD mode never runs the FD runtime concurrently).
@@ -2651,20 +2680,32 @@ public:
         // dev_hugepage_base == get_host_command_queue_addr(UNRESERVED) lands in the same
         // PCIe region the FD runtime would use.  If SD is ever extended to non-zero channel/
         // cq_id, switch to get_absolute_cq_offset(...) + cq_start (mirroring topology.cpp).
-        const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+        // WH/BH stage commands in PCIe hugepage; Quasar has no hugepage and uses DRAM bank 0 (kSdQuasarIssueBase).
+        uint32_t dev_hugepage_base = 0;
+        void* host_hugepage_base = nullptr;
+        if (!is_quasar) {
+            dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
-        const ChipId mmio_id =
-            tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
-        const uint16_t channel =
-            tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
-        char* hugepage_bar_base =
-            static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
-        hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
-        void* const host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
+            const ChipId mmio_id =
+                tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+            const uint16_t channel =
+                tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
+            char* hugepage_bar_base = static_cast<char*>(
+                tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
+            hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+            host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
+        } else {
+            TT_FATAL(
+                kSdQuasarIssueBase >= this->dram_base_,
+                "SD DRAM command buffer ({:#x}) overlaps allocator region (base {:#x})",
+                kSdQuasarIssueBase,
+                this->dram_base_);
+            dev_hugepage_base = kSdQuasarIssueBase;
+        }
 
         // Physical cores
-        const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(Common::sd_prefetch_core);
-        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::sd_dispatch_core);
+        const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(pref_logical);
+        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(disp_logical);
         const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
 
         auto& cluster = tt_metal::MetalContext::instance().get_cluster();
@@ -2679,31 +2720,45 @@ public:
         const std::vector<uint32_t> prefetch_q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
         cluster.write_core(prefetch_q_zeros.data(), prefetch_q_size, prefetch_cxy, prefetch_q_base);
 
-        // FetchQ entries go through the static TLB so each 2-byte write hits L1 directly
-        // instead of round-tripping through the cluster API.
-        tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
+        // FetchQ entries go through the static TLB on WH/BH so each write hits L1 directly.
+        // Quasar doesn't support static TLB windows; write_core is used instead (see write_prefetcher_cmd).
+        tt::umd::TlbWindow* prefetch_q_tlb = is_quasar ? nullptr : cluster.get_static_tlb_window(prefetch_cxy);
 
         uint32_t prefetch_q_dev_ptr = prefetch_q_base;
         const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
 
         uint32_t* host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
+        uint32_t dram_write_offset = 0;
 
         const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
 
-        // write_prefetcher_cmd: streaming-store cmd to hugepage + write one FetchQ entry via TLB.
+        // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM bank 0 (Quasar),
+        // then write one FetchQ entry via TLB (WH/BH) or write_core (Quasar).
         // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
         // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
-            const uint64_t host_offset =
-                static_cast<uint64_t>(reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
-            TT_FATAL(
-                host_offset + cmd_size_bytes <= Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
-                "SD prefetch: command stream exceeds SD_HUGEPAGE_ISSUE_BUFFER_SIZE");
-            tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
-            host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
-
-            prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
-            // this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
+            if (is_quasar) {
+                // DRAM path: write commands to DRAM bank 0. Wrap to base on overflow.
+                if (dram_write_offset + cmd_size_bytes > Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE) {
+                    dram_write_offset = 0;
+                }
+                tt::tt_metal::detail::WriteToDeviceDRAMChannel(
+                    this->device_,
+                    0,
+                    kSdQuasarIssueBase + dram_write_offset,
+                    std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(src), cmd_size_bytes));
+                dram_write_offset += cmd_size_bytes;
+                cluster.write_core(&cmd_size_entry, sizeof(uint32_t), prefetch_cxy, prefetch_q_dev_ptr);
+            } else {
+                const uint64_t host_offset = static_cast<uint64_t>(
+                    reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
+                TT_FATAL(
+                    host_offset + cmd_size_bytes <= Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
+                    "SD prefetch: command stream exceeds SD_HUGEPAGE_ISSUE_BUFFER_SIZE");
+                tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
+                host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
+                prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
+            }
             prefetch_q_dev_ptr += entry_size;
             if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
                 prefetch_q_dev_ptr = prefetch_q_base;
@@ -2738,23 +2793,39 @@ public:
         write_cmd(CommandBuilder::build_dispatch_terminate(/*include_dispatch_s*/ false));
         write_cmd(CommandBuilder::build_prefetch_terminate());
 
+        if (is_quasar) {
+            // Ensure all DRAM command writes are visible to the kernel before LaunchProgram.
+            cluster.dram_barrier(this->device_->id());
+        }
+
         // Semaphores
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        // Slot 0: prefetch_sync_sem - dispatch signals prefetch when a stall round-trip is done.
-        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
-        const uint32_t di_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
-        TT_FATAL(pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
-
-        // Slot 1: downstream_cb_sem on prefetch (init=dispatch_buffer_pages); dispatch_cb_sem on dispatch (init=0).
-        const uint32_t pf_downstream_cb_sem =
-            tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, dispatch_buffer_pages);
-        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
-        TT_FATAL(
-            pf_downstream_cb_sem == di_dispatch_cb_sem,
-            "dispatch_cb sem slot mismatch ({} vs {})",
-            pf_downstream_cb_sem,
-            di_dispatch_cb_sem);
+        // On separate cores (WH/BH) each (pf, di) pair shares a slot id across separate cores' L1
+        // instances — TT_FATALs verify the slot-id equality.  On Quasar (same core) one L1 location
+        // can't hold both init values, so the slots must be DISTINCT and we override DOWNSTREAM_CB_SEM_ID
+        // post-call.
+        uint32_t credit_sem_id;
+        uint32_t produced_sem_id;
+        uint32_t pf_sync_sem_id;
+        uint32_t di_sync_sem_id;
+        if (fd_kernels_on_same_core) {
+            pf_sync_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
+            di_sync_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
+            credit_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, dispatch_buffer_pages);
+            produced_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
+        } else {
+            const uint32_t pf_sync = tt_metal::CreateSemaphore(program, {pref_logical}, 0u);
+            const uint32_t di_sync = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
+            TT_FATAL(pf_sync == di_sync, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync, di_sync);
+            const uint32_t pf_cb = tt_metal::CreateSemaphore(program, {pref_logical}, dispatch_buffer_pages);
+            const uint32_t di_cb = tt_metal::CreateSemaphore(program, {disp_logical}, 0u);
+            TT_FATAL(pf_cb == di_cb, "dispatch_cb sem slot mismatch ({} vs {})", pf_cb, di_cb);
+            credit_sem_id = pf_cb;
+            produced_sem_id = di_cb;
+            pf_sync_sem_id = pf_sync;
+            di_sync_sem_id = di_sync;
+        }
 
         // Kernel defines and creation
         auto prefetch_defines = Common::make_sd_prefetch_defines(
@@ -2771,43 +2842,85 @@ public:
             scratch_db_size,
             dispatch_cb_base,
             dispatch_buffer_pages,
-            pf_downstream_cb_sem,
-            pf_sync_sem,
+            credit_sem_id,
+            pf_sync_sem_id,
             entry_size,
             phys_prefetch,
             phys_disp);
-        auto prefetch_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            {Common::sd_prefetch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .defines = prefetch_defines});
-        tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
+        if (fd_kernels_on_same_core) {
+            // Helper hardcodes MY_DOWNSTREAM == DOWNSTREAM; same-core needs them on distinct slots.
+            prefetch_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(produced_sem_id);
+        }
 
         const uint32_t dev_completion_base = dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
         auto dispatch_defines = Common::make_sd_dispatch_defines(
             this->device_,
             dispatch_buffer_pages,
-            di_dispatch_cb_sem,
-            pf_downstream_cb_sem,
-            di_sync_sem,
+            produced_sem_id,
+            credit_sem_id,
+            di_sync_sem_id,
             phys_prefetch,
             phys_disp,
             memmap,
             dispatch_cb_base,
             dev_completion_base,
             Common::SD_COMPLETION_QUEUE_SIZE);
-        auto dispatch_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            {Common::sd_dispatch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .defines = dispatch_defines});
-        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::sd_dispatch_core, {0u, 0u, 0u});
+
+        if (is_quasar) {
+            // Quasar has no PCIe endpoint — both kernels' NOC addressing must resolve to DRAM bank 0.
+            prefetch_defines["IS_CQ_DRAM_BACKED"] = "1";
+            prefetch_defines["DRAM_BACKED_CQ_BANK_ID"] = "0";
+            dispatch_defines["IS_CQ_DRAM_BACKED"] = "1";
+            dispatch_defines["DRAM_BACKED_CQ_BANK_ID"] = "0";
+        }
+
+        // LOAD-BEARING ORDER: on Quasar, the experimental kernel API auto-assigns DM0 to the first
+        // kernel created on a given core and DM1 to the second. Prefetch must be first to get DM0.
+        KernelHandle prefetch_kernel;
+        if (is_quasar) {
+            prefetch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+                pref_logical,
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1,
+                    .defines = prefetch_defines,
+                    .is_legacy_kernel = true,
+                });
+        } else {
+            prefetch_kernel = tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+                {pref_logical},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .defines = prefetch_defines});
+        }
+        tt_metal::SetRuntimeArgs(program, prefetch_kernel, pref_logical, {0u, 0u, 0u});
+
+        KernelHandle dispatch_kernel;
+        if (is_quasar) {
+            dispatch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                disp_logical,
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1,
+                    .defines = dispatch_defines,
+                    .is_legacy_kernel = true,
+                });
+        } else {
+            dispatch_kernel = tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                {disp_logical},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .defines = dispatch_defines});
+        }
+        tt_metal::SetRuntimeArgs(program, dispatch_kernel, disp_logical, {0u, 0u, 0u});
 
         // Initialize the dispatcher's completion queue write/read pointers in L1, mirroring
         // what topology.cpp does for FD mode.  The kernel reads this slot at startup; without
@@ -2834,6 +2947,8 @@ public:
         tt_metal::detail::LaunchProgram(this->device_, program);
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
+        // On Quasar, completion data lives in DRAM; subclass reads it into the host buffer here.
+        refresh_completion_data();
         EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
     }
 
@@ -2870,7 +2985,15 @@ public:
     // Completion-buffer hooks: in SD mode the dispatch kernel writes to the hugepage region
     // we set up ourselves (dev_hugepage_base + SD_HUGEPAGE_ISSUE_BUFFER_SIZE), not to a
     // runtime-managed FDMeshCommandQueue completion queue.
+    //
+    // WH/BH: points into the host-mapped hugepage at dev_hugepage_base + SD_HUGEPAGE_ISSUE_BUFFER_SIZE.
+    // Quasar: points into a host-side staging buffer; refresh_completion_data() fills it from DRAM
+    //         at kSdQuasarCompletionBase before validate() is called.
     void* get_completion_queue_buffer() override {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
+            quasar_completion_buf_.resize(Common::SD_COMPLETION_QUEUE_SIZE);
+            return quasar_completion_buf_.data();
+        }
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
         const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         const ChipId mmio_id =
@@ -2883,6 +3006,19 @@ public:
         return hugepage_bar_base + dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
     }
     uint32_t get_completion_queue_buffer_size() override { return Common::SD_COMPLETION_QUEUE_SIZE; }
+
+    void refresh_completion_data() override {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
+            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
+                this->device_,
+                0,
+                kSdQuasarCompletionBase,
+                std::span<uint8_t>(quasar_completion_buf_.data(), quasar_completion_buf_.size()));
+        }
+    }
+
+private:
+    std::vector<uint8_t> quasar_completion_buf_;
 };
 
 class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
