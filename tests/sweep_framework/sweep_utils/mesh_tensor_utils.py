@@ -242,11 +242,19 @@ def create_mesh_device(
     except Exception:
         pass
 
-    return ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*mesh_shape),
-        l1_small_size=l1_small_size,
-        dispatch_core_config=ttnn.DispatchCoreConfig(),
-    )
+    try:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(),
+        )
+    except RuntimeError:
+        # Requested mesh shape exceeds available devices — fall back to (1,1)
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(1, 1),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(),
+        )
 
 
 def _parse_shard_dim(placement_str: str) -> int:
