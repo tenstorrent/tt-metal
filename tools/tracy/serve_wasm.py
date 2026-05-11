@@ -86,17 +86,20 @@ def _profiler_server_log_path() -> Path:
 
 
 def _embed_trace_dest_path() -> Path:
-    """Resolved embed.tracy path under PROFILER_WASM_DIR (constant basename only)."""
+    """Path to embed.tracy under PROFILER_WASM_DIR (constant basename only).
+
+    Do not Path.resolve() the full path: embed.tracy is usually a symlink to traces/*.tracy,
+    and resolving would follow the symlink and break the basename check (and crash the WS thread).
+    """
     wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
     dest = wasm_root / PROFILER_WASM_TRACE_FILE_NAME
-    resolved = _resolve_under_root(dest, strict=False)
     try:
-        resolved.relative_to(wasm_root)
+        dest.relative_to(wasm_root)
     except ValueError as e:
         raise RuntimeError(f"Invalid embed trace path under {wasm_root}") from e
-    if resolved.name != PROFILER_WASM_TRACE_FILE_NAME:
+    if dest.name != PROFILER_WASM_TRACE_FILE_NAME:
         raise RuntimeError("Embed trace basename mismatch")
-    return resolved
+    return dest
 
 
 def _cmdline_targets_this_script(argv: list[str], script_realpath: str) -> bool:
