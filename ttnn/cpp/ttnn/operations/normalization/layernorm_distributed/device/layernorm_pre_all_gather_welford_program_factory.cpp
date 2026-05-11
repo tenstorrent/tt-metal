@@ -131,10 +131,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
-    if (fuse_pre_add) {
-        reader_defines["FUSE_PRE_ADD"] = "1";
-        compute_defines["FUSE_PRE_ADD"] = "1";
-    }
+    reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
 
     std::vector<uint32_t> compute_args = {Wt, W, block_size};
 

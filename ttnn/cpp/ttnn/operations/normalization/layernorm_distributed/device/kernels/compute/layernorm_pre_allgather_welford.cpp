@@ -33,7 +33,7 @@ void kernel_main() {
     namespace generic = kutil::generic;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
     constexpr uint32_t blk = get_compile_time_arg_val(2);
 #endif
 
@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
     constexpr uint32_t cb_x2 = tt::CBIndex::c_1;           // x**2
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_2;  // recip table
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
     constexpr uint32_t cb_res = tt::CBIndex::c_5;         // residual b
     constexpr uint32_t cb_inp = tt::CBIndex::c_3;         // fused a + b (sized to a few blocks)
     constexpr uint32_t cb_mean_spill = tt::CBIndex::c_4;  // Welford mean accumulator spill (1 tile)
@@ -50,7 +50,7 @@ void kernel_main() {
     constexpr uint32_t cb_inp = cb_in0;
 #endif
 
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_res, cb_inp);
 #else
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_x2);
@@ -68,7 +68,7 @@ void kernel_main() {
         constexpr uint32_t dst1 = 1;
         constexpr uint32_t dst2 = 2;
 
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
         // Block-interleaved pre-add + Welford. The Welford accumulator lives in the SFPU within a
         // tile_regs scope, but the pre-add must use its own tile_regs scope to pack its result to
         // cb_inp before the Welford pass can transpose-read it back. To bridge those scopes the

@@ -138,10 +138,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
-    if (fuse_pre_add) {
-        reader_defines["FUSE_PRE_ADD"] = "1";
-        compute_defines["FUSE_PRE_ADD"] = "1";
-    }
+    reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
 
     std::vector<uint32_t> compute_args = {Wt, block_size};
 
@@ -414,10 +412,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
-    if (fuse_pre_add) {
-        reader_defines["FUSE_PRE_ADD"] = "1";
-        compute_defines["FUSE_PRE_ADD"] = "1";
-    }
+    reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
 
     std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
 

@@ -16,6 +16,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+
+namespace pre_add = norm::kernel_util::compute::pre_add;
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -32,40 +35,19 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;                           // x**2
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;                          // residual b (unused when !FUSE_PRE_ADD)
+    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;  // fused a + b, or just a
 
-#ifdef FUSE_PRE_ADD
-    constexpr uint32_t cb_res = tt::CBIndex::c_5;  // residual b
-    constexpr uint32_t cb_inp = tt::CBIndex::c_3;  // fused a + b
-    binary_op_init_common(cb_in0, cb_res, cb_inp);
-#else
-    constexpr uint32_t cb_inp = cb_in0;
-    binary_op_init_common(cb_inp, cb_reduce, cb_x2);
-#endif
+    if constexpr (FUSE_PRE_ADD) {
+        binary_op_init_common(cb_in0, cb_res, cb_inp);
+    } else {
+        binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-#ifdef FUSE_PRE_ADD
-        /*
-         * Fuse pre-add: cb_inp = cb_in0 + cb_res
-         */
-        reconfig_data_format(cb_in0, cb_res);
-        pack_reconfig_data_format(cb_inp);
-        add_tiles_init(cb_in0, cb_res);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_in0, blk);
-            cb_wait_front(cb_res, blk);
-            cb_reserve_back(cb_inp, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                add_tiles(cb_in0, cb_res, wtr, wtr, wtr);
-                pack_tile(wtr, cb_inp);
-            }
-            REL();
-            cb_push_back(cb_inp, blk);
-            cb_pop_front(cb_in0, blk);
-            cb_pop_front(cb_res, blk);
-        }
-#endif
+        // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
+        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
 
         /*
          * x**2

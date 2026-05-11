@@ -37,7 +37,7 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb_inp_buf(cb_inp);
 
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
     const uint32_t res_addr = get_arg_val<uint32_t>(4);  // Residual source address in dram
     constexpr uint32_t cb_res = tt::CBIndex::c_5;
     const uint32_t src1_tile_bytes = get_tile_size(cb_res);
@@ -53,14 +53,14 @@ void kernel_main() {
             for (uint32_t r = 0; r < blk; r++) {
                 cb_inp_buf.reserve_back(1);
                 noc.async_read(src_a, cb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
                 cb_res_buf.reserve_back(1);
                 noc.async_read(src_b, cb_res_buf, src1_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
 #endif
                 inp_tile_idx++;
                 noc.async_read_barrier();
                 cb_inp_buf.push_back(1);
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
                 cb_res_buf.push_back(1);
 #endif
             }

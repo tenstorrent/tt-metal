@@ -54,7 +54,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_x2_merge_buf(cb_x2_merge);
     experimental::Semaphore<> reducer_sem(reducer_semaphore_id);
 
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
     const uint32_t res_addr = get_arg_val<uint32_t>(8);  // Residual source address in dram
     constexpr uint32_t cb_res = tt::CBIndex::c_5;
     const uint32_t src1_tile_bytes = get_tile_size(cb_res);
@@ -80,7 +80,7 @@ void kernel_main() {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_inp_buf.reserve_back(blk);
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
             cb_res_buf.reserve_back(blk);
 #endif
 
@@ -91,7 +91,7 @@ void kernel_main() {
                     src0_tile_bytes,
                     {.page_id = inp_tile_idx},
                     {.offset_bytes = r * src0_tile_bytes});
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
                 noc.async_read(
                     src_b,
                     cb_res_buf,
@@ -104,7 +104,7 @@ void kernel_main() {
             noc.async_read_barrier();
 
             cb_inp_buf.push_back(blk);
-#ifdef FUSE_PRE_ADD
+#if FUSE_PRE_ADD
             cb_res_buf.push_back(blk);
 #endif
 
