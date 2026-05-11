@@ -8,16 +8,15 @@ Demo / smoke test using the **same user prompt** as ``reference/model_loading.py
 - Multimodal message: one image placeholder + text
   ``"Describe what you see in this image."``
 
-**HF path** (``--backend hf``, default): matches ``model_loading.py`` — ``AutoProcessor``,
-``AutoModelForImageTextToText``, ``sample.jpeg``, ``max_new_tokens=100``.
+**HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
+``--vision-max-edge`` PIL cap as TT before ``processor`` (default 336). Default image
+``reference/sample.jpeg``; ``max_new_tokens=100``.
 
 **TT path** (``--backend tt``): loads :class:`TtDevstral2SmallModel` (Pixtral vision + projector +
 ``TtMinistral3Model``), runs TT vision/projector, merges features into text embeddings like HF
 ``masked_scatter`` on ``image_token_id``, then ``language_model.forward_prefill_from_embeddings``.
-Requires ``reference/sample.jpeg`` (same as HF). Pixtral vision QKV L1 grows with patch-token count;
-default ``--vision-max-edge 336`` resizes the PIL image before ``processor`` (similar to
-``test_devstral2_small`` ~24×24 patches when patch size is 14). Use ``0`` for full processor sizing
-(may exceed Wormhole L1).
+Same ``--vision-max-edge`` as HF. Pixtral QKV L1 grows with patch count; ``0`` = full sizing (fine on
+HF; may exceed Wormhole L1 on TT).
 
 Usage (repo root)::
 
@@ -46,6 +45,7 @@ from transformers.models.pixtral.modeling_pixtral import position_ids_in_meshgri
 
 import ttnn
 from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
+from models.experimental.devstarl2_small.devstral_utils import pad_input_ids_and_positions_for_tt_prefill
 from models.experimental.devstarl2_small.reference.inference_fixtures import REFERENCE_GENERATE_KWARGS
 from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -157,7 +157,7 @@ def _tt_prefill_from_merged_embeds(
         raise RuntimeError("current_ids / merged_embeds / seq_len_keep length mismatch.")
     device_host = current_ids.device
     position_ids = torch.arange(sl, dtype=torch.long, device=device_host).unsqueeze(0)
-    input_ids_pad, position_ids_pad, _ = _tt_demo._pad_input_ids_and_positions_for_tt_prefill(
+    input_ids_pad, position_ids_pad, _ = pad_input_ids_and_positions_for_tt_prefill(
         current_ids,
         position_ids,
         pad_token_id,
@@ -201,6 +201,7 @@ def run_hf(
     image_path: Path,
     max_new_tokens: int,
     seed: int | None,
+    vision_max_edge: int,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(
@@ -219,6 +220,15 @@ def run_hf(
     device = next(model.parameters()).device
 
     image = Image.open(image_path).convert("RGB")
+    orig_sz = image.size
+    image = _resize_image_max_edge(image, vision_max_edge)
+    if vision_max_edge <= 0:
+        logger.info("HF: vision-max-edge 0 — no PIL resize before processor.")
+    elif image.size != orig_sz:
+        logger.info(f"HF: PIL resize {orig_sz} -> {image.size} (vision-max-edge={vision_max_edge}).")
+    else:
+        logger.info(f"HF: image within vision-max-edge={vision_max_edge} ({image.size}), no resize.")
+
     prompt = processor.apply_chat_template(
         MODEL_LOADING_MESSAGES,
         add_generation_prompt=True,
@@ -256,7 +266,7 @@ def run_tt(
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
 
     os.environ["HF_MODEL"] = model_id
-    _tt_demo._apply_devstral_hf_trust_patches()
+    _tt_demo.apply_devstral_hf_trust_patches()
 
     ref_do_sample = bool(REFERENCE_GENERATE_KWARGS["do_sample"])
     do_sample = ref_do_sample if not greedy else False
@@ -290,7 +300,7 @@ def run_tt(
     extra_tokens = max(0, max_new_tokens)
     max_seq = max(4096, prompt_len + extra_tokens + 2048)
 
-    mesh_device = _tt_demo._open_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
+    mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
     try:
         dtype_tt = ttnn.bfloat16
 
@@ -366,9 +376,7 @@ def run_tt(
                 f"CPU LM head: chunked torch matmul; weight {tuple(lm_head_weight_cpu.shape)} {lm_head_weight_cpu.dtype}."
             )
         else:
-            lm_head_max_cols = _tt_demo._demo_lm_head_max_columns_per_device(
-                model_args, cli_cap=lm_head_max_device_cols
-            )
+            lm_head_max_cols = _tt_demo.demo_lm_head_max_columns_per_device(model_args, cli_cap=lm_head_max_device_cols)
             logger.info(
                 f"On-device LMHead max columns per shard: {lm_head_max_cols} "
                 f"(ModelArgs value {model_args.max_columns_per_device_lm_head})."
@@ -401,7 +409,7 @@ def run_tt(
                 torch.cuda.manual_seed_all(seed)
 
         id_device = input_ids.device
-        eos_ids = _tt_demo._eos_token_ids(hf_full.config, tokenizer)
+        eos_ids = _tt_demo.eos_token_ids(hf_full.config, tokenizer)
         current_ids = input_ids.clone()
         mode = "greedy" if greedy else f"sample (T={gen_temperature})"
         lm_mode = "CPU lm_head (chunked torch)" if lm_head_cpu else "TT lm_head"
@@ -434,12 +442,12 @@ def run_tt(
 
             if lm_head_cpu:
                 assert lm_head_weight_cpu is not None
-                logits_row = _tt_demo._cpu_lm_head_logits_last_token(
+                logits_row = _tt_demo.cpu_lm_head_logits_last_token(
                     tt_out, sl - 1, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
                 )
             else:
                 assert tt_lm_head is not None
-                logits_row = _tt_demo._tt_lm_head_logits_last_token(tt_out, sl - 1, mesh_device, model_args, tt_lm_head)
+                logits_row = _tt_demo.tt_lm_head_logits_last_token(tt_out, sl - 1, mesh_device, model_args, tt_lm_head)
             ttnn.deallocate(tt_out)
 
             if do_sample:
@@ -488,8 +496,8 @@ def main() -> None:
         "--vision-max-edge",
         type=int,
         default=336,
-        help="TT only: max longest image side (px) before processor; ~14*24=336 caps patch grid ~24². "
-        "0 = use processor default sizing (may exceed Wormhole L1 in Pixtral attention).",
+        help="HF and TT: max longest image side (px) before PIL+processor. On TT, 0 can exceed Wormhole L1 "
+        "in Pixtral attention; on HF, 0 is full processor sizing.",
     )
     args = parser.parse_args()
 
@@ -499,6 +507,7 @@ def main() -> None:
             args.image,
             max_new_tokens=args.max_new_tokens,
             seed=args.seed,
+            vision_max_edge=args.vision_max_edge,
         )
     else:
         run_tt(
