@@ -14,9 +14,7 @@ Description:
     operation, or None if no entry is found.
 
     The mailbox holds the raw runtime_id for both fast and slow dispatch — see
-    tt_metal/impl/program/dispatch.cpp and tt_metal/tt_metal.cpp (LaunchProgram). The
-    EncodePerDeviceProgramID step only happens in the profiler ingest path
-    (tt_metal/impl/profiler/profiler.cpp), which doesn't touch the launch-message mailbox.
+    tt_metal/impl/program/dispatch.cpp and tt_metal/tt_metal.cpp (LaunchProgram).
 
     This is intentionally cached with @triage_singleton so the mapping is computed once per
     triage run (per args/context) and reused by other scripts.
