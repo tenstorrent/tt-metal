@@ -79,7 +79,10 @@ struct DeviceStorage::MeshTensorHolder {
     States state_;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
-    MeshTensorHolder(MeshTensor mesh_tensor) : state_(Allocated{std::move(mesh_tensor)}) {}
+    MeshTensorHolder(MeshTensor mesh_tensor) {
+        TT_FATAL(!mesh_tensor.is_valueless_after_move(), "MeshTensor must not be in a moved-from state.");
+        state_ = Allocated{std::move(mesh_tensor)};
+    }
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
 
