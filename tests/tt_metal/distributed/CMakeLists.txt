@@ -75,6 +75,9 @@ target_sources(
         test_gap76_fixsb_idle_eth_init_fabric_guard.cpp
         test_gap77_fixtg2_base_umd_partial_l1_clear.cpp
         test_gap72_fixti_ring_sync_fast_skip.cpp
+        test_gap78_fixp25clean_skip_already_terminated_phase3.cpp
+        test_gap79_fixap_master_router_chan_relay_broken.cpp
+        test_gap80_fixev_event_synchronize_dead_relay_guard.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
