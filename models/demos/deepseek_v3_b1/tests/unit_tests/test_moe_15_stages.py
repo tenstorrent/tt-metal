@@ -1006,9 +1006,7 @@ def test_persistent_moe_15_stages(
                         break
                 assert d2h_result_torch is not None, "All D2H sockets returned zeros -- reduce or pipeline failed"
 
-        logger.info(f"[rank={my_mesh_id}] waiting for barrier")
         ttnn.distributed_context_barrier()
-        logger.info(f"[rank={my_mesh_id}] barrier completed")
 
     finally:
         pass
