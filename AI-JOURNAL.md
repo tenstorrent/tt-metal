@@ -1,5 +1,85 @@
 
 ---
+## 2026-05-11 — FIX EV: EventSynchronize infinite spin on dead-relay device
+
+**File**: `tt_metal/distributed/distributed.cpp`, `EventSynchronize()` lines 45-59
+
+**Root cause of 8-minute hang**: After FIX Z/GAP-A throws from `read_completion_queue_event`
+(reader thread detects `relay_path_broken=true` on device 1), the main thread in
+`device_operation.hpp` calls `EventSynchronize(completion_event)`. That function enters
+`ttsl::nice_spin_until()` polling `sysmem.get_last_completed_event(cq_id) >= target_id`.
+For device 1 (dead relay, non-MMIO), the event counter is never updated → infinite spin →
+8 minutes until CI cancels.
+
+**Full call chain**:
+1. `ttnn.all_gather()` → `device_operation.hpp` dispatch path
+2. `enqueue_mesh_workload(blocking=false)` dispatches workload
+3. `enqueue_record_event_to_host(sub_device_ids)` → event=1 enqueued; reader thread processes it
+4. Reader thread: device 0 OK; device 1 → FIX Z/GAP-A fires → exception stored, `reads_processed_cv_.notify_all()`
+5. Main thread calls `EventSynchronize(event=1)` → `nice_spin_until` for device 1 → HANGS
+
+**Fix**: Added `is_fabric_relay_path_broken()` guard BEFORE touching `sysmem`. If non-MMIO
+device has broken relay, log a warning and `continue` to next device. The reader thread's
+exception will surface through the normal error-propagation path.
+
+---
+## 2026-05-11 — FIX LT9-PROGRESS-B2: Rate-based fabric ERISC progress detection
+
+**Branch**: nsexton/0-racecondition-hunt
+**Files**: command_queue_common.cpp, system_memory_manager.cpp, command_queue_common.hpp
+
+**Problem**: Design 1 (MMIO-only filter) was insufficient — MMIO ERISC keepalive traffic still
+changed the XOR value every 100ms, preventing timeout from ever firing on a genuinely stuck dispatch.
+
+**Design 2 fix**:
+- `FabricProgressState` struct (file-static, anonymous namespace) tracks last counter sum and a `progress_token`
+- SUM (not XOR) all MMIO ERISC packet counters to preserve magnitude for rate calculation
+- Only increment `progress_token` when delta >= threshold (default 10 pkts/100ms)
+- Threshold scales with elapsed time: `scaled_threshold = PROGRESS_THRESHOLD * (elapsed_ms / 100.0f)`
+- Background keepalive: ~1-50 delta/ERISC/100ms → below threshold → no false timeout extension
+- Real AllGather: >>10,000 delta/ERISC/100ms → well above threshold → timeout extended correctly
+- `progress_token` XOR'd with dispatch progress in both lambdas; only changes on real fabric work
+- No changes to `loop_and_wait_with_timeout` (zero-change contract preserved)
+- Configurable via `TT_METAL_FABRIC_PROGRESS_THRESHOLD` env var (default 10)
+
+---
+## 2026-05-11 — FIX LT9-PROGRESS-SAFE: Eliminate infinite hang paths from Approach B
+
+**Root cause**: Sanity run 25642907489 on N300 showed infinite hangs and dispatch deadlocks after LT9-PROGRESS integration.
+
+Three infinite hang paths identified:
+
+1. **Progress lambda blocks forever**: `get_fabric_erisc_progress()` calls `cluster.read_core()` on non-MMIO chips (device 1 on N300). The read goes through the ERISC relay. If the relay is broken (the very condition we're timing out on), `read_core()` blocks indefinitely. `loop_and_wait_with_timeout` never calls `on_timeout`.
+
+2. **False progress prevents timeout**: Background fabric keepalive traffic increments the packet counter even when the dispatch operation is truly stuck. The XOR value keeps changing every 100ms, resetting the timeout clock. Timeout never fires.
+
+3. **on_timeout blocks before termination signal**: `dump_fabric_erisc_state()` was called before `on_dispatch_timeout_detected()`. If any non-MMIO `read_core()` blocked, the device never received the termination signal.
+
+**Fixes applied**:
+- **Fix A**: Removed `get_fabric_erisc_progress()` XOR from both dispatch progress lambdas in `system_memory_manager.cpp`. Progress lambdas now return only `get_cq_dispatch_progress()`.
+- **Fix B**: Added MMIO guard to `dump_fabric_erisc_state()` in `command_queue_common.cpp` — skips non-MMIO chips with a log message.
+- **Fix C** (kept): `dump_fabric_erisc_state()` retained in `on_timeout` lambda — valuable diagnostics, now safe.
+- **Fix D** (kept): Kernel packet counter in `fabric_erisc_router.cpp` retained — useful for MMIO-safe diagnostics.
+- `get_fabric_erisc_progress()` function body and declaration kept (dead code) — cleanup deferred.
+
+**Approach B (progress-aware fabric timeout) is deferred**: Needs MMIO-only or rate-based approach to avoid both the blocking read and false progress issues.
+
+---
+## 2026-05-10 — Adversarial v3 Audit of EDM Firmware (10 files)
+
+Full audit of all spin loops, shared-memory accesses, ETH TXQ handling, and flow control across 10 device-side firmware files. Results in `/workspace/group/research/edm_races_findings_v3.md`.
+
+**Findings**: 0 CRITICAL, 0 HIGH, 2 MEDIUM, 5 LOW, 3 INFO.
+
+**MEDIUM findings** (NOT fixed — require perf benchmarking):
+- **WFEWS**: `wait_for_empty_write_slot()` in mux `forward_data` is an unbounded spin. If downstream EDM stalls, mux hangs forever, preventing host teardown. Fixing requires restructuring the forward loop to be non-blocking.
+- **MUX-NOWH**: Legacy mux `wait_for_static_connection_to_ready` has no termination check on any arch. Dead code — not called from kernel_main.
+
+**Verified fixes present**: FIX HS1 (line 130), FIX HS2 (lines 50-61), FIX ER1 (lines 260-262), FIX AH (lines 60-76).
+
+**No code changes made** — the two MEDIUM findings are architectural and performance-sensitive. The mux hot path has documented sensitivity to codegen changes (>1 GB/s regression from removing an unused function parameter).
+
+---
 ## CANONICAL BRANCHES (2026-05-09)
 
 - **tt-metal**: `nsexton/0-racecondition-hunt`

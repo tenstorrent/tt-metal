@@ -2302,8 +2302,14 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     if (!dead_relay_devices_.empty()) {
         const auto& eth_connections_rrnm = cluster_.get_ethernet_connections();
         const auto& router_config_rrnm = builder_context.get_fabric_router_config();
-        constexpr uint32_t kRomPostcode_RRNM = 0x49705180u;
-        constexpr uint32_t kRRNM_BootWaitMs = 500;
+        // FIX RR-NM bug fix: poll for base-UMD sentinel (0x49706550), NOT for !kRomPostcode.
+        // Previous code used kRomPostcode_RRNM=0x49705180 and checked (status != kRomPostcode),
+        // which exits immediately when the channel is at 0x49705530 (mid-ROM, also != 0x49705180).
+        // The relay (UMD write_core protocol) only works once base-UMD firmware is running
+        // (0x49706550).  Writing through a channel still in ROM boot causes the flush timeout
+        // in assert_risc_reset_at_core_write_only (step 2).  Must wait for 0x49706550.
+        constexpr uint32_t kBaseUmdSentinel_RRNM = 0x49706550u;
+        constexpr uint32_t kRRNM_BootWaitMs = 2000;  // extended: ROM→base-UMD can take ~1s
         constexpr uint32_t kRRNM_PollIntervalMs = 5;
 
         // Step 1: PCIe-direct soft reset of MMIO dead channels.
@@ -2339,15 +2345,14 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                     while (elapsed_ms < kRRNM_BootWaitMs) {
                         std::vector<uint32_t> status_buf(1, 0);
                         cluster_.read_core(status_buf, sizeof(uint32_t), core_loc, edm_addr);
-                        if (status_buf[0] != kRomPostcode_RRNM) {
+                        if (status_buf[0] == kBaseUmdSentinel_RRNM) {
                             booted = true;
                             log_info(
                                 tt::LogMetal,
-                                "FIX RR-NM step 1: MMIO dev={} chan={} booted to 0x{:08x} "
-                                "after {}ms. Relay path available. (#42429)",
+                                "FIX RR-NM step 1: MMIO dev={} chan={} reached base-UMD "
+                                "(0x49706550) after {}ms. Relay path available. (#42429)",
                                 dev->id(),
                                 chan,
-                                status_buf[0],
                                 elapsed_ms);
                             break;
                         }
