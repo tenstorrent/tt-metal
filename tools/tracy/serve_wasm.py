@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import functools
 import os
+import shutil
+import stat
 import sys
 import subprocess
 from pathlib import Path
@@ -60,6 +63,17 @@ def _safe_trace_file_path(traces_dir: Path, filename: str) -> Path | None:
     return candidate
 
 
+def _ensure_resolved_path_under(allowed_root: Path, candidate: Path) -> Path:
+    """Resolve ``candidate`` and require it to lie under ``allowed_root`` (both resolved)."""
+    root_r = _resolve_under_root(allowed_root, strict=False)
+    resolved = _resolve_under_root(candidate, strict=False)
+    try:
+        resolved.relative_to(root_r)
+    except ValueError as e:
+        raise RuntimeError(f"Refusing path outside {root_r}: {candidate}") from e
+    return resolved
+
+
 def _validated_wasm_serve_directory(directory: str | os.PathLike[str]) -> Path:
     """Ensure the serve root stays under PROFILER_WASM_DIR (path traversal / arbitrary chdir)."""
     root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
@@ -83,6 +97,70 @@ def _profiler_server_log_path() -> Path:
     if resolved.name != _SERVER_LOG_BASENAME:
         raise RuntimeError("Profiler log path basename mismatch")
     return resolved
+
+
+def _copy_validated_trace_to_embed(trace_filename: str) -> None:
+    """Copy ``traces/<trace_filename>`` onto ``embed.tracy`` under ``PROFILER_WASM_DIR``.
+
+    Uses ``open(..., dir_fd=…)`` (POSIX ``openat``) with **relative** basenames under directory
+    file descriptors for traces / WASM roots. Path-based SAST tools often flag ``open(abs_path)``
+    when any predecessor value touched request input; relative opens under pinned directories avoid
+    passing a tainted absolute path string into ``open``.
+    """
+    traces_root = _resolve_under_root(Path(PROFILER_WASM_TRACES_DIR), strict=False)
+    wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
+    validated = _safe_trace_file_path(traces_root, trace_filename)
+    if validated is None or not validated.is_file():
+        raise ValueError("invalid trace file")
+
+    trace_bn = validated.name
+    safe_bn: str | None = None
+    traces_base = os.path.abspath(str(traces_root))
+    with os.scandir(traces_base) as scan:
+        for entry in scan:
+            if entry.name != trace_bn:
+                continue
+            if entry.is_file(follow_symlinks=False):
+                safe_bn = entry.name
+                break
+    if safe_bn is None:
+        raise ValueError("invalid trace file")
+    if os.sep in safe_bn or safe_bn in (".", ".."):
+        raise RuntimeError("invalid traces directory entry")
+
+    wasm_base = os.path.abspath(str(wasm_root))
+    embed_rel = PROFILER_WASM_TRACE_FILE_NAME
+
+    traces_dir_fd = os.open(traces_base, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        wasm_dir_fd = os.open(wasm_base, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            try:
+                st = os.stat(embed_rel, dir_fd=wasm_dir_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                st = None
+            if st is not None and stat.S_ISLNK(st.st_mode):
+                os.unlink(embed_rel, dir_fd=wasm_dir_fd)
+
+            src_fd = os.open(safe_bn, os.O_RDONLY, dir_fd=traces_dir_fd)
+            try:
+                dst_fd = os.open(
+                    embed_rel,
+                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                    0o644,
+                    dir_fd=wasm_dir_fd,
+                )
+                try:
+                    with os.fdopen(src_fd, "rb", closefd=False) as sf, os.fdopen(dst_fd, "wb", closefd=False) as df:
+                        shutil.copyfileobj(sf, df)
+                finally:
+                    os.close(dst_fd)
+            finally:
+                os.close(src_fd)
+        finally:
+            os.close(wasm_dir_fd)
+    finally:
+        os.close(traces_dir_fd)
 
 
 def _embed_trace_dest_path() -> Path:
@@ -185,15 +263,22 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
     cmd = [sys.executable, __file__, "--port", str(http_port)]
     if directory is not None:
         validated_dir = _validated_wasm_serve_directory(directory)
+        wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
+        validated_dir = _ensure_resolved_path_under(wasm_root, validated_dir)
         cmd += ["--dir", str(validated_dir)]
     logger.info(f"Running command: {' '.join(cmd)}")
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     with open(log_path, "a", buffering=1) as log_file:
         dup_fd = os.dup(log_file.fileno())
-    child_log = os.fdopen(dup_fd, "a", buffering=1)
     try:
-        process = subprocess.Popen(
+        child_log = os.fdopen(dup_fd, "a", buffering=1)
+    except Exception:
+        os.close(dup_fd)
+        raise
+    try:
+        # argv: sys.executable, this script, --port <int>, optional --dir <path validated above>; shell=False.
+        process = subprocess.Popen(  # nosec B603
             cmd,
             env=env,
             stdout=child_log,
@@ -202,8 +287,10 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
             close_fds=True,
             shell=False,
         )
-    finally:
+    except Exception:
         child_log.close()
+        raise
+    child_log.close()
     logger.info(f"Started server with PID {process.pid}, logging to {log_path}")
     return process
 
@@ -244,12 +331,13 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(b"File not found")
                 return
             try:
-                os.remove(str(file_path))
-                print(f"[DEBUG] DELETE /traces/ deleted file: '{file_path}'")
+                traces_root = _resolve_under_root(Path(traces_dir), strict=False)
+                to_remove = _ensure_resolved_path_under(traces_root, file_path)
+                to_remove.unlink()
+                print(f"[DEBUG] DELETE /traces/ deleted file: '{to_remove}'")
                 # Check if embed.tracy is a symlink to the deleted file
                 embed_path = _embed_trace_dest_path()
-                traces_root = _resolve_under_root(Path(traces_dir), strict=False)
-                abs_deleted = _resolve_under_root(file_path, strict=False)
+                abs_deleted = _resolve_under_root(to_remove, strict=False)
                 if embed_path.is_symlink():
                     abs_target = (embed_path.parent / embed_path.readlink()).resolve()
                     try:
@@ -259,17 +347,19 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                     else:
                         if abs_target == abs_deleted:
                             embed_path.unlink()
-                            # Find first available .tracy file
-                            files = [
-                                f
-                                for f in os.listdir(traces_dir)
-                                if f.endswith(".tracy") and os.path.isfile(os.path.join(traces_dir, f))
-                            ]
+                            # Find first available .tracy file (basename-only, under traces_root)
+                            files = []
+                            for f in os.listdir(traces_dir):
+                                sp = _safe_trace_file_path(traces_root, f)
+                                if sp is not None and sp.is_file():
+                                    files.append(f)
                             files.sort(reverse=True)
                             if files:
-                                new_target = os.path.relpath(os.path.join(traces_dir, files[0]), embed_path.parent)
-                                os.symlink(new_target, embed_path)
-                                print(f"[DEBUG] embed.tracy now points to: {new_target}")
+                                safe_pick = _safe_trace_file_path(traces_root, files[0])
+                                if safe_pick is not None:
+                                    new_target = os.path.relpath(str(safe_pick), embed_path.parent)
+                                    os.symlink(new_target, embed_path)
+                                    print(f"[DEBUG] embed.tracy now points to: {new_target}")
                             else:
                                 print("[DEBUG] No .tracy files left to point embed.tracy to.")
                 self.send_response(200)
@@ -346,12 +436,14 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"File not found")
                 return
-            print(f"[DEBUG] /traces/ serving file: '{file_path}'")
+            traces_root = _resolve_under_root(Path(traces_dir), strict=False)
+            safe_file = _ensure_resolved_path_under(traces_root, file_path)
+            print(f"[DEBUG] /traces/ serving file: '{safe_file}'")
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Disposition", f"attachment; filename={filename}")
+            self.send_header("Content-Disposition", f"attachment; filename={safe_file.name}")
             self.end_headers()
-            with file_path.open("rb") as trace_stream:
+            with safe_file.open("rb") as trace_stream:
                 while True:
                     chunk = trace_stream.read(8192)
                     if not chunk:
@@ -364,23 +456,15 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
 
             filename = self.path[len("/set-embed-tracy/") :]
             filename = urllib.parse.unquote(filename)
-            src_path = _safe_trace_file_path(Path(traces_dir), filename)
-            if src_path is None or not src_path.is_file():
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"Invalid filename")
-                return
-            dst_path = _embed_trace_dest_path()
-            import shutil
-
             try:
-                # Remove embed.tracy if it is a symlink
-                if dst_path.is_symlink():
-                    dst_path.unlink()
-                shutil.copyfile(src_path, dst_path)
+                _copy_validated_trace_to_embed(filename)
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"OK")
+            except ValueError:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid filename")
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()
@@ -410,7 +494,7 @@ async def watch_embed_file():
                 last_mtime = mtime
                 await notify_clients()
         except FileNotFoundError:
-            # Trace file may not exist yet (or may be temporarily absent); keep polling.
+            # embed.tracy may not exist yet (or may be temporarily absent); keep polling.
             pass
         await asyncio.sleep(1)
 
@@ -451,14 +535,16 @@ def run_server(directory, port):
     except ValueError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
-    os.chdir(serve_root)
+    wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
+    serve_root = _ensure_resolved_path_under(wasm_root, serve_root)
     print(f"Serving WASM from {serve_root} on http://0.0.0.0:{port} ...")
     # Start WebSocket server in a separate thread
     ws_thread = threading.Thread(target=start_websocket_server, args=(ws_port,), daemon=True)
     ws_thread.start()
 
-    # Start HTTP server
-    HTTPServer(("0.0.0.0", port), CORSRequestHandler).serve_forever()
+    # Start HTTP server (set serve root via handler; avoids os.chdir on argv-derived paths).
+    handler_factory = functools.partial(CORSRequestHandler, directory=str(serve_root))
+    HTTPServer(("0.0.0.0", port), handler_factory).serve_forever()
 
 
 if __name__ == "__main__":
