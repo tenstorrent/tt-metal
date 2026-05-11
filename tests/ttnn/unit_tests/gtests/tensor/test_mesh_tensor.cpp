@@ -1220,5 +1220,52 @@ TEST_F(MeshTensorTest, LargeWriteRoundtrip_PinnedMemoryPath) {
     expect_host_tensors_eq(host_tensor, result);
 }
 
+TEST_F(MeshTensorTest, LargeWriteRoundtrip_HeightShardedDeviceRequiringShardPadding) {
+    // 1024 * 9216 * 4 bytes = 36 MB, above the 32 MB pinned-write threshold.
+    // Device uses HEIGHT_SHARDED with shard_height=257 on 4 DRAM cores;
+    // ceil(1024/257)=4, and 4*257=1028 > 1024, so the last shard carries
+    // 4 padding rows. This padding may prevent the pinned-memory fast path
+    // at the dispatch level.
+    const ttnn::Shape shape{1, 1, 1024, 9216};
+    constexpr uint32_t kShardHeight = 257;
+    constexpr uint32_t kWidth = 9216;
+
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(3, 0)));
+    ShardSpec shard_spec(shard_grid, {kShardHeight, kWidth});
+    MemoryConfig sharded_mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec);
+
+    auto dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed::MeshCoordinateRange range(mesh_device_->shape());
+    std::vector<distributed::MeshCoordinate> coords(range.begin(), range.end());
+    dhb.emplace_shards(coords, [&](const distributed::MeshCoordinate&) {
+        std::vector<uint32_t> data(shape.volume());
+        std::iota(data.begin(), data.end(), 0);
+        return HostBuffer(std::move(data));
+    });
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
+    HostTensor host_tensor(
+        std::move(dhb), TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{})), topology);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_, sharded_mem_cfg);
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
+
+    const size_t logical_volume = shape.volume();
+    const auto& exp_coords = host_tensor.buffer().shard_coords();
+    const auto& act_coords = result.buffer().shard_coords();
+    ASSERT_EQ(exp_coords, act_coords);
+    for (const auto& coord : exp_coords) {
+        auto exp_shard = host_tensor.buffer().get_shard(coord);
+        auto act_shard = result.buffer().get_shard(coord);
+        ASSERT_TRUE(exp_shard.has_value());
+        ASSERT_TRUE(act_shard.has_value());
+        auto exp_span = exp_shard->view_as<uint32_t>();
+        auto act_span = act_shard->view_as<uint32_t>();
+        ASSERT_GE(act_span.size(), logical_volume);
+        EXPECT_TRUE(std::equal(exp_span.begin(), exp_span.end(), act_span.begin()))
+            << "Data mismatch at mesh coordinate " << coord;
+    }
+}
+
 }  // namespace
 }  // namespace ttnn::distributed::test
