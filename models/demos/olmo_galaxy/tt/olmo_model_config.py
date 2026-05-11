@@ -176,14 +176,32 @@ class TtOlmoModelArgs(TtModelArgs):
             ]
         )
 
-        # RoPE MUST use the same sub_core_grids as ops (not the full 70-core grid).
-        # fused_qk creates its kernel on all_cores_bb = bounding_box(cos/sin grid).
-        # Q comes from llama_rs_create_heads on sub_core_grids cores 0-7 (y≤2).
-        # K comes from llama_rs_create_heads on sub_core_grids cores 8-15 (y up to 5).
-        # If rope uses the full 70-core grid starting at (0,0), cos/sin bbox only covers y≤2,
-        # causing K cores at y=3..5 to be outside → OOB access in core_to_runtime_args_.
-        # Using sub_core_grids starting at (1,0): 16 cores → bbox {(1,0)-(3,5)}, covers K ✓
-        self.rope_sub_core_grids = self.sub_core_grids
+        # RoPE MUST use the old 50-core non-contiguous grid (NOT the widened 60-core
+        # self.sub_core_grids) because CREATE_HEAD_OUTPUT_MEMCFG is pinned to that
+        # same 50-core literal and fused_qk creates its kernel bounding box from the
+        # cos/sin shard grid.
+        #
+        # K comes from CREATE_HEAD_OUTPUT_MEMCFG cores 8-15 of the 50-core grid
+        # (5-wide per row: x=1,2,3,5,6). Enumerating row-wise:
+        #   cores 8-15 → rows y=1 (last 3: x=3,5,6) + row y=2 (x=1..3,5) + (1,3).
+        # The last K core is (1,3) at y=3.
+        #
+        # With the 50-core grid (5 cores per row), 16 rope cores cover y=0..3:
+        #   bbox = {(1,0)-(6,3)} which includes (1,3) ✓
+        #
+        # With the widened 60-core self.sub_core_grids (6 cores per row), 16 rope
+        # cores only cover y=0..2 (6+6+4):
+        #   bbox = {(1,0)-(6,2)} which DOES NOT include (1,3) → OOB crash.
+        #
+        # Col 4 is missing from the rope grid here (same as CREATE_HEAD_OUTPUT),
+        # which is intentional — the kernel's all_cores_bb still spans the gap
+        # safely because the bounding box covers all needed K cores.
+        self.rope_sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            ]
+        )
         self.rope_start_core = self.start_core  # CoreCoord(1, 0)
 
         # Load from HF_MODEL environment variable
