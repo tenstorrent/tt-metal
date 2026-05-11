@@ -513,18 +513,21 @@ struct BinaryFpu : BinaryFpuTag {
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_init(CbA, CbB);
             else                                       mul_tiles_init(CbA, CbB);
         } else {
-            // Reg A fix: replace init_bcast<>() (full HW configure mid-MAIN) with short-init
-            // forms: llk_math_eltwise_binary_init + llk_unpack_AB_init. No hw_configure,
-            // no pack_dest_init, no math_pack_sync_init — preserves D8 invariant
-            // (BIG init only at compute_kernel_hw_startup boot, never per-tile mid-MAIN).
+            // Reg A fix v2: use *_init_short form from bcast.h:352-446. The original
+            // init_bcast<>() was the BIG init (hw_configure + pack_dest_init + sync_init)
+            // — undefined mid-MAIN per D8. The previous patch used non-operand math init
+            // which programs DEFAULT_TENSOR_SHAPE; we now switch to the _with_operands form
+            // that reads the actual tensor shape from CB metadata via get_operand_tensor_shape.
+            // This matches `add_bcast_rows_init_short` / `sub_bcast_cols_init_short` etc.
+            // exactly — math init + unpack init only, no hw_configure / pack_dest_init / sync_init.
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
             constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
                                 (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
                                                            ckernel::EltwiseBinaryType::ELWMUL;
             if constexpr (Op == BinaryFpuOp::Mul) {
-                MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>()));
+                MATH((llk_math_eltwise_binary_init_with_operands<et, bt, MATH_FIDELITY>(CbA, CbB)));
             } else {
-                MATH((llk_math_eltwise_binary_init<et, bt, MathFidelity::LoFi>()));
+                MATH((llk_math_eltwise_binary_init_with_operands<et, bt, MathFidelity::LoFi>(CbA, CbB)));
             }
             UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
         }
