@@ -38,6 +38,9 @@ class KokoroFullTtnn(nn.Module):
     End-to-end Kokoro on Tenstorrent: device PL-BERT, device predictor, device ISTFTNet.
 
     Vocoder uses the experimental :class:`KokoroIstftNetTt` (no host STFT fallback).
+
+    Set ``use_torch_sinegen=True`` to run the reference PyTorch ``SineGen`` on CPU inside
+    the TTNN generator (compare waveform PCC vs default device ``KokoroTtnnSineGen``).
     """
 
     def __init__(
@@ -48,14 +51,16 @@ class KokoroFullTtnn(nn.Module):
         disable_complex: bool = True,
         weights_dtype=ttnn.bfloat16,
         vocoder_cache_max: int = 16,
+        use_torch_sinegen: bool = False,
     ):
         super().__init__()
         self.device = device
         self.repo_id = repo_id
         self.disable_complex = disable_complex
         self.weights_dtype = weights_dtype
+        self.use_torch_sinegen = bool(use_torch_sinegen)
         self._vocoder_cache_max = int(vocoder_cache_max)
-        self._vocoder_cache: OrderedDict[int, KokoroIstftNetTt] = OrderedDict()
+        self._vocoder_cache: OrderedDict[tuple[int, bool], KokoroIstftNetTt] = OrderedDict()
 
         config_path = hf_hub_download(repo_id=repo_id, filename="config.json")
         with open(config_path, "r", encoding="utf-8") as f:
@@ -73,18 +78,20 @@ class KokoroFullTtnn(nn.Module):
         self.tt_predictor = TtKokoroPredictor(device, pred_params)
 
     def _vocoder_for_tf(self, tf: int) -> KokoroIstftNetTt:
-        if tf in self._vocoder_cache:
-            self._vocoder_cache.move_to_end(tf)
-            return self._vocoder_cache[tf]
+        key = (tf, self.use_torch_sinegen)
+        if key in self._vocoder_cache:
+            self._vocoder_cache.move_to_end(key)
+            return self._vocoder_cache[key]
         params = preprocess_kokoro_decoder_tt_parameters(
             self._decoder_cpu,
             self.device,
             f0_coarse_time=tf,
             disable_complex=self.disable_complex,
+            use_torch_sinegen=self.use_torch_sinegen,
         )
         voc = KokoroIstftNetTt(self.device, params)
-        self._vocoder_cache[tf] = voc
-        self._vocoder_cache.move_to_end(tf)
+        self._vocoder_cache[key] = voc
+        self._vocoder_cache.move_to_end(key)
         while len(self._vocoder_cache) > self._vocoder_cache_max:
             self._vocoder_cache.popitem(last=False)
         return voc

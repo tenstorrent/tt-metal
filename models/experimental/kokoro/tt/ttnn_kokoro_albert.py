@@ -2,7 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full Kokoro PL-BERT `AlbertModel` forward on TTNN (12× shared layer, device weights)."""
+"""Full Kokoro PL-BERT `AlbertModel` forward on TTNN (12× shared layer, device weights).
+
+Position and token-type ids are created with ``ttnn.arange`` / ``ttnn.zeros`` (no torch
+``arange``/``zeros``). Encoder attention bias uses TTNN ops only after a single host
+``from_torch`` of the 2D validity mask (HF 1=attend, 0=pad).
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,6 @@ import torch
 
 import ttnn
 from models.experimental.kokoro.tt.common import default_compute_kernel_config, dram_tile_config
-from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
 def _gelu_new_approx(x: ttnn.Tensor, *, memory_config) -> ttnn.Tensor:
@@ -32,6 +36,37 @@ def _gelu_new_approx(x: ttnn.Tensor, *, memory_config) -> ttnn.Tensor:
     bracket = ttnn.add(one, tanh_br, memory_config=memory_config)
     out = ttnn.multiply(x, bracket, memory_config=memory_config)
     return ttnn.multiply(out, 0.5, memory_config=memory_config)
+
+
+def _extended_encoder_attention_bias_ttnn(
+    attention_valid_2d: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig,
+) -> ttnn.Tensor:
+    """
+    HF-style additive mask for encoder self-attention: 0 for valid tokens, large negative for pad.
+
+    ``attention_valid_2d`` is ``[B, S]`` bfloat16 with **1 = attend**, **0 = pad** (same as HF
+    ``attention_mask`` before ``get_extended_attention_mask``). Returns ``[B, 1, 1, S]`` bf16.
+    """
+    # [B, S] -> [B, 1, 1, S] (broadcastable with scores [B, H, S, S]); matches two ``unsqueeze(1)``.
+    am4 = ttnn.unsqueeze(attention_valid_2d, 1)
+    am4 = ttnn.unsqueeze(am4, 1)
+    ones = ttnn.ones_like(am4)
+    inverted = ttnn.subtract(ones, am4, memory_config=memory_config)
+    ttnn.deallocate(ones)
+    neg = ttnn.full(
+        inverted.shape,
+        fill_value=-100000.0,
+        dtype=inverted.dtype,
+        layout=inverted.layout,
+        device=inverted.device(),
+        memory_config=memory_config,
+    )
+    out = ttnn.multiply(inverted, neg, memory_config=memory_config)
+    ttnn.deallocate(neg)
+    ttnn.deallocate(inverted)
+    return out
 
 
 def _ensure_bsh(x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
@@ -225,9 +260,6 @@ class TtKokoroAlbert:
         device = self.mesh_device
         batch_size, seq_len = input_ids.shape
 
-        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
-        token_type_ids = torch.zeros((batch_size, seq_len), dtype=torch.long)
-
         tt_input = ttnn.from_torch(
             input_ids,
             dtype=ttnn.uint32,
@@ -235,15 +267,19 @@ class TtKokoroAlbert:
             device=device,
             memory_config=self.memory_config,
         )
-        tt_pos = ttnn.from_torch(
-            position_ids,
+        pos_row = ttnn.arange(
+            0,
+            seq_len,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=self.memory_config,
         )
-        tt_tok = ttnn.from_torch(
-            token_type_ids,
+        pos_row = ttnn.reshape(pos_row, [1, seq_len], memory_config=self.memory_config)
+        tt_pos = ttnn.repeat(pos_row, (batch_size, 1))
+
+        tt_tok = ttnn.zeros(
+            [batch_size, seq_len],
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -283,14 +319,18 @@ class TtKokoroAlbert:
         )
         ttnn.deallocate(embeddings)
 
-        ext = get_extended_attention_mask(attention_mask_1_for_valid.float(), input_ids.shape, torch.float32)
-        ext = torch.clamp(ext, min=-100000.0)
-        ext = ext.expand((batch_size, -1, -1, -1))
-        attention_mask = ttnn.from_torch(
-            ext,
+        am_host = attention_mask_1_for_valid
+        if not isinstance(am_host, torch.Tensor):
+            raise TypeError("attention_mask_1_for_valid must be a torch.Tensor (host I/O boundary)")
+        am_bf16 = ttnn.from_torch(
+            am_host.to(dtype=torch.float32),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=self.memory_config,
+        )
+        attention_mask = _extended_encoder_attention_bias_ttnn(
+            am_bf16,
             memory_config=self.memory_config,
         )
 

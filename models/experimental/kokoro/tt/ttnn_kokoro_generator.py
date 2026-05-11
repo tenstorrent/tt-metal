@@ -266,7 +266,10 @@ class KokoroGenerator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.m_source = SourceModuleHnNSF(device, parameters["m_source"])
+        m_src = dict(parameters["m_source"])
+        m_src["use_torch_sinegen"] = bool(parameters.get("use_torch_sinegen", False))
+        m_src["torch_sin_gen"] = parameters.get("torch_sin_gen")
+        self.m_source = SourceModuleHnNSF(device, m_src)
         self.stft = KokoroConvStft(device, parameters["stft"])
         self.noise_convs = [_StridedNoiseConv1d(device, s) for s in parameters["noise_convs"]]
         self.noise_res = [AdaINResBlock1(device, p) for p in parameters["noise_res"]]

@@ -18,7 +18,7 @@ from .ttnn_kokoro_decoder_body import KokoroDecoderBody, preprocess_kokoro_decod
 from .ttnn_kokoro_decoder_front import KokoroDecoderFront
 from .ttnn_kokoro_generator import KokoroGenerator
 from .ttnn_kokoro_stft import KokoroConvStft
-from .ttnn_kokoro_plbert import TtKokoroPlBert, TtKokoroPlBertHybrid, TtKokoroPlBertOutput
+from .ttnn_kokoro_plbert import TtKokoroPlBert, TtKokoroPlBertOutput
 from .ttnn_kokoro_plbert_projection import TtKokoroPlBertProjection
 from .ttnn_kokoro_predictor import (
     TtKokoroPredictor,
@@ -40,7 +40,6 @@ __all__ = [
     "KokoroFullTtnn",
     "TtKokoroAlbert",
     "TtKokoroPlBert",
-    "TtKokoroPlBertHybrid",
     "TtKokoroPlBertOutput",
     "TtKokoroPlBertProjection",
     "TtKokoroPredictor",

@@ -23,6 +23,11 @@ def main() -> int:
     parser.add_argument("--lang-code", type=str, default="a")
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--output", type=str, default="kokoro_experimental_ttnn.wav")
+    parser.add_argument(
+        "--torch-sinegen",
+        action="store_true",
+        help="Run PyTorch SineGen on CPU for harmonics (TTNN linear+rest on device); compare PCC vs default.",
+    )
     args = parser.parse_args()
 
     try:
@@ -46,7 +51,13 @@ def main() -> int:
 
     device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), l1_small_size=24576)
     try:
-        model = KokoroFullTtnn(device, repo_id=KokoroConfig.repo_id, disable_complex=True)
+        model = KokoroFullTtnn(
+            device,
+            repo_id=KokoroConfig.repo_id,
+            disable_complex=True,
+            use_torch_sinegen=bool(args.torch_sinegen),
+        )
+        logger.info(f"use_torch_sinegen={bool(args.torch_sinegen)}")
         wave_chunks: list[torch.Tensor] = []
         torch.manual_seed(0)
         for chunk_idx, result in enumerate(results):
