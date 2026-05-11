@@ -109,7 +109,7 @@ class LlamaGRPOCompleter:
         # blocks_per_user_for_max_seq_len)`` and split it evenly across
         # users. ``MIN_NUM_BLOCKS = 1024`` matches the demo / PCC test
         # configs that are known to work end-to-end on this model
-        # (``simple_text_demo.py`` and ``pcc_hf_ttml_ttt.py`` both pin
+        # (``simple_text_demo.py`` and ``gen_hf_ttt.py`` both pin
         # ``max_num_blocks=1024`` regardless of how short the actual
         # sequence is). Tighter sizing has empirically produced incoherent
         # output and may trip undocumented kernel assumptions, so we
@@ -213,7 +213,7 @@ class LlamaGRPOCompleter:
         # (https://github.com/tenstorrent/tt-metal/issues/34763). :meth:`generate`
         # therefore always sources the next token via host sampling, which is
         # bit-exact deterministic for greedy and matches what
-        # ``pcc_hf_ttml_ttt.py`` already validates for this model.
+        # ``gen_hf_ttt.py`` already validates for this model.
 
         # Build paged-attention KV-cache handles the same way ``create_tt_model``
         # does in ``models/tt_transformers/tt/common.py``: one (k, v) tuple per
