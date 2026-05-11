@@ -43,10 +43,13 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     const uint32_t num_layers = operation_attributes.num_layers;
     const bool enable_performance_mode = operation_attributes.enable_performance_mode;
 
+    /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
-    const ttnn::Tensor& tensor_addrs = input_tensors.back();
+    // tensors that with addresses
+    const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
     std::vector<Buffer*> tensor_buffers;
+    // tensors that with actual data
     std::vector<Tensor> tensors;
     tensors.resize(input_tensors.size() - 1);
     std::copy(input_tensors.begin(), input_tensors.end() - 1, tensors.begin());
