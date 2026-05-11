@@ -477,7 +477,12 @@ struct BinaryOp : DestOnlyTag {
     static_assert(
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(Out) < DEST_AUTO_LIMIT,
         "BinaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
-    static_assert(In0 != In1 && In0 != Out && In1 != Out, "BinaryOp slots must be distinct");
+    // NOTE: slot-distinctness is *not* enforced here. SFPU binary ops (AddBinary /
+    // SubBinary / MulBinary / DivBinary) routinely operate in-place (Out == In0 or
+    // Out == In1) and even `In0 == In1` is legal (e.g. squaring). The FPU binary
+    // chain element (`BinaryFpu`) reads its inputs from CBs, not DEST slots, so it
+    // also doesn't need In0 != In1. If a future op truly requires distinct DEST
+    // slots, it should enforce that locally rather than at the CRTP base.
 
     static constexpr Dst in0 = In0;
     static constexpr Dst in1 = In1;

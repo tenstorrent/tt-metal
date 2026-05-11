@@ -34,10 +34,11 @@ struct Exp : UnaryOp<Exp<approx, fast, Slot>, Slot> {
 };
 
 // ---- Log ----
-template <Dst Slot = Dst::D0>
-struct Log : UnaryOp<Log<Slot>, Slot> {
-    static ALWI void init() { log_tile_init(); }
-    static ALWI void call(uint32_t idst) { log_tile(idst); }
+// `log_tile_init<fast_and_approx>()` and `log_tile<fast_and_approx>(idst)`.
+template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
+struct Log : UnaryOp<Log<fast, Slot>, Slot> {
+    static ALWI void init() { log_tile_init<fast == Approx::Fast>(); }
+    static ALWI void call(uint32_t idst) { log_tile<fast == Approx::Fast>(idst); }
 };
 
 // ---- Sqrt ----

@@ -57,6 +57,6 @@ void kernel_main() {
         CopyTile<cb_tmp0, Dst::D0, CopyTilePolicy::NoWaitPop>{},
         RsubUnary<Dst::D0>{0x3F800000u},  // 1.0f - x
         DivBinary<Dst::D1, Dst::D0, Dst::D0>{},
-        Log<Dst::D0>{},
+        Log<Approx::Exact, Dst::D0>{},
         PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

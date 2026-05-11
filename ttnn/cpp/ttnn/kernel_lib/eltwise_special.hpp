@@ -16,6 +16,7 @@
 #include "api/compute/eltwise_unary/i1.h"
 #include "api/compute/eltwise_unary/digamma.h"
 #include "api/compute/eltwise_unary/tanh_derivative.h"
+#include "api/compute/eltwise_unary/where.h"
 // Note: lgamma uses `lgamma_stirling_tile` (multi-tile) — wrap separately when needed.
 
 namespace compute_kernel_lib {
@@ -47,5 +48,17 @@ ELTWISE_DECLARE_UNARY(Digamma, digamma)
 ELTWISE_DECLARE_UNARY(TanhDerivative, tanh_derivative)
 
 #undef ELTWISE_DECLARE_UNARY
+
+// Where — ternary y = where(cond, a, b). DEST-only chain element with compile-time
+// slot binding. Skips TernaryOp CRTP's distinctness assert (out may equal a/b).
+template <DataFormat DF, Dst Cond = Dst::D0, Dst A = Dst::D1, Dst B = Dst::D2, Dst Out = Dst::D0>
+struct Where : DestOnlyTag {
+    static ALWI void init() { where_tile_init(); }
+    static ALWI void exec() { where_tile<DF>(to_u32(Cond), to_u32(A), to_u32(B), to_u32(Out)); }
+    static ALWI void apply() {
+        init();
+        exec();
+    }
+};
 
 }  // namespace compute_kernel_lib
