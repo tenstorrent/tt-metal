@@ -6,6 +6,10 @@
 Replaces HF model.generate() entirely, combining scatter-merge on device,
 argmax on device, and a custom generation loop.  No monkey-patching, no
 HF generate dependency.
+
+Logits are cast to float32 before greedy argmax, and the LM head uses FP32 destination
+accumulation, for stable token choices across mesh layouts (same cost as the prior fast
+path in practice for this pipeline).
 """
 
 from __future__ import annotations
@@ -39,14 +43,17 @@ from models.experimental.tt_symbiote.utils.device_management import timed_call
 
 
 def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
+    """Greedy token from logits (float32 argmax for stable ties vs bf16-only)."""
     logits_rm = ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    logits_rm = ttnn.typecast(logits_rm, ttnn.float32)
     token = ttnn.argmax(
         logits_rm,
         dim=-1,
         keepdim=True,
         use_multicore=True,
     )
-    return ttnn.reshape(token, (1, 1))
+    b = int(token.shape[0])
+    return ttnn.reshape(token, (b, 1))
 
 
 @trace_enabled
@@ -271,12 +278,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # Paged KV cache
         paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
 
-        graph_prefill = TTNNDotsOCRPrefillGraph(decoder_stack, final_norm, lm_head)
-        graph_prefill._unique_name = "dots_ocr_graph_prefill"
-        graph_decode = TTNNDotsOCRDecodeGraph(embedding, decoder_stack, final_norm, lm_head)
-        graph_decode._unique_name = "dots_ocr_graph_decode"
-
-        # Pipeline config
+        # Pipeline config (before graphs)
         eos_token_ids = [151643, 151673]
         if hasattr(hf_model, "generation_config") and hf_model.generation_config is not None:
             gc_eos = getattr(hf_model.generation_config, "eos_token_id", None)
@@ -291,6 +293,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
             num_devices=device.get_num_devices(),
             batch_size=batch_size,
         )
+
+        graph_prefill = TTNNDotsOCRPrefillGraph(decoder_stack, final_norm, lm_head)
+        graph_prefill._unique_name = "dots_ocr_graph_prefill"
+        graph_decode = TTNNDotsOCRDecodeGraph(embedding, decoder_stack, final_norm, lm_head)
+        graph_decode._unique_name = "dots_ocr_graph_decode"
 
         pipeline = cls(
             embedding=embedding,
@@ -327,11 +334,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
             module.preprocess_weights()
             module.move_weights_to_device()
 
-        # LM head: HiFi2 + packer_l1_acc for decode
+        # LM head: HiFi2 + packer_l1_acc + FP32 dest accum (matches stable argmax path).
         self.lm_head.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
