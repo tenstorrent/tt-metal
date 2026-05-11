@@ -1550,13 +1550,6 @@ def test_demo_text(
                 batch_size=global_batch_size,
                 seq_len=input_seq_len,
             )
-            if ci_targets is None:
-                ci_targets = resolve_perf_targets(
-                    model_name=model_name,
-                    sku=tt_device_name,
-                    batch_size=global_batch_size,
-                    seq_len=None,
-                )
 
             if ci_targets:  # Only verify performance if we have targets for this model/device combination
                 high_tol_percentage = float(ci_targets.get("decode_tolerance", ci_targets.get("tolerance", 1.15)))
