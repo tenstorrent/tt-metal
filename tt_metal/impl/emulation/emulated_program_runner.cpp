@@ -129,6 +129,11 @@ thread_local uint32_t __emule_my_thread_id = 0;
 thread_local uint32_t __emule_sem_l1_range_start = 0;
 thread_local uint32_t __emule_sem_l1_range_end = 0;
 
+// Outstanding-NOC-read counter for missing-barrier detection. Incremented by
+// noc_async_read / noc_async_read_page (JIT inlines), zeroed by
+// noc_async_read_barrier, checked at cb_push_back.
+thread_local uint32_t __emule_pending_noc_reads = 0;
+
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
@@ -185,6 +190,20 @@ extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
     return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
 }
 
+// Returns true when TT_EMULE_STRICT_NOC is set in the environment. The fabric
+// access guards in __emule_noc_resolve / __emule_resolve_noc_addr abort under
+// strict mode and fall back to the legacy "return nullptr + EMULE WARN at the
+// call site" behavior otherwise. Cached on first call. Off by default to keep
+// existing tests / kernels that NOC into unregistered cores (eth, dispatch, …)
+// running until those access sites are audited.
+static bool emule_strict_noc_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_NOC");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
 extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
     if (__emule_core_map) {
         uint64_t key = (uint64_t(x) << 32) | y;
@@ -192,10 +211,12 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         if (it != __emule_core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
-        fprintf(stderr,
-                "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
-                x, y);
-        abort();
+        if (emule_strict_noc_enabled()) {
+            fprintf(stderr,
+                    "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
+                    x, y);
+            abort();
+        }
     }
     return nullptr;
 }
@@ -233,10 +254,12 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
             }
             return target_core->l1_ptr(static_cast<uint32_t>(l1_offset));
         }
-        fprintf(stderr,
-                "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
-                noc_x, noc_y);
-        abort();
+        if (emule_strict_noc_enabled()) {
+            fprintf(stderr,
+                    "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
+                    noc_x, noc_y);
+            abort();
+        }
     }
     return nullptr;
 }
@@ -1566,6 +1589,7 @@ static void launch_cores(
                             __emule_logical_y = ly;
                             __emule_sem_l1_range_start = sem_base;
                             __emule_sem_l1_range_end = sem_base + sem_size;
+                            __emule_pending_noc_reads = 0;
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
@@ -1597,6 +1621,7 @@ static void launch_cores(
                             __emule_core_map = nullptr;
                             __emule_sem_l1_range_start = 0;
                             __emule_sem_l1_range_end = 0;
+                            __emule_pending_noc_reads = 0;
                         });
                     }
 

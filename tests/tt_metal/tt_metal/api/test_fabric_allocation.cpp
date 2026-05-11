@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -17,6 +18,9 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, Fabric_Access_Violation_SanityCheck) {
+    // temp
+    ::setenv("TT_EMULE_STRICT_NOC", "1", 1);
+
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();

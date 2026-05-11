@@ -12,6 +12,7 @@ target_sources(unit_tests_api_lib PRIVATE
     test_cb_pages.cpp
     test_fabric_allocation.cpp
     test_metadata_size.cpp
+    test_noc_without_barrier.cpp
     test_pointer_size.cpp
     test_semaphore_write.cpp
 )
