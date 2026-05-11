@@ -301,11 +301,18 @@ class SamplingGenerator:
         logger.debug(
             f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
         )
+        # Penalties mutate logits in-place. Pre-compile on a clone so trace
+        # capture sees the model logits, not logits that were already
+        # transformed by the compile run.
+        compile_logits = ttnn.clone(logits) if penalties_on else logits
         self._run_sampling(
-            logits,
+            compile_logits,
             penalties_on=penalties_on,
             tt_out_tok=tt_out_tok,
         )
+        if compile_logits is not logits:
+            ttnn.synchronize_device(self.mesh_device)
+            compile_logits.deallocate()
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(

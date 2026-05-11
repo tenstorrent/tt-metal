@@ -259,6 +259,9 @@ class TTPenalties(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=self.prompt_mask)
+        ttnn.synchronize_device(self.mesh_device)
+        prompt_tokens_tt.deallocate()
+        src_tt.deallocate()
 
     def reset_output_tokens(self, tokens=None):
         # ALWAYS reset output buffers to zero first (this is the core accuracy fix from issue #35731)
@@ -303,6 +306,7 @@ class TTPenalties(LightweightModule):
                 counts_sliced=self.output_counts,
                 mask=self.output_mask,
             )
+            ttnn.synchronize_device(self.mesh_device)
             tokens_tt.deallocate()
             src_tt.deallocate()
 
@@ -330,10 +334,16 @@ class TTPenalties(LightweightModule):
             mask=self.output_mask,
         )
 
-    def token_bin_counts_and_mask(self, new_tokens, src, counts=None, mask=None, counts_sliced=None):
+    def token_bin_counts_and_mask(
+        self,
+        new_tokens,
+        src,
+        counts=None,
+        mask=None,
+        counts_sliced=None,
+    ):
         counts_new = ttnn.scatter_add(self.zeros, 1, new_tokens, src, **self._op_kwargs)
 
-        new_tokens.deallocate()
         # need to use use_low_perf because llama galaxy runs out of L1 otherwise
         counts_new = ttnn.tilize(
             counts_new, **self._op_kwargs, use_low_perf=True if self.sub_core_grids is not None else False
