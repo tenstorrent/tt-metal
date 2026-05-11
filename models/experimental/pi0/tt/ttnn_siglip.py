@@ -418,20 +418,17 @@ class SigLIPAttentionTTNN:
         )
         ttnn.deallocate(attn_output)
 
-        # Output projection
+        # Output projection — fuse bias into the linear.
         output = ttnn.linear(
             attn_concat,
             self.wo,
+            bias=self.bo,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             core_grid=self.core_grid,
         )
         ttnn.deallocate(attn_concat)
-
-        # Add bias if present
-        if self.bo is not None:
-            output = ttnn.add(output, self.bo)
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
         output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))
@@ -526,20 +523,17 @@ class SigLIPMLPTTNN:
             activation="gelu",
         )
 
-        # FC2
+        # FC2 — fuse bias into the linear (was: separate ttnn.add per block).
         output = ttnn.linear(
             x,
             self.fc2_weight,
+            bias=self.fc2_bias,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=self.core_grid,
         )
         ttnn.deallocate(x)
-
-        # Add bias if present
-        if self.fc2_bias is not None:
-            output = ttnn.add(output, self.fc2_bias)
 
         return output
 
