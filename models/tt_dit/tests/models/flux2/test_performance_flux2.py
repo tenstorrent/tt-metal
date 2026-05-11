@@ -14,7 +14,7 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
-from .test_pipeline_flux2 import line_params_flux2, ring_params_flux2
+from .test_pipeline_flux2 import line_params_flux2, ring_params_8k_flux2
 
 NUM_INFERENCE_STEPS = 50
 NUM_PERF_RUNS = 3
@@ -41,7 +41,7 @@ NUM_PERF_RUNS = 3
         [(2, 2), 0, 1, 8, 8, ttnn.Topology.Linear, 2, True, False, line_params_flux2],
         [(2, 4), 0, 1, 8, 8, ttnn.Topology.Linear, 2, False, False, line_params_flux2],
         [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 2, False, False, line_params_flux2],
-        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Ring, 2, False, False, ring_params_flux2],
+        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
     ],
     ids=[
         "bh_qb",
