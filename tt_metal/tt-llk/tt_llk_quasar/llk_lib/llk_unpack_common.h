@@ -8,8 +8,15 @@
 
 #include "ckernel_trisc_common.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
+
+enum class p_dim_stride_target
+{
+    IGNORE,
+    FACE_ROW_MAJOR
+};
 
 /**
  * @brief Programs unpacker l1 info & source register format
@@ -73,6 +80,47 @@ inline void _llk_unpack_dest_dvalid_section_done_()
         // For DstSync::SyncFull issue a CLEARDVALID instruction for dest bank1 as well in order to use full dest register
         // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
         TTI_CLEARDVALID(0, 0, 0, p_cleardvalid::UNPACK_TO_DEST, p_cleardvalid::UNPACK_TO_DEST, 0);
+    }
+}
+
+/**
+ * Quasar unpack dynamic output format: reprograms only THCON `UNPACKER*_REG0_OUT_DATA_FORMAT`.
+ * L1 layout and input encoding stay in the buffer descriptor; `unpack_src_format` is the BD/L1
+ * DataFormat and is not written to unpacker config here.
+ *
+ * @tparam UNP_SEL              Unpacker to update: p_unpacr::UNP_A or UNP_DEST (unpacker 0), UNP_B (1), UNP_S (2).
+ * @tparam is_fp32_dest_acc_en  FP32 dest accumulation (validated with `unpack_src_format` / `unpack_dst_format`).
+ * @tparam unpack_to_dest       Unpack-to-dest / SrcS vs SrcA/SrcB path (validated with the format pair).
+ * @param unpack_src_format     BD/L1 input DataFormat (used only for the conversion check).
+ * @param unpack_dst_format     OUT_DATA_FORMAT register value to program (unpacker gasket output).
+ */
+template <std::uint32_t UNP_SEL, bool is_fp32_dest_acc_en, bool unpack_to_dest>
+inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
+{
+    static_assert(
+        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S) || (UNP_SEL == p_unpacr::UNP_DEST),
+        "UNP_SEL must be p_unpacr::UNP_A, UNP_B, UNP_S, or UNP_DEST");
+
+    LLK_ASSERT(
+        ckernel::unpack::is_quasar_unpack_reconfig_pair_supported(unpack_src_format, unpack_dst_format, is_fp32_dest_acc_en, unpack_to_dest),
+        "Unsupported Quasar unpacker OUT_DATA_FORMAT for this L1 format and unpack path.");
+
+    const auto out_fmt = static_cast<std::uint8_t>(unpack_dst_format);
+
+    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK0);
+        cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, out_fmt);
+    }
+    else if constexpr (UNP_SEL == p_unpacr::UNP_B)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK1);
+        cfg_rmw(THCON_UNPACKER1_REG0_OUT_DATA_FORMAT_RMW, out_fmt);
+    }
+    else // UNP_S
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK2);
+        cfg_rmw(THCON_UNPACKER2_REG0_OUT_DATA_FORMAT_RMW, out_fmt);
     }
 }
 
