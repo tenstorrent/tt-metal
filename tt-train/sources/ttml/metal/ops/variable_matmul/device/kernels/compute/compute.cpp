@@ -12,6 +12,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
+#include "api/compute/transpose_wh.h"
 #include "api/compute/untilize.h"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
@@ -222,6 +223,28 @@ void add_bias_and_addcmul_block(
     cb_pop_front(intermediate_cb, out_block_num_tiles);
 }
 
+// Transpose every tile of a block from src_cb into dst_cb. Caller must have at least
+// num_tiles tiles ready in src_cb (already cb_wait_front'd). This function pops src_cb
+// and pushes dst_cb. One tile per acquire/commit cycle to avoid any dest-register
+// sizing assumptions.
+inline void transpose_in0_block(uint32_t src_cb, uint32_t dst_cb, uint32_t num_tiles) {
+    reconfig_data_format_srca(src_cb);
+    transpose_wh_init_short(src_cb);
+    pack_reconfig_data_format(dst_cb);
+
+    cb_reserve_back(dst_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        transpose_wh_tile(src_cb, i, /*dst=*/0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dst_cb);
+        tile_regs_release();
+    }
+    cb_push_back(dst_cb, num_tiles);
+    cb_pop_front(src_cb, num_tiles);
+}
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t in0_cb,
@@ -232,7 +255,8 @@ void matmul_blocks(
     const uint32_t full_N_block_tiles,
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
-    const uint32_t subblock_w) {
+    const uint32_t subblock_w,
+    const uint32_t transpose_b) {
     uint32_t in0_index_offset = 0;
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
@@ -251,7 +275,7 @@ void matmul_blocks(
                     in0_index,
                     in1_index,
                     dst_index,
-                    false /*transpose*/,
+                    transpose_b /*transpose*/,
                     subblock_w,
                     subblock_h,
                     K_block_tiles);
@@ -289,6 +313,8 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t transpose_b = get_compile_time_arg_val(8);
+    constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(9));
 
     uint32_t argidx = 0;
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -313,12 +339,17 @@ void kernel_main() {
     constexpr uint32_t in2_cb = tt::CBIndex::c_4;
     constexpr uint32_t ternary_a_cb = tt::CBIndex::c_5;
     constexpr uint32_t ternary_b_cb = tt::CBIndex::c_6;
+    // When transpose_a is set, the dataflow writes the raw [K, M]-stored block into in0_cb,
+    // and the compute kernel transposes each tile into in0_transposed_cb (c_7), which is
+    // what the matmul actually consumes. `in0_cb_for_matmul` selects the right one.
+    constexpr uint32_t in0_transposed_cb = tt::CBIndex::c_7;
+    constexpr uint32_t in0_cb_for_matmul = transpose_a ? in0_transposed_cb : in0_cb;
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
+    mm_init(in0_cb_for_matmul, in1_cb, intermediate_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -347,22 +378,42 @@ void kernel_main() {
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
             mm_block_init_short(
-                in0_cb,
+                in0_cb_for_matmul,
                 in1_cb,
-                false /*transpose*/,
+                transpose_b /*transpose*/,
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
-            reconfig_data_format(in1_cb, in0_cb);
+            reconfig_data_format(in1_cb, in0_cb_for_matmul);
             pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
+                if constexpr (transpose_a) {
+                    // Reuse logic: on the first K-iteration of a non-first N-iter the dataflow
+                    // skipped pushing in0 (the slice is the same as last N-iter's), and we kept
+                    // the transposed block too. Skip the transpose pass in that case.
+                    if (!reuse_in0_block) {
+                        cb_wait_front(in0_cb, in0_block_num_tiles);
+                        transpose_in0_block(in0_cb, in0_transposed_cb, in0_block_num_tiles);
+                        // transpose pass disrupts matmul state — re-init.
+                        mm_block_init_short(
+                            in0_cb_for_matmul,
+                            in1_cb,
+                            transpose_b,
+                            current_subblock_w,
+                            current_subblock_h,
+                            K_block_tiles);
+                        reconfig_data_format(in1_cb, in0_cb_for_matmul);
+                        pack_reconfig_data_format(intermediate_cb);
+                    }
+                }
+
+                cb_wait_front(in0_cb_for_matmul, in0_block_num_tiles);
                 cb_wait_front(in1_cb, in1_block_num_tiles);
 
                 matmul_blocks(
-                    in0_cb,
+                    in0_cb_for_matmul,
                     in1_cb,
                     intermediate_cb,
                     current_M_block_tiles,
@@ -370,7 +421,8 @@ void kernel_main() {
                     N_block_tiles,
                     K_block_tiles,
                     current_subblock_h,
-                    current_subblock_w);
+                    current_subblock_w,
+                    transpose_b);
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -383,7 +435,7 @@ void kernel_main() {
                     }
                 }
                 if (!reuse_in0_block) {
-                    cb_pop_front(in0_cb, in0_block_num_tiles);
+                    cb_pop_front(in0_cb_for_matmul, in0_block_num_tiles);
                 }
                 cb_pop_front(in1_cb, in1_block_num_tiles);
                 reuse_in0_block = false;
