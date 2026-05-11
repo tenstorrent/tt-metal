@@ -65,7 +65,6 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
@@ -261,20 +260,6 @@ class PipelineBlock:
             assert len(pipeline_config) == self.num_procs + 1
 
         self.pipeline_config = pipeline_config
-
-        logger.info(
-            f"PipelineBlock.__init__ my_stage_idx={my_stage_idx} num_procs={self.num_procs} "
-            f"pipeline_config entries: "
-            + " | ".join(
-                f"[{i}] entry={pipeline_config[i].entry_node_coord} exit={pipeline_config[i].exit_node_coord}"
-                for i in range(min(len(pipeline_config), 4))
-            )
-            + (
-                f" ... [{len(pipeline_config)-1}] entry={pipeline_config[-1].entry_node_coord} exit={pipeline_config[-1].exit_node_coord}"
-                if len(pipeline_config) > 4
-                else ""
-            )
-        )
 
         self.is_pipeline_start = self.my_stage_idx == 0
         self.is_last_stage = self.my_stage_idx == self.num_procs - 1
@@ -799,13 +784,7 @@ class PipelineBlock:
             # place the downstream on the exit device so the exit sender program
             # can find its upstream socket locally.
             downstream_dc = this_exit_dc_for_downstream if not use_multi_upstream else this_entry_dc
-            logger.info(
-                f"PipelineBlock ENTRY socket ch[{i}] stage={self.my_stage_idx}: "
-                f"sender=MeshCoreCoord({prev_exit_dc},{core_exit}) on rank={ps.rank} mesh_id={ps.mesh_id} -> "
-                f"receiver=MeshCoreCoord({this_entry_dc},{core_entry}) on LOCAL mesh | "
-                f"downstream=MeshCoreCoord({downstream_dc},{effective_downstream_core}) | "
-                f"use_reader={entry_use_reader}"
-            )
+
             entry_si = SocketInterface(
                 upstream_d2d_socket_page_size,
                 upstream_d2d_socket_fifo_size,
@@ -819,11 +798,6 @@ class PipelineBlock:
             )
             ds_sock = entry_si.get_downstream_socket()
             ds_addr = int(ds_sock.get_config_buffer_address()) if ds_sock is not None else 0
-            logger.info(
-                f"PipelineBlock ENTRY socket ch[{i}] stage={self.my_stage_idx}: "
-                f"downstream_socket config_addr={ds_addr} "
-                f"downstream_dc={downstream_dc} use_multi_upstream={use_multi_upstream}"
-            )
             self.entry_socket_interface.append(entry_si)
 
         assert len(actual_exit_coords) == len(actual_entry_coords), (
@@ -841,13 +815,6 @@ class PipelineBlock:
             # different core to avoid semaphore conflicts with the forward exit
             # sender (which lives on a different device column on stage 0).
             exit_recv_core = loopback_entry_core if (self.is_last_stage and loopback_entry_core) else core_entry
-
-            logger.info(
-                f"PipelineBlock EXIT socket ch[{i}] stage={self.my_stage_idx}: "
-                f"sender=MeshCoreCoord({this_exit_dc},{core_exit}) on LOCAL mesh -> "
-                f"receiver=MeshCoreCoord({next_entry_dc},{exit_recv_core}) on rank={ns.rank} mesh_id={ns.mesh_id} | "
-                f"is_last_stage={self.is_last_stage} next_cfg_idx={next_cfg_idx}"
-            )
 
             if use_multi_upstream and len(exit_upstream_cores) > 0:
                 per_device_upstream_cores = [ttnn.MeshCoreCoord(this_exit_dc, uc) for uc in exit_upstream_cores]
@@ -897,19 +864,6 @@ class PipelineBlock:
                 exit_variant = "multi_upstream_entry_downstream_only"
             else:
                 exit_variant = "single_upstream_passthrough"
-            logger.info(
-                "PipelineBlock parallel passive stage: "
-                f"my_stage_idx={self.my_stage_idx} is_last_stage={self.is_last_stage} "
-                f"prev_stage={prev_stage} rank={ps.rank} mesh_id={ps.mesh_id} "
-                f"next_stage={next_stage} rank={ns.rank} mesh_id={ns.mesh_id} "
-                f"next_cfg_idx={next_cfg_idx} exit_variant={exit_variant} "
-                f"cfg[prev] entry={pc_prev.entry_node_coord} exit={pc_prev.exit_node_coord} "
-                f"cfg[this] entry={pc_curr.entry_node_coord} exit={pc_curr.exit_node_coord} "
-                f"cfg[next_cfg] entry={pc_next.entry_node_coord} exit={pc_next.exit_node_coord} "
-                f"n_channels={num_channels} "
-                f"core_entry={core_entry} core_exit={core_exit} effective_downstream={effective_downstream_core} "
-                f"upstream_page={upstream_d2d_socket_page_size} downstream_page={downstream_d2d_socket_page_size}"
-            )
             for i in range(num_channels):
                 prev_exit_dc = _blitz_mesh_coord_for_parallel_row(pc_prev.exit_node_coord, i)
                 this_entry_dc = _blitz_mesh_coord_for_parallel_row(pc_curr.entry_node_coord, i)
@@ -917,13 +871,6 @@ class PipelineBlock:
                 next_entry_dc = _blitz_mesh_coord_for_parallel_row(pc_next.entry_node_coord, i)
                 caller_entry = actual_entry_coords[i]
                 caller_exit = actual_exit_coords[i]
-                logger.info(
-                    f"PipelineBlock parallel passive ch[{i}]: "
-                    f"blitz prev_exit={prev_exit_dc} this_entry={this_entry_dc} this_exit={this_exit_dc} "
-                    f"next_entry={next_entry_dc} | caller entry_dc={caller_entry} exit_dc={caller_exit} | "
-                    f"entry hop MeshCoreCoord(prev_exit,{core_exit})<->{this_entry_dc},{core_entry} "
-                    f"downstream@{this_entry_dc}; exit hop {this_exit_dc}->{next_entry_dc}"
-                )
 
     def _dispatch_parallel_device_programs(self):
         """Collect programs from all per-device socket interfaces and dispatch in a single generic_op."""
@@ -933,14 +880,6 @@ class PipelineBlock:
         exit_entries = []
         for si in self.exit_socket_interface:
             exit_entries.extend(si.build_programs(base_programs=entry_entries))
-
-        if self.my_stage_idx >= 2:
-            logger.info(
-                "PipelineBlock parallel passive dispatch: "
-                f"my_stage_idx={self.my_stage_idx} "
-                f"entry_program_entries={len(entry_entries)} exit_program_entries={len(exit_entries)} "
-                f"n_entry_si={len(self.entry_socket_interface)} n_exit_si={len(self.exit_socket_interface)}"
-            )
 
         exit_device_set = {str(dc) for dc, _ in exit_entries}
         all_entries = [(dc, prog) for dc, prog in entry_entries if str(dc) not in exit_device_set]
@@ -1097,9 +1036,6 @@ class PipelineBlock:
         """Return list of downstream sockets (parallel mode)."""
         assert self.parallel_devices, "get_downstream_sockets() requires per-device parallel mode"
         sockets = [si.get_downstream_socket() for si in self.entry_socket_interface]
-        for i, s in enumerate(sockets):
-            addr = int(s.get_config_buffer_address()) if s is not None else 0
-            logger.info(f"get_downstream_sockets() ch[{i}] stage={self.my_stage_idx}: " f"config_addr={addr}")
         return sockets
 
     def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str) -> None:

@@ -179,14 +179,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     entry_column_coords = [ttnn.MeshCoordinate(r, entry_column) for r in range(int(mesh_rows))]
     exit_column_coords = [ttnn.MeshCoordinate(r, reduce_exit_column) for r in range(int(mesh_rows))]
     pipeline_column_coords = exit_column_coords
-    logger.info(
-        f"[rank={my_mesh_id}] pipeline_idx={pipeline_idx} "
-        f"entry_column={entry_column}, reduce_exit_column={reduce_exit_column}, "
-        f"exit_column(=entry_column)={exit_column}, "
-        f"entry_devices={len(entry_column_coords)}, exit_devices={len(exit_column_coords)}, "
-        f"pipeline_config[{pipeline_idx}].entry_node_coord={pipeline_config[pipeline_idx].entry_node_coord} "
-        f"pipeline_config[{pipeline_idx}].exit_node_coord={pipeline_config[pipeline_idx].exit_node_coord}"
-    )
 
     # -- MoE tensor setup (needed before PipelineBlock to get correct reduce shard size) --
     state_dict = get_reference_model_state_dict(
@@ -233,11 +225,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
 
     if is_stage0:
-        import time as _time
-
-        _t0_total = _time.time()
-        print(f"[TEST] stage0: starting setup, my_mesh_id={my_mesh_id} num_procs={num_procs}", flush=True)
-
         embedding_tensor = ttnn.from_torch(
             torch_embedding,
             dtype=ttnn.bfloat16,
@@ -261,26 +248,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         fwd_recv_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
         bwd_send_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
         bwd_recv_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in loopback_entry_dcs]
-        print(
-            f"[TEST] stage0: fwd_send_d2d_cores(stage0 exit col {stage0_exit_col})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_send_d2d_cores]}",
-            flush=True,
-        )
-        print(
-            f"[TEST] stage0: fwd_recv_d2d_cores(stage1 entry col {entry_column})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_recv_d2d_cores]}",
-            flush=True,
-        )
-        print(
-            f"[TEST] stage0: bwd_send_d2d_cores(stage15 exit col {reduce_exit_column})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_send_d2d_cores]}",
-            flush=True,
-        )
-        print(
-            f"[TEST] stage0: bwd_recv_d2d_cores(loopback entry col {loopback_entry_col})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_recv_d2d_cores]}",
-            flush=True,
-        )
 
         exit_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
@@ -347,10 +314,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         stage0_program_entries = all_entries
         logger.info(f"[rank=0] parallel stage 0 programs built ({len(exit_column_coords)} channels), dispatch deferred")
     else:
-        import time as _time
-
-        _t0_total = _time.time()
-        print(f"[TEST] stage1: creating PipelineBlock, my_mesh_id={my_mesh_id} num_procs={num_procs}", flush=True)
         fabric_loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core))
         pipeline_block = PipelineBlock(
             mesh_device,
@@ -368,7 +331,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             exit_device_coords=exit_column_coords,
             loopback=fabric_loopback,
         )
-        print(f"[TEST] stage1: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
         logger.info(f"[rank=1] parallel pipeline block created")
     # ── Get per-device sockets for forward (input) and reduce (output) ──
     # Expand to num_devices-sized lists indexed by chip_id (row * cols + col).
@@ -386,19 +348,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             ds_chip_id = row_idx * int(mesh_cols) + reduce_exit_column
             forward_sockets[fwd_chip_id] = raw_fwd[idx]
             downstream_sockets[ds_chip_id] = raw_ds[idx]
-        logger.info(
-            f"[rank={my_mesh_id}] {len(raw_fwd)} forward sockets mapped to "
-            f"{sum(1 for s in forward_sockets if s is not None)}/{num_devices} devices, "
-            f"{len(raw_ds)} downstream socket groups"
-        )
-        for idx in range(len(raw_fwd)):
-            fwd_chip_id = idx * int(mesh_cols) + fwd_col
-            sock = raw_fwd[idx]
-            addr = int(sock.get_config_buffer_address()) if sock is not None else 0
-            logger.info(
-                f"[rank={my_mesh_id}] raw_fwd[{idx}] -> forward_sockets[chip_id={fwd_chip_id}] "
-                f"config_addr={addr} (row={idx}, fwd_col={fwd_col})"
-            )
 
     if my_mesh_id >= 1:
         kv_cache_shard_height = 256
@@ -528,29 +477,6 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     ttnn.distributed_context_barrier()
 
     if my_mesh_id >= 1:
-        logger.info(
-            f"[rank={my_mesh_id}] forward_sockets mapping: "
-            + ", ".join(
-                f"chip{i}={'SET' if forward_sockets[i] is not None else 'None'}"
-                + (
-                    f"(addr={int(forward_sockets[i].get_config_buffer_address())})"
-                    if forward_sockets[i] is not None
-                    else ""
-                )
-                for i in range(len(forward_sockets))
-            )
-        )
-        logger.info(
-            f"[rank={my_mesh_id}] downstream_sockets mapping: "
-            + ", ".join(
-                f"chip{i}={'SET' if downstream_sockets[i] is not None else 'None'}"
-                for i in range(len(downstream_sockets))
-            )
-        )
-        logger.info(
-            f"[rank={my_mesh_id}] MoeOp.op params: exit_column={entry_column} "
-            f"reduce_exit_column={reduce_exit_column}"
-        )
         logger.info(f"[rank={my_mesh_id}] launching MoE forward + reduce-to-all (num_iterations=1)")
         MoeOp.op(
             r.ttnn_residual_mcast_src,
@@ -697,9 +623,7 @@ def test_persistent_moe_15_stages(
     embedding_fifo_size = embedding_size_bytes * 1
 
     torch.manual_seed(42)
-    print("Create torch embedding")
     torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
-    print("Torch embedding created")
 
     reduce_root_coord = ttnn.MeshCoordinate(1, 1)
 
@@ -763,10 +687,6 @@ def test_persistent_moe_15_stages(
 
     if r is not None:
         reduce_payload_per_shard = r.per_core_down_proj_N * 2  # bfloat16
-        logger.info(
-            f"[rank={my_mesh_id}] reduce_payload_per_shard={reduce_payload_per_shard} "
-            f"(per_core_down_proj_N={r.per_core_down_proj_N})"
-        )
     else:
         reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
 
@@ -781,10 +701,6 @@ def test_persistent_moe_15_stages(
 
     try:
         if is_stage0:
-            import time as _time
-
-            _t0_total = _time.time()
-
             # PipelineBlock.__init__ calls generate_blitz_decode_pipeline (collective).
             # Stage 0 must match so all processes participate.
             ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(True)
@@ -1070,11 +986,9 @@ def test_persistent_moe_15_stages(
                 logger.info(f"[rank=0] token {iteration} injected to {len(h2d_sockets)} channels")
 
                 d2h_results = []
-                print("d2h sockets: ", d2h_sockets)
                 for sock_idx, d2h_sock in enumerate(d2h_sockets):
                     buf = torch.zeros(1, num_elements, dtype=torch.bfloat16)
                     buf_tensor = ttnn.from_torch(buf, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-                    print(f"rank 0 waiting for D2H socket[{sock_idx}] iteration {iteration}")
                     d2h_sock.read_tensor(buf_tensor)
                     result = ttnn.to_torch(buf_tensor)
                     nz = torch.count_nonzero(result)
@@ -1170,9 +1084,7 @@ def test_persistent_moe_multi_token(
     embedding_fifo_size = embedding_size_bytes * 1
 
     torch.manual_seed(42)
-    print("Create torch embedding")
     torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
-    print("Torch embedding created")
 
     reduce_root_coord = ttnn.MeshCoordinate(1, 0)
 
@@ -1236,10 +1148,6 @@ def test_persistent_moe_multi_token(
 
     if r is not None:
         reduce_payload_per_shard = r.per_core_down_proj_N * 2  # bfloat16
-        logger.info(
-            f"[rank={my_mesh_id}] reduce_payload_per_shard={reduce_payload_per_shard} "
-            f"(per_core_down_proj_N={r.per_core_down_proj_N})"
-        )
     else:
         reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
 
@@ -1253,12 +1161,6 @@ def test_persistent_moe_multi_token(
 
     try:
         if is_stage0:
-            import time as _time
-
-            _t0_total = _time.time()
-
-            # PipelineBlock.__init__ calls generate_blitz_decode_pipeline (collective).
-            # Stage 0 must match so all processes participate.
             ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(True)
 
             embedding_tensor = ttnn.from_torch(
@@ -1560,11 +1462,9 @@ def test_persistent_moe_multi_token(
                 logger.info(f"[rank=0] token {iteration} injected to {len(h2d_sockets)} channels")
             for iter_ in range(num_tokens_in_flight):
                 d2h_results = []
-                print("d2h sockets: ", d2h_sockets)
                 for sock_idx, d2h_sock in enumerate(d2h_sockets):
                     buf = torch.zeros(1, num_elements, dtype=torch.bfloat16)
                     buf_tensor = ttnn.from_torch(buf, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-                    print(f"rank 0 waiting for D2H socket[{sock_idx}] iteration {iteration}")
                     d2h_sock.read_tensor(buf_tensor)
                     result = ttnn.to_torch(buf_tensor)
                     nz = torch.count_nonzero(result)

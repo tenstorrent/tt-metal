@@ -68,9 +68,8 @@ class MoeSem:
     REDUCE_FC_BWD_R1 = 21
     REDUCE_FC_BWD_R2 = 22
     REDUCE_FC_R3_FWD = 23
-    REDUCE_FC_BARRIER_GATHER = 24
-    FORWARD_CROSS_COL_SYNC = 25
-    NUM_SEMAPHORES = 26
+    FORWARD_CROSS_COL_SYNC = 24
+    NUM_SEMAPHORES = 25
 
 
 @dataclass
@@ -4006,48 +4005,22 @@ class MoeOp:
             cb46_page_size = rmsnorm_fmt.page_size
             cb46_tile = rmsnorm_fmt.tile
 
-            if routed_ctx.forward_staging_tensor is not None:
-                print(
-                    f"[overlap] bcast_pkt_cb (forward staging) -> dedicated PB: cb_id={cb46_cb_id} "
-                    f"size={cb46_total_size} page_size={cb46_page_size}",
-                    flush=True,
-                )
-                cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                    cb46_cb_id,
-                    routed_ctx.forward_staging_tensor,
-                )
-                cb46_fmt = ttnn.CBFormatDescriptor(
-                    buffer_index=cb46_cb_id,
-                    data_format=routed_ctx.data_format,
-                    page_size=cb46_page_size,
-                    tile=cb46_tile,
-                )
-                cb46_desc.format_descriptors = [cb46_fmt]
-                routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
-                # NOTE: out_offset is intentionally NOT incremented — cb46 no
-                # longer consumes space in sdpa_out_interm_buffer.
-            else:
-                cb46_offset = out_offset
-                print(
-                    f"[overlap] bcast_pkt_cb (forward staging, LEGACY overlap): cb_id={cb46_cb_id} "
-                    f"offset={cb46_offset} size={cb46_total_size} page_size={cb46_page_size}",
-                    flush=True,
-                )
-                cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                    cb46_cb_id,
-                    out_buf,
-                    address_offset=cb46_offset,
-                    total_size=cb46_total_size,
-                )
-                cb46_fmt = ttnn.CBFormatDescriptor(
-                    buffer_index=cb46_cb_id,
-                    data_format=routed_ctx.data_format,
-                    page_size=cb46_page_size,
-                    tile=cb46_tile,
-                )
-                cb46_desc.format_descriptors = [cb46_fmt]
-                routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
-                out_offset += cb46_total_size
+            assert (
+                routed_ctx.forward_staging_tensor is not None
+            ), "Forward staging tensor must be provided when forward is enabled and bcast_pkt_cb is set."
+
+            cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb46_cb_id,
+                routed_ctx.forward_staging_tensor,
+            )
+            cb46_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb46_cb_id,
+                data_format=routed_ctx.data_format,
+                page_size=cb46_page_size,
+                tile=cb46_tile,
+            )
+            cb46_desc.format_descriptors = [cb46_fmt]
+            routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
 
         # ── Reduce: CB 24 (add_cb_out / reduce_local_cb) → sdpa_out_interm_buffer ──
         # When reduce is enabled, CB 24 is a working buffer (not final output).
@@ -4235,16 +4208,6 @@ class MoeOp:
         socket_page_size = (
             reduce_params["downstream_socket_page_size"] if (self.downstream_sockets and is_exit_col) else 0
         )
-        if is_exit_col and self.downstream_sockets:
-            print(
-                f"[MoE DIAG] chip_id={chip_id} row={row} col={col} "
-                f"reduce_socket_page_size={socket_page_size} "
-                f"reduce_payload_size_bytes(padded)={reduce_params['payload_size_bytes']} "
-                f"downstream_socket_page_size(unpadded)={reduce_params['downstream_socket_page_size']} "
-                f"num_workers={reduce_params['num_workers']} "
-                f"total_socket_bytes={reduce_params['num_workers']}*{socket_page_size}={reduce_params['num_workers']*socket_page_size}",
-                flush=True,
-            )
 
         def _update_brisc_ct(name, value):
             for i, (n, _v) in enumerate(self.brisc_args):
@@ -4458,21 +4421,9 @@ class MoeOp:
                     device_sockets = self.downstream_sockets[chip_id]
                     if isinstance(device_sockets, list):
                         socket_config_addr = device_sockets[shard_idx].get_config_buffer_address()
-                        print(
-                            f"[MoE DIAG] chip_id={chip_id} worker_idx={worker_idx} "
-                            f"shard_idx={shard_idx} core=({core.x},{core.y}) "
-                            f"socket_config_addr=0x{socket_config_addr:x} "
-                            f"num_downstream_sockets={len(device_sockets)}",
-                            flush=True,
-                        )
                     else:
                         socket_config_addr = device_sockets.get_config_buffer_address()
-                        print(
-                            f"[MoE DIAG] chip_id={chip_id} worker_idx={worker_idx} "
-                            f"shard_idx={shard_idx} core=({core.x},{core.y}) "
-                            f"socket_config_addr=0x{socket_config_addr:x} (single socket)",
-                            flush=True,
-                        )
+
                 worker_metadata_addr = self._metadata_l1_addr if (is_exit_col and self._metadata_l1_addr != 0) else 0
                 worker_args = [
                     fc_phys.x,  # 0
@@ -4669,13 +4620,6 @@ class MoeOp:
 
         fwd_socket = ctx.forward_sockets[chip_id] if ctx.forward_sockets else None
         fwd_addr = int(fwd_socket.get_config_buffer_address()) if fwd_socket is not None else 0
-        print(
-            f"[MoE _build_forward_per_device] chip_id={chip_id} row={row} col={col} "
-            f"exit_column={self.exit_column} is_entry_col={is_entry_col} "
-            f"forward_socket={'SET' if fwd_socket is not None else 'None'} "
-            f"fwd_config_addr={fwd_addr}",
-            flush=True,
-        )
 
         sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
 
@@ -4722,7 +4666,6 @@ class MoeOp:
             cross_col_payload = 0
             if self.exit_column is not None:
                 fabric_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
-                print("fabric max payload: ", fabric_max_payload)
                 cross_col_payload = int(socket_page_size)
                 num_fabric_packets = (cross_col_payload + fabric_max_payload - 1) // fabric_max_payload
 
@@ -4812,40 +4755,17 @@ class MoeOp:
 
                 link_idx = 0 if col_idx < num_columns // 2 else 1
 
-                print(f"[MoE fabric] row={row} col={col} fc=({fc.x},{fc.y}) link={link_idx}", flush=True)
-                print(
-                    f"  src_node={fabric_node_id} fwd_node={fwd_fabric_node_id} r3_node={r3_fabric_node_id} bwd_node={bwd_fabric_node_id}",
-                    flush=True,
-                )
-
                 fwd_conn = ttnn.setup_fabric_connection(fabric_node_id, fwd_fabric_node_id, link_idx, program, fc)
-                print(
-                    f"  fwd_conn (BRISC): eth_ch={list(fwd_conn)[0] if fwd_conn else '?'} args={list(fwd_conn)}",
-                    flush=True,
-                )
                 program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(fwd_conn)
-
-                # barrier_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BARRIER_GATHER]
-                # program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(
-                #    [barrier_sem_addr]
-                # )
 
                 is_exit_col = self.reduce_exit_column is not None and col == self.reduce_exit_column
                 if not is_exit_col:
                     r3_conn = ttnn.setup_fabric_connection(fabric_node_id, r3_fabric_node_id, link_idx, program, fc)
-                    print(
-                        f"  r3_conn  (BRISC): eth_ch={list(r3_conn)[0] if r3_conn else '?'} args={list(r3_conn)} link={link_idx}",
-                        flush=True,
-                    )
+
                     program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(r3_conn)
-                else:
-                    print(f"  r3_conn  (BRISC): SKIPPED (exit column)", flush=True)
 
                 bwd_conn = ttnn.setup_fabric_connection(fabric_node_id, bwd_fabric_node_id, link_idx, program, fc)
-                print(
-                    f"  bwd_conn (NCRISC): eth_ch={list(bwd_conn)[0] if bwd_conn else '?'} args={list(bwd_conn)}",
-                    flush=True,
-                )
+
                 program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend(bwd_conn)
 
         if ctx.enable_reduce_to_all and self._persistent_fabric_core is not None:
@@ -4922,11 +4842,6 @@ class MoeOp:
             fwd_cross_col_conn = ttnn.setup_fabric_connection(
                 my_fabric_node, partner_fabric_node, 0, program, sender_core
             )
-            print(
-                f"[MoE forward fabric] row={row} col={col} sender=({sender_core.x},{sender_core.y}) "
-                f"partner=({partner_coord}) args={list(fwd_cross_col_conn)}",
-                flush=True,
-            )
             program.kernels[ncrisc_kernel_idx].runtime_args[sender_core.x][sender_core.y].extend(fwd_cross_col_conn)
 
     # ==================================================================
@@ -4989,12 +4904,6 @@ class MoeOp:
         self.forward_sockets = forward_sockets
         self.exit_column = exit_column
         self.reduce_exit_column = reduce_exit_column if reduce_exit_column is not None else exit_column
-        print(
-            f"[MoeOp.__init__] exit_column={self.exit_column} reduce_exit_column={self.reduce_exit_column} "
-            f"forward_sockets={'provided' if forward_sockets is not None else 'None'} "
-            f"len={len(forward_sockets) if forward_sockets else 0}",
-            flush=True,
-        )
         self._forward_metadata_size_bytes = forward_metadata_size_bytes
         self._metadata_l1_addr = metadata_l1_addr
         if semaphores is None:
@@ -5085,11 +4994,6 @@ class MoeOp:
 
             if routed_ctx.enable_forward and forward_staging_tensor is not None:
                 routed_ctx.forward_staging_tensor = forward_staging_tensor
-                print(
-                    f"[MoeOp] using caller-provided forward_staging_tensor (cb46 backing): "
-                    f"shape={forward_staging_tensor.shape}",
-                    flush=True,
-                )
 
             routed_ctx.forward_metadata_size_bytes = self._forward_metadata_size_bytes
 
@@ -5528,17 +5432,6 @@ class MoeOp:
         # Create per-device programs (mesh loop)
         # ==================================================================
         ctx = moe.ctx
-        if ctx.enable_forward and ctx.forward_sockets:
-            print(
-                f"[MoeOp.op] forward_sockets state before mesh loop: "
-                f"exit_column={moe.exit_column} reduce_exit_column={moe.reduce_exit_column} "
-                f"len={len(ctx.forward_sockets)} "
-                + " ".join(
-                    f"[{i}]={'addr=' + str(int(s.get_config_buffer_address())) if s is not None else 'None'}"
-                    for i, s in enumerate(ctx.forward_sockets)
-                ),
-                flush=True,
-            )
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for row in range(ctx.mesh_rows):
             for col in range(ctx.mesh_cols):
@@ -5553,19 +5446,6 @@ class MoeOp:
                     row,
                     col,
                 )
-
-                if ctx.enable_forward:
-                    fwd_entry_ct = None
-                    for n, v in moe.brisc_args:
-                        if n == "forward_is_entry_column":
-                            fwd_entry_ct = v
-                            break
-                    print(
-                        f"[MoeOp.op] chip_id={chip_id} row={row} col={col} "
-                        f"brisc_common_rt_args[0:3]={moe.brisc_common_rt_args[:3]} "
-                        f"forward_is_entry_column(CT)={fwd_entry_ct}",
-                        flush=True,
-                    )
 
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",

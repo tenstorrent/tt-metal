@@ -251,7 +251,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_r2_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_ncrisc_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_is_exit_column"),
-                1>;  // useRawSemAddrs: MoE uses global semaphore addresses directly
+                1>;
 
             deepseek_b1_ops::ReduceToAllB1::ReaderArgs reduce_rt_args{};
 #endif
@@ -321,7 +321,7 @@ void kernel_main() {
     } moe;
 
 #ifdef ENABLE_REDUCE_TO_ALL
-    // Populate NCRISC reduce runtime args (must be outside struct initializer)
+    // Populate NCRISC reduce runtime args
     if constexpr (Moe::Routed::ReduceToAllCTArgs::is_fabric_core == 0) {
         moe.routed.reduce_rt_args = {
             get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 0),

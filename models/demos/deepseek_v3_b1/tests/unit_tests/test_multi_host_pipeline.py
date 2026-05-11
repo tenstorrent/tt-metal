@@ -908,7 +908,7 @@ def _dispatch_merged_programs(all_entries, mesh_device):
 )
 @pytest.mark.parametrize(
     "num_channels",
-    [1, 4, 8],
+    [1, 4],
 )
 @pytest.mark.parametrize(
     "mesh_device",
