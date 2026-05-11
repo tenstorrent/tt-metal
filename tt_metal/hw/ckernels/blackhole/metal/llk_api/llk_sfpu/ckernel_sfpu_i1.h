@@ -68,13 +68,13 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
         -1.9748322314e-02f,
         -3.3467922914e-01f);
 
-    // exp(|x|) — unsafe FP32 variant: |x|∈[10,88.5] precludes overflow/underflow,
-    // so the safe-path's v_if guards are dead and skipped. BF16 path uses the
-    // 21-bit approximation as before.
+    // exp(|x|) — unsafe variants in both paths: |x|∈[10,88.5] precludes
+    // overflow/underflow, so the safe wrappers' clamping/guards are dead
+    // and skipped.
 #ifdef INP_FLOAT32
     const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
 #else
-    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_<true>(abs_x);
+    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x);
 #endif
 
     // i1 is odd: copy sign of original x onto positive magnitude.

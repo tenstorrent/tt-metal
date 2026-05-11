@@ -39,6 +39,51 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val)
 }
 
 /*
+ * Unsafe core of BF16 21f exp: skips the xlog2 clamp present in
+ * _sfpu_exp_21f_bf16_. The caller MUST ensure `val * (1/ln2) + 127`
+ * stays in [0, 256) (roughly val ∈ [-88.0, 88.7]) — otherwise the
+ * implicit float→int conversion in _float_to_int32_for_exp_21f_ can
+ * wrap and produce garbage.
+ *
+ * Use this variant when the caller has already clamped its input (e.g. i1's
+ * asymptotic path operates on |x| ∈ [10, 88.5]).
+ *
+ * @param val The input value, must be in the safe range described above.
+ * @return sfpi::vFloat Result of exp(val), 21-bit accuracy (~3 FP32 ULP).
+ */
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val)
+{
+    constexpr float ONE_LN2 = 1.4426950216293334961f;
+    sfpi::vFloat xlog2      = (val * ONE_LN2 + 127.f);
+
+    sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
+
+    sfpi::vInt exponential_part = exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias); // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));                         // Extract mantissa ( = leftover part, in [0; 1])
+
+    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+
+    // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
+    // This uses a 2nd degree polynomial adjustment of the fractional part
+    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+
+    // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
+    sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
+
+    if constexpr (!is_fp32_dest_acc_en)
+    {
+        // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
+        // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
+        // rather than 81 (which would have been correct).
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        y = sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven);
+    }
+
+    return y;
+}
+
+/*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
  * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
