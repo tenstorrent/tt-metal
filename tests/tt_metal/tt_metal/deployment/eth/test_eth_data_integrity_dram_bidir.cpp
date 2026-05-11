@@ -225,7 +225,12 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDramBidir) {
                 bool passed = run_test_integrity_dram_bidir(
                     this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core);
                 if (!passed) {
-                    errors.emplace_back(sender_device->id(), receiver_device->id(), sender_core, receiver_core);
+                    errors.emplace_back(
+                        sender_device->id(),
+                        receiver_device->id(),
+                        sender_core,
+                        receiver_core,
+                        DataMovementProcessor::RISCV_0);
                 }
             }
         }

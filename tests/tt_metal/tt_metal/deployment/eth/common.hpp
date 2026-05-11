@@ -18,14 +18,15 @@
         start = NOW();                                                                        \
     } while (0)
 
+namespace tt::tt_metal {
+
 struct LinkError {
     int send_device_id;
     int recv_device_id;
     const CoreCoord send_core;
     const CoreCoord recv_core;
+    DataMovementProcessor processor;
 };
-
-namespace tt::tt_metal {
 
 [[maybe_unused]]
 static inline void prepare_sender(
@@ -594,11 +595,12 @@ void print_summary(std::span<struct LinkError> errors) {
     for (auto& e : errors) {
         log_critical(
             tt::LogTest,
-            "\tSender device {}, receiver device {}, sender core {}, receiver core {}",
+            "\tSender device {}, receiver device {}, sender core {}, receiver core {}, processor {}",
             e.send_device_id,
             e.recv_device_id,
             e.send_core,
-            e.recv_core);
+            e.recv_core,
+            e.processor);
     }
     log_critical(tt::LogTest, "{} failing links in total", errors.size());
 }
