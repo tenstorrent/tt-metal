@@ -178,11 +178,9 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             mesh_shape = tuple(mesh_device.shape)
         except Exception:
             mesh_shape = None
-        galaxy_dp4_forced = False
         if tt_data_parallel == 1 and mesh_shape == (8, 4):
             logger.info("Galaxy mesh detected (8,4); forcing internal tt_data_parallel=4")
             tt_data_parallel = 4
-            galaxy_dp4_forced = True
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
         assert (
@@ -217,38 +215,26 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         del state_dict
         logger.info(f"All {tt_data_parallel} TtMolmo2Model replica(s) ready")
 
-        # Warmup matches the 105-test demo (models/demos/molmo2/tests/test_10_videos.py:179):
-        #   1) JIT compile all prefill buckets,
-        #   2) capture prefill traces ≤ MAX_TRACE_BUCKET,
-        #   3) vision JIT,
-        #   4) capture decode trace at a canonical position.
-        # Without this, prefill JITs cold per request and the decode trace gets captured
-        # lazily at request-0's actual position — different memory layouts across requests
-        # cause run-to-run non-determinism in prefill outputs.
-        # Skipped on the Galaxy DP=4 submesh path until re-validated under the current
-        # tt-metal pin (the old pin leaked tensors on (1,8) submeshes during warmup).
-        if galaxy_dp4_forced:
-            logger.info("Galaxy DP=4 submesh path — skipping per-replica warmup (re-validate before enabling)")
-        else:
-            # Two-step warmup: JIT compile prefill kernels + vision kernels. This
-            # makes prefill deterministic (cold-JIT allocations otherwise vary the
-            # memory layout across requests → bf16 reduction-order non-determinism).
-            #
-            # We deliberately do NOT call:
-            #   - warmup_all_buckets(use_trace=True): prefill traces conflict with
-            #     the decode trace for video/image eager prefill (commit 1dd8490d7d2).
-            #   - warmup_decode_trace(): captures decode trace at PREFILL_BUCKETS[-1]
-            #     =32768. While the comment claims position-agnostic, in our server
-            #     (concurrent users on one model) it produces garbage decode at
-            #     S≪32768. Lazy capture at first request's actual position works.
-            from models.demos.molmo2.tt.model import PREFILL_BUCKETS
+        # Two-step warmup: JIT compile prefill kernels + vision kernels. Applied to
+        # every replica (single mesh or each submesh). This makes prefill deterministic
+        # — cold-JIT allocations otherwise vary the memory layout across requests and
+        # cause bf16 reduction-order non-determinism in prefill outputs.
+        #
+        # We deliberately do NOT call:
+        #   - warmup_all_buckets(use_trace=True): prefill traces conflict with the
+        #     decode trace for video/image eager prefill (commit 1dd8490d7d2).
+        #   - warmup_decode_trace(): captures decode trace at PREFILL_BUCKETS[-1]
+        #     =32768. The "position-agnostic" claim breaks under the server (concurrent
+        #     users on one model) — produces garbage decode at S≪32768. Lazy capture
+        #     at first request's actual position works.
+        from models.demos.molmo2.tt.model import PREFILL_BUCKETS
 
-            for dp_idx, m in enumerate(models):
-                logger.info(f"[warmup {dp_idx + 1}/{len(models)}] JIT prefill buckets {PREFILL_BUCKETS}")
-                m.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
-                logger.info(f"[warmup {dp_idx + 1}/{len(models)}] vision compile")
-                m.warmup_vision_compile()
-            logger.info("All replicas warmed up (JIT prefill + vision). Decode trace will capture lazily.")
+        for dp_idx, m in enumerate(models):
+            logger.info(f"[warmup {dp_idx + 1}/{len(models)}] JIT prefill buckets {PREFILL_BUCKETS}")
+            m.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+            logger.info(f"[warmup {dp_idx + 1}/{len(models)}] vision compile")
+            m.warmup_vision_compile()
+        logger.info("All replicas warmed up (JIT prefill + vision). Decode trace will capture lazily.")
 
         return cls(
             models=models,
