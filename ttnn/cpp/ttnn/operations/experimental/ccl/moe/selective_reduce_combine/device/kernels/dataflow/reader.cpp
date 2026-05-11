@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -81,7 +81,6 @@ void kernel_main() {
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
     constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
-    constexpr uint32_t worker_bounding_box_size = get_named_compile_time_arg_val("worker_bounding_box_size");
 
     constexpr uint32_t aligned_activations_page_size = aligned_token_activations_page_size_bytes / sizeof(uint32_t);
 
@@ -99,9 +98,12 @@ void kernel_main() {
 
     const uint32_t sync_semaphore_addr = get_semaphore(sync_semaphore_id);
 
-    const auto dense_token_maps_addrgen = TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr);
-    const auto token_counts_addrgen = TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr);
-    const auto token_activations_addrgen = TensorAccessor(token_activations_ta_args, token_activations_addr);
+    const auto dense_token_maps_addrgen =
+        TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr, dense_token_maps_page_size_bytes);
+    const auto token_counts_addrgen =
+        TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr, token_counts_page_size_bytes);
+    const auto token_activations_addrgen =
+        TensorAccessor(token_activations_ta_args, token_activations_addr, token_activations_page_size_bytes);
 
     // wait for metadata to be ready
     auto* sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore_addr);
@@ -113,7 +115,7 @@ void kernel_main() {
         noc_semaphore_set_multicast(
             sync_semaphore_addr,
             semaphore_mc_addr,
-            worker_bounding_box_size - 1,
+            num_token_parallel_cores * num_data_parallel_cores - 1,
             /*linked=*/false,
             /*noc=*/1);
         noc_async_writes_flushed(/*noc=*/1);
@@ -124,8 +126,8 @@ void kernel_main() {
 
     // read dense token counts
     cb_reserve_back(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
-    const uint64_t token_counts_noc_addr = token_counts_addrgen.get_noc_addr(0, /*offset=*/0, /*noc=*/1);
+    const uint32_t token_counts_l1_addr = get_read_ptr(token_counts_cb_id);
+    const uint64_t token_counts_noc_addr = get_noc_addr(0, token_counts_addrgen, /*offset=*/0, /*noc=*/1);
     noc_async_read(token_counts_noc_addr, token_counts_l1_addr, token_counts_page_size_bytes, /*noc=*/1);
     noc_async_read_barrier(/*noc=*/1);
 

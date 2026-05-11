@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,9 +43,6 @@ struct MoEComputeMeshWorkloadFactory {
         // CB handle for combine global sharded input tensor
         tt::tt_metal::CBHandle combine_data_cb_handle;
 
-        // CB handle for token counts per expert
-        tt::tt_metal::CBHandle expert_tokens_cb_handle;
-
         // Combine cores
         std::vector<CoreCoord> combine_cores;
 
@@ -76,9 +73,6 @@ struct MoEComputeMeshWorkloadFactory {
         std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
-std::vector<ttnn::CoreCoord> get_moe_combine_cores(
-    ttnn::MeshDevice* mesh_device,
-    const uint32_t combine_token_parallel_cores,
-    const uint32_t combine_data_parallel_cores);
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device);
 
 }  // namespace ttnn::experimental::prim

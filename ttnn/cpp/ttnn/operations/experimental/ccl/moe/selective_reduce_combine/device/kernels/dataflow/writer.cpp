@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -123,6 +123,7 @@ void kernel_main() {
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
     constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
+    constexpr uint32_t token_size_bytes = get_named_compile_time_arg_val("token_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
@@ -184,12 +185,12 @@ void kernel_main() {
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
 
-    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
+    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr, token_size_bytes);
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
         cb_reserve_back(packet_header_cb_id, 1);
-        const uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
+        const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
         cb_push_back(packet_header_cb_id, 1);
     }
@@ -224,7 +225,7 @@ void kernel_main() {
     cb_pop_front(token_counts_cb_id, 1);
 
     cb_reserve_back(data_cb_id, 1);
-    const uint32_t src_data_l1_base_addr = get_write_ptr(data_cb_id);
+    const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
 
     cb_wait_front(dense_token_maps_cb_id, num_local_experts);
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
@@ -262,7 +263,6 @@ void kernel_main() {
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
         noc_semaphore_wait(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
-
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];

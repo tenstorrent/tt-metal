@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,15 +7,15 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
-void kernel_main() {
-    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
-    constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
-    constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+namespace detail {
+inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
+}  // namespace detail
 
+void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t tile_width_size_bytes = get_named_compile_time_arg_val("tile_width_size_bytes");
 
     constexpr uint32_t combine_shard_width_tiles = get_named_compile_time_arg_val("combine_shard_width_tiles");
-    constexpr uint32_t token_expert_row_offset = get_named_compile_time_arg_val("token_expert_row_offset");
+    constexpr uint32_t buffer_size_total_tokens = get_named_compile_time_arg_val("buffer_size_total_tokens");
     constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
     constexpr uint32_t matmul_combine_sync_semaphore_id =
@@ -59,16 +59,16 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
+    constexpr auto cb_c2s_out = tt::CBIndex::c_14;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -76,37 +76,37 @@ void kernel_main() {
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
-    // Pre-computed shard lookup tables — same LUT definitions as compute.cpp.
-    constexpr auto shard_tiles_lut = moe_ring::make_shard_lut<Nt, num_cores>();
-    constexpr auto w2_shard_tiles_lut = moe_ring::make_w2_shard_lut<Ht, Nt, num_cores>();
-    constexpr auto w2_offset_lut = moe_ring::make_w2_offset_lut<Ht, Nt, num_cores>();
-
-    // Constants for MoE — derived from compile-time shape args
-    constexpr uint32_t num_w0_w1_tiles_h = Ht;
-    const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
-    const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
-
-    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
+    // Constants for MoE
+    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
-        token_expert_row_offset * combine_shard_width_tiles * tile_width_size_bytes;
+        buffer_size_total_tokens / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);
-    constexpr uint32_t source_width_tiles = Cfg::w2_tiles_per_expert_w;
-    const uint32_t output_width_tiles_core = w2_shard_tiles_lut[ring_core_id];
-    const uint32_t width_tile_base = w2_offset_lut[ring_core_id];
-    constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
+    constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
+    const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
+    // offset in tiles into the token width for this core
+    const uint32_t width_tile_base = moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id];
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
     const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
-    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
+    // The number of times to repeat the all2all
+    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_B;
 
-    constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
+    // The number of steps to take in the all2all is the number of cores
+    constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
+
+    // The number of tiles to send in each step
+    // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
+    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_B;  // max(num_w0_w1_tiles_w)
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
@@ -119,13 +119,8 @@ void kernel_main() {
     // Size of each transfer in bytes
     constexpr uint32_t a2a_xfer_bytes_per_step = tiles_per_step * in2_tile_size;
 
-    // Split each A2A transfer into max-burst packets plus a smaller remainder.
-    constexpr uint32_t noc_max_burst_bytes = get_named_compile_time_arg_val("noc_max_burst_bytes");
-    constexpr uint32_t max_tiles_per_burst = noc_max_burst_bytes / in2_tile_size;
-    constexpr uint32_t a2a_full_packets = tiles_per_step / max_tiles_per_burst;
-    constexpr uint32_t a2a_full_packet_size = max_tiles_per_burst * in2_tile_size;
-    constexpr uint32_t a2a_remainder_tiles = tiles_per_step % max_tiles_per_burst;
-    constexpr uint32_t a2a_remainder_size = a2a_remainder_tiles * in2_tile_size;
+    // Split into 2 packets
+    constexpr uint32_t a2a_packet_size = a2a_xfer_bytes_per_step / 2;
 
     // Source and destination addresses for the all2all
     const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
@@ -149,26 +144,26 @@ void kernel_main() {
 
     // Signal to the compute core that num_tokens_per_expert has arrived.
     // We also use this CB to transfer (from the writer to compute) 2 semaphore addresses:
-    // - 0: address of L1 page (CB) used to send metadata (number of tokens per expert)
+    // - 0: address of semaphore used to send metadata (number of tokens per expert)
     // - 1: address of semaphore used to notify matmuls cores that tilized chunks have arrived
-
-    // Read per-expert token counts from CB
-    const auto num_tokens_per_expert_addr = get_read_ptr(per_expert_total_tokens_cb_id);
-    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_tokens_per_expert_addr);
-
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
-    cb_w2c_md_write_ptr[0] = num_tokens_per_expert_addr;
+    cb_w2c_md_write_ptr[0] = get_semaphore(metadata_ready_semaphore_id);
     cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
     cb_reserve_back(cb_w2c_md, 2);
     cb_push_back(cb_w2c_md, 2);
 
     // Precompute NUM_CHUNKS_PER_EXPERT
+    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
+    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
+
+    constexpr uint32_t BITS_PER_EXPERT = 10;
+    constexpr uint32_t EXPERT_MASK = 0x3FFu;
     uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
+        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
         NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[expert_id] = detail::div_up(num_tokens, tokens_per_chunk);
     }
@@ -214,15 +209,10 @@ void kernel_main() {
         }
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            if constexpr (a2a_full_packets == 0 || a2a_remainder_tiles == 0) {
-                // Set only once here if there is only 1 type of packet: either all full with none partial, or none full
-                // with one partial
-                noc_async_write_one_packet_set_state</*posted=*/true>(
-                    neighbor_base_addr,
-                    a2a_full_packets > 0 ? a2a_full_packet_size : a2a_remainder_size,
-                    /*noc=*/1,
-                    vchannel);
-            }
+            // Set state for the data writes
+            noc_async_write_one_packet_set_state</*posted=*/true>(
+                neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
+
             // Set state for the semaphore write
             noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
                 neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
@@ -233,14 +223,9 @@ void kernel_main() {
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
-            for (uint32_t i = 0; i < Cfg::num_a2a_iters; ++i) {
+            // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
+            for (uint32_t i = 0; i < num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
-                    if constexpr (a2a_full_packets > 0 && a2a_remainder_tiles > 0) {
-                        // Resetting required as both full and partial packets exist
-                        noc_async_write_one_packet_set_state</*posted=*/true>(
-                            neighbor_base_addr, a2a_full_packet_size, /*noc=*/1, vchannel);
-                    }
-
                     // Wait for current data to be ready in cb_s2c_in2
                     while ((*my_semaphore_ptr) < semaphore_value) {
                     };
@@ -249,28 +234,14 @@ void kernel_main() {
                     cb_reserve_back(cb_w2c_rdy, 1);
                     cb_push_back(cb_w2c_rdy, 1);
 
-                    // Write tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+                    // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
                     const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
-                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == num_cores - 1) ? 0 : (step + 1)];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
 
-                    uint32_t pkt_offset = 0;
-                    // Rely on compiler to remove loop if no full packet exists
-                    for (uint32_t pkt = 0; pkt < a2a_full_packets; ++pkt) {
-                        noc_async_write_one_packet_with_state</*posted=*/true>(
-                            local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
-                        pkt_offset += a2a_full_packet_size;
-                    }
-                    if constexpr (a2a_remainder_tiles > 0) {
-                        if constexpr (a2a_full_packets > 0) {
-                            // Reset here if full packets exist, otherwise, it was already set once at the top and no
-                            // reset required
-                            noc_async_write_one_packet_set_state</*posted=*/true>(
-                                neighbor_base_addr, a2a_remainder_size, /*noc=*/1, vchannel);
-                        }
-                        noc_async_write_one_packet_with_state</*posted=*/true>(
-                            local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
-                    }
+                    noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
+                    noc_async_write_one_packet_with_state</*posted=*/true>(
+                        local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
                     // Signal neighbor that data is ready (increment their semaphore value)
                     noc_inline_dw_write_with_state<
@@ -285,7 +256,7 @@ void kernel_main() {
                 }
             }
 
-            uint32_t width_tiles_to_send = output_width_tiles_core;  // split width of hidden dim, maybe padded
+            uint32_t width_tiles_to_send = output_width_tiles_core;  // 18 or 19
             uint32_t width_tiles_sent = 0;
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
