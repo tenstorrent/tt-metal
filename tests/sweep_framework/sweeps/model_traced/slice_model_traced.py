@@ -246,14 +246,21 @@ def run(
             _start_placement = (
                 pos_args_raw.get(1, {}).get("tensor_placement") if isinstance(pos_args_raw.get(1), dict) else None
             )
-            if is_mesh_device and _start_placement:
-                slice_start = create_tensor_on_mesh(
+            if is_mesh_device:
+                _sp = _start_placement or {
+                    "distribution_shape": "[1, 2]",
+                    "mesh_device_shape": "[1, 2]",
+                    "placement": "['PlacementReplicate', 'PlacementShard(0)']",
+                }
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
+
+                slice_start = replicate_with_topology(
                     _start_torch,
                     device,
                     ttnn.int32,
                     ttnn.ROW_MAJOR_LAYOUT,
                     ttnn.DRAM_MEMORY_CONFIG,
-                    _start_placement,
+                    _sp,
                 )
             else:
                 slice_start = ttnn.from_torch(
@@ -262,21 +269,27 @@ def run(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
                 )
         if isinstance(slice_end, list):
             _end_torch = _torch_s.tensor(slice_end, dtype=_torch_s.int32)
             _end_placement = (
                 pos_args_raw.get(2, {}).get("tensor_placement") if isinstance(pos_args_raw.get(2), dict) else None
             )
-            if is_mesh_device and _end_placement:
-                slice_end = create_tensor_on_mesh(
+            if is_mesh_device:
+                _ep = _end_placement or {
+                    "distribution_shape": "[1, 2]",
+                    "mesh_device_shape": "[1, 2]",
+                    "placement": "['PlacementReplicate', 'PlacementShard(0)']",
+                }
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
+
+                slice_end = replicate_with_topology(
                     _end_torch,
                     device,
                     ttnn.int32,
                     ttnn.ROW_MAJOR_LAYOUT,
                     ttnn.DRAM_MEMORY_CONFIG,
-                    _end_placement,
+                    _ep,
                 )
             else:
                 slice_end = ttnn.from_torch(
@@ -285,7 +298,6 @@ def run(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
                 )
 
     start_time = start_measuring_time()
