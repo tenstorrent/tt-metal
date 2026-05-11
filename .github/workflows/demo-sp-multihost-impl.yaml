@@ -4,9 +4,8 @@ on:
   workflow_call:
     inputs:
       docker-image:
-        required: false
+        required: true
         type: string
-        default: "ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:latest"
         description: "Worker image for multihost TTOP environments (reset + test pods)"
       build-artifact-name:
         required: true
@@ -111,7 +110,7 @@ jobs:
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       PYTHON_ENV_DIR: /opt/venv
-      PYTHONPATH: /home/user/tt-pydeps:/opt/venv/lib/python3.10/site-packages:/home/user/tt-metal
+      PYTHONPATH: /opt/venv/lib/python3.10/site-packages:/home/user/tt-metal
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
       HOME: /home/user
       TT_METAL_CACHE: /home/user/.cache
@@ -224,21 +223,25 @@ jobs:
           # Move the cloned directory to workers. TODO: Clone directly to NFS
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           # Ensure a clean checkout target on workers.
-          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal /home/user/tt-pydeps && cp -r /ci/tt-metal /home/user/tt-metal'
+          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/tt-metal'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive --force
 
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
-          mpirun --pernode bash -lc 'mkdir -p /home/user/tt-pydeps /home/user/.cache/pip'
-          mpirun --pernode bash -lc 'HOME=/home/user PIP_CACHE_DIR=/home/user/.cache/pip python3 -m pip install --no-input --target /home/user/tt-pydeps $(find /ci/artifacts -name "*.whl")'
+          mpirun --pernode bash -lc 'mkdir -p /home/user/.cache/pip'
+          mpirun --pernode bash -lc 'HOME=/home/user PIP_CACHE_DIR=/home/user/.cache/pip /opt/venv/bin/python -m pip install --no-input $(find /ci/artifacts -name "*.whl")'
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        working-directory: /ci/tt-metal
+        working-directory: /home/user/tt-metal
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
+          echo "Checking tt-smi location on workers..."
+          mpirun --pernode --tag-output which tt-smi
+          mpirun --pernode --tag-output bash -lc 'tt-smi --version || true'
+
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'
           ${{ matrix.test-group.cmd }}
