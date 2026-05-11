@@ -36,12 +36,9 @@ ALWI void moreh_bin_chain() {
         CbIndexMode::Pinned,
         Dst::D0,
         /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
-    BinElt elt{};
-    elt.a_tile_idx = IdxA;
-    elt.b_tile_idx = IdxB;
     eltwise_chain(
         1,
-        elt,
+        BinElt{IdxA, IdxB},
         PackTile<
             CbOut,
             Dst::D0,
@@ -74,12 +71,9 @@ ALWI void moreh_bin_chain_rt(uint32_t idxA, uint32_t idxB) {
         CbIndexMode::Pinned,
         Dst::D0,
         /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
-    BinElt elt{};
-    elt.a_tile_idx = idxA;
-    elt.b_tile_idx = idxB;
     eltwise_chain(
         1,
-        elt,
+        BinElt{idxA, idxB},
         PackTile<
             CbOut,
             Dst::D0,
@@ -94,11 +88,9 @@ template <typename Sfpu, uint32_t CbIn, uint32_t CbOut>
 ALWI void moreh_unary_chain_rt(uint32_t idx) {
     using namespace compute_kernel_lib;
     using CopyElt = CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::Pinned, CopyTileReconfig::Input>;
-    CopyElt elt{};
-    elt.cb_tile_idx = idx;
     eltwise_chain(
         1,
-        elt,
+        CopyElt{idx},
         Sfpu{},
         PackTile<
             CbOut,
@@ -125,12 +117,9 @@ ALWI void moreh_mul_neg_chain_rt(uint32_t idxA, uint32_t idxB) {
         CbIndexMode::Pinned,
         Dst::D0,
         /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
-    BinElt elt{};
-    elt.a_tile_idx = idxA;
-    elt.b_tile_idx = idxB;
     eltwise_chain(
         1,
-        elt,
+        BinElt{idxA, idxB},
         Negative<Dst::D0>{},
         PackTile<
             CbOut,

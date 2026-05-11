@@ -34,12 +34,9 @@ ALWI void moreh_bin_chain() {
         CbIndexMode::Pinned,
         Dst::D0,
         /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
-    BinElt elt{};
-    elt.a_tile_idx = IdxA;
-    elt.b_tile_idx = IdxB;
     eltwise_chain(
         1,
-        elt,
+        BinElt{IdxA, IdxB},
         PackTile<
             CbOut,
             Dst::D0,
@@ -58,11 +55,9 @@ ALWI void moreh_copy_chain() {
         Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
         CopyTileReconfig::Input>;
-    CopyElt elt{};
-    elt.cb_tile_idx = Idx;
     eltwise_chain(
         1,
-        elt,
+        CopyElt{Idx},
         PackTile<
             CbOut,
             Dst::D0,
