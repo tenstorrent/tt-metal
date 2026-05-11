@@ -11,8 +11,7 @@ from fuser.fused_loop import FusedLoop
 from fuser.fused_operation import FusedOperation
 from fuser.fused_packer import Packer as BasePacker
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import PackGolden
-from helpers.llk_params import PackerReluType
+from helpers.llk_params import L1Accumulation, PackerReluType
 
 
 class Packer(BasePacker):
@@ -32,11 +31,11 @@ class Packer(BasePacker):
         config: GlobalConfig,
     ) -> torch.Tensor:
         if operation.pack_relu != PackerReluType.NoRelu:
-            intermediate_format = config.sentinel.golden_format.pack_src
-            relu_config = PackGolden.generate_relu_config(
-                operation.pack_relu, operation.relu_threshold, intermediate_format
-            )
-            tensor = PackGolden.apply_relu(tensor, relu_config, intermediate_format)
+            tensor = self._relu_golden(tensor, operation, config)
+
+        if operation.pack_l1_accumulation == L1Accumulation.Yes:
+            tensor = self._l1_acc_golden(tensor, operation, config)
+
         return tensor
 
     def init(
