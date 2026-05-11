@@ -841,17 +841,21 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     try:
         _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
         if not _master_path:
-            _auto = os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "..",
-                "..",
-                "model_tracer",
-                "traced_operations",
-                "ttnn_operations_master.json",
-            )
-            if os.path.isfile(_auto):
-                _master_path = _auto
+            for _base in [
+                os.path.join(os.path.dirname(__file__), "..", "..", ".."),
+                os.environ.get("TT_METAL_HOME", ""),
+            ]:
+                if not _base:
+                    continue
+                _auto = os.path.join(
+                    _base,
+                    "model_tracer",
+                    "traced_operations",
+                    "ttnn_operations_master.json",
+                )
+                if os.path.isfile(_auto):
+                    _master_path = _auto
+                    break
         if _master_path and os.path.isfile(_master_path):
             import json as _json_ms
 
