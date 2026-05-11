@@ -1103,6 +1103,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // writing the launch message.
     pending_phase25_force_reset_chans_.clear();
     phase25_already_clean_chans_.clear();  // FIX P25-CLEAN (#42429)
+    phase25_p25_clean_for_health_check_.clear();  // FIX QH-1 (#42429): reset at quiesce entry
 
     if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
         log_warning(
@@ -1948,6 +1949,18 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // FIX AR (#42429): clear force-reset set after inline ETH launch pass — channels are
     // now either launched or skipped; no further deassert needed.
     pending_phase25_force_reset_chans_.clear();
+    // FIX QH-1 (#42429): Save P25-CLEAN channels for Phase 5b health check BEFORE clearing.
+    // These channels were skipped during Phase 3 launch (already TERMINATED, peer not quiescing).
+    // They will remain TERMINATED after quiesce restart — Phase 5b must not count them as failures.
+    phase25_p25_clean_for_health_check_ = phase25_already_clean_chans_;
+    if (!phase25_p25_clean_for_health_check_.empty()) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} FIX QH-1 — saving {} P25-CLEAN channel(s) "
+            "for Phase 5b health check exclusion (will remain TERMINATED, not READY_FOR_TRAFFIC). (#42429)",
+            this->id(),
+            phase25_p25_clean_for_health_check_.size());
+    }
     phase25_already_clean_chans_.clear();  // FIX P25-CLEAN: consumed by inline Phase 3 launch
 
     // FIX P REMOVED (#42429): The per-device MAGIC injection (FIX P) was removed because it
@@ -2046,6 +2059,18 @@ void Device::launch_eth_cores_for_quiesce() {
     // These will be skipped in Phase 3 launch — their peers are not quiescing.
     const auto p25_already_clean = std::move(phase25_already_clean_chans_);
     phase25_already_clean_chans_.clear();  // FIX P25-CLEAN: consumed
+    // FIX QH-1 (#42429): Persist P25-CLEAN channels for Phase 5b health check exclusion.
+    // These channels will remain TERMINATED after quiesce restart — Phase 5b must not count
+    // them as unhealthy (their peers are not quiescing; READY_FOR_TRAFFIC is unreachable).
+    phase25_p25_clean_for_health_check_ = p25_already_clean;
+    if (!phase25_p25_clean_for_health_check_.empty()) {
+        log_info(
+            tt::LogMetal,
+            "launch_eth_cores_for_quiesce: Device {} FIX QH-1 — saving {} P25-CLEAN channel(s) "
+            "for Phase 5b health check exclusion (will remain TERMINATED, not READY_FOR_TRAFFIC). (#42429)",
+            this->id(),
+            phase25_p25_clean_for_health_check_.size());
+    }
 
     log_info(
         tt::LogMetal,
@@ -2612,10 +2637,43 @@ bool Device::phase5b_erisc_health_check(
     uint32_t router_sync_addr,
     uint32_t expected_ready,
     tt::tt_fabric::chan_id_t master_router_chan) {
-    constexpr uint32_t kHealthCheckTimeoutMs = 2000;
+    // FIX QH-2 (#42429): Extend Phase 5b timeout when stale base-UMD channels were present.
+    // When fabric_stale_base_umd_channels_ is set (FIX M fired during configure_fabric —
+    // channels were transitioned from base-UMD to fabric firmware via launch_msg rather than
+    // the clean path), the ETH handshake after quiesce restart takes longer because the
+    // channels need to complete the REMOTE_HANDSHAKE_COMPLETE → READY_FOR_TRAFFIC transition
+    // after booting from the launch_msg.  Extend by 12x to match FIX TH3 / FIX BO.
+    const uint32_t kHealthCheckTimeoutMs = this->is_fabric_stale_base_umd_channels() ? 24000u : 2000u;
+    if (this->is_fabric_stale_base_umd_channels()) {
+        log_info(
+            tt::LogMetal,
+            "phase5b_erisc_health_check: Device {} FIX QH-2 — stale base-UMD channels detected, "
+            "extending Phase 5b timeout from 2000ms to 24000ms. (#42429)",
+            this->id());
+    }
     // Log unhealthy channels every 200ms for observability.
     constexpr uint32_t kHCIntermediateLogMs = 200;
     constexpr uint32_t kSpinLimit = 64U;
+
+    // FIX QH-1 (#42429): Consume P25-CLEAN channel set — these channels were skipped by
+    // launch_eth_cores_for_quiesce because they were already TERMINATED before quiesce and
+    // their peer was not in the quiesce set.  They will remain TERMINATED after restart.
+    // Do NOT count them as unhealthy — READY_FOR_TRAFFIC is unreachable for them.
+    const auto p25_clean_excluded = std::move(phase25_p25_clean_for_health_check_);
+    phase25_p25_clean_for_health_check_.clear();
+    if (!p25_clean_excluded.empty()) {
+        std::string p25_str;
+        for (const auto& c : p25_clean_excluded) {
+            p25_str += fmt::format(" chan{}", c);
+        }
+        log_info(
+            tt::LogMetal,
+            "phase5b_erisc_health_check: Device {} FIX QH-1 — excluding {} P25-CLEAN channel(s) "
+            "from health check (expected TERMINATED, not READY_FOR_TRAFFIC):{}  (#42429)",
+            this->id(),
+            p25_clean_excluded.size(),
+            p25_str);
+    }
 
     struct UnhealthyChannel {
         uint32_t eth_chan_id;
@@ -2635,6 +2693,18 @@ bool Device::phase5b_erisc_health_check(
                 tt::LogMetal,
                 "phase5b_erisc_health_check: Device {} chan={} is external ETH (no in-cluster "
                 "peer, firmware not loaded) — skipping health check. (FIX EXT #42429)",
+                this->id(),
+                eth_chan_id);
+            continue;
+        }
+        // FIX QH-1 (#42429): skip P25-CLEAN channels — already TERMINATED, not launched,
+        // not expected to reach READY_FOR_TRAFFIC after quiesce restart.
+        if (p25_clean_excluded.count(eth_chan_id) > 0) {
+            log_info(
+                tt::LogMetal,
+                "phase5b_erisc_health_check: Device {} chan={} is P25-CLEAN (TERMINATED before "
+                "quiesce, peer not quiescing) — skipping health check (expected TERMINATED). "
+                "(FIX QH-1: #42429)",
                 this->id(),
                 eth_chan_id);
             continue;
@@ -2803,7 +2873,7 @@ bool Device::phase5b_erisc_health_check(
                 const auto diag_elapsed =
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - hc_start)
                         .count();
-                constexpr int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;
+                const int64_t kDiagBudgetMs = static_cast<int64_t>(kHealthCheckTimeoutMs) + 6000;
                 if (diag_elapsed > kDiagBudgetMs) {
                     log_warning(
                         tt::LogMetal,

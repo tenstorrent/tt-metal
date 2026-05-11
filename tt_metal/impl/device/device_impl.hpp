@@ -465,6 +465,14 @@ private:
     // and WILL be re-launched in Phase 3 (their TERMINATED state was caused by the peer
     // quiescing first, not by being disconnected from the active fabric).
     std::unordered_set<ChipId> quiescing_device_ids_;
+    // FIX QH-1 (#42429): P25-CLEAN channels persisted for Phase 5b health check exclusion.
+    // Channels populated here were skipped by launch_eth_cores_for_quiesce() because they
+    // were already TERMINATED before quiesce and their peer was not in the quiesce set.
+    // They will naturally remain TERMINATED after quiesce restart — Phase 5b must NOT count
+    // them as failures (they never had firmware launched, so READY_FOR_TRAFFIC is unreachable).
+    // Cleared after Phase 5b consumes it.  Populated by both the inline path (in
+    // quiesce_and_restart_fabric_workers) and the deferred path (launch_eth_cores_for_quiesce).
+    std::unordered_set<uint32_t> phase25_p25_clean_for_health_check_;
 
     // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
     // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which
