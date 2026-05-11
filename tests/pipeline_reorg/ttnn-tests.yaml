@@ -6,7 +6,7 @@
 #   - ttsim.yaml (simulator CI)
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
-# Optional: merge_gate (filter in workflow), ttsim (for TTSim), fast_runtime_mode_off.
+# Optional: merge_gate (filter in workflow), fast_runtime_mode_off.
 # =============================================================================
 
 - name: "ttnn data movement group"
@@ -44,7 +44,6 @@
   team: ttnn
   owner_id: U05ACKAJTHS # Naif Tarafdar
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn example tests"
   cmd: "./tests/scripts/run_ttnn_examples.sh"
@@ -58,7 +57,6 @@
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   merge_gate: true
-  ttsim: true
 
 - name: "ttnn eltwise group 1"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 1 -m "not disable_fast_runtime_mode"'
@@ -72,7 +70,6 @@
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn eltwise group 2"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 2 -m "not disable_fast_runtime_mode"'
@@ -86,7 +83,6 @@
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn eltwise group 3"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 3 -m "not disable_fast_runtime_mode"'
@@ -100,7 +96,6 @@
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn eltwise group 4"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 4 -m "not disable_fast_runtime_mode"'
@@ -114,7 +109,6 @@
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn conv group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
@@ -128,7 +122,6 @@
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn pool group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
@@ -142,7 +135,6 @@
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn matmul group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
@@ -156,7 +148,6 @@
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn fused group 1"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
@@ -170,7 +161,6 @@
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn fused group 2"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
@@ -184,7 +174,6 @@
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn misc ops group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/deepseek tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
@@ -198,7 +187,6 @@
   team: ttnn
   owner_id: U08JFM3CFA4 # Gongyu Wang
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn sdpa group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
@@ -212,7 +200,6 @@
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
   merge_gate: false
-  ttsim: true
 
 - name: "ttnn reduce group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
@@ -226,7 +213,6 @@
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
   merge_gate: false
-  ttsim: true
 
 - name: "per-core allocation tests"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
@@ -240,7 +226,6 @@
     bh_p150b_civ2:
       timeout: 5
   team: ttnn
-  ttsim: true
 
 - name: "core ttnn unit test group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
@@ -254,4 +239,3 @@
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   merge_gate: false
-  ttsim: true

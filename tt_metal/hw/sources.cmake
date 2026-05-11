@@ -20,6 +20,7 @@ set(HW_JIT_API_HEADERS
     inc/api/numeric/bfloat16.h
     inc/api/numeric/float32.h
     inc/api/numeric/int32.h
+    inc/api/kernel_thread_globals.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
     inc/api/tensor/shard_pages_address_iterator.h
@@ -142,6 +143,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
+    inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h

@@ -105,6 +105,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     const auto& dispatched_buffer = tensor_args.dispatched_buffer;
     const auto& dispatched_metadata = tensor_args.dispatched_metadata;
     const auto& expert_token_counts = tensor_args.expert_token_counts;
+    const auto& expert_region_offsets = tensor_args.expert_region_offsets;
     const auto& output_tensor = tensor_return_value;
     const bool is_tile_layout = dispatched_buffer.layout() == tt::tt_metal::Layout::TILE;
 
@@ -144,7 +145,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
-    auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
+    auto max_dispatch_buffer_token_size = dispatched_shape[-2];
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     // Maximum worker cores: one per fabric link.
@@ -272,15 +273,27 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     // Sized one extra page larger than the raw counter data so reader_combine can append
     // its receive_buf_addr (get_write_ptr(c_18)) immediately after the counter pages before the
     // multicast, giving idle cores a host-side-free way to discover the sender's receive buffer.
-    uint32_t extra_pages = is_tile_layout ? 1 : 0;
-    // c_2: expert_token_counts (reader-only, full tensor)
+    // Extra space is one full counter_page_size (not l1_alignment) to keep cb_size divisible by page_size.
+    {
+        uint32_t counter_pages = detail::get_num_pages(expert_token_counts);
+        uint32_t counter_page_size = detail::get_aligned_page_size(expert_token_counts);
+        auto data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_token_counts.dtype());
+        // One extra page holds the single receive_buf_addr (uint32) appended after counter data.
+        uint32_t extra_pages = 1;
+        uint32_t cb_size = (counter_pages + extra_pages) * counter_page_size;
+        tt::tt_metal::CircularBufferConfig c2_config =
+            tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_2, data_format}})
+                .set_page_size(tt::CBIndex::c_2, counter_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, c2_config);
+    }
+    // c_8: expert_region_offsets (reader-only, full tensor)
     detail::create_tensor_cb(
         program,
         sender_core_grid,
-        expert_token_counts,
-        /*buffering_factor=*/detail::get_num_pages(expert_token_counts) + extra_pages,
-        /*cb_id=*/tt::CBIndex::c_2,
-        "expert_token_counts");
+        expert_region_offsets,
+        /*buffering_factor=*/detail::get_num_pages(expert_region_offsets),
+        /*cb_id=*/tt::CBIndex::c_8,
+        "expert_region_offsets");
 
     if (is_tile_layout) {
         // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only)
@@ -386,7 +399,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         operation_attributes.experts_per_chip,
         operation_attributes.num_experts_per_tok,
         operation_attributes.seq_len_per_chip,
-        (uint32_t)max_dispatched_tokens_per_expert,
 
         // Hidden dimension
         (uint32_t)hidden_size,
@@ -441,11 +453,21 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             computed_ndg);
     }
 
-    // Append TensorAccessorArgs for all 4 tensors (starting at index 35, after num_dispatch_groups at 34)
+    // Expert region offsets tensor metadata (indices 34-37): CB id, pages, page sizes
+    compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_8));
+    compile_time_args.push_back(detail::get_num_pages(expert_region_offsets));
+    compile_time_args.push_back(detail::get_page_size(expert_region_offsets));
+    compile_time_args.push_back(detail::get_aligned_page_size(expert_region_offsets));
+
+    // Dispatch buffer total per-chip capacity (index 38): used by readers as overflow guard.
+    compile_time_args.push_back((uint32_t)max_dispatch_buffer_token_size);
+
+    // Append TensorAccessorArgs for all 5 tensors (starting at index 39)
     tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_region_offsets.buffer()).append_to(compile_time_args);
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
@@ -622,7 +644,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;
     if (is_tile_layout) {
         // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
-        //   0-13: shared base (below, includes tile_height/tile_width at 12-13)
+        //   0-13: shared base (below, includes max_dispatch_buffer_token_size at 13)
         //   14:   core_id   — local index within sender s's idle group (0..k_s-1)
         //   15:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
         //   16:   aligned_output_page_size
@@ -641,10 +663,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             read_batch_size,                                   // 7:  read_batch_size
             static_cast<uint32_t>(tt::CBIndex::c_3),           // 8:  cb_signal_id
             detail::get_aligned_page_size(dispatched_buffer),  // 9:  aligned_dispatched_buffer_page_size
-            (uint32_t)max_dispatched_tokens_per_expert,        // 10: max_dispatched_tokens_per_expert
-            cb_factor,                                         // 11: cb_factor
-            tile_height,                                       // 12: tile_height
-            tile_width,                                        // 13: tile_width
+            cb_factor,                                         // 10: cb_factor
+            tile_height,                                       // 11: tile_height
+            tile_width,                                        // 12: tile_width
+            (uint32_t)max_dispatch_buffer_token_size,          // 13: max_dispatch_buffer_token_size
         };
 
         // Partitioned idle cores: each sender s owns a dedicated group of k_s idle cores.
@@ -882,6 +904,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             dispatched_buffer.buffer()->address(),
             dispatched_metadata.buffer()->address(),
             expert_token_counts.buffer()->address(),
+            expert_region_offsets.buffer()->address(),
             output_tensor.buffer()->address(),
             zero_init_semaphore_id,
             zero_init_barrier_semaphore_id,
@@ -917,6 +940,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             dispatched_buffer.buffer()->address(),
             dispatched_metadata.buffer()->address(),
             expert_token_counts.buffer()->address(),
+            expert_region_offsets.buffer()->address(),
             output_tensor.buffer()->address(),
             zero_init_semaphore_id,
             (uint32_t)init_semaphore.address(),
@@ -1019,13 +1043,15 @@ void CombineProgramFactory::override_runtime_arguments(
             reader_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.expert_token_counts.buffer()->address();
-            reader_runtime_args.at(3) = tensor_return_value.buffer()->address();
+            reader_runtime_args.at(3) = tensor_args.expert_region_offsets.buffer()->address();
+            reader_runtime_args.at(4) = tensor_return_value.buffer()->address();
 
             writer_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
             writer_runtime_args.at(2) = tensor_args.expert_token_counts.buffer()->address();
-            writer_runtime_args.at(3) = tensor_return_value.buffer()->address();
-            writer_runtime_args.at(5) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(3) = tensor_args.expert_region_offsets.buffer()->address();
+            writer_runtime_args.at(4) = tensor_return_value.buffer()->address();
+            writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
         }
 
         for (const auto& core : shared_variables.zero_init_cores) {

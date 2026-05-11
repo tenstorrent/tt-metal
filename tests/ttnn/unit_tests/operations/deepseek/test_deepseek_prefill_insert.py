@@ -66,13 +66,33 @@ def _make_index(device, *, dtype=ttnn.uint32, shape=(NUM_EXPERTS,), memory_confi
     )
 
 
-def _run(global_tensor, local_tensor, start, counts, global_expert_id=GLOBAL_EXPERT_ID):
+def _make_identity_idx_table(device, length=NUM_EXPERTS):
+    """Build a 1D UINT32 DRAM-interleaved tensor `[0, 1, ..., length-1]`.
+
+    Using an identity table preserves the old `global_expert_id` test semantics under
+    the new API: local_expert_id=i -> table[i] = i (= old global_expert_id).
+    """
+    torch_tensor = torch.arange(length, dtype=torch.int32)
+    return ttnn.from_torch(
+        torch_tensor,
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _run(global_tensor, local_tensor, start, counts, global_expert_id=GLOBAL_EXPERT_ID, idx_table=None):
+    device = global_tensor.device()
+    if idx_table is None:
+        idx_table = _make_identity_idx_table(device)
     return ttnn.experimental.deepseek_prefill.insert(
         global_tensor,
         local_tensor,
         start,
         counts,
-        global_expert_id=global_expert_id,
+        idx_table,
+        local_expert_id=global_expert_id,
     )
 
 
@@ -378,7 +398,7 @@ def test_insert_copies_slice(device, starts, counts, expert_id, global_rows, loc
     # PCC against the original (pre-quantization) bfloat16 reference.
     original = global_torch.clone()
     original[start : start + rows, :] = local_torch[:rows, :]
-    assert_with_pcc(original.float(), out_torch.float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
 
 
 def test_insert_is_in_place(device):
@@ -415,7 +435,7 @@ def test_insert_is_in_place(device):
     original = global_torch.clone()
     original[0:32, :] = local_a[:32, :]
     original[64:96, :] = local_b[:32, :]
-    assert_with_pcc(original.float(), out_torch.float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
 
 
 def test_insert_2d_indices_matches_torch_slice(device):
@@ -461,4 +481,108 @@ def test_insert_2d_indices_matches_torch_slice(device):
     # PCC against the original (pre-quantization) bfloat16 reference.
     original = global_torch.clone()
     original[starts[expert_id] : starts[expert_id] + rows, :] = local_torch[:rows, :]
-    assert_with_pcc(original.float(), out_torch.float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
+
+
+# ---------------------------------------------------------------------------
+# Stress test: DRAM utilization with a large global tensor.
+#
+# Global tensor is shaped (2 * 25k, 7k) with 1k = 1024. Local tensor holds 25k
+# rows. Scenarios cover uniform insertion (every expert gets the same slice)
+# and non-uniform insertion (one expert dominates, tail-heavy, irregular
+# tile-unaligned counts).
+# ---------------------------------------------------------------------------
+
+
+K = 1024
+STRESS_GLOBAL_ROWS = 2 * 25 * K  # 51200
+STRESS_HIDDEN_DIM = 7 * K  # 7168
+STRESS_LOCAL_ROWS = 25 * K  # 25600
+
+
+@pytest.mark.parametrize(
+    "starts, counts, expert_id",
+    [
+        # Uniform: each of 8 experts inserts an equal 3k-row slice.
+        ([0, 3 * K, 6 * K, 9 * K, 12 * K, 15 * K, 18 * K, 21 * K], [3 * K] * 8, 0),
+        ([0, 3 * K, 6 * K, 9 * K, 12 * K, 15 * K, 18 * K, 21 * K], [3 * K] * 8, 5),
+        # One expert inserts the full local rows, the rest insert a single tile row each.
+        (
+            [0, 25 * K, 25 * K + 32, 25 * K + 64, 25 * K + 96, 25 * K + 128, 25 * K + 160, 25 * K + 192],
+            [25 * K, 32, 32, 32, 32, 32, 32, 32],
+            0,
+        ),
+        (
+            [0, 25 * K, 25 * K + 32, 25 * K + 64, 25 * K + 96, 25 * K + 128, 25 * K + 160, 25 * K + 192],
+            [25 * K, 32, 32, 32, 32, 32, 32, 32],
+            3,
+        ),
+        # Tail-heavy: last expert inserts the full local rows, others are tiny.
+        (
+            [0, 512, 1024, 1536, 2048, 2560, 3072, 4 * K],
+            [512, 512, 512, 512, 512, 512, 512, 25 * K],
+            7,
+        ),
+        # Irregular: mix of tile-aligned and non-tile-aligned counts.
+        (
+            [0, 1024, 4032, 4064, 12256, 12288, 12416, 25216],
+            [1024, 3000, 17, 8192, 5, 100, 12800, 513],
+            6,
+        ),
+        (
+            [0, 1024, 4032, 4064, 12256, 12288, 12416, 25216],
+            [1024, 3000, 17, 8192, 5, 100, 12800, 513],
+            1,
+        ),
+    ],
+)
+def test_insert_stress_dram_utilization(device, starts, counts, expert_id):
+    assert len(starts) == NUM_EXPERTS
+    assert len(counts) == NUM_EXPERTS
+
+    torch.manual_seed(0)
+    global_torch = torch.empty(STRESS_GLOBAL_ROWS, STRESS_HIDDEN_DIM, dtype=torch.bfloat16).normal_()
+    local_torch = torch.empty(STRESS_LOCAL_ROWS, STRESS_HIDDEN_DIM, dtype=torch.bfloat16).normal_()
+
+    g = _to_tile_bfp8(device, global_torch)
+    l = _to_tile_bfp8(device, local_torch)
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+
+    out = _run(g, l, s, c, global_expert_id=expert_id)
+    out_torch = ttnn.to_torch(out)
+
+    assert out_torch.shape == (STRESS_GLOBAL_ROWS, STRESS_HIDDEN_DIM)
+    rows = _ceil_to_tile(counts[expert_id])
+    start = starts[expert_id]
+    expected = ttnn.to_torch(l)[:rows, :]
+    torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+    local_slice = local_torch[:rows, :].float()
+    assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.9999)
+
+
+@pytest.mark.parametrize("count", [25 * K, 16 * K, 8 * K, 4 * K, 2 * K, 1 * K])
+def test_insert_stress_dram_utilization_single_expert(device, count):
+    starts = [0]
+    counts = [count]
+    expert_id = 0
+
+    torch.manual_seed(0)
+    global_torch = torch.empty(STRESS_GLOBAL_ROWS, STRESS_HIDDEN_DIM, dtype=torch.bfloat16).normal_()
+    local_torch = torch.empty(STRESS_LOCAL_ROWS, STRESS_HIDDEN_DIM, dtype=torch.bfloat16).normal_()
+
+    g = _to_tile_bfp8(device, global_torch)
+    l = _to_tile_bfp8(device, local_torch)
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+
+    out = _run(g, l, s, c, global_expert_id=expert_id)
+    out_torch = ttnn.to_torch(out)
+
+    assert out_torch.shape == (STRESS_GLOBAL_ROWS, STRESS_HIDDEN_DIM)
+    rows = _ceil_to_tile(counts[expert_id])
+    start = starts[expert_id]
+    expected = ttnn.to_torch(l)[:rows, :]
+    torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+    local_slice = local_torch[:rows, :].float()
+    assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.9999)

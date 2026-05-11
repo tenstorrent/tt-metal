@@ -348,10 +348,12 @@ jobs:
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
+        FILE_INSTALL_LOG: "./output/vllm_install.log"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
         FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
+        FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -389,13 +391,19 @@ jobs:
           ref: ${{ inputs.vllm-commit }}
           fetch-depth: 0
 
-      - name: 📀 Install vLLM
-        run: |
-          uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
-
       - name: 📂 Create output directory
         run: |
           mkdir -p output
+
+      - name: 📀 Install vLLM
+        run: |
+          {
+            uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+            if [ -d vllm/plugins/vllm-tt-plugin ]; then
+              uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+            fi
+          } 2>&1 | tee "${FILE_INSTALL_LOG}"
+          exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
         timeout-minutes: 1
@@ -454,11 +462,61 @@ jobs:
           elapsed=0
           interval=20
 
+          # Read the launcher PID once. ``read -r`` consumes only the
+          # first line, so a stray trailing line in the PID file can't
+          # turn ``$server_pid`` into a multi-token argument to
+          # ``kill -0``. A missing file or non-numeric content leaves
+          # ``$server_pid`` empty and the liveness check below silently
+          # skips rather than failing closed.
+          server_pid=""
+          if [ -f "${FILE_SERVER_PID}" ]; then
+            read -r server_pid < "${FILE_SERVER_PID}" || server_pid=""
+          fi
+          if ! [[ "$server_pid" =~ ^[0-9]+$ ]]; then
+            server_pid=""
+          fi
+
+          # vLLM writes one of these to the server log within seconds of
+          # an engine-core crash. Polling /health for the full
+          # server-timeout after one has appeared just burns CI minutes —
+          # fail fast so the rest of the matrix can move on. Using a
+          # single ``grep -m1`` with multiple ``-e`` patterns gives one
+          # bounded-by-first-match file scan per poll cycle even as the
+          # log grows.
+          fatal_grep_args=(
+            -F -m1
+            -e "EngineCore failed to start"
+            -e "EngineCore encountered a fatal error"
+            -e "EngineDeadError"
+            -e "Engine core initialization failed"
+            -e "Failed core proc"
+          )
+
           while [ $elapsed -lt $timeout_seconds ]; do
             if curl -sf http://localhost:8000/health; then
               echo "Server is up! 🚀 [$elapsed sec]"
               exit 0
             fi
+
+            # Fast-fail when the launcher process has already exited.
+            if [ -n "$server_pid" ] && ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "❌ Server launcher (pid=$server_pid) exited before becoming ready [$elapsed sec]."
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+
+            # Fast-fail on a fatal marker in the server log. The launcher
+            # may stay alive after engine cores crash (e.g. multiprocess
+            # DP), so the log signal complements the liveness check.
+            if [ -f "${FILE_SERVER_LOG}" ]; then
+              fatal_match=$(grep "${fatal_grep_args[@]}" "${FILE_SERVER_LOG}" 2>/dev/null) || true
+              if [ -n "$fatal_match" ]; then
+                echo "❌ Fatal marker in server log [$elapsed sec]: $fatal_match"
+                echo "Check out the server log in a step below."
+                exit 1
+              fi
+            fi
+
             sleep $interval
             elapsed=$((elapsed + interval))
           done
@@ -584,12 +642,15 @@ jobs:
         if: ${{ matrix.test-group.sampling-tests }}
         timeout-minutes: 10
         run: |
-          FILTER="${{ matrix.test-group.sampling-test-filter }}"
-          if [ -n "$FILTER" ]; then
-            pytest vllm/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
-          else
-            pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
-          fi
+          {
+            FILTER="${{ matrix.test-group.sampling-test-filter }}"
+            if [ -n "$FILTER" ]; then
+              pytest vllm/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+            else
+              pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+            fi
+          } 2>&1 | tee "${FILE_SAMPLING_TESTS_LOG}"
+          exit "${PIPESTATUS[0]}"
 
       - name: 🧹 Cleanup server process
         if: always()
@@ -628,6 +689,22 @@ jobs:
         run: |
           cat output/vllm_result_structured.json
 
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["output"],
+              "output_dir": "ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+
       - name: Set artifact prefix
         if: ${{ !cancelled() }}
         id: set-artifact-prefix
@@ -645,3 +722,39 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [generate-matrix, vllm-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.generate-matrix.outputs.matrix }}
+          run-result: ${{ needs.vllm-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

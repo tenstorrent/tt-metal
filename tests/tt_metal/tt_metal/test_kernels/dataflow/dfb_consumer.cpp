@@ -19,6 +19,9 @@ void kernel_main() {
     // Base page offset for this core's slice of the global buffer.
     // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
     const uint32_t chunk_offset = get_arg_val<uint32_t>(2);
+    // Total entries in this core's slice; used to clamp the last consumer when
+    // entries_per_core is not a multiple of num_consumers.
+    const uint32_t entries_per_core = get_arg_val<uint32_t>(3);
     const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
 
     experimental::DataflowBuffer dfb(logical_dfb_id);
@@ -45,6 +48,11 @@ void kernel_main() {
             page_id = chunk_offset + tile_id;
         } else {
             page_id = chunk_offset + tile_id * num_consumers + consumer_idx;
+        }
+        // Skip if this consumer's slice overshoots the actual buffer size (happens when
+        // entries_per_core is not a multiple of num_consumers).
+        if (page_id >= chunk_offset + entries_per_core) {
+            break;
         }
         // DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
         // DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);

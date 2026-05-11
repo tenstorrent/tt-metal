@@ -165,3 +165,13 @@ class UnpackerAB(Unpacker):
         buffer_b = compute_unit.src_b.cpp_name
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
         return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        shape_var = f"tensor_shape_stage_{operation.stage_id}"
+        return f"_llk_unpack_AB_uninit_({shape_var}, {shape_var});\n"

@@ -248,7 +248,7 @@ class PipelineBlock:
         self._h2d_page_size_bytes = None
         self._d2h_page_size_bytes = None
 
-        token_size_bytes = 64
+        token_size_bytes = DeepseekMetadata.aligned_size_bytes()
         if self.is_pipeline_start:
             self._init_first_stage(
                 mesh_device,

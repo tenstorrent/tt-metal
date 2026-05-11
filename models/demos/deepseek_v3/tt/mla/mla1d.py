@@ -68,7 +68,17 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
-def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
+def build_prefill_matmul_program_config(
+    seq_len,
+    k,
+    n,
+    batch=1,
+    tile_h=32,
+    tile_w=32,
+    *,
+    mesh_device: ttnn.Device,
+    override_compute_grid: ttnn.CoreGrid = None,
+):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
 
     Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
@@ -91,7 +101,8 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     N_tiles = even_int_div(n, tile_w)
 
     compute_grid = mesh_device.compute_with_storage_grid_size()
-
+    if override_compute_grid is not None:
+        compute_grid = override_compute_grid
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
     for x in range(min(compute_grid.x, N_tiles), 0, -1):
@@ -2380,6 +2391,9 @@ class MLA1D(AbstractModule):
             n=qkv_a_n,
             batch=batch_size,
             mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            override_compute_grid=ttnn.CoreGrid(
+                x=6, y=6
+            ),  # FIXME: optimize this config for prefill, potential DI_DT hang WORKAROUND. See issue #41501.
         )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 

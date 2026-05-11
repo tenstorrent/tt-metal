@@ -8,6 +8,8 @@ from pathlib import Path
 import torch
 from loguru import logger
 
+import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
@@ -46,6 +48,24 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         super().__init__(*args, **kwargs)
 
     @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        if "DeepSeek-R1-0528" in model_name and is_wormhole_b0():
+            return 32_768
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
+
+    @classmethod
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
@@ -65,6 +85,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             cache_dir=Path(cache_dir) if cache_dir else None,
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
+            vllm_context=True,
         )
 
         return model
@@ -216,6 +237,22 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         # - sample_on_device=True  -> sampled token ids
         # - sample_on_device=False -> logits [B, 1, V] for host sampling
         return decode_output
+
+    def read_decode_output(self, tt_out, async_read=False):
+        # If decode already returned host tensors, pass through.
+        if isinstance(tt_out, torch.Tensor):
+            return (tt_out, []) if async_read else tt_out
+
+        # Device-sampling decode output: TT tensor -> host torch token ids.
+        if isinstance(tt_out, ttnn.Tensor):
+            host_tokens = self._tokens_from_device(
+                tt_out,
+                self.mesh_device,
+                batch_size_per_row=self.batch_size_per_row,
+            )
+            return (host_tokens, []) if async_read else host_tokens
+
+        raise TypeError(f"Unsupported decode output type from DeepseekV3ForCausalLM: {type(tt_out)}")
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         assert (

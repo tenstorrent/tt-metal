@@ -19,7 +19,7 @@
  * At the time of writing, the binary eltwise op framework that this implementation rely on is not
  * flexible enough to handle all the needs of the quantization ops:
  * 0. The only supported integer type is i32.
- * 1. Implicit broadcasting is only well supported in BinaryNg (so we pass use_legacy=false).
+ * 1. Implicit broadcasting is only well supported in BinaryNg.
  * 2. Support for mixed data type A op B -> C is incomplete, especially when the data types have
  *    different sizes (e.g. bf16 .* f32 -> i32) and/or when implicit broadcasting is involved.
  * 3. There're some issues in the activation mechanism, which could have been used to do reciprocal
@@ -223,18 +223,10 @@ Tensor quantize(
         const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, a_dtype);
         const Tensor zero_point_full = reshape_per_channel_vector_args(*zero_point_p, input_shape, axis_v, a_dtype);
         const Tensor input_scaled =
-            ttnn::divide(input_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none, false);
+            ttnn::divide(input_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none);
         return ttnn::typecast(
             ttnn::add(
-                input_scaled,
-                zero_point_full,
-                std::nullopt,
-                memory_config,
-                optional_output_tensor,
-                none,
-                none,
-                none,
-                false),
+                input_scaled, zero_point_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
             c_dtype);
     }
 
@@ -279,7 +271,7 @@ Tensor quantize(
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_scaled =
-                    ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+                    ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
                 return ttnn::typecast(
                     ttnn::add(
                         input_scaled,
@@ -289,8 +281,7 @@ Tensor quantize(
                         std::nullopt,
                         none,
                         none,
-                        none,
-                        false),
+                        none),
                     c_dtype);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
@@ -304,8 +295,7 @@ Tensor quantize(
                     std::nullopt,
                     none,
                     none,
-                    none,
-                    false);
+                    none);
                 return ttnn::typecast(
                     ttnn::add(
                         input_scaled,
@@ -315,8 +305,7 @@ Tensor quantize(
                         std::nullopt,
                         none,
                         none,
-                        none,
-                        false),
+                        none),
                     c_dtype);
             }},
         scale,
@@ -399,20 +388,12 @@ Tensor requantize(
         const Tensor out_zero_point_full =
             expand_or_cast(*out_zero_point_p, out_zero_point_is_full_size, DataType::FLOAT32);
 
-        const Tensor scale_recip_full = ttnn::divide(
-            in_scale_full, out_scale_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+        const Tensor scale_recip_full =
+            ttnn::divide(in_scale_full, out_scale_full, std::nullopt, std::nullopt, std::nullopt, none, none, none);
         const Tensor in_zero_point_scaled_full = ttnn::multiply(
-            in_zero_point_full, scale_recip_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+            in_zero_point_full, scale_recip_full, std::nullopt, std::nullopt, std::nullopt, none, none, none);
         const Tensor zero_point_full = ttnn::subtract(
-            out_zero_point_full,
-            in_zero_point_scaled_full,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            false);
+            out_zero_point_full, in_zero_point_scaled_full, std::nullopt, std::nullopt, std::nullopt, none, none, none);
 
         const Tensor input_scaled = ttnn::multiply(
             ttnn::typecast(input_tensor, DataType::FLOAT32),
@@ -422,19 +403,10 @@ Tensor requantize(
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
         return ttnn::typecast(
             ttnn::add(
-                input_scaled,
-                zero_point_full,
-                std::nullopt,
-                memory_config,
-                optional_output_tensor,
-                none,
-                none,
-                none,
-                false),
+                input_scaled, zero_point_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
             c_dtype);
     }
 
@@ -523,19 +495,10 @@ Tensor dequantize(
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
         return ttnn::typecast(
             ttnn::multiply(
-                input_shifted,
-                scale_full,
-                std::nullopt,
-                memory_config,
-                optional_output_tensor,
-                none,
-                none,
-                none,
-                false),
+                input_shifted, scale_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
             c_dtype);
     }
 
@@ -579,17 +542,17 @@ Tensor dequantize(
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                     c_dtype);
                 return ttnn::multiply(
-                    input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none, false);
+                    input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
                 check_per_tensor_scale(scale);
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                     c_dtype);
                 return ttnn::multiply(
                     input_shifted,
@@ -599,8 +562,7 @@ Tensor dequantize(
                     optional_output_tensor,
                     none,
                     none,
-                    none,
-                    false);
+                    none);
             }},
         scale,
         zero_point);

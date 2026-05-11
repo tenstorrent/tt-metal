@@ -769,6 +769,11 @@ def comp_equal(golden, calculated):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
+    # If either tensor is zero-volume, broadcasting can still yield an empty delta and
+    # crash torch.max(); defer entirely to torch.equal (False on shape mismatch).
+    if golden.numel() == 0 or calculated.numel() == 0:
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
+
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
     return (
@@ -1089,6 +1094,10 @@ def run_for_blackhole(reason_str="only runs for Blackhole"):
 
 def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_wormhole_b0_or_blackhole(reason_str="only runs for Wormhole B0 or Blackhole"):
+    return ti_skip(not (is_wormhole_b0() or is_blackhole()), reason=reason_str)
 
 
 def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):

@@ -1777,7 +1777,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_output_core_noc_x"),
                 get_named_compile_time_arg_val("reduce_output_core_noc_y"),
                 get_named_compile_time_arg_val("reduce_num_workers"),
-                get_named_compile_time_arg_val("reduce_slot_size_bytes"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core"),
                 get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
                 get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
@@ -2324,7 +2323,6 @@ void kernel_main() {
         const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
             cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
-        // DPRINT<<"CUR_POS: "<<cur_pos<<" CUR_SLOT: "<<metadata_ptr->slot_id<<ENDL();
         if (!skip_attention) {
             // ====================================================================
             // Matmul operation
@@ -2383,7 +2381,7 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("QNOPE/MATMUL3");
-                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
                     matmul3(matmul3_args);
                 }
 
@@ -3035,8 +3033,6 @@ void kernel_main() {
 #endif
 #endif
 
-    constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
-    constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
     constexpr uint32_t termination_semaphore_addr = get_named_compile_time_arg_val("termination_semaphore_addr");
     deepseek_b1_ops::PersistentLoop<persistent_mode == 1> loop(termination_semaphore_addr, num_iterations);
     while (loop.next()) {
