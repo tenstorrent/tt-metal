@@ -159,3 +159,9 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# Local dev artifacts
+director_output/
+models/tt_dit/demo/
+models/tt_dit/prodia/
+sweep_results_*/

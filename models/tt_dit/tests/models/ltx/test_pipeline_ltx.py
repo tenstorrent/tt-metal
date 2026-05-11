@@ -231,8 +231,11 @@ def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis",
-    [((2, 4), (2, 4), 0, 1)],
-    ids=["wh_lb_2x4"],
+    [
+        ((2, 4), (2, 4), 0, 1),
+        ((4, 8), (4, 8), 1, 0),
+    ],
+    ids=["wh_lb_2x4", "bh_glx_4x8"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -242,7 +245,7 @@ def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
 )
 def test_pipeline_av_22b(mesh_device: ttnn.MeshDevice, mesh_shape, sp_axis: int, tp_axis: int):
     """
-    Full LTX-2.3 22B AV pipeline on WH LB 2x4 mesh.
+    Full LTX-2.3 22B AV pipeline on WH LB 2x4 or BH Galaxy 4x8 mesh.
 
     Gemma encoding (device) → connectors → dealloc → DiT denoise → dealloc → VAE decode → export MP4.
     All on device, no ltx_core dependency for encoding/denoising/decode.

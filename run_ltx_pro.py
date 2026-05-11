@@ -34,8 +34,6 @@ from safetensors.torch import load_file
 torch.cuda.synchronize = lambda *a, **kw: None
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
-from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
 # Reference defaults from LTX-2/packages/ltx-pipelines/src/ltx_pipelines/utils/constants.py
@@ -160,7 +158,9 @@ def main():
     parser.add_argument("--rescale", type=float, default=0.7)
     parser.add_argument("--stg-block", type=int, default=28)
     parser.add_argument("--ge-gamma", type=float, default=0.0, help="Gradient estimation (0=disabled)")
+    parser.add_argument("--mesh", default="2,4", help="Mesh shape rows,cols (e.g. 2,4 or 4,8)")
     args = parser.parse_args()
+    mesh_rows, mesh_cols = [int(x) for x in args.mesh.split(",")]
 
     assert os.path.exists(args.checkpoint), f"Checkpoint not found: {args.checkpoint}"
     assert os.path.isdir(args.gemma), f"Gemma not found: {args.gemma}"
@@ -179,21 +179,9 @@ def main():
 
     # === Stage 1: Text encoding ===
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), l1_small_size=16384)
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(mesh_rows, mesh_cols), l1_small_size=16384)
 
-    sp_axis, tp_axis = 0, 1
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
-    )
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    pipeline = LTXPipeline(
-        mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        ccl_manager=ccl_manager,
-        mode="av",
-    )
+    pipeline = LTXPipeline.create_pipeline(mesh_device, mode="av")
 
     t0 = time.time()
     results = pipeline.encode_prompts_reference([args.prompt, DEFAULT_NEGATIVE_PROMPT], args.checkpoint, args.gemma)

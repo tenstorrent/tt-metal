@@ -140,6 +140,8 @@ class GemmaAttention(Module):
         self.o_proj = ColParallelLinear(self.num_heads * self.head_dim, self.hidden_size, **col_kwargs)
 
         self.input_layernorm = GemmaRMSNorm(config, mesh_device)
+        # Gemma-3: post-attn norm applied to attn output before residual add
+        self.post_attention_layernorm = GemmaRMSNorm(config, mesh_device)
 
         # Gemma-3 QK normalization (RMSNorm per head, shape [head_dim])
         self.q_norm = RMSNorm(
@@ -251,6 +253,8 @@ class GemmaAttention(Module):
             )
         output = ttnn.squeeze(output, 0)
 
+        # Gemma-3: post-attn norm before residual add
+        output = self.post_attention_layernorm(output)
         return output + residual
 
 
@@ -287,7 +291,9 @@ class GemmaFF(Module):
             ccl_manager=ccl_manager,
         )
 
-        self.post_attention_layernorm = GemmaRMSNorm(config, mesh_device)
+        # Gemma-3: two norms sandwich the FFN
+        self.pre_feedforward_layernorm = GemmaRMSNorm(config, mesh_device)
+        self.post_feedforward_layernorm = GemmaRMSNorm(config, mesh_device)
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -304,7 +310,7 @@ class GemmaFF(Module):
 
     def forward(self, x):
         residual = x
-        x = self.post_attention_layernorm(x)
+        x = self.pre_feedforward_layernorm(x)
 
         gate = self.gate_proj(x, compute_kernel_config=self.compute_config)
         up = self.up_proj(x, compute_kernel_config=self.compute_config)
@@ -321,6 +327,8 @@ class GemmaFF(Module):
             )
         x = ttnn.squeeze(x, 0)
 
+        # Gemma-3: post-FFN norm before residual add
+        x = self.post_feedforward_layernorm(x)
         return x + residual
 
 
@@ -333,16 +341,19 @@ class GemmaEncoderLayer(Module):
         self.ff = GemmaFF(config, mesh_device, ccl_manager, parallel_config)
 
     def _prepare_torch_state(self, state):
-        # HF keys: self_attn.{q,k,v,o}_proj, mlp.{gate,up,down}_proj, input_layernorm, post_attention_layernorm
+        # HF Gemma-3 per-layer keys and their destinations:
+        #   input_layernorm              → self_attn.input_layernorm  (pre-attn)
+        #   post_attention_layernorm     → self_attn.post_attention_layernorm  (post-attn, before residual)
+        #   pre_feedforward_layernorm    → ff.pre_feedforward_layernorm  (before FFN)
+        #   post_feedforward_layernorm   → ff.post_feedforward_layernorm  (after FFN, before residual)
+        #   mlp.*                        → ff.*
         rename_substate(state, "input_layernorm", "self_attn.input_layernorm")
-        rename_substate(state, "post_attention_layernorm", "ff.post_attention_layernorm")
+        rename_substate(state, "post_attention_layernorm", "self_attn.post_attention_layernorm")
+        rename_substate(state, "pre_feedforward_layernorm", "ff.pre_feedforward_layernorm")
+        rename_substate(state, "post_feedforward_layernorm", "ff.post_feedforward_layernorm")
         rename_substate(state, "mlp.gate_proj", "ff.gate_proj")
         rename_substate(state, "mlp.up_proj", "ff.up_proj")
         rename_substate(state, "mlp.down_proj", "ff.down_proj")
-        # QK norms are now handled by GemmaAttention._prepare_torch_state
-        # Gemma3 sandwich norms around FFN — not used in our simplified architecture
-        pop_substate(state, "pre_feedforward_layernorm")
-        pop_substate(state, "post_feedforward_layernorm")
 
     def forward(self, hidden_states, cos, sin, attn_mask=None):
         hidden_states = self.self_attn(hidden_states, cos, sin, attn_mask=attn_mask)
