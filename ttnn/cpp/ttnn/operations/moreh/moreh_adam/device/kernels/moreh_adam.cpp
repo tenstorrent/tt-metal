@@ -199,8 +199,18 @@ void kernel_main() {
             /*popA=*/true,
             /*popB=*/true>();
 
-        // cb_exp_avg_out
-        moreh_copy_chain<tmp_cb_exp_avg, cb_exp_avg_out, first_tile, /*pop=*/false>();
+        // cb_exp_avg_out (raw LLK swap for bisect)
+        tile_regs_acquire();
+        cb_wait_front(tmp_cb_exp_avg, onetile);
+        cb_reserve_back(cb_exp_avg_out, onetile);
+        copy_tile_init_with_dt(tmp_cb_exp_avg);
+        copy_tile(tmp_cb_exp_avg, first_tile, dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_exp_avg_out);
+        cb_push_back(cb_exp_avg_out, onetile);
+        tile_regs_release();
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -259,8 +269,18 @@ void kernel_main() {
             /*popA=*/true,
             /*popB=*/true>();
 
-        // cb_exp_avg_sq_out
-        moreh_copy_chain<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, first_tile, /*pop=*/false>();
+        // cb_exp_avg_sq_out (raw LLK swap for bisect)
+        tile_regs_acquire();
+        cb_wait_front(tmp_cb_exp_avg_sq, onetile);
+        cb_reserve_back(cb_exp_avg_sq_out, onetile);
+        copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
+        copy_tile(tmp_cb_exp_avg_sq, first_tile, dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_exp_avg_sq_out);
+        cb_push_back(cb_exp_avg_sq_out, onetile);
+        tile_regs_release();
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -315,8 +335,18 @@ void kernel_main() {
         cb_push_back(tmp_cb_max_exp_avg_sq, onetile);
         tile_regs_release();
 
-        // cb_max_exp_avg_sq_out  (T1.34)
-        moreh_copy_chain<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/false>();
+        // cb_max_exp_avg_sq_out  (T1.34 — raw LLK swap for bisect)
+        tile_regs_acquire();
+        cb_wait_front(tmp_cb_max_exp_avg_sq, onetile);
+        cb_reserve_back(cb_max_exp_avg_sq_out, onetile);
+        copy_tile_init_with_dt(tmp_cb_max_exp_avg_sq);
+        copy_tile(tmp_cb_max_exp_avg_sq, first_tile, dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_max_exp_avg_sq_out);
+        cb_push_back(cb_max_exp_avg_sq_out, onetile);
+        tile_regs_release();
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
