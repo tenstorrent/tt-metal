@@ -21,12 +21,15 @@ Intended usage (PyTorch FSDP2-style root):
         ttml.fsdp.fully_shard(block)
     ttml.fsdp.fully_shard(model)  # root: wraps only params NOT owned by a block
 
-Hybrid FSDP + DDP (future-ready: grad sync already per-param per-axis):
+Hybrid FSDP + DDP (HSDP) on a 2D mesh ``[D, F]`` with axes
+``("dp", "fsdp")``:
 
-    # Mesh: ("fsdp", "dp") shape [F, D].
-    # fully_shard uses axis "fsdp"; sync_gradients all-reduces DDP-replicated
-    # shards across "dp" axis. FSDP-sharded params are skipped by sync_gradients
-    # on the "fsdp" axis (already reduce-scattered in backward-post).
+    # fully_shard uses axis "fsdp" (default). sync_gradients all-reduces
+    # DDP-replicated shards across the "dp" axis; FSDP-sharded params are
+    # skipped on the "fsdp" axis (already reduce-scattered in backward-post)
+    # but still reduced on the "dp" axis to average across DP replicas.
+    # The per-param axis filter in ttml.sync_gradients is what makes the
+    # same single call cover pure DDP, pure FSDP, and HSDP.
 
 Contract:
     * Call ``fully_shard`` BEFORE ``create_optimizer`` so optimizer state

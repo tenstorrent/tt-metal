@@ -23,7 +23,7 @@ import math
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal, Union, Callable
+from typing import Optional, Tuple, List, Literal, Union, Callable
 import time
 import pickle
 
@@ -280,36 +280,36 @@ def read_file_to_str(file_path: str) -> str:
 def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     """Build a named device mesh from DeviceConfig.
 
-    Mirrors the C++ axis-assignment rule in autograd/auto_context.cpp:140-195
-    so that ttml.sync_gradients and mesh.axis_mapper("dp"|"tp", ...) bind to
-    the same physical axes the C++ trainer would.
+    Axis assignment order is ``(dp -> fsdp -> tp)`` — first enabled name claims
+    axis 0, next enabled claims axis 1, etc. This matches PyTorch FSDP2's
+    ``Mesh((replicate, shard), ("replicate", "shard"))`` HSDP convention
+    where the DDP (replicate) axis is outermost and the FSDP (shard) axis
+    is innermost.
 
     Line topology (at most one mesh dim > 1): exactly one of
     enable_ddp/enable_fsdp/enable_tp must be true; that name is assigned to
     the active (non-trivial) axis.
 
-    2D mesh (both dims > 1): the number of enabled parallelisms must equal
-    the number of mesh dims, and assignment order is (DP/FSDP) -> TP, where
-    DP and FSDP are mutually exclusive on the same axis. CP/PP are out of
-    scope here.
+    Hybrid sharded data parallel (HSDP, ``enable_ddp + enable_fsdp``)
+    requires a 2D mesh ``[D, F]`` — axis 0 = "dp" (size D, the replicate
+    axis), axis 1 = "fsdp" (size F, the shard axis). HSDP+TP (3D mesh
+    ``[D, F, T]``) is not yet supported.
     """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
     nontrivial = [i for i, s in enumerate(shape) if s > 1]
     is_line = len(nontrivial) <= 1
 
-    if device_config.enable_ddp and device_config.enable_fsdp:
-        raise ValueError(
-            "enable_ddp and enable_fsdp cannot both be true on a single-axis "
-            "DP setup. Pick one. (Hybrid FSDP+DDP would require a 3D mesh, "
-            "which the current Wormhole/Blackhole MGD does not support.)"
-        )
-
-    # Replication ("dp") and FSDP sharding ("fsdp") are alternatives on the
-    # same outer axis; whichever is enabled gets that name.
-    outer = "fsdp" if device_config.enable_fsdp else ("dp" if device_config.enable_ddp else None)
-    enabled = (outer, ("tp" if device_config.enable_tp else None))
-    enabled_names = tuple(name for name in enabled if name is not None)
+    # Ordered list of enabled parallelism axis names. Order is ``(dp -> fsdp -> tp)``;
+    # this is the mapping from "which mesh axis" to "which parallelism", e.g.
+    # ``enable_ddp + enable_fsdp`` -> axis 0 = "dp", axis 1 = "fsdp".
+    enabled_names: List[str] = []
+    if device_config.enable_ddp:
+        enabled_names.append("dp")
+    if device_config.enable_fsdp:
+        enabled_names.append("fsdp")
+    if device_config.enable_tp:
+        enabled_names.append("tp")
 
     axis_names = [f"_{i}" for i in range(n)]
     if not enabled_names:
@@ -326,10 +326,9 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     else:
         if len(enabled_names) != n:
             raise ValueError(
-                f"2D mesh {shape} requires both axes assigned ((DP|FSDP) and TP). " f"Got enabled={enabled_names}"
+                f"{n}D mesh {shape} requires {n} parallelisms enabled "
+                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
             )
-        # enabled_names is ordered ((dp|fsdp), tp) by construction above,
-        # matching the C++ assignment order in auto_context.cpp.
         for i, name in enumerate(enabled_names):
             axis_names[i] = name
 
@@ -403,10 +402,16 @@ def create_dataset_from_text(
 def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
 
-    When the active mesh has a "dp" or "fsdp" axis with size > 1, inputs and targets
-    are sharded along the batch dim across that axis (matches main.cpp:551-609
-    Shard{BATCH_DIM}). Otherwise the tensors replicate across whatever mesh
-    is open, which is the right behavior for TP-only and 1x1 cases.
+    Distribution rules (driven by the active mesh's axis names):
+
+    * Pure DDP or pure FSDP (only one of "dp" / "fsdp" has size > 1):
+      shard the batch along that single axis, replicate on every other
+      axis.
+    * HSDP (both "dp" and "fsdp" have size > 1, no "tp" axis): each
+      device gets a unique batch slice ``B / (D * F)``.
+    * TP-only / single-device / no-mesh: replicate the tensors.
+
+    HSDP + TP (3D mesh ``[D, F, T]``) is not supported.
 
     Args:
         samples: List of (sequence, target) tuples.
@@ -423,11 +428,27 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
     mesh = ttml.mesh()
+    data_axes = [
+        axis_name for axis_name in ("dp", "fsdp") if mesh.has_axis(axis_name) and mesh.axis_size(axis_name) > 1
+    ]
+
     mapper = None
-    for axis_name in ("dp", "fsdp"):
-        if mesh.has_axis(axis_name) and mesh.axis_size(axis_name) > 1:
-            mapper = mesh.axis_mapper(axis_name, tdim=0)
-            break
+    if len(data_axes) == 1:
+        # Pure DDP or pure FSDP: shard along the single batch-parallel axis.
+        mapper = mesh.axis_mapper(data_axes[0], tdim=0)
+    elif len(data_axes) >= 2:
+        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+            raise NotImplementedError("HSDP + TP batch sharding is not supported.")
+        flat_size = int(np.prod([mesh.axis_size(a) for a in data_axes]))
+        if actual_batch_size % flat_size != 0:
+            raise ValueError(
+                f"HSDP batch sharding requires the batch ({actual_batch_size}) to be "
+                f"divisible by D*F ({flat_size}); got data_axes={data_axes}."
+            )
+        # HSDP batch sharding: each device gets a unique batch slice ``B / (D * F)``.
+        # That's what ``cluster_axis=None`` does.
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
 
     data_tensor = ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     targets_tensor = ttml.autograd.Tensor.from_numpy(targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
@@ -531,7 +552,8 @@ def train_step(
 
     if should_step:
         # All-reduce gradients across the "dp" axis (no-op when there is no
-        # mesh, no "dp" axis, or dp size == 1). Mirrors main.cpp:817-823.
+        # mesh, no "dp" axis, or dp size == 1).
+        # Ignore FSDP axis (FSDP reduce-scatter the grads in backward-post)
         ttml.sync_gradients(model.parameters())
 
         # Gradient clipping. clip_grad_norm is incorrect under TP/FSDP because
@@ -1387,11 +1409,9 @@ def main():
     # Parse device config from YAML (mesh_shape, enable_ddp, enable_fsdp, enable_tp).
     device_config = DeviceConfig(yaml_config)
 
-    # Mirrors main.cpp:447-451 and lora_llama: TP-sharded parameters cannot be
-    # round-tripped through the script's pickle checkpoint format, so refuse
+    # TP-sharded parameters cannot be round-tripped through the script's pickle checkpoint format, so refuse
     # any save/resume request up front rather than failing partway through.
-    # FSDP-sharded weights have the same problem (the saved pickle would
-    # contain a per-rank slice of each weight, not the full tensor).
+    # FSDP-sharded weights have the same problem (the saved pickle would contain a per-rank slice of each weight, not the full tensor).
     if device_config.enable_tp or device_config.enable_fsdp:
         guard_name = "tensor parallelism" if device_config.enable_tp else "FSDP"
         guard_flag = "device_config.enable_tp=true" if device_config.enable_tp else "device_config.enable_fsdp=true"
