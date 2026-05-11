@@ -9,6 +9,8 @@ from .ttnn_adain_resblk_encode import (
     preprocess_adain_resblk1d_parameters,
     preprocess_encode_parameters,
 )
+from ..reference.kokoro_source_module_preprocess import preprocess_source_module_hn_nsf_parameters
+from .ttnn_source_module_hn_nsf import SourceModuleHnNSF
 
 __all__ = [
     "AdainResBlk1d",
@@ -16,4 +18,6 @@ __all__ = [
     "infer_encode_dims",
     "preprocess_adain_resblk1d_parameters",
     "preprocess_encode_parameters",
+    "preprocess_source_module_hn_nsf_parameters",
+    "SourceModuleHnNSF",
 ]
