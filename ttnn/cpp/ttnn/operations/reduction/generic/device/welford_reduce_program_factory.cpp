@@ -53,6 +53,13 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_arg.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
+    // Float32 input requires fp32 dest accumulation; otherwise the unpacker would silently
+    // downcast through SrcA to TF32 / Float16_b (~10 mantissa bits).
+    TT_FATAL(
+        !(input_cb_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "ttnn.std/var with Float32 input requires fp32_dest_acc_en=true in the compute kernel "
+        "config; otherwise precision is silently lost in the unpacker format conversion.");
+
     // Scalar datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
@@ -365,32 +372,22 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
 
     // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so that
     // the unpacker writes full fp32 to DEST instead of routing through SrcA (which would
-    // be downcast to TF32 -- 10 mantissa bits -- per Blackhole/Wormhole format conversion).
-    // Without this, large-mean fp32 variance silently collapses to ~0 due to TF32 truncation
-    // wiping the bits that distinguish nearby samples (issue: see test_var_fp32_known_answer_diagnostic).
+    // be downcast to TF32 with only 10 mantissa bits), losing precision and even leading to
+    // large-mean fp32 variance silently collapsing to ~0 due to TF32 truncation
+    // wiping the bits that distinguish nearby samples.
     //
-    // Currently gated to H-reduce only:
-    //   * HW-reduce: kernel uses a per-column-partials -> writer-rereduce pipeline that depends
-    //     on the previous TF32-via-SrcA rounding behavior; switching to fp32 produces regressions
-    //     on small-N / correction=0 cases (needs follow-up in welford_reduce_hw.cpp).
-    //   * W-reduce:  kernel uses transpose_wh_tile, whose fp32 path calls llk_math_transpose_dest
-    //     which writes to the SFPU replay buffer (slot 0). welford_init() also writes that same
-    //     slot, so the two clobber each other and the kernel hangs. Fix requires either
-    //     restructuring the kernel to avoid the shared replay-buffer slot, or extending the
-    //     welford LLK to expose a "reprogram replay buffer without clearing LREG4/5" entry point.
+    // Applied to all three reduction paths (H, W, HW): the input CB plus each Float32 scratch
+    // CB the compute kernel reads back via copy_tile / transpose_wh_tile; W reads cb_var
+    // (c_19) after the initial transpose to undo it; HW reads cb_combined (c_22) after the
+    // writer-side re-reduction.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (input_cb_data_format == tt::DataFormat::Float32 && (reduce_h || reduce_w || reduce_hw)) {
+    if (input_cb_data_format == tt::DataFormat::Float32) {
         unpack_to_dest_mode[static_cast<uint32_t>(input_cb_index)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    // W-reduce also reads back the variance tile from cb_var via transpose_wh_tile to undo the
-    // initial transpose; that read needs the same fp32-preserving unpack-to-dest path or it
-    // truncates the final variance to TF32 (~10 mantissa bits) on the output.
     if (reduce_w && fp32_dest_acc_en) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    // HW-reduce reads back the combined-variance tile from cb_combined (Float32) via copy_tile;
-    // same TF32-truncation issue if the unpacker isn't told to use the UnpackToDest fp32 path.
     if (reduce_hw && fp32_dest_acc_en) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }

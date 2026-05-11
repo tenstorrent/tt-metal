@@ -106,6 +106,60 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
     )
 
 
+# Regression test for fp32 Welford variance precision under large mean offsets.
+# Uses a bit-exact integer input where the true variance is known analytically:
+# variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
+# correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly.
+# Variance is translation-invariant, so adding a large offset to every element must not
+# change the answer.  If the unpacker silently routes fp32 input through SrcA as TF32
+# (10-bit mantissa instead of 23), values that differ by less than the TF32 ULP collapse
+# to the same representation; at offset=1e6 the TF32 ULP is ~512, so all 32 consecutive
+# integers become identical and the apparent variance drops to 0.  This test exercises all
+# three reduction paths (H, W, HW) so the regression is caught regardless of which kernel
+# is selected.
+# offset=0 is the sanity baseline; offset=1e6 is the regression target -- at offset=1e6
+# the TF32 ULP (~512) exceeds the spread of our 32 consecutive integers, so the buggy path
+# returns var=0 instead of the correct 88.0.  Intermediate offsets (100, 10000) and
+# correction=False were considered but don't add coverage that 1e6 doesn't already provide.
+@pytest.mark.parametrize("offset", [0.0, 1e6])
+@pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
+def test_var_fp32_translation_invariance(device, dim, offset):
+    correction = True
+    N = 32
+    seq = torch.arange(N, dtype=torch.float32) + offset
+    # Lay out the input so the reduction axis is the integer sequence.
+    if dim == -1:
+        # Each row of the tile is the sequence; reducing along W gives var of [offset..offset+31].
+        torch_input = seq.unsqueeze(0).expand(N, N).contiguous()
+    else:
+        # dim=-2 or dim=(-2,-1): each column is the sequence so H-reduce
+        # (or HW-reduce of a rank-deficient tile) sees the sequence.
+        torch_input = seq.unsqueeze(-1).expand(N, N).contiguous()
+    torch_input = torch_input.unsqueeze(0).unsqueeze(0)  # (1, 1, 32, 32)
+
+    # Reference computed in fp64 so it isn't itself contaminated by any fp32 precision loss.
+    torch_ref = torch.var(torch_input.to(torch.float64), dim=dim, keepdim=True, correction=correction)
+
+    tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.var(tt_in, dim=dim, keepdim=True, correction=correction, use_legacy=False)
+    actual = ttnn.to_torch(ttnn.from_device(tt_out))
+
+    # Tolerances are tight: with the precision-preserving unpacker path the answer is
+    # exact (deviation = 0).  atol=1e-3 here is many orders of magnitude tighter than what
+    # the buggy TF32-via-SrcA path produces (which at offset=1e6 returns exactly 0.0
+    # against an expected ~88) while still allowing some small accumulation noise from
+    # the SFPU Welford recurrence itself.
+    assert_numeric_metrics(
+        torch_ref,
+        actual,
+        rtol=1e-4,
+        atol=1e-3,
+        frobenius_threshold=1e-4,
+        pcc_threshold=0.9999,
+        check_ulp=False,
+    )
+
+
 # Test a 1D, 2D, 3D, and 4D tensor
 @pytest.mark.parametrize("input_shape", [(2,), (3, 10), (6, 3, 60), (1, 11, 67, 77)])
 @pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])
