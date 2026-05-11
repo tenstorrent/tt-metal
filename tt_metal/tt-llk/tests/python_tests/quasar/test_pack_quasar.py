@@ -5,10 +5,11 @@ from typing import List
 
 import pytest
 import torch
-from helpers.data_format_inference import infer_data_formats
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.data_format_inference import data_formats, infer_data_formats
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
+    MatmulGolden,
     PackGolden,
     get_golden_generator,
     quantize_mx_tensor_chunked,
@@ -17,6 +18,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    MathFidelity,
     PackerReluType,
     format_dict,
 )
@@ -37,6 +39,62 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.utils import passed_test
+
+
+def print_diff_summary(
+    golden_tensor: torch.Tensor,
+    res_tensor: torch.Tensor,
+    output_format: DataFormat,
+    num_faces: int = 4,
+    face_size: int = 256,  # 16*16
+    max_samples: int = 16,
+) -> None:
+    """Concise mismatch report. Per-face breakdown surfaces face-arrangement bugs
+    (e.g. EN_X2 matmul Dest face layout vs DataCopyGolden expectations)."""
+    g = golden_tensor.type(format_dict[output_format]).flatten()
+    r = res_tensor.type(format_dict[output_format]).flatten()
+    n = min(g.numel(), r.numel())
+    g, r = g[:n], r[:n]
+
+    tol = tolerances[output_format]
+    is_close = torch.isclose(g, r, rtol=tol.rtol, atol=tol.atol)
+    is_nan = torch.isnan(g) & torch.isnan(r)
+    mismatch = ~(is_close | is_nan)
+    n_bad = int(mismatch.sum())
+
+    print(
+        f"\n--- diff summary [{output_format.name}, atol={tol.atol}, rtol={tol.rtol}] ---"
+    )
+    print(f"  total={n}  mismatch={n_bad}  ratio={n_bad / max(n, 1):.4f}")
+    if n_bad == 0:
+        return
+
+    abs_diff = (g.float() - r.float()).abs()
+    max_idx = int(abs_diff.argmax())
+    print(
+        f"  abs_diff max={float(abs_diff.max()):.4g} mean={float(abs_diff.mean()):.4g}"
+        f"  worst@{max_idx}: g={float(g[max_idx]):.4g} r={float(r[max_idx]):.4g}"
+    )
+
+    # Per-face mismatch counts (single tile assumed; for multi-tile callers can pass
+    # face_size = num_elems_per_tile and num_faces accordingly).
+    elems_per_tile = face_size * num_faces
+    n_tiles = n // elems_per_tile
+    if n_tiles >= 1:
+        per_face = []
+        for f in range(num_faces):
+            start = f * face_size
+            end = start + face_size
+            face_mismatch = mismatch[start:end].sum().item()
+            per_face.append(f"f{f}={face_mismatch}/{face_size}")
+        print(f"  tile 0 per-face mismatches: {'  '.join(per_face)}")
+
+    bad_idx = torch.where(mismatch)[0].tolist()
+    print(f"  first {len(bad_idx)} mismatches (idx, golden, result, |diff|):")
+    for i in bad_idx:
+        print(
+            f"    [{i:5d}]  g={float(g[i]):+.4f}  r={float(r[i]):+.4f}  |diff|={float(abs_diff[i]):.4f}"
+        )
 
 
 def generate_qsr_pack_combinations(
@@ -299,5 +357,171 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         )
     ):
         test_passed = True
+
+    assert test_passed, "Assert against golden failed"
+
+
+# 2x-packed FP4 register-format variants for the pack pipeline. L1 stays MxFp4; the
+# unpacker produces MxFp4_2x_A/B in the src registers. _A pairs with the FP16 family,
+# _B with the FP16_b family. Per TEN-3634 MOV MXFP4_2x was removed from Quasar HW, so
+# this path routes through an identity-SrcB matmul (see _llk_math_eltwise_unary_datacopy_x2_).
+PACK_QSR_MXFP4_2X_FORMATS = [
+    InputOutputFormat(
+        DataFormat.MxFp4,
+        DataFormat.Float16,
+        register_format_hint=DataFormat.MxFp4_2x_A,
+    ),
+    InputOutputFormat(
+        DataFormat.MxFp4,
+        DataFormat.Float16_b,
+        register_format_hint=DataFormat.MxFp4_2x_B,
+    ),
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    format=PACK_QSR_MXFP4_2X_FORMATS,
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
+    tile_count=[1, 2, 4, 8],
+)
+def test_pack_quasar_mxfp4_2x(
+    format, dest_sync_mode, tile_count, boot_mode=BootMode.DEFAULT
+):
+    # The LLK x2 datacopy path runs as a matmul block with ct_dim=tile_count, rt_dim=1:
+    # one identity SrcB tile is loaded and reused across N data SrcA tiles via the matmul
+    # reuse_a path. SrcA tiles tile-major in L1; one identity tile in L1 for SrcB.
+    # dest_acc fixed to No (Float16/Float16_b output).
+    dest_acc = DestAccumulation.No
+    num_faces = 4
+
+    # Skip variants that exceed Dest register capacity. DestSync.Half holds 8 tiles
+    # (Float16), DestSync.Full holds 16. dest_acc=Yes would halve these.
+    if dest_sync_mode == DestSync.Half and tile_count > 8:
+        pytest.skip(f"tile_count={tile_count} exceeds DestSync.Half capacity")
+
+    # SrcA: tile_count tiles of random MxFp4 data, laid out as a 32 x (32*tile_count)
+    # block (1 tile row, tile_count tile cols). SrcB: single 32x32 identity tile.
+    src_A_dimensions = [32, 32 * tile_count]
+    src_B_dimensions = [32, 32]
+
+    src_A, tile_cnt_A, _, _ = generate_stimuli(
+        stimuli_format_A=format.input_format,
+        input_dimensions_A=src_A_dimensions,
+        stimuli_format_B=format.input_format,
+        input_dimensions_B=src_B_dimensions,
+        sfpu=False,
+        output_format=format.output_format,
+    )
+    src_B = torch.eye(
+        src_B_dimensions[0], src_B_dimensions[1], dtype=format_dict[format.input_format]
+    )
+    tile_cnt_B = 1
+
+    tilized_A = tilize_block(
+        src_A, dimensions=src_A_dimensions, stimuli_format=format.input_format
+    )
+    tilized_B = tilize_block(
+        src_B, dimensions=src_B_dimensions, stimuli_format=format.input_format
+    )
+
+    # Quantize through MxFp4 in tilized order then untilize for golden (matches test_matmul_quasar).
+    tilized_A_q = quantize_mx_tensor_chunked(
+        tilized_A.flatten().to(torch.bfloat16), format.input_format
+    ).reshape(tilized_A.shape)
+    tilized_B_q = quantize_mx_tensor_chunked(
+        tilized_B.flatten().to(torch.bfloat16), format.input_format
+    ).reshape(tilized_B.shape)
+    src_A_golden = untilize_block(
+        tilized_A_q, stimuli_format=format.input_format, dimensions=src_A_dimensions
+    )
+    src_B_golden = untilize_block(
+        tilized_B_q, stimuli_format=format.input_format, dimensions=src_B_dimensions
+    )
+
+    formats_config = data_formats(
+        input_format=format.input_format,
+        input_format_B=format.input_format_B,
+        output_format=format.output_format,
+        is_fp32_dest_acc_en=dest_acc,
+        num_iterations=1,
+        unpacking_to_dest=False,
+        disable_format_inference=False,
+        register_format_hint=format.register_format_hint,
+    )[0]
+    pack_src_format = formats_config.pack_src
+
+    # Operand order: kernel wires python_src_A->SrcA, python_src_B->SrcB. HW computes
+    # Dest = SrcB * SrcA = identity_32x32 * data_32x(32N), shape (32, 32N) = data.
+    # In the FP4-2x scheme MatmulGolden models, so golden = MatmulGolden(src_B, src_A).
+    generate_golden = get_golden_generator(MatmulGolden)
+    golden_tensor = generate_golden(
+        src_B_golden,
+        src_A_golden,
+        format.output_format,
+        MathFidelity.LoFi,
+        input_A_dimensions=src_B_dimensions,
+        input_B_dimensions=src_A_dimensions,
+        tilize=True,
+        input_A_format=format.input_format,
+        input_B_format=format.input_format,
+        math_format=pack_src_format,
+        dest_acc=dest_acc,
+    )
+
+    relu_config = PackGolden.generate_relu_config(
+        PackerReluType.NoRelu,
+        relu_threshold=0.0,
+        intermediate_format=format.output_format,
+    )
+
+    configuration = TestConfig(
+        "sources/quasar/pack_quasar_mxfp4_2x_test.cpp",
+        format,
+        templates=[
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
+            DEST_SYNC(dest_sync_mode),
+        ],
+        runtimes=[
+            TEST_FACE_DIMS(),
+            NUM_FACES(num_faces),
+            TILE_COUNT(tile_cnt_A),
+            RELU_CONFIG(relu_config),
+        ],
+        variant_stimuli=StimuliConfig(
+            tilized_A.flatten(),
+            format.input_format,
+            tilized_B.flatten(),
+            format.input_format,
+            format.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+        ),
+        unpack_to_dest=False,
+        dest_acc=dest_acc,
+        boot_mode=boot_mode,
+        # Inference must run so register_format_hint propagates to unpack_A_dst etc.
+        disable_format_inference=False,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    torch_format = format_dict[format.output_format]
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    test_passed = passed_test(
+        golden_tensor, res_tensor, format.output_format, print_errors=False
+    )
+
+    if not test_passed:
+        print_diff_summary(
+            golden_tensor, res_tensor, format.output_format, num_faces=num_faces
+        )
 
     assert test_passed, "Assert against golden failed"
