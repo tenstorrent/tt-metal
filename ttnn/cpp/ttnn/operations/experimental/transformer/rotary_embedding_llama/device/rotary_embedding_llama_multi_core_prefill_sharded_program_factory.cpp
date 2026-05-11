@@ -45,7 +45,7 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
     const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
     const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t sin_seq_len_t = sin.padded_shape()[2] / TILE_HEIGHT;
-    const uint32_t rotary_seq_len_t = std::min(seq_len_t, std::min(cos_seq_len_t, sin_seq_len_t));
+    const uint32_t rotary_seq_len_t = std::min({seq_len_t, cos_seq_len_t, sin_seq_len_t});
 
     if (seq_len_t != cos_seq_len_t || seq_len_t != sin_seq_len_t) {
         log_warning(
