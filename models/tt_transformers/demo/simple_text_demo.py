@@ -82,13 +82,6 @@ def get_accuracy_thresholds(model_args, batch_size=None, seq_len=None):
         batch_size=batch_size,
         seq_len=seq_len,
     )
-    if centralized_targets is None and batch_size is not None:
-        centralized_targets = resolve_accuracy_targets(
-            model_name=model_args.base_model_name,
-            sku=model_args.device_name,
-            batch_size=batch_size,
-            seq_len=None,
-        )
     if centralized_targets and "top1" in centralized_targets and "top5" in centralized_targets:
         return float(centralized_targets["top1"]), float(centralized_targets["top5"]), "models/model_targets.yaml"
     raise ValueError(
