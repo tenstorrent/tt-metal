@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
 
 import numpy as np
@@ -107,8 +108,6 @@ def i2v_metrics(mesh_device, height):
 
 
 def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topology: ttnn.Topology):
-    import os
-
     if model_type == "t2v":
         pipeline_cls = WanPipeline
         expected_metrics = t2v_metrics(mesh_device, height)
@@ -218,9 +217,7 @@ def test_pipeline_performance(
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
     # Test prompts
-    import os as _os
-
-    _custom_prompt = _os.environ.get("PROMPT")
+    _custom_prompt = os.environ.get("PROMPT")
     prompts = [
         _custom_prompt
         or """Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.""",
