@@ -28,7 +28,7 @@ struct MoEComputeParams {
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
     // Same value as combine_params.axis (single source of truth)
-    std::optional<uint32_t> cluster_axis() const { return combine_params.axis; }
+    uint32_t cluster_axis() const { return combine_params.axis; }
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
