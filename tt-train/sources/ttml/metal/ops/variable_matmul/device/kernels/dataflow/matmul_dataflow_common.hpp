@@ -74,10 +74,16 @@ struct TensorShape2D {
  * Read a block of in0 from a potentially padded tensor.
  * Since this is for matmul, no need to read when M >= logical_M
  * Otherwise, if K >= logical_K, fill with zeros.
+ *
+ * Iteration order is always M-outer, K-inner (CB layout = [M, K] tile-major). When
+ * TransposeA is true, the physical tensor is stored as [K, M] instead of [M, K]; the
+ * address formula and bounds-check map to that storage. `shape` should be constructed
+ * matching storage layout: (M, K) without transpose_a, (K, M) with it.
  */
 template <
     uint32_t M_block_tiles,
     uint32_t K_block_tiles,
+    bool TransposeA,
     typename TensorAccessorType
 #ifdef READ_FROM_LOCAL_INPUT
     ,
@@ -102,12 +108,16 @@ void read_in0_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    // i sweeps M (matmul-outer), j sweeps K (matmul-inner).
+    // shape carries storage-layout sizes: when TransposeA, logical_d0=K, logical_d1=M.
+    const uint32_t m_bound = TransposeA ? shape.logical_d1 : shape.logical_d0;
+    const uint32_t k_bound = TransposeA ? shape.logical_d0 : shape.logical_d1;
     for (uint32_t i = d0_start; i < d0_end; i++) {
-        if (i >= shape.logical_d0) {
+        if (i >= m_bound) {
             break;
         }
         for (uint32_t j = d1_start; j < d1_end; j++) {
-            if (j < shape.logical_d1) {
+            if (j < k_bound) {
 #ifdef READ_FROM_LOCAL_INPUT
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
@@ -115,7 +125,12 @@ void read_in0_block_sync(
                     noc_async_read_tile(tile_id, in3_accessor, write_ptr);
                 } else {
 #endif
-                    uint32_t tile_id = i * shape.logical_d1 + j;
+                    uint32_t tile_id;
+                    if constexpr (TransposeA) {
+                        tile_id = j * shape.logical_d1 + i;  // (K, M) storage: K-row * M_tiles + M-col
+                    } else {
+                        tile_id = i * shape.logical_d1 + j;  // (M, K) storage: M-row * K_tiles + K-col
+                    }
                     noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
 #ifdef READ_FROM_LOCAL_INPUT
                 }
@@ -135,8 +150,14 @@ void read_in0_block_sync(
  * Read a block of in1 from a potentially padded tensor.
  * Since this is for matmul, no need to read when N >= logical_N
  * Otherwise, if K >= logical_K, fill with zeros.
+ *
+ * Iteration order is always K-outer, N-inner (so the CB ends up [K, N] tile-major),
+ * which is what the matmul compute kernel expects. When TransposeB is true, the
+ * physical tensor is stored as [N, K] (rather than [K, N]); the address formula
+ * and bounds-check map to that storage. `shape` should be constructed with d0/d1
+ * matching the storage layout: (K, N) without transpose_b, (N, K) with it.
  */
-template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool TransposeB, typename TensorAccessorType>
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -148,21 +169,31 @@ void read_in1_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+    // i sweeps K (matmul-inner), j sweeps N (matmul-outer).
+    // shape carries storage-layout sizes: when TransposeB, logical_d0=N, logical_d1=K.
+    const uint32_t k_bound = TransposeB ? shape.logical_d1 : shape.logical_d0;
+    const uint32_t n_bound = TransposeB ? shape.logical_d0 : shape.logical_d1;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
-            if (j >= shape.logical_d1) {
+            if (j >= n_bound) {
                 write_ptr += tile_size_bytes;
                 continue;
             }
-            if (i < shape.logical_d0) {
-                uint32_t tile_id = i * shape.logical_d1 + j;
+            if (i < k_bound) {
+                // Storage row-stride is always shape.logical_d1 (storage inner dim).
+                uint32_t tile_id;
+                if constexpr (TransposeB) {
+                    tile_id = j * shape.logical_d1 + i;  // (N, K) storage: N-row * K_tiles + K-col
+                } else {
+                    tile_id = i * shape.logical_d1 + j;  // (K, N) storage: K-row * N_tiles + N-col
+                }
                 noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }
             write_ptr += tile_size_bytes;
         }
-        // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
+        // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();

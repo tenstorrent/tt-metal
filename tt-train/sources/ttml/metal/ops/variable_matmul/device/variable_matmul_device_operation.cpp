@@ -51,9 +51,11 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& w_logical = weight_tensor.logical_shape();
     TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "variable_matmul expects rank >= 2 tensors");
 
-    const uint32_t M = a_logical[-2];
-    const uint32_t K = a_logical[-1];
-    const uint32_t K_w = w_logical[-2];
+    // With transpose_a, the input is stored as [K, M], so M is at [-1] and K at [-2].
+    const uint32_t M = config.transpose_a ? a_logical[-1] : a_logical[-2];
+    const uint32_t K = config.transpose_a ? a_logical[-2] : a_logical[-1];
+    // When transpose_b, the weight is stored as [N, K] and K matches w_logical[-1].
+    const uint32_t K_w = config.transpose_b ? w_logical[-1] : w_logical[-2];
 
     TT_FATAL(K == K_w, "variable_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0, "variable_matmul dimensions must be positive");
@@ -102,12 +104,17 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& in0 = tensor_args.input_tensor;
     const auto& in1 = tensor_args.weight_tensor;
-    const uint32_t N = in1.logical_shape()[-1];
+    const auto& config = operation_attributes.config;
+    // With transpose_b, the weight is stored as [N, K] so N is at logical[-2].
+    const uint32_t N = config.transpose_b ? in1.logical_shape()[-2] : in1.logical_shape()[-1];
+    // With transpose_a, the input is stored as [K, M] so M is at logical[-1].
+    const uint32_t M = config.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
 
     const auto& memory_config = in0.memory_config();
     auto dtype = in0.dtype();
 
     ttnn::Shape output_shape(in0.logical_shape());
+    output_shape[-2] = M;
     output_shape[-1] = N;
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 }
@@ -125,8 +132,15 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // This gives at most 2 cached programs: one for actual_M <= N, one for actual_M > N.
     const auto& w = tensor_args.weight_tensor;
     const auto& a = tensor_args.input_tensor;
-    uint32_t actual_M = a.physical_volume() / a.padded_shape()[-1];
-    uint32_t N = w.logical_shape()[-1];
+    const bool transpose_a = operation_attributes.config.transpose_a;
+    const bool transpose_b = operation_attributes.config.transpose_b;
+    // physical_volume / padded[-1] gives the count along the *stored* outer dim. With
+    // transpose_a that's K-tiles; without, M-tiles. Either way, actual_M (for the matmul) is
+    // along the stored *other* dim: padded_shape[-2] when transpose_a, [-1] otherwise — both
+    // equal physical_volume/padded[-1] only when transpose_a is false. Use logical shape to
+    // disambiguate for the hash's M-vs-N comparison (purely for transpose_core_grid).
+    uint32_t actual_M = transpose_a ? a.logical_shape()[-1] : (a.physical_volume() / a.padded_shape()[-1]);
+    uint32_t N = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
     bool transpose_core_grid = actual_M > N;
 
     return ttsl::hash::hash_objects_with_default_seed(
@@ -141,7 +155,9 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         operation_attributes.compute_kernel_config,
         a.dtype(),
         w.dtype(),
-        w.logical_shape());
+        w.logical_shape(),
+        transpose_a,
+        transpose_b);
 }
 
 }  // namespace ttml::metal::ops::variable_matmul::device

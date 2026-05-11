@@ -30,6 +30,7 @@ void kernel_main() {
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
     constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
+    constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(22));
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -56,7 +57,7 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<22>();
+    constexpr auto in0_args = TensorAccessorArgs<23>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -115,7 +116,9 @@ void kernel_main() {
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
     const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
 
-    const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
+    // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
+    const TensorShape2D in0_shape = transpose_a ? TensorShape2D(K_tiles, M_tiles, padded_K_tiles, padded_M_tiles)
+                                                : TensorShape2D(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
@@ -259,7 +262,7 @@ void kernel_main() {
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
-                    read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                    read_in0_block_sync<M_block_tiles, K_block_tiles, transpose_a>(
                         in0_reader,
                         in0_shape,
                         in0_start_address,

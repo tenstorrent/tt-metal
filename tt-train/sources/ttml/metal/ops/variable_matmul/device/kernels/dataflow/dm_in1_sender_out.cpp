@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
+    constexpr bool transpose_b = static_cast<bool>(get_compile_time_arg_val(21));
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -54,7 +55,7 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<21>();
+    constexpr auto in1_args = TensorAccessorArgs<22>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -95,7 +96,9 @@ void kernel_main() {
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
     const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
 
-    const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
+    // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].
+    const TensorShape2D in1_shape = transpose_b ? TensorShape2D(N_tiles, K_tiles, padded_N_tiles, padded_K_tiles)
+                                                : TensorShape2D(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
@@ -217,7 +220,7 @@ void kernel_main() {
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
-                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                    read_in1_block_sync<K_block_tiles, N_block_tiles, transpose_b>(
                         in1_reader,
                         in1_shape,
                         in1_start_address,
