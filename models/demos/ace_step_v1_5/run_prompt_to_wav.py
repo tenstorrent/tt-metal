@@ -5,6 +5,12 @@ from pathlib import Path
 
 import numpy as np
 
+from models.demos.ace_step_v1_5.checkpoint_paths import (
+    ACE_STEP_CHECKPOINT_DIR_ENV,
+    resolve_ace_step_checkpoints_root,
+    resolve_ace_step_source_root,
+)
+
 
 def _build_t_schedule(shift: float = 1.0):
     # Matches `SHIFT_TIMESTEPS` for fix_nfe=8 in ACE-Step turbo (excluding final 0).
@@ -27,25 +33,69 @@ def _build_t_schedule(shift: float = 1.0):
 
 
 def main():
+    _default_ckpt = resolve_ace_step_checkpoints_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompt", type=str, required=True)
-    ap.add_argument("--ckpt_dir", type=str, default="/home/ubuntu/ign-sakthi/ACE-Step-1.5/checkpoints")
+    ap.add_argument(
+        "--ckpt_dir",
+        type=str,
+        default=str(_default_ckpt) if _default_ckpt is not None else "",
+        help=(
+            "ACE-Step checkpoints root (contains Qwen3-Embedding-0.6B/, vae/, variant dirs). "
+            f"Default: discover next to tt-metal or ${ACE_STEP_CHECKPOINT_DIR_ENV}."
+        ),
+    )
     ap.add_argument("--variant", type=str, default="acestep-v15-turbo")
     ap.add_argument("--device_id", type=int, default=0)
     ap.add_argument("--duration_sec", type=float, default=10.0)
     ap.add_argument("--shift", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=str, default="ttnn_out.wav")
+    ap.add_argument(
+        "--cq_trace",
+        action="store_true",
+        help="Use TTNN CQ trace capture/replay per decoder timestep (needs trace_region_size).",
+    )
+    ap.add_argument(
+        "--trace_region_size",
+        type=int,
+        default=256 << 20,
+        help="Trace buffer bytes for open_device when --cq_trace (default 256 MiB).",
+    )
+    ap.add_argument(
+        "--cq_trace_no_prep",
+        action="store_true",
+        help="Disable Tracer prep-run before capture (faster setup, higher first-capture risk).",
+    )
+    ap.add_argument(
+        "--use_torch_text_encoder",
+        action="store_true",
+        help="Run Qwen3 with PyTorch+Transformers instead of TTNN (debug / fallback).",
+    )
+    ap.add_argument(
+        "--torch_vae",
+        action="store_true",
+        help="Decode latents with PyTorch+Diffusers AutoencoderOobleck (default: TTNN decoder on device).",
+    )
     args = ap.parse_args()
 
-    # Make ACE-Step package importable (read-only reference; we do not modify it).
     import sys
 
-    ace_step_root = Path("/home/ubuntu/ign-sakthi/ACE-Step-1.5")
-    if str(ace_step_root) not in sys.path:
+    ace_step_root = resolve_ace_step_source_root()
+    if ace_step_root is not None and str(ace_step_root) not in sys.path:
         sys.path.insert(0, str(ace_step_root))
 
-    ckpt_dir = Path(args.ckpt_dir)
+    ckpt_dir = Path(args.ckpt_dir).expanduser() if str(args.ckpt_dir).strip() else None
+    if ckpt_dir is None or not ckpt_dir.is_dir():
+        ckpt_dir = resolve_ace_step_checkpoints_root()
+    if ckpt_dir is None:
+        raise FileNotFoundError(
+            "Could not find ACE-Step checkpoints. Pass --ckpt_dir (directory containing "
+            "Qwen3-Embedding-0.6B/) or set "
+            f"{ACE_STEP_CHECKPOINT_DIR_ENV}, "
+            "or place ACE-Step-1.5 next to tt-metal (…/ACE-Step-1.5/checkpoints/)."
+        )
+    ckpt_dir = ckpt_dir.resolve()
     model_dir = ckpt_dir / args.variant
     safetensors_path = model_dir / "model.safetensors"
     silence_latent_path = model_dir / "silence_latent.pt"
@@ -58,39 +108,30 @@ def main():
         raise FileNotFoundError(f"Missing silence_latent: {silence_latent_path}")
 
     # --------------------------
-    # Host path: prompt -> encoder_hidden_states (Torch/Transformers)
+    # Host path: tokenization (always). Qwen3 forward: TTNN (default) or PyTorch (--use_torch_text_encoder).
     # --------------------------
     import torch
-    from safetensors.torch import load_file as torch_load_safetensors
-    from transformers import AutoModel, AutoTokenizer
+    from transformers import AutoTokenizer
 
     torch.manual_seed(int(args.seed))
     np.random.seed(int(args.seed))
 
-    # Text encoder (host; allowed)
     tok = AutoTokenizer.from_pretrained(str(text_model_dir))
-    txt_model = AutoModel.from_pretrained(str(text_model_dir)).eval()
-
-    # Keep this on GPU if available; otherwise CPU.
-    torch_dev = "cuda" if torch.cuda.is_available() else "cpu"
-    txt_model = txt_model.to(device=torch_dev)
-
     tokens = tok(args.prompt, padding="max_length", truncation=True, max_length=256, return_tensors="pt")
-    input_ids = tokens["input_ids"].to(device=torch_dev)
-    attn_mask = tokens["attention_mask"].to(device=torch_dev).to(torch.bool)
+    input_ids_np = tokens["input_ids"].numpy().astype(np.uint32)
+    attn_mask_np = tokens["attention_mask"].numpy().astype(np.float32)
 
-    with torch.inference_mode():
-        out = txt_model(input_ids=input_ids, attention_mask=attn_mask)
-        # [B, S, text_hidden_dim]
-        text_hidden_states = out.last_hidden_state
+    torch_dev = "cuda" if torch.cuda.is_available() else "cpu"
+    text_hidden_f32_np = None
+    if args.use_torch_text_encoder:
+        from transformers import AutoModel
 
-    # Project to decoder hidden size using ACE-Step condition encoder text_projector weights.
-    # Weight key in the main checkpoint is `encoder.text_projector.weight` (no bias).
-    sd_torch = torch_load_safetensors(str(safetensors_path), device="cpu")
-    W = sd_torch["encoder.text_projector.weight"].to(dtype=torch.float32)  # [hidden, text_hidden_dim]
-    text_h = text_hidden_states.to(dtype=torch.float32).to(device="cpu")  # host staging
-    encoder_hidden_states = torch.matmul(text_h, W.t())  # [B, S, hidden]
-    encoder_attn_mask = attn_mask.to(device="cpu")
+        txt_model = AutoModel.from_pretrained(str(text_model_dir)).eval().to(device=torch_dev)
+        input_ids = tokens["input_ids"].to(device=torch_dev)
+        attn_mask = tokens["attention_mask"].to(device=torch_dev).to(torch.bool)
+        with torch.inference_mode():
+            out = txt_model(input_ids=input_ids, attention_mask=attn_mask)
+            text_hidden_f32_np = out.last_hidden_state.detach().float().cpu().numpy()
 
     # --------------------------
     # Host path: init latents + context (silence + chunk masks)
@@ -145,17 +186,36 @@ def main():
     os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
 
     import ttnn
+    from models.demos.ace_step_v1_5.cq_trace import AceStepCQTracers
     from models.demos.ace_step_v1_5.full_pipeline import AceStepV15TTNNPipeline
+    from models.demos.ace_step_v1_5.ttnn_impl.oobleck_vae_decoder import TtOobleckVaeDecoder
+    from models.demos.ace_step_v1_5.ttnn_impl.text_projector import (
+        TtAceStepTextProjector,
+        load_text_projector_weight_numpy,
+    )
+
+    proj_weight_np = load_text_projector_weight_numpy(str(safetensors_path))
 
     # Strict mode: any fallback should hard-fail (proves device-pure execution).
     if hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True
         print(f"TTNN strict: throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
 
-    dev = ttnn.open_device(device_id=int(args.device_id))
+    trace_kw = {}
+    if args.cq_trace:
+        trace_kw["trace_region_size"] = int(args.trace_region_size)
+        print(
+            f"CQ trace enabled: trace_region_size={trace_kw['trace_region_size']} "
+            f"prep_run={not args.cq_trace_no_prep}"
+        )
+
+    dev = ttnn.open_device(device_id=int(args.device_id), **trace_kw)
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
 
+    cq_runner = None
+    torch_latents_after_tt: torch.Tensor | None = None
+    tt_audio_nlc_fp32_cpu: torch.Tensor | None = None
     try:
         t_schedule = _build_t_schedule(float(args.shift))
         timesteps_host = np.asarray(t_schedule + [0.0], dtype=np.float32)
@@ -167,6 +227,23 @@ def main():
             timesteps_host=timesteps_host,
             expected_input_length=expected_input_length,
         )
+
+        tt_vae = None
+        if not args.torch_vae:
+            if not Path(vae_dir, "config.json").is_file():
+                raise FileNotFoundError(
+                    f"TTNN VAE decode needs a Hugging Face-style VAE folder at {vae_dir} (config.json). "
+                    "Use --torch_vae if your layout differs."
+                )
+            act_dtype_vae = getattr(ttnn, "bfloat16", None)
+            tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
+                str(vae_dir),
+                device=dev,
+                latent_frames=int(frames),
+                batch_size=1,
+                activation_dtype=act_dtype_vae,
+                weights_dtype=act_dtype_vae,
+            )
 
         # One host->device staging phase (all inputs/weights)
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
@@ -180,9 +257,36 @@ def main():
         ctx_tt = ttnn.as_tensor(
             context_latents.numpy(), device=dev, dtype=act_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=mem
         )
-        enc_tt = ttnn.as_tensor(
-            encoder_hidden_states.numpy(), device=dev, dtype=act_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=mem
+
+        text_proj = TtAceStepTextProjector(
+            device=dev,
+            weight_f32_numpy=proj_weight_np,
+            weights_dtype=act_dtype,
+            weight_memory_config=mem,
         )
+        if args.use_torch_text_encoder:
+            if text_hidden_f32_np is None:
+                raise RuntimeError("Torch text path requires text_hidden_f32_np")
+            enc_tt = text_proj.forward(text_hidden_f32_np, activation_dtype=act_dtype)
+        else:
+            from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+
+            qwen_enc = TtQwen3EmbeddingEncoder(
+                device=dev,
+                hf_model_dir=str(text_model_dir),
+                qwen_safetensors_path=str(text_model_dir / "model.safetensors"),
+            )
+            qh = qwen_enc.forward(input_ids_np, attn_mask_np)
+            enc_tt = text_proj.forward_from_hidden(qh, activation_dtype=act_dtype)
+
+        if args.cq_trace:
+            cq_runner = AceStepCQTracers(
+                dev,
+                pipe,
+                enc_tt,
+                prep_run=not args.cq_trace_no_prep,
+                clone_prep_inputs=True,
+            )
 
         for step_idx, t_curr in enumerate(t_schedule):
             t_curr_f = float(t_curr)
@@ -197,7 +301,10 @@ def main():
             else:
                 model_in = ttnn.concatenate([ctx_tt, xt_tt], dim=-1)
 
-            vt = pipe.forward(hidden_states_btC=model_in, timestep_index=step_idx, encoder_hidden_states_btd=enc_tt)
+            if cq_runner is not None:
+                vt = cq_runner.forward(model_in, step_idx)
+            else:
+                vt = pipe.forward(hidden_states_btC=model_in, timestep_index=step_idx, encoder_hidden_states_btd=enc_tt)
 
             vt_dt = ttnn.multiply(vt, float(dt))
             xt_tt = ttnn.subtract(xt_tt, vt_dt)
@@ -208,22 +315,26 @@ def main():
             if hasattr(ttnn, "concat")
             else ttnn.concatenate([ctx_tt, xt_tt], dim=-1)
         )
-        vt = pipe.forward(
-            hidden_states_btC=model_in, timestep_index=len(t_schedule) - 1, encoder_hidden_states_btd=enc_tt
-        )
+        final_idx = len(t_schedule) - 1
+        if cq_runner is not None:
+            vt = cq_runner.forward(model_in, final_idx)
+        else:
+            vt = pipe.forward(hidden_states_btC=model_in, timestep_index=final_idx, encoder_hidden_states_btd=enc_tt)
         t_last = float(t_schedule[-1])
         xt_tt = ttnn.subtract(xt_tt, ttnn.multiply(vt, float(t_last)))
 
-        # Single device->host at end
-        pred_latents = ttnn.to_torch(xt_tt).to(torch.float32)  # [1,T,64]
+        if tt_vae is not None:
+            tt_audio_nlc_fp32_cpu = ttnn.to_torch(tt_vae(xt_tt)).float()
+        else:
+            torch_latents_after_tt = ttnn.to_torch(xt_tt).to(torch.float32)  # [1,T,64]
     finally:
+        if cq_runner is not None:
+            cq_runner.release()
         ttnn.close_device(dev)
 
     # --------------------------
-    # Host path: VAE decode + save wav (host; after TTNN completes)
+    # Host path: optional PyTorch VAE decode (if --torch_vae), then save wav (host)
     # --------------------------
-    from diffusers.models import AutoencoderOobleck
-
     def _save_wav_fallback(wav_1d: torch.Tensor, out_path: Path, sample_rate: int = 44100) -> None:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -248,13 +359,23 @@ def main():
         audio_i16 = (audio_i16 * 32767.0).astype(np.int16)
         wavfile.write(str(out_path), sample_rate, audio_i16)
 
-    vae = AutoencoderOobleck.from_pretrained(str(vae_dir)).eval()
-    vae = vae.to(device=torch_dev)
+    if tt_audio_nlc_fp32_cpu is not None:
+        wav = tt_audio_nlc_fp32_cpu.permute(0, 2, 1)  # [B, audio_channels, samples]
+    else:
+        if torch_latents_after_tt is None:
+            raise RuntimeError("Internal error: diffusion latents missing for PyTorch VAE decode.")
+        from diffusers.models import AutoencoderOobleck
 
-    with torch.inference_mode():
-        lat = pred_latents.transpose(1, 2).contiguous().to(device=torch_dev, dtype=next(vae.parameters()).dtype)
-        wav = vae.decode(lat).sample  # [B, channels, samples]
-        wav = wav.float().cpu()
+        vae = AutoencoderOobleck.from_pretrained(str(vae_dir)).eval()
+        vae = vae.to(device=torch_dev)
+        with torch.inference_mode():
+            lat = (
+                torch_latents_after_tt.transpose(1, 2)
+                .contiguous()
+                .to(device=torch_dev, dtype=next(vae.parameters()).dtype)
+            )
+            wav = vae.decode(lat).sample  # [B, channels, samples]
+            wav = wav.float().cpu()
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

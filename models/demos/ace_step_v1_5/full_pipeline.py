@@ -35,7 +35,7 @@ class AceStepV15TTNNPipeline:
     Minimal TTNN-only pipeline scaffold.
 
     This currently wires:
-      input acoustic/context tensor -> patch embed -> (TODO: DiT blocks) -> output head
+      input acoustic/context tensor -> patch embed -> DiT core (``TtAceStepDiTCore``) -> output head
 
     Notes on strict rules:
     - Host->device occurs in __init__ for weights.
