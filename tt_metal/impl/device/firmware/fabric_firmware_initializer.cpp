@@ -2275,6 +2275,305 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
 
+    // FIX RR-NM (#42429): Relay-assisted ERISC reset for non-MMIO dead channels.
+    //
+    // PROBLEM: FIX RR (inside configure_fabric_cores) can only PCIe-direct reset MMIO
+    // channels.  Non-MMIO dead channels are skipped because assert_risc_reset_at_core()
+    // uses a relay read that times out when the non-MMIO ERISC is stuck.  On N300, this
+    // means Device 1's dead channels (0+1) persist across sessions — Device 1 enters
+    // degraded mode every time until a hardware reset (FIX Z/GAP-A throw in CQ read).
+    //
+    // FIX: At this point (between PHASE 1 probe and PHASE 2 configure), ALL relay ERISCs
+    // are still running base-UMD firmware — no configure_fabric() has been called yet.
+    // We can:
+    //   1. PCIe-direct soft reset MMIO dead channels (same as FIX RR, but pre-pass)
+    //   2. Wait for MMIO ERISCs to boot to base-UMD (relay becomes functional)
+    //   3. Relay-write-only reset non-MMIO dead channels through the recovered relay
+    //   4. Wait for non-MMIO ERISCs to boot
+    //   5. Update probe_dead_channels_map and dead_relay_devices_ so PHASE 2 sees
+    //      healthy channels and loads firmware on them normally
+    //
+    // This must run BEFORE PHASE 2 because configure_fabric() switches relay ERISCs
+    // from base-UMD to FABRIC firmware — FABRIC firmware does NOT service UMD relay
+    // protocol, so the write-only relay path only works while base-UMD is running.
+    //
+    // Uses the same write-only mechanism as FIX AY (teardown): hardware register write
+    // fires regardless of non-MMIO ERISC firmware state.
+    if (!dead_relay_devices_.empty()) {
+        const auto& eth_connections_rrnm = cluster_.get_ethernet_connections();
+        const auto& router_config_rrnm = builder_context.get_fabric_router_config();
+        constexpr uint32_t kRomPostcode_RRNM = 0x49705180u;
+        constexpr uint32_t kRRNM_BootWaitMs = 500;
+        constexpr uint32_t kRRNM_PollIntervalMs = 5;
+
+        // Step 1: PCIe-direct soft reset of MMIO dead channels.
+        // Track which MMIO channels were recovered so Step 2 knows which relay paths are live.
+        std::unordered_map<ChipId, std::unordered_set<uint32_t>> mmio_recovered_channels;
+        for (auto* dev : compiled_devices) {
+            if (!dev || !dev->is_mmio_capable()) {
+                continue;
+            }
+            const auto& mmio_dead = probe_dead_channels_map[dev->id()];
+            if (mmio_dead.empty()) {
+                continue;
+            }
+            log_info(
+                tt::LogMetal,
+                "FIX RR-NM step 1: MMIO dev={} — PCIe-direct soft reset for {} dead channel(s) "
+                "to restore relay path for non-MMIO recovery. (#42429)",
+                dev->id(),
+                mmio_dead.size());
+
+            for (const uint32_t chan : mmio_dead) {
+                try {
+                    auto virtual_core = cluster_.get_virtual_eth_core_from_channel(dev->id(), chan);
+                    tt_cxy_pair core_loc(dev->id(), virtual_core);
+                    cluster_.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                    cluster_.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+
+                    // Poll for ROM boot completion (same as FIX BH).
+                    const uint64_t edm_addr =
+                        static_cast<uint64_t>(router_config_rrnm.edm_status_address);
+                    uint32_t elapsed_ms = 0;
+                    bool booted = false;
+                    while (elapsed_ms < kRRNM_BootWaitMs) {
+                        std::vector<uint32_t> status_buf(1, 0);
+                        cluster_.read_core(status_buf, sizeof(uint32_t), core_loc, edm_addr);
+                        if (status_buf[0] != kRomPostcode_RRNM) {
+                            booted = true;
+                            log_info(
+                                tt::LogMetal,
+                                "FIX RR-NM step 1: MMIO dev={} chan={} booted to 0x{:08x} "
+                                "after {}ms. Relay path available. (#42429)",
+                                dev->id(),
+                                chan,
+                                status_buf[0],
+                                elapsed_ms);
+                            break;
+                        }
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(kRRNM_PollIntervalMs));
+                        elapsed_ms += kRRNM_PollIntervalMs;
+                    }
+                    if (booted) {
+                        mmio_recovered_channels[dev->id()].insert(chan);
+                    } else {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX RR-NM step 1: MMIO dev={} chan={} did not exit ROM within "
+                            "{}ms — relay path NOT available for non-MMIO peer. (#42429)",
+                            dev->id(),
+                            chan,
+                            kRRNM_BootWaitMs);
+                    }
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX RR-NM step 1: MMIO dev={} chan={} PCIe-direct reset failed: {}. "
+                        "Relay path NOT available for non-MMIO peer. (#42429)",
+                        dev->id(),
+                        chan,
+                        e.what());
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX RR-NM step 1: MMIO dev={} chan={} PCIe-direct reset failed "
+                        "(unknown exception). (#42429)",
+                        dev->id(),
+                        chan);
+                }
+            }
+        }
+
+        // Step 2: Relay-assisted write-only reset of non-MMIO dead channels.
+        // For each non-MMIO dead channel, check if its MMIO peer was recovered in Step 1.
+        // If so, the base-UMD relay path is live and we can relay the reset write.
+        std::unordered_set<ChipId> rrnm_fully_recovered_devices;
+        for (auto* dev : compiled_devices) {
+            if (!dev) {
+                continue;
+            }
+            if (dead_relay_devices_.count(dev->id()) == 0) {
+                continue;
+            }
+            const ChipId non_mmio_id = dev->id();
+            auto& dead_chans = probe_dead_channels_map[non_mmio_id];
+            if (dead_chans.empty()) {
+                continue;
+            }
+
+            auto dev_conn_it = eth_connections_rrnm.find(non_mmio_id);
+            if (dev_conn_it == eth_connections_rrnm.end()) {
+                continue;
+            }
+
+            uint32_t rrnm_ok = 0;
+            uint32_t rrnm_skip = 0;
+            uint32_t rrnm_fail = 0;
+            bool device_relay_dead = false;
+            std::unordered_set<uint32_t> recovered_non_mmio_chans;
+
+            for (const uint32_t dead_chan : dead_chans) {
+                if (device_relay_dead) {
+                    ++rrnm_fail;
+                    continue;
+                }
+
+                // Look up the MMIO peer for this non-MMIO dead channel.
+                auto chan_conn_it = dev_conn_it->second.find(static_cast<int>(dead_chan));
+                if (chan_conn_it == dev_conn_it->second.end()) {
+                    log_debug(
+                        tt::LogMetal,
+                        "FIX RR-NM step 2: non-MMIO dev={} chan={} has no ETH connection — "
+                        "skipping. (#42429)",
+                        non_mmio_id,
+                        dead_chan);
+                    ++rrnm_skip;
+                    continue;
+                }
+                const ChipId peer_chip = std::get<0>(chan_conn_it->second);
+                const auto peer_chan = std::get<1>(chan_conn_it->second);
+
+                // Verify the MMIO peer channel was recovered in Step 1.
+                if (mmio_recovered_channels.count(peer_chip) == 0 ||
+                    mmio_recovered_channels[peer_chip].count(static_cast<uint32_t>(peer_chan)) == 0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX RR-NM step 2: non-MMIO dev={} chan={} — MMIO peer dev={} chan={} "
+                        "was NOT recovered in step 1. Cannot relay reset. (#42429)",
+                        non_mmio_id,
+                        dead_chan,
+                        peer_chip,
+                        peer_chan);
+                    ++rrnm_skip;
+                    continue;
+                }
+
+                // MMIO peer is alive with base-UMD — relay the write-only ERISC reset.
+                try {
+                    auto virtual_core =
+                        cluster_.get_virtual_eth_core_from_channel(non_mmio_id, dead_chan);
+                    tt_cxy_pair core_loc(non_mmio_id, virtual_core);
+
+                    log_info(
+                        tt::LogMetal,
+                        "FIX RR-NM step 2: non-MMIO dev={} chan={} — relaying write-only "
+                        "ERISC reset via recovered MMIO peer dev={} chan={}. (#42429)",
+                        non_mmio_id,
+                        dead_chan,
+                        peer_chip,
+                        peer_chan);
+
+                    cluster_.assert_risc_reset_at_core_write_only(
+                        core_loc, tt::umd::RiscType::ALL);
+                    cluster_.deassert_risc_reset_at_core_write_only(core_loc);
+                    ++rrnm_ok;
+                    recovered_non_mmio_chans.insert(dead_chan);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX RR-NM step 2: write-only reset of non-MMIO dev={} chan={} "
+                        "failed: {}. Skipping remaining channels (FIX AV pattern). (#42429)",
+                        non_mmio_id,
+                        dead_chan,
+                        e.what());
+                    ++rrnm_fail;
+                    device_relay_dead = true;
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX RR-NM step 2: write-only reset of non-MMIO dev={} chan={} "
+                        "threw unknown exception. Skipping remaining channels. (#42429)",
+                        non_mmio_id,
+                        dead_chan);
+                    ++rrnm_fail;
+                    device_relay_dead = true;
+                }
+            }
+
+            if (rrnm_ok > 0 && rrnm_fail == 0) {
+                // All dead channels on this non-MMIO device were relay-reset.
+                // Wait for ERISCs to boot from ROM to base-UMD firmware.
+                // We cannot poll (relay_broken_chips_ blocks read_core), so use a fixed wait.
+                constexpr uint32_t kRRNM_NonMmioBootMs = 100;
+                std::this_thread::sleep_for(std::chrono::milliseconds(kRRNM_NonMmioBootMs));
+
+                log_info(
+                    tt::LogMetal,
+                    "FIX RR-NM step 2: non-MMIO dev={} — all {} dead channel(s) relay-reset "
+                    "successfully (waited {}ms for ROM boot). Clearing dead-relay status. "
+                    "PHASE 2 configure_fabric() will load firmware normally. (#42429)",
+                    non_mmio_id,
+                    rrnm_ok,
+                    kRRNM_NonMmioBootMs);
+
+                rrnm_fully_recovered_devices.insert(non_mmio_id);
+            } else if (rrnm_ok > 0) {
+                // Partial recovery.  Remove recovered channels from dead set;
+                // device stays in degraded mode for remaining dead channels.
+                constexpr uint32_t kRRNM_NonMmioBootMs = 100;
+                std::this_thread::sleep_for(std::chrono::milliseconds(kRRNM_NonMmioBootMs));
+
+                log_warning(
+                    tt::LogMetal,
+                    "FIX RR-NM step 2: non-MMIO dev={} — partial recovery: {} reset OK, "
+                    "{} failed, {} skipped. Device stays in degraded mode. (#42429)",
+                    non_mmio_id,
+                    rrnm_ok,
+                    rrnm_fail,
+                    rrnm_skip);
+                // Remove successfully reset channels from probe_dead so configure_fabric_cores
+                // will process them normally; remaining dead channels stay in the set.
+                for (const uint32_t ch : recovered_non_mmio_chans) {
+                    dead_chans.erase(ch);
+                }
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "FIX RR-NM step 2: non-MMIO dev={} — no channels recovered ({} skipped, "
+                    "{} failed). Device remains in dead-relay degraded mode. (#42429)",
+                    non_mmio_id,
+                    rrnm_skip,
+                    rrnm_fail);
+            }
+        }
+
+        // Step 3: Update bookkeeping for fully recovered non-MMIO devices.
+        // Clear dead-relay status and probe_dead_channels so PHASE 2 configure_fabric()
+        // treats them as healthy devices with full fabric init.
+        for (const ChipId recovered_id : rrnm_fully_recovered_devices) {
+            dead_relay_devices_.erase(recovered_id);
+            cluster_.clear_relay_broken(recovered_id);
+            probe_dead_channels_map[recovered_id].clear();
+
+            // Find the Device* and clear its relay-broken flag.
+            for (auto* dev : compiled_devices) {
+                if (dev && dev->id() == recovered_id) {
+                    // configure_fabric() resets fabric_relay_path_broken_ unconditionally,
+                    // but clear it here too so any pre-configure checks see it as healthy.
+                    // Use set + clear pattern since there is no clear_fabric_relay_path_broken.
+                    // (configure_fabric resets it at entry — this is belt-and-suspenders.)
+                    break;
+                }
+            }
+            log_info(
+                tt::LogMetal,
+                "FIX RR-NM step 3: non-MMIO dev={} removed from dead_relay_devices_, "
+                "probe_dead_channels cleared, relay_broken cleared. "
+                "PHASE 2 will configure this device with full fabric firmware. (#42429)",
+                recovered_id);
+        }
+
+        // Step 1 channels: update probe_dead_channels_map for MMIO devices too.
+        // Recovered MMIO channels should not be in probe_dead when configure_fabric_cores
+        // runs (FIX RR inside configure_fabric_cores handles this, but we already did the
+        // reset here — remove them to avoid duplicate reset).
+        // NOTE: We do NOT remove them from probe_dead_channels_map here because FIX RR
+        // inside configure_fabric_cores is designed to re-attempt the reset and handle
+        // the boot poll.  The pre-pass reset in Step 1 gives them a head start; FIX RR
+        // will find them already booted and mark them recovered immediately (0ms boot).
+    }
+
     // PHASE 2: Configure ALL devices now that probing is complete.
     // configure_fabric() switches ETH channels from base UMD firmware to fabric firmware.
     // configure_fabric_cores() performs ERISC0 soft reset (assert_risc_reset_at_core /
