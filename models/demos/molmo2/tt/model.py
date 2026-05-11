@@ -687,13 +687,40 @@ class TtMolmo2Model(LightweightModule):
 
         # Token ID input for embedding (inside trace) — [1, 1, 1] uint32
         tok_id = _tt(torch.zeros(1, 1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # Current decode position — [1] int32
+        # Current decode position — [1] int32 (KV cache update requires INT32)
         cur_pos = _tt(torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # RoPE cos/sin for current position — [1, 1, 1, head_dim]
-        cos_buf = _tt(torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16))
-        sin_buf = _tt(torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16))
 
-        return {"tok_id": tok_id, "cur_pos": cur_pos, "cos": cos_buf, "sin": sin_buf, "mapper": mapper}
+        # RoPE cos/sin lookup tables — uploaded once, used inside every trace execution.
+        # Shape [max_seq_len, head_dim] ROW_MAJOR; ttnn.embedding(cur_pos, table) → [1,1,1,head_dim].
+        cos_table = ttnn.from_torch(
+            self._cos_hf.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        sin_table = ttnn.from_torch(
+            self._sin_hf.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+        # Pre-allocated torch buffers for H2D uploads — updated in-place each step
+        t_tok_id = torch.zeros(1, 1, 1, dtype=torch.int32)
+        t_cur_pos = torch.zeros(1, dtype=torch.int32)
+
+        return {
+            "tok_id": tok_id,
+            "cur_pos": cur_pos,
+            "cos_table": cos_table,
+            "sin_table": sin_table,
+            "t_tok_id": t_tok_id,
+            "t_cur_pos": t_cur_pos,
+        }
 
     def _capture_decode_trace(self, tt, prefill_seq_len: int):
         """Warm-up + trace capture for single-token decode.
@@ -730,20 +757,36 @@ class TtMolmo2Model(LightweightModule):
         # Seed stable buffers with valid initial values (pre-trace — allocation is safe here)
         _upload(torch.zeros(1, 1, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, tt["tok_id"])
         _upload(torch.tensor([prefill_seq_len], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, tt["cur_pos"])
-        cos_p = self._cos_hf[prefill_seq_len : prefill_seq_len + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        sin_p = self._sin_hf[prefill_seq_len : prefill_seq_len + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        _upload(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["cos"])
-        _upload(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["sin"])
 
-        def _forward_decode(tok_id_t, cur_pos_t, cos_t, sin_t):
-            """Single decode step: embedding → 36 layers → ln_f → lm_head.
+        def _forward_decode(tok_id_t, cur_pos_t):
+            """Single decode step: embedding → RoPE lookup → 36 layers → ln_f → lm_head.
 
-            Embedding is the FIRST op so layer.forward's ttnn.deallocate(x)
-            acts on the embedding output (trace-internal), never on tok_id_t.
+            cos/sin are looked up from pre-uploaded device tables using cur_pos, so
+            the only per-step stable-buffer updates are tok_id and cur_pos (8 bytes total).
             """
             x = ttnn.embedding(tok_id_t, self.embedding)
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             x = ttnn.reshape(x, [1, 1, 1, cfg.dim])
+            # RoPE lookup: typecast cur_pos [1] int32 → uint32, reshape to [1,1,1] for embedding.
+            # embedding([1,1,1], table=[S,head_dim]) → [1,1,head_dim] → reshape [1,1,1,head_dim]
+            # → TILE_LAYOUT for rotary_embedding.
+            pos_idx = ttnn.reshape(ttnn.typecast(cur_pos_t, ttnn.uint32), [1, 1, 1])
+            cos_t = ttnn.to_layout(
+                ttnn.reshape(
+                    ttnn.embedding(pos_idx, tt["cos_table"], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    [1, 1, 1, cfg.head_dim],
+                ),
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            sin_t = ttnn.to_layout(
+                ttnn.reshape(
+                    ttnn.embedding(pos_idx, tt["sin_table"], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    [1, 1, 1, cfg.head_dim],
+                ),
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             rot_mats = [cos_t, sin_t]
             for layer in self.layers:
                 x = layer.forward_decode(x, current_pos=cur_pos_t, rot_mats=rot_mats)
@@ -757,14 +800,14 @@ class TtMolmo2Model(LightweightModule):
             )
 
         # ---- Warm-up (compile) pass — not traced ----
-        logits_warmup = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
+        logits_warmup = _forward_decode(tt["tok_id"], tt["cur_pos"])
         ttnn.deallocate(logits_warmup)
 
         # ---- Trace capture (all ops including embedding inside the trace) ----
         tok = trace_capture_run_begin()
         try:
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-            trace_logits = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
+            trace_logits = _forward_decode(tt["tok_id"], tt["cur_pos"])
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         finally:
             trace_capture_run_end(tok)
@@ -774,41 +817,27 @@ class TtMolmo2Model(LightweightModule):
     def _execute_decode_trace(self, token_id: int, position: int) -> int:
         """Update stable input buffers and execute the captured decode trace.
 
-        Uses copy_host_to_device_tensor (direct DMA into pre-allocated device buffers).
+        Only tok_id and cur_pos updated per step (8 bytes H2D total).
+        cos/sin are looked up inside the trace from pre-uploaded device tables.
+        Pre-allocated torch buffers (t_tok_id, t_cur_pos) are updated in-place;
+        from_torch(device=None) wraps without new allocation or mesh replication.
+
         Returns next token ID (int) via on-device argmax.
         """
         tt = self._decode_trace_tensors
-        mapper = tt["mapper"]
 
-        cos_p = self._cos_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        sin_p = self._sin_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        # In-place update of pre-allocated torch buffers (no new tensor allocation)
+        tt["t_tok_id"][0, 0, 0] = token_id
+        tt["t_cur_pos"][0] = position
+
+        # DMA into stable device buffers — single-buffer host (no mesh_mapper needed)
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                torch.tensor([[[token_id]]], dtype=torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=None,
-                mesh_mapper=mapper,
-            ),
+            ttnn.from_torch(tt["t_tok_id"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None),
             tt["tok_id"],
         )
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                torch.tensor([position], dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=None,
-                mesh_mapper=mapper,
-            ),
+            ttnn.from_torch(tt["t_cur_pos"], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None),
             tt["cur_pos"],
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(cos_p, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=mapper),
-            tt["cos"],
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(sin_p, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=mapper),
-            tt["sin"],
         )
 
         # Replay the captured trace — non-blocking so CPU can continue while device runs.
