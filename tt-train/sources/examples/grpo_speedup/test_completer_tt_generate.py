@@ -40,20 +40,13 @@ sys.path.insert(0, str(REPO_ROOT))
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+MODEL_ID = "TinyLlama/TinyLlama_v1.1_math_code"
 TTML_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
 
-SYSTEM_PROMPT = (
-    "You are an erudite cultural historian. Whenever the user asks about a "
-    "city, country, or landmark, respond with a long, deep-dive explanation "
-    "that uses rich, full sentences (never bullet points). Cover the "
-    "history, geography, architecture, culture, and modern significance of "
-    "the subject across several thorough paragraphs."
-)
-USER_PROMPT = "The capital of France is"
-MAX_NEW_TOKENS = 128
-TEMPERATURE = 0.0  # 0 == greedy
-MAX_SEQ_LEN = 2048
+PROMPT = "Q: A train travels at 60 mph for 2.5 hours. How far does it go?\nA:"
+MAX_NEW_TOKENS = 512
+TEMPERATURE = 0.7  # 0 == greedy
+MAX_SEQ_LEN = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +64,7 @@ def main() -> int:
     # tt-transformers expects fabric_config to be set BEFORE any mesh device
     # is opened. ``LlamaGRPOCompleter.setup_device`` opens the mesh inside
     # the constructor for single device without enabling fabric, so we do it
-    # here. FABRIC_2D matches ``pcc_hf_ttml_ttt.py``.
+    # here. FABRIC_2D matches ``gen_hf_ttt.py``.
     print("[test] set_fabric_config(FABRIC_2D)")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
@@ -94,19 +87,10 @@ def main() -> int:
     completer.load_weights(state_dict)
 
     tokenizer = completer.tokenizer
-    chat = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": USER_PROMPT},
-    ]
-    prompt_ids = tokenizer.apply_chat_template(
-        chat,
-        add_generation_prompt=True,
-        tokenize=True,
-    )
+    prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
 
-    print(f"[test] system: {SYSTEM_PROMPT!r}")
-    print(f"[test] user:   {USER_PROMPT!r}")
-    print(f"[test] chat-template prompt: {len(prompt_ids)} tokens")
+    print(f"[test] prompt: {PROMPT!r}")
+    print(f"[test] tokenized prompt: {len(prompt_ids)} tokens")
     print(f"[test] first 16 token ids: {prompt_ids[:16]}")
     print(f"[test] first 16 tokens:    {tokenizer.convert_ids_to_tokens(prompt_ids[:16])}")
 
