@@ -171,6 +171,18 @@ class Generator(WarmupForwardMixin):
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
 
+    def _reset_decode_traces(self):
+        """Release cached decode/sampling traces after a decode batch layout change."""
+        for trace_id in self.trace_ids_decode.values():
+            if trace_id is not None:
+                ttnn.release_trace(self.mesh_device, trace_id)
+        self.trace_ids_decode.clear()
+        self.trace_inputs_decode.clear()
+        self.trace_output_decode.clear()
+        sampling_module = getattr(self.model, "sampling", None)
+        if sampling_module is not None:
+            sampling_module.reset_trace()
+
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
         # Model-level CCL references may differ from layer-level ones (e.g. after the
@@ -1059,6 +1071,8 @@ class Generator(WarmupForwardMixin):
         # inputs and per-batch sampling state must be reloaded.
         if reset_batch:
             reset_inputs = True
+            if enable_trace:
+                self._reset_decode_traces()
         if self.prev_page_table is None:
             self.prev_page_table = (
                 page_table.clone()
@@ -1103,16 +1117,11 @@ class Generator(WarmupForwardMixin):
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
-                sampling_module.seed_manager.reset_seed(
-                    sampling_params.seed,
-                    list(range(self.model_args.max_batch_size)),
-                )
-                if active_seed_slots is not None:
-                    sampling_module.seed_manager.clear_inactive_slots(active_seed_slots)
-                    if had_prefill_sampling:
-                        # Prefill sampling already consumed the first RNG value
-                        # for these requests; keep decode on the next value.
-                        sampling_module.seed_manager.advance_rngs(active_seed_slots)
+                if not had_prefill_sampling:
+                    sampling_module.seed_manager.reset_seed(
+                        sampling_params.seed,
+                        list(range(self.model_args.max_batch_size)),
+                    )
         self.model.sampling.seed_manager.get_new_values(active_seed_slots)
 
         if tt_out_logits_saved is not None:
