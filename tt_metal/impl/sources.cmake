@@ -41,6 +41,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/float8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/int8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mx_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
@@ -57,6 +59,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptor_patching.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_rpc_client.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_service.cpp
@@ -87,6 +90,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/realtime_profiler_tracy_handler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp

@@ -92,8 +92,8 @@ def test_pipeline_inference(
         topology=topology,
         is_fsdp=is_fsdp,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        target_height=height,
-        target_width=width,
+        height=height,
+        width=width,
         num_frames=num_frames,
     )
 
@@ -138,10 +138,13 @@ def test_pipeline_inference(
         frames = frames[0]
         output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
         if int(ttnn.distributed_context_get_rank()) == 0:
-            from models.tt_dit.utils.video import export_to_video
+            try:
+                from models.tt_dit.utils.video import export_to_video
 
-            export_to_video(frames, output_filename, fps=16)
-            logger.info(f"Saved video to: {output_filename}")
+                export_to_video(frames, output_filename, fps=16)
+                logger.info(f"Saved video to: {output_filename}")
+            except ImportError:
+                logger.info("Could not export video - imageio_ffmpeg not available")
         else:
             logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 

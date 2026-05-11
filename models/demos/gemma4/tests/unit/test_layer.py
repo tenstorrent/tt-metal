@@ -15,7 +15,15 @@ import ttnn
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
+from ...tests.test_factory import (
+    PREFILL_BUCKETS,
+    TestFactory,
+    build_hf_prefill_mask,
+    compare_tensors,
+    get_pcc_threshold,
+    parametrize_batch_seq,
+    parametrize_mesh_with_fabric,
+)
 
 # ── Config / Structure Tests ───────────────────────────────────────────────
 
@@ -122,8 +130,8 @@ def _create_gemma4_model_args(hf_text_config):
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-@parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device):
+@parametrize_batch_seq(configs=[(1, L) for L in PREFILL_BUCKETS])
+def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds, request):
     """
     Full decoder layer PCC test: compares TT layer against HF reference.
 
@@ -168,12 +176,14 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device):
     # Input
     x_torch = torch.randn(1, seq_len, model_args.hidden_size, dtype=torch.float32)
 
-    # HF reference forward (must pass causal mask — HF defaults to bidirectional without it)
+    # HF reference forward — sliding layers need a sliding+causal mask so the
+    # reference matches TT's SDPA (which applies sliding_window_size).
     hf_rope = _create_hf_rope(hf_text_config, seq_len, layer_idx)
-    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    sliding = attn_cfg.sliding_window if attn_cfg.is_sliding else None
+    attn_mask = build_hf_prefill_mask(seq_len, sliding_window=sliding)
     with torch.no_grad():
         pli = _make_per_layer_input(hf_text_config, seq_len)
-        hf_output = hf_layer(x_torch, per_layer_input=pli, position_embeddings=hf_rope, attention_mask=causal_mask)
+        hf_output = hf_layer(x_torch, per_layer_input=pli, position_embeddings=hf_rope, attention_mask=attn_mask)
     logger.info(f"HF output shape: {hf_output.shape}, range: [{hf_output.min():.4f}, {hf_output.max():.4f}]")
 
     # TT forward
@@ -200,7 +210,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device):
         .float()
     )
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.95)
+    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"Full layer (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
 
 
@@ -209,7 +219,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device):
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_layer_forward_decode(layer_idx, mesh_device):
+def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
     """
     Full decoder layer decode test (seq_len=1, fully on device).
 
@@ -342,5 +352,5 @@ def test_layer_forward_decode(layer_idx, mesh_device):
     )
 
     # Relaxed threshold for decode: MoE router bf16 topk can pick different experts
-    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.90)
+    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"Full layer decode (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"

@@ -135,8 +135,10 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         cb_stats_buf.push_back(stats_tiles_cols);
-        uint32_t gamma_tile_count = 0;
-        uint32_t beta_tile_count = 0;
+        // In the 2D-core-grid path each core handles only a horizontal slice [y_offset, y_offset + Wt)
+        // of the gamma/beta tensors. The 1D path passes y_offset == 0 so this is a no-op there.
+        uint32_t gamma_tile_count = y_offset;
+        uint32_t beta_tile_count = y_offset;
         for (uint32_t i = 0; i < cb_iterations; i++) {
             for (uint32_t j = 0; j < cb_length; j++) {
                 cb_inp_buf.reserve_back(1);

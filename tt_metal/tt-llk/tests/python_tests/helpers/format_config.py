@@ -23,6 +23,12 @@ MXFP8_E4M3_MAX_NORMAL = float(
     ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
 )  # 448.0 from dtype
 
+# Safe minimum magnitudes for stimulus generation.
+# These sit well above the subnormal boundary so that quantised golden
+# values stay in the normal range of each FP8 element type.
+MXFP8_E4M3_MIN_MAGNITUDE = 0.0625  # 2^-4  (E4M3 min normal = 2^-6)
+MXFP8_E5M2_MIN_MAGNITUDE = 2.44e-4  # 2^-12 (E5M2 min normal = 2^-14)
+
 # ============================================================================
 # MX SrcS Slice L1 Layout
 # ============================================================================
@@ -172,6 +178,15 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+        }
+
+    def supports_l1_accumulation(self) -> bool:
+        """Checks if the data format supports L1 accumulation"""
+        return self in {
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
         }
 
 

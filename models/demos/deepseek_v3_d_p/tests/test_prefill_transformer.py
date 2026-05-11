@@ -14,7 +14,7 @@ Parametrized over:
 - use_pretrained: real pretrained weights from DeepSeek-R1-0528 vs random weights
 - input_source: "random", "json_prompts", or InfiniteBench subset (passkey, kv_retrieval, etc.)
 - pcc_validation: per-stage PCC check (via return_intermediates) vs shape-only smoke test
-- n_routed_experts / capacity_factor / gate_fallback_mode: MoE configurations
+- n_routed_experts / gate_fallback_mode: MoE configurations
 """
 
 import gc
@@ -94,24 +94,30 @@ SEQ_LEN_25K = 25 * 1024
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
-@pytest.mark.parametrize("isl_total", [SEQ_LEN_1K, SEQ_LEN_25K])
+@pytest.mark.parametrize(
+    "isl_total, dispatch_buffer_capacity_factor",
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+)
 @pytest.mark.parametrize(
     "num_layers",
     [
+        5,
         12,
         pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
+    ids=["5_layers", "12_layers", "61_layers"],
 )
 @pytest.mark.parametrize(
-    "n_routed_experts, capacity_factor, gate_fallback_mode",
+    "n_routed_experts, gate_fallback_mode",
     [
-        (64, 4, GateComputeMode.HOST_ALL),
-        (256, 32, GateComputeMode.HOST_ALL),
-        (256, 32, GateComputeMode.DEVICE),
+        (64, GateComputeMode.HOST_ALL),
+        (256, GateComputeMode.HOST_ALL),
+        (256, GateComputeMode.DEVICE),
+        (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e64_cf4_host", "e256_cf32_host", "e256_cf32_device"],
+    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
 )
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -147,9 +153,9 @@ def test_prefill_transformer(
     device_params,
     is_balanced,
     isl_total,
+    dispatch_buffer_capacity_factor,
     num_layers,
     n_routed_experts,
-    capacity_factor,
     gate_fallback_mode,
     num_links,
     topology,
@@ -198,7 +204,8 @@ def test_prefill_transformer(
     logger.info(
         f"isl_total={isl_total}, isl_per_chip={isl_per_chip}, "
         f"num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-        f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+        f"dispatch_buffer_capacity_factor={dispatch_buffer_capacity_factor}, "
+        f"gate_fallback_mode={gate_fallback_mode}, "
         f"input_source={input_source}, pcc_validation={pcc_validation}, "
         f"weights={weight_type}"
     )
@@ -325,7 +332,6 @@ def test_prefill_transformer(
                 topology=topology,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
-                capacity_factor=capacity_factor,
                 gate_fallback_mode=gate_fallback_mode,
             )
 
@@ -366,12 +372,12 @@ def test_prefill_transformer(
         seq_len=isl_total,
         is_balanced=is_balanced,
         padding_side=padding_side,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
-        capacity_factor=capacity_factor,
         weight_cache_path=effective_cache_path,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
@@ -467,7 +473,7 @@ def test_prefill_transformer(
             "isl_per_chip": isl_per_chip,
             "num_layers": num_layers,
             "n_routed_experts": n_routed_experts,
-            "capacity_factor": capacity_factor,
+            "dispatch_buffer_capacity_factor": dispatch_buffer_capacity_factor,
             "gate_fallback_mode": gate_fallback_mode,
             "use_pretrained": use_pretrained,
             "input_source": input_source,
@@ -622,7 +628,7 @@ def test_prefill_transformer(
             logger.success(
                 f"TtPrefillTransformer PCC test passed "
                 f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-                f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+                f"gate_fallback_mode={gate_fallback_mode}, "
                 f"weights={weight_type})"
             )
         else:
@@ -634,7 +640,7 @@ def test_prefill_transformer(
         logger.success(
             f"TtPrefillTransformer smoke test passed "
             f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-            f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+            f"gate_fallback_mode={gate_fallback_mode}, "
             f"weights={weight_type})"
         )
 
