@@ -38,10 +38,7 @@ ALWI void moreh_bin_chain() {
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
         Dst::D0>;
-    BinElt elt{};
-    elt.a_tile_idx = IdxA;
-    elt.b_tile_idx = IdxB;
-    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(1, BinElt{IdxA, IdxB}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
@@ -53,11 +50,9 @@ ALWI void moreh_copy_chain() {
         Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
         CopyTileReconfig::Input>;
-    CopyElt elt{};
-    elt.cb_tile_idx = Idx;
     eltwise_chain(
         1,
-        elt,
+        CopyElt{Idx},
         PackTile<
             CbOut,
             Dst::D0,
@@ -215,23 +210,20 @@ void kernel_main() {
         // cb_tmp1 = (1 - beta2)  (T1.5-01)
         {
             using namespace compute_kernel_lib;
-            auto bin_elt = BinaryFpu<
-                cb_one,
-                cb_scalar_args,
-                cb_tmp1,
-                BinaryFpuOp::Sub,
-                BroadcastDim::None,
-                BinaryDataFormatReconfig::InputAndOutput,
-                CopyTilePolicy::NoWaitNoPop,
-                CopyTilePolicy::NoWaitNoPop,
-                CbIndexMode::Pinned,
-                Dst::D0,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{};
-            bin_elt.a_tile_idx = first_tile;
-            bin_elt.b_tile_idx = beta2_tile;
             eltwise_chain(
                 onetile,
-                bin_elt,
+                BinaryFpu<
+                    cb_one,
+                    cb_scalar_args,
+                    cb_tmp1,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::InputAndOutput,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned,
+                    Dst::D0,
+                    /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{first_tile, beta2_tile},
                 PackTile<
                     cb_tmp1,
                     Dst::D0,
