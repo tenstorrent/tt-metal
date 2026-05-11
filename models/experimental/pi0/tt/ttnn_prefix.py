@@ -80,34 +80,48 @@ class PrefixEmbeddingTTNN:
         if self.embed_image_fn is None:
             raise RuntimeError("embed_image_fn not set")
 
-        image_embs = []
-        expanded_masks = []
+        image_embs: List[ttnn.Tensor] = []
+        expanded_masks: List[ttnn.Tensor] = []
 
-        for img, mask in zip(images, img_masks):
-            # embed_image_fn handles PyTorch->TTNN conversion internally
-            img_emb = self.embed_image_fn(img)
-            image_embs.append(img_emb)
+        # OPTIMIZATION: when multiple images share the same shape, run SigLIP
+        # in a single bs=N pass instead of N sequential bs=1 calls. Halves
+        # the kernel dispatch count for the vision tower.
+        same_shape = (
+            len(images) > 1
+            and isinstance(images[0], ttnn.Tensor)
+            and all(isinstance(im, ttnn.Tensor) and tuple(im.shape) == tuple(images[0].shape) for im in images)
+        )
+        if same_shape:
+            stacked = ttnn.concat(images, dim=0)  # (N, C, H, W)
+            all_embs = self.embed_image_fn(stacked)  # (N, num_tokens, vlm_hidden)
+            ttnn.deallocate(stacked)
+            num_tokens = all_embs.shape[1]
+            hidden = all_embs.shape[2]
+            for i in range(len(images)):
+                img_emb = ttnn.slice(all_embs, [i, 0, 0], [i + 1, num_tokens, hidden])
+                image_embs.append(img_emb)
+            ttnn.deallocate(all_embs)
+        else:
+            for img in images:
+                image_embs.append(self.embed_image_fn(img))
 
-            # Expand mask - convert from PyTorch if needed
+        # Build expanded masks (mask handling unchanged — masks may be per-image)
+        for img_emb, mask in zip(image_embs, img_masks):
             shape = img_emb.shape
             batch_size, num_tokens = shape[0], shape[1]
 
             if isinstance(mask, torch.Tensor):
-                # Convert PyTorch mask to TTNN, reshape on device (no torch.unsqueeze)
                 mask_ttnn = ttnn.from_torch(
-                    mask.float(),  # (batch_size,)
+                    mask.float(),
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-                # Reshape to 2D and convert to TILE on device
                 mask_ttnn = ttnn.reshape(mask_ttnn, (batch_size, 1))
                 mask_ttnn = ttnn.to_layout(mask_ttnn, ttnn.TILE_LAYOUT)
-                # Expand on device using ttnn.repeat (no round-trip!)
                 expanded_mask = ttnn.repeat(mask_ttnn, (1, num_tokens), memory_config=ttnn.L1_MEMORY_CONFIG)
             else:
-                # Already TTNN - expand directly on device (no round-trip!)
                 mask_reshaped = ttnn.reshape(mask, (batch_size, 1))
                 expanded_mask = ttnn.repeat(mask_reshaped, (1, num_tokens), memory_config=ttnn.L1_MEMORY_CONFIG)
 

@@ -50,11 +50,19 @@ def sdpa_prefill_chunk_sizes(
     only for long sequences (>= 2048), otherwise 64 — then cap by tile-aligned lengths.
     """
     longest = max(seq_len_q, seq_len_kv)
-    base = 256 if longest >= 2048 else 64
+    # For pi0 the expert cross-attention has kv=595, prefix self-attn has kv=544
+    # — both fall in the 512-2048 band where a larger k_chunk drastically reduces
+    # the number of SDPA chunks (e.g. 595 / 64 = 10 chunks vs 595 / 256 = 3).
+    if longest >= 2048:
+        base_q, base_k = 256, 256
+    elif longest >= 512:
+        base_q, base_k = 64, 128
+    else:
+        base_q, base_k = 64, 64
     q_aligned = ((seq_len_q + tile - 1) // tile) * tile if seq_len_q > 0 else tile
     k_aligned = ((seq_len_kv + tile - 1) // tile) * tile if seq_len_kv > 0 else tile
-    q_chunk = min(base, q_aligned)
-    k_chunk = min(base, k_aligned)
+    q_chunk = min(base_q, q_aligned)
+    k_chunk = min(base_k, k_aligned)
     return max(q_chunk, tile), max(k_chunk, tile)
 
 
