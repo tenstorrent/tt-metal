@@ -13,9 +13,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
 
-    DPRINT << "reader_dropout_interleaved_start_id: " << "src_addr: " << src_addr << " num_tiles: " << num_tiles
-           << " start_id: " << start_id << " cb_id_in0: " << cb_id_in0 << ENDL();
-
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const auto s = TensorAccessor(src_args, src_addr);

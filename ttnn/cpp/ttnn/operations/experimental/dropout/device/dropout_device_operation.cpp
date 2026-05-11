@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 using namespace tt::tt_metal;
 

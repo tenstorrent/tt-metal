@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::experimental::prim {
 namespace {
@@ -35,6 +36,7 @@ constexpr uint32_t kNumOutputTiles = 2;
 // Overrides the seed with a per-device seed by using the device ID as an offset.
 DropoutParams override_per_device_seed(
     const DropoutParams& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
+    py_log1_cout(mesh_coord);
     DropoutParams args_with_per_device_seed = args;
     args_with_per_device_seed.seed += input_tensor.device()->get_device(mesh_coord)->id();
     return args_with_per_device_seed;
@@ -138,6 +140,12 @@ inline void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2,
     uint32_t seed) {
+    py_log_cout(
+        "num_cores:{} num_cores_y:{} num_tiles_per_core_group_1:{} num_tiles_per_core_group_2:{}",
+        num_cores,
+        num_cores_y,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2);
     using namespace tt::tt_metal;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -317,6 +325,7 @@ void DropoutProgramFactory::override_runtime_arguments(
     auto& group_2_runtime_args =
         core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, dropout_group_2_kernel);
 
+    py_log_here();
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -348,10 +357,12 @@ DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::c
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const DropoutInputs& tensor_args,
     Tensor& output) {
+    py_log_here();
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    py_log_here();
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
             const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
@@ -369,6 +380,7 @@ void DropoutMeshWorkloadFactory::override_runtime_arguments(
     const DropoutParams& args,
     const DropoutInputs& tensor_args,
     Tensor& tensor_return_value) {
+    py_log_here();
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {

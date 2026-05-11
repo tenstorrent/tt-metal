@@ -8,7 +8,6 @@
 #include "api/compute/eltwise_unary/dropout.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
@@ -17,10 +16,6 @@ void kernel_main() {
     uint32_t int_scale_factor = get_compile_time_arg_val(3);
 
     uint32_t seed = get_arg_val<uint32_t>(0);
-
-    DPRINT << "dropout_kernel: " << "per_core_block_cnt: " << per_core_block_cnt
-           << " per_core_block_dim: " << per_core_block_dim << " int_probability: " << int_probability
-           << " int_scale_factor: " << int_scale_factor << " seed: " << seed << ENDL();
 
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
     dropout_kernel_init(seed);

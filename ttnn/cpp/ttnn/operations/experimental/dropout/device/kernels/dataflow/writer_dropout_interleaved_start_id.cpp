@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -12,8 +11,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    DPRINT << "writer_dropout_interleaved_start_id: " << "dst_addr: " << dst_addr << " num_tiles: " << num_tiles
-           << " start_id: " << start_id << " cb_id_out: " << cb_id_out << ENDL();
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_tiles);

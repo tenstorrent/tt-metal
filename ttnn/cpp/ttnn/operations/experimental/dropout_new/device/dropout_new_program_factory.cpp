@@ -245,6 +245,9 @@ tt::tt_metal::ProgramDescriptor DropoutNewProgramFactory::create_descriptor(
         .reader = create_reader_kernel(all_cores, std::move(reader_compile_args), kReaderKernelPath),
         .writer = create_writer_kernel(all_cores, std::move(writer_compile_args), kWriterKernelPath),
     };
+    // Tag kernels built for dropout_new so device-side debug can distinguish this program from legacy dropout.
+    kernels.reader.defines.emplace_back("DEBUG_IS_NEW_RUN", "");
+    kernels.writer.defines.emplace_back("DEBUG_IS_NEW_RUN", "");
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for dropout
@@ -266,6 +269,7 @@ tt::tt_metal::ProgramDescriptor DropoutNewProgramFactory::create_descriptor(
 
     kernels.compute_group_1 =
         create_compute_kernel(core_group_1, std::move(compute_group_1_args), kComputeKernelPath, math_approx_mode);
+    kernels.compute_group_1.defines.emplace_back("DEBUG_IS_NEW_RUN", "");
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -278,6 +282,7 @@ tt::tt_metal::ProgramDescriptor DropoutNewProgramFactory::create_descriptor(
 
         kernels.compute_group_2 =
             create_compute_kernel(core_group_2, std::move(compute_group_2_args), kComputeKernelPath, math_approx_mode);
+        kernels.compute_group_2->defines.emplace_back("DEBUG_IS_NEW_RUN", "");
     }
 
     // -------------------------------------------------------------------------
@@ -313,6 +318,7 @@ tt::tt_metal::ProgramDescriptor DropoutNewMeshWorkloadFactory::create_descriptor
     const DropoutNewInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    py_log_here();
     const auto effective_args = override_per_device_seed(args, mesh_dispatch_coordinate, tensor_args.input);
     return DropoutNewProgramFactory::create_descriptor(effective_args, tensor_args, output);
 }
