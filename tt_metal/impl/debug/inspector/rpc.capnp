@@ -43,6 +43,7 @@ struct MeshDeviceData {
     shape @2 :List(UInt32);
     parentMeshId @3 :Int64;  # -1 if no parent
     initialized @4 :Bool;
+    programCacheEnabled @5 :Bool;
 }
 
 struct MeshCoordinate {
@@ -166,6 +167,20 @@ struct ConfigurationEntry {
     scope @2 :ConfigurationScope;
 }
 
+struct MappedDevice {
+    isLocal @0 :Bool;
+    localChipId @1 :UInt32;   # valid iff isLocal
+    fabricMeshId @2 :UInt32;  # global identity (always valid)
+    fabricChipId @3 :UInt32;
+}
+
+struct SystemMeshData {
+    globalShape @0 :List(UInt32);          # Global mesh shape across all hosts
+    localShape @1 :List(UInt32);           # This host's local mesh shape
+    localOffset @2 :List(UInt32);          # Where this host's slice sits in the global mesh
+    mappedDevices @3 :List(MappedDevice);  # Row-major over globalShape
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -202,4 +217,7 @@ interface Inspector {
 
     # Get configuration data (environment variables, runtime options, TTNN config)
     getConfiguration @10 () -> (entries :List(ConfigurationEntry));
+
+    # Get the host's SystemMesh shape (global + local).
+    getSystemMesh @11 () -> (systemMesh :SystemMeshData);
 }

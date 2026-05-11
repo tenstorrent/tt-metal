@@ -387,3 +387,78 @@ jobs:
       tier: "3"
 
   # Note: Tier 3 sweep tests not yet defined — no sweep entries with tier 3 exist in models_sweep_tests.yaml
+
+  # ── AI run summary ────────────────────────────────────────────────
+  # Aggregates per-leg ai-job-summary artifacts into one run-level report.
+  ai-run-summary:
+    needs:
+      - t1-unit-tests
+      - t1-e2e-tests
+      - t1-sweep-tests
+      - t2-unit-tests
+      - t2-e2e-tests
+      - t2-sweep-tests
+      - t3-unit-tests
+      - t3-e2e-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Aggregate child matrices and results
+        id: aggregate
+        env:
+          # toJSON(needs) gives one object keyed by child workflow name,
+          # each with `result` and `outputs.matrix`. Using it here keeps
+          # the aggregation data-driven — adding/removing a tier or
+          # test-type only requires updating the `needs:` list above.
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # Union of every child's matrix output. Skipped children expose
+          # null or "" for outputs.matrix; both must be filtered before
+          # `fromjson` (which would otherwise throw).
+          EXPECTED=$(jq -cn --argjson n "$NEEDS" '
+            [$n[] | .outputs.matrix | select(. != null and . != "") | fromjson] | add // []')
+          echo "expected-jobs=$EXPECTED" >> "$GITHUB_OUTPUT"
+          echo "Merged $(echo "$EXPECTED" | jq 'length') expected legs"
+
+          # Most-severe-wins precedence: failure > cancelled > success > skipped.
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $r |
+            if   any($r[]; . == "failure")   then "failure"
+            elif any($r[]; . == "cancelled") then "cancelled"
+            elif any($r[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "Combined run-result: $RESULT"
+
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.aggregate.outputs.expected-jobs }}
+          run-result: ${{ steps.aggregate.outputs.run-result }}
+
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

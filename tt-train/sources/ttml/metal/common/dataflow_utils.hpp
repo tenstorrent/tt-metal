@@ -128,6 +128,22 @@ inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, u
     }
 }
 
+/**
+ * Zero-fill an L1 region asynchronously by issuing NoC reads from the hardware zero region
+ * (`MEM_ZEROS_BASE`).
+ *
+ * Caller must call `noc_async_read_barrier()` before consuming `write_addr`.
+ */
+inline void fill_zeros_async(uint32_t write_addr, uint32_t bytes) {
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    while (bytes > 0U) {
+        const uint32_t read_size = bytes > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes -= read_size;
+    }
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
 void generate_tile_with_bfloat16_value(const uint32_t cb_id, const uint16_t bf16_value) {

@@ -177,7 +177,7 @@ def test_binary_max_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
+    tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     output_tensor = ttnn.to_torch(tt_result).to(torch.int32)
     assert torch.equal(golden, output_tensor)
 
@@ -481,7 +481,7 @@ def test_binary_max_fp32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
+    tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     comp_pass = compare_equal([tt_result], [golden])
     assert comp_pass
 
@@ -529,7 +529,7 @@ def test_binary_max_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
+    tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     result = ttnn.to_torch(tt_result)
     assert_with_pcc(golden, result, 0.999)
 

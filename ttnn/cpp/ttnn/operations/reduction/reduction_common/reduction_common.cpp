@@ -72,6 +72,14 @@ ttnn::SmallVector<int> generate_reduce_dim(
     }
 
     std::sort(dim.begin(), dim.end());
+    for (size_t i = 1; i < dim.size(); i++) {
+        TT_FATAL(
+            dim[i] != dim[i - 1],
+            "reduce dim list contains a duplicate axis after sorting (indices {} and {}, value {})",
+            i - 1,
+            i,
+            dim[i]);
+    }
     return dim;
 }
 
