@@ -326,6 +326,9 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         std::unordered_map<std::string, uint32_t> named_compile_args(
             kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
+        std::vector<std::filesystem::path> compiler_include_paths(
+            kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
+
         auto config = std::visit(
             tt::stl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -333,14 +336,16 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
                     -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -352,6 +357,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
@@ -367,6 +373,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
             },

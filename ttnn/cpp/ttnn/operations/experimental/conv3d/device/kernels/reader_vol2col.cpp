@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
 // Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
 // Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
@@ -160,6 +162,28 @@ struct ChunkWriter {
     }
 };
 
+template <uint32_t C_in_block_bytes>
+struct CoalescedRowLayout {
+    uint32_t slot_chunk_offset[NUM_DRAM_BANKS];
+    uint32_t slot_chunk_pages[NUM_DRAM_BANKS];
+
+    FORCE_INLINE void compute(uint32_t W_shard_cur) {
+        uint32_t offset = 0;
+        for (uint32_t slot = 0; slot < NUM_DRAM_BANKS; slot++) {
+            slot_chunk_offset[slot] = offset;
+            const uint32_t pages = slot < W_shard_cur ? ((W_shard_cur - 1 - slot) / NUM_DRAM_BANKS) + 1 : 0;
+            slot_chunk_pages[slot] = pages;
+            offset += pages * C_in_block_bytes;
+        }
+    }
+
+    FORCE_INLINE uint32_t offset_for_w(uint32_t w_natural) const {
+        const uint32_t slot = w_natural % NUM_DRAM_BANKS;
+        const uint32_t local_idx = w_natural / NUM_DRAM_BANKS;
+        return slot_chunk_offset[slot] + local_idx * C_in_block_bytes;
+    }
+};
+
 // Copy one (t, h) row of patches from the L1 shard into the vol2col CB.
 // Iterates over w positions in [w_block, w_block_end), extracting kT×kH×kW patches
 // via one_packet NOC reads.  Calls chunk.advance() after each patch.
@@ -237,6 +261,20 @@ void shift_retained_w_columns(
 // Gather rows from DRAM into the L1 shard buffer.
 // When check_padding=false, all positions are known to be in-bounds — skip per-position
 // boundary checks and clamp/zeroPad logic (~3-6 RISC-V cycles saved per position).
+//
+// Trid pipeline: each issued read is tagged with `trid = (issued % N_TRIDS) + 1`.  Once
+// `issued >= N_TRIDS`, issuing read `i` first blocks on trid `((i - N_TRIDS) % N_TRIDS) + 1`
+// to free that slot.  After the loop, drain by barriering on each in-flight trid.  This
+// bounds NoC outstanding reads to N_TRIDS and replaces the single trailing barrier with
+// per-trid waits so later reads continue while earlier ones drain.
+//
+// Per-call fast path: when this gather call has fewer than `kGatherFastPathReadCutoff`
+// reads it issues untagged + single trailing barrier (the original behavior).  In that
+// regime the ring overhead would dominate.  Note this is independent from the host gate:
+// the host decides whether N_TRIDS is non-zero for the whole shape; this decides whether
+// any individual call (e.g. a small slice along the h boundary) skips the ring locally.
+// trid is reset to 0 before returning so callers using untagged reads see clean cmd_buf
+// state.
 template <
     uint32_t C_in_block_bytes,
     bool is_padding_zeros,
@@ -248,6 +286,7 @@ template <
     uint32_t H_in_W_in,
     uint32_t in_row_size_bytes,
     bool check_padding,
+    uint32_t N_TRIDS,
     typename Reader,
     typename ShardCB>
 void gather_rows_to_shard(
@@ -264,6 +303,29 @@ void gather_rows_to_shard(
     int32_t w_shard_start,
     uint32_t w_col_start,
     uint32_t w_count) {
+    // N_TRIDS == 0 is a compile-time sentinel: the host-side classifier disabled the trid
+    // ring for this shape (compute-bound regime — see conv3d_program_factory.cpp).  In that
+    // case all ring code is constexpr-elided and the function reduces to issue-all + single
+    // trailing barrier.  When non-zero, N_TRIDS is always conv3d_gather_tuning::
+    // kGatherTridDepth (the host wires this in); the upper bound matches the underlying NoC
+    // trid-id range.
+    static_assert(
+        N_TRIDS == 0 || N_TRIDS == conv3d_gather_tuning::kGatherTridDepthLow ||
+        N_TRIDS == conv3d_gather_tuning::kGatherTridDepthHigh);
+    static_assert(conv3d_gather_tuning::kGatherTridDepthHigh <= 8, "trid id range exceeded");
+    auto trid_for = [](uint32_t i) -> uint32_t {
+        if constexpr (N_TRIDS == 0) {
+            return 0;  // unused
+        } else {
+            return (i % N_TRIDS) + 1;
+        }
+    };
+    // Per-call fast path: if this call won't fill at least two ring cycles, the
+    // post-loop drain of N_TRIDS barriers is wasted.  Floor at 2 * N_TRIDS reads.
+    constexpr uint32_t kGatherFastPathReadCutoff = 2 * N_TRIDS;
+    const uint32_t total_reads_estimate = T_shard_cur * (h_end - h_start) * w_count;
+    [[maybe_unused]] const bool use_ring = (N_TRIDS != 0) && (total_reads_estimate >= kGatherFastPathReadCutoff);
+    [[maybe_unused]] uint32_t issued = 0;
     for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
         const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
         [[maybe_unused]] const bool t_outside = check_padding && (t_in < 0 || t_in >= static_cast<int32_t>(T_in));
@@ -278,6 +340,18 @@ void gather_rows_to_shard(
                 (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_col_start) * C_in_block_bytes;
             for (uint32_t w_idx = 0; w_idx < w_count; w_idx++) {
                 const int32_t w_in = w_shard_start + static_cast<int32_t>(w_col_start + w_idx);
+                // Trid ring: free this slot if it's been used N_TRIDS reads ago, then tag the
+                // upcoming read with this iteration's trid.  Both N_TRIDS==0 (host-disabled)
+                // and use_ring=false (small-burst fallback) bypass; the constexpr branch keeps
+                // the disabled binary clean.
+                if constexpr (N_TRIDS != 0) {
+                    if (use_ring) {
+                        if (issued >= N_TRIDS) {
+                            experimental::async_read_barrier_with_trid(noc, trid_for(issued - N_TRIDS));
+                        }
+                        experimental::set_read_trid(noc, trid_for(issued));
+                    }
+                }
                 if constexpr (check_padding) {
                     const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
                     const bool in_padding = t_outside || h_outside || w_outside;
@@ -326,41 +400,241 @@ void gather_rows_to_shard(
                         shard_offset,
                         C_in_block_bytes);
                 }
+                if constexpr (N_TRIDS != 0) {
+                    if (use_ring) {
+                        issued++;
+                    }
+                }
                 shard_offset += C_in_block_bytes;
             }
         }
     }
-    noc.async_read_barrier();
+    if constexpr (N_TRIDS != 0) {
+        if (use_ring) {
+            // Drain the in-flight trids in issue order.  After the loop, the most recently
+            // issued read used trid_for(issued-1), and the oldest still in flight used
+            // trid_for(issued - to_drain).
+            const uint32_t to_drain = issued < N_TRIDS ? issued : N_TRIDS;
+            for (uint32_t k = 0; k < to_drain; k++) {
+                experimental::async_read_barrier_with_trid(noc, trid_for(issued - to_drain + k));
+            }
+            // Restore untagged state so vol2col / pre_zero / shift reads (which use trid 0)
+            // don't get accounted against a stale per-trid counter.
+            experimental::set_read_trid(noc, 0);
+        } else {
+            // Small-burst fallback: ring code never set a trid this call, so no reset needed.
+            noc.async_read_barrier();
+        }
+    } else {
+        // Host-disabled: ring code is fully constexpr-elided, trid was never touched.
+        noc.async_read_barrier();
+    }
 }
 
-// Dispatch to fast or slow gather based on runtime bounds check.
-#define GATHER_ROWS(all_in_bounds, ...)  \
-    do {                                 \
-        if (all_in_bounds)               \
-            gather_rows_to_shard<        \
-                C_in_block_bytes,        \
-                is_padding_zeros,        \
-                H_shard_max_W_shard_max, \
-                W_shard_max,             \
-                T_in,                    \
-                H_in,                    \
-                W_in,                    \
-                H_in_W_in,               \
-                in_row_size_bytes,       \
-                false>(__VA_ARGS__);     \
-        else                             \
-            gather_rows_to_shard<        \
-                C_in_block_bytes,        \
-                is_padding_zeros,        \
-                H_shard_max_W_shard_max, \
-                W_shard_max,             \
-                T_in,                    \
-                H_in,                    \
-                W_in,                    \
-                H_in_W_in,               \
-                in_row_size_bytes,       \
-                true>(__VA_ARGS__);      \
-    } while (0)
+// Coalesced shard gather reads each logical row into scratch in bank-major chunks, then
+// deinterleaves scratch back into the natural shard layout with local L1->L1 copies.  The
+// extra L1 traffic is intentional: perf sweeps showed the win comes from replacing
+// many small DRAM reads with larger per-bank bursts and then paying a local reorder pass.
+template <
+    uint32_t C_in_block_bytes,
+    uint32_t H_shard_max_W_shard_max,
+    uint32_t W_shard_max,
+    uint32_t W_in,
+    uint32_t H_in_W_in,
+    uint32_t GatherTrids,
+    typename Reader,
+    typename ShardCB>
+void gather_rows_to_shard_coalesced(
+    experimental::Noc noc,
+    const Reader& in_reader,
+    const ShardCB& shard_cb,
+    uint32_t shard_l1_base,
+    uint32_t scratch_row_offset,
+    uint32_t batch_page_base,
+    [[maybe_unused]] uint32_t c_in_offset_bytes,
+    int32_t t_shard_start,
+    uint32_t T_shard_cur,
+    int32_t h_shard_start,
+    uint32_t h_start,
+    uint32_t h_end,
+    int32_t w_shard_start,
+    uint32_t w_col_start,
+    uint32_t w_count,
+    uint32_t scratch_rows) {
+    static_assert(Reader::DSpec::is_interleaved && Reader::DSpec::is_dram);
+    static_assert(GatherTrids == 0, "Coalesced shard reads require gather trid ring disabled");
+    ASSERT(c_in_offset_bytes == 0);
+    ASSERT(h_end > h_start);
+    ASSERT(w_count > NUM_DRAM_BANKS);
+    ASSERT(scratch_rows > 0);
+
+    CoalescedRowLayout<C_in_block_bytes> row_layout;
+    row_layout.compute(w_count);
+
+    const uint32_t h_count = h_end - h_start;
+    const uint32_t total_rows = T_shard_cur * h_count;
+    const uint32_t scratch_row_bytes = W_shard_max * C_in_block_bytes;
+
+    for (uint32_t row_start = 0; row_start < total_rows; row_start += scratch_rows) {
+        const uint32_t rows_cur = std::min(scratch_rows, total_rows - row_start);
+
+        for (uint32_t scratch_row = 0; scratch_row < rows_cur; scratch_row++) {
+            const uint32_t row_linear = row_start + scratch_row;
+            const uint32_t t_local = row_linear / h_count;
+            const uint32_t h_local = h_start + row_linear - t_local * h_count;
+            const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
+            const int32_t h_in = h_shard_start + static_cast<int32_t>(h_local);
+            const uint32_t page_base = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
+                                       static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_shard_start);
+            const uint32_t scratch_base = scratch_row_offset + scratch_row * scratch_row_bytes;
+
+            for (uint32_t slot = 0; slot < NUM_DRAM_BANKS; slot++) {
+                const uint32_t pages = row_layout.slot_chunk_pages[slot];
+                if (pages == 0) {
+                    continue;
+                }
+                noc.async_read(
+                    in_reader,
+                    shard_cb,
+                    pages * C_in_block_bytes,
+                    {.page_id = page_base + w_col_start + slot, .offset_bytes = 0},
+                    {.offset_bytes = scratch_base + row_layout.slot_chunk_offset[slot]});
+            }
+        }
+        noc.async_read_barrier();
+
+        if constexpr (C_in_block_bytes <= NOC_MAX_BURST_SIZE) {
+            experimental::set_read_state<C_in_block_bytes>(noc, shard_l1_base + scratch_row_offset);
+        }
+
+        for (uint32_t scratch_row = 0; scratch_row < rows_cur; scratch_row++) {
+            const uint32_t row_linear = row_start + scratch_row;
+            const uint32_t t_local = row_linear / h_count;
+            const uint32_t h_local = h_start + row_linear - t_local * h_count;
+            const uint32_t row_base = (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) * C_in_block_bytes;
+            const uint32_t scratch_base = scratch_row_offset + scratch_row * scratch_row_bytes;
+            for (uint32_t w_idx = 0; w_idx < w_count; w_idx++) {
+                const uint32_t src_l1_addr = shard_l1_base + scratch_base + row_layout.offset_for_w(w_idx);
+                const uint32_t dst_offset = row_base + (w_col_start + w_idx) * C_in_block_bytes;
+                if constexpr (C_in_block_bytes <= NOC_MAX_BURST_SIZE) {
+                    experimental::read_with_state(noc, shard_cb, src_l1_addr, {.offset_bytes = dst_offset});
+                } else {
+                    experimental::UnicastEndpoint self_ep;
+                    noc.async_read(
+                        self_ep,
+                        shard_cb,
+                        C_in_block_bytes,
+                        experimental::local_addr(src_l1_addr, noc.get_noc_id()),
+                        {.offset_bytes = dst_offset});
+                }
+            }
+        }
+        noc.async_read_barrier();
+    }
+}
+
+// Dispatch to coalesced, in-bounds, or padded gather from one call site shape. This keeps the
+// first-W incremental gather and the later H-incremental gather wired identically.
+template <
+    uint32_t C_in_block_bytes,
+    bool is_padding_zeros,
+    uint32_t H_shard_max_W_shard_max,
+    uint32_t W_shard_max,
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    uint32_t H_in_W_in,
+    uint32_t in_row_size_bytes,
+    uint32_t GatherTrids,
+    bool EnableCoalescedShardReads,
+    typename Reader,
+    typename ShardCB>
+void gather_rows_to_shard_selected(
+    experimental::Noc noc,
+    const Reader& in_reader,
+    const ShardCB& shard_cb,
+    [[maybe_unused]] uint32_t shard_l1_base,
+    [[maybe_unused]] uint32_t coalesced_scratch_offset,
+    bool all_in_bounds,
+    [[maybe_unused]] bool use_coalesced,
+    uint32_t batch_page_base,
+    uint32_t c_in_offset_bytes,
+    int32_t t_shard_start,
+    uint32_t T_shard_cur,
+    int32_t h_shard_start,
+    uint32_t h_start,
+    uint32_t h_end,
+    int32_t w_shard_start,
+    uint32_t w_col_start,
+    uint32_t w_count,
+    [[maybe_unused]] uint32_t coalesced_scratch_rows) {
+    if constexpr (EnableCoalescedShardReads) {
+        if (use_coalesced) {
+            ASSERT(all_in_bounds);
+            gather_rows_to_shard_coalesced<
+                C_in_block_bytes,
+                H_shard_max_W_shard_max,
+                W_shard_max,
+                W_in,
+                H_in_W_in,
+                GatherTrids>(
+                noc,
+                in_reader,
+                shard_cb,
+                shard_l1_base,
+                coalesced_scratch_offset,
+                batch_page_base,
+                c_in_offset_bytes,
+                t_shard_start,
+                T_shard_cur,
+                h_shard_start,
+                h_start,
+                h_end,
+                w_shard_start,
+                w_col_start,
+                w_count,
+                coalesced_scratch_rows);
+            return;
+        }
+    }
+
+    // check_padding is a template arg on gather_rows_to_shard (compile-time elision of the
+    // padding bounds-check + clamp/zero-pad branch in the hot inner loop), so it must be
+    // dispatched as a constant. Generic lambda + bool-constant lifts the runtime
+    // `all_in_bounds` to a compile-time value once and shares the call site.
+    const auto do_gather = [&](auto check_padding_v) {
+        gather_rows_to_shard<
+            C_in_block_bytes,
+            is_padding_zeros,
+            H_shard_max_W_shard_max,
+            W_shard_max,
+            T_in,
+            H_in,
+            W_in,
+            H_in_W_in,
+            in_row_size_bytes,
+            decltype(check_padding_v)::value,
+            GatherTrids>(
+            noc,
+            in_reader,
+            shard_cb,
+            batch_page_base,
+            c_in_offset_bytes,
+            t_shard_start,
+            T_shard_cur,
+            h_shard_start,
+            h_start,
+            h_end,
+            w_shard_start,
+            w_col_start,
+            w_count);
+    };
+    if (all_in_bounds) {
+        do_gather(std::false_type{});
+    } else {
+        do_gather(std::true_type{});
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
@@ -402,6 +676,10 @@ void kernel_main() {
 
     // Padding bytes to append after each patch row to reach tile-aligned CB page width
     constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
+    // Trid-ring depth for gather_rows_to_shard.  See plan in conv3d_gather_trid_pipeline_plan.md.
+    constexpr uint32_t gather_trids = get_compile_time_arg_val(36);
+    constexpr bool enable_coalesced_shard_reads = get_compile_time_arg_val(37) == 1;
+    constexpr uint32_t coalesced_scratch_rows = get_compile_time_arg_val(38);
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
     // Load input/output addresses and range parameters
@@ -419,7 +697,7 @@ void kernel_main() {
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<36>();
+    constexpr auto in_args = TensorAccessorArgs<39>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
 
     experimental::Noc noc;
@@ -438,7 +716,9 @@ void kernel_main() {
     uint32_t shard_l1_base = 0;
     if constexpr (use_l1_prefetch) {
         constexpr uint32_t shard_total = T_shard_max * H_shard_max_W_shard_max;
-        shard_cb.reserve_back(shard_total);
+        constexpr uint32_t coalesced_scratch_pages =
+            enable_coalesced_shard_reads ? coalesced_scratch_rows * W_shard_max : 0;
+        shard_cb.reserve_back(shard_total + coalesced_scratch_pages);
         shard_l1_base = shard_cb.get_write_ptr();
     }
 
@@ -483,6 +763,10 @@ void kernel_main() {
                                 const bool shard_all_in_bounds = th_in_bounds && w_shard_start >= 0 &&
                                                                  (w_shard_start + static_cast<int32_t>(W_shard_cur) -
                                                                   1) < static_cast<int32_t>(W_in);
+                                const bool coalesce_this_block =
+                                    enable_coalesced_shard_reads && shard_all_in_bounds && W_shard_cur > NUM_DRAM_BANKS;
+                                constexpr uint32_t coalesced_scratch_offset =
+                                    T_shard_max * H_shard_max_W_shard_max * C_in_block_bytes;
 
                                 // --- SLIDING WINDOW W + H-ROW INTERLEAVED GATHER ---
                                 // For w_block > first: shift retained kW-1 columns to shard start,
@@ -509,11 +793,25 @@ void kernel_main() {
 
                                     // Gather new W columns for existing h-rows
                                     const uint32_t new_w_cols = W_shard_cur - overlap_w;
-                                    GATHER_ROWS(
-                                        shard_all_in_bounds,
+                                    gather_rows_to_shard_selected<
+                                        C_in_block_bytes,
+                                        is_padding_zeros,
+                                        H_shard_max_W_shard_max,
+                                        W_shard_max,
+                                        T_in,
+                                        H_in,
+                                        W_in,
+                                        H_in_W_in,
+                                        in_row_size_bytes,
+                                        gather_trids,
+                                        enable_coalesced_shard_reads>(
                                         noc,
                                         in_reader,
                                         shard_cb,
+                                        shard_l1_base,
+                                        coalesced_scratch_offset,
+                                        shard_all_in_bounds,
+                                        shard_all_in_bounds && new_w_cols > NUM_DRAM_BANKS,
                                         batch_page_base,
                                         c_in_offset_bytes,
                                         t_shard_start,
@@ -523,7 +821,8 @@ void kernel_main() {
                                         h_rows_gathered,
                                         w_shard_start,
                                         overlap_w,
-                                        new_w_cols);
+                                        new_w_cols,
+                                        coalesced_scratch_rows);
                                 }
 
                                 ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk(noc);
@@ -537,11 +836,25 @@ void kernel_main() {
                                         // Gather shard rows needed for this output h (incremental)
                                         const uint32_t h_needed = h_base + kH;
                                         if (h_needed > h_rows_gathered) {
-                                            GATHER_ROWS(
-                                                shard_all_in_bounds,
+                                            gather_rows_to_shard_selected<
+                                                C_in_block_bytes,
+                                                is_padding_zeros,
+                                                H_shard_max_W_shard_max,
+                                                W_shard_max,
+                                                T_in,
+                                                H_in,
+                                                W_in,
+                                                H_in_W_in,
+                                                in_row_size_bytes,
+                                                gather_trids,
+                                                enable_coalesced_shard_reads>(
                                                 noc,
                                                 in_reader,
                                                 shard_cb,
+                                                shard_l1_base,
+                                                coalesced_scratch_offset,
+                                                shard_all_in_bounds,
+                                                coalesce_this_block,
                                                 batch_page_base,
                                                 c_in_offset_bytes,
                                                 t_shard_start,
@@ -551,11 +864,13 @@ void kernel_main() {
                                                 h_needed,
                                                 w_shard_start,
                                                 0u,
-                                                W_shard_cur);
+                                                W_shard_cur,
+                                                coalesced_scratch_rows);
                                             h_rows_gathered = h_needed;
                                         }
 
-                                        // Vol2col for this (t, h) across all w
+                                        // Coalesced gather reorders through scratch into the same natural shard layout,
+                                        // so vol2col always keeps the contiguous kW-row fast path.
                                         vol2col_shard_to_cb<
                                             kT,
                                             kH,
