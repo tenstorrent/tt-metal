@@ -12,8 +12,9 @@ For detailed information about each model including performance metrics, usage i
 - **[Qwen-Image](models/QwenImage.md)** - Text-to-image generation model
 - **[Mochi-1](models/Mochi_1.md)** - Video generation model
 - **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
+- **[Wan2.2-Distill](models/Wan2_2_Distill.md)** - 4-step distilled I2V (lightx2v, 7× speedup)
 - **[Index-AniSora V3.2](models/AniSora.md)** - Anime-domain image-to-video (Wan2.2-based)
-- **[Wan2.2 LoRA Adapter](models/Wan2_2_LoRA.md)** - LoRA adapter pipeline for Wan2.2 I2V (camera control, distill, style)
+- **[Wan2.2 LoRA Adapter](models/Wan2_2_LoRA.md)** - LoRA adapter pipeline for Wan2.2 I2V (camera control, style)
 
 ## Directory Structure
 
@@ -29,6 +30,7 @@ tt_dit/
 │   ├── QwenImage.md     # Qwen-Image model documentation
 │   ├── Mochi_1.md       # Mochi-1 model documentation
 │   ├── Wan2_2.md        # Wan2.2 model documentation
+│   ├── Wan2_2_Distill.md # Wan2.2-Distill model documentation
 │   ├── AniSora.md       # Index-AniSora V3.2 model documentation
 │   └── Wan2_2_LoRA.md   # Wan2.2 LoRA adapter documentation
 ├── encoders/            # Text encoder implementations
