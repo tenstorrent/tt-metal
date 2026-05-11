@@ -108,13 +108,20 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     auto in0_tensor_shape = input_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
-    uint32_t K = in0_tensor_shape[-1];
-    uint32_t N = in1_tensor_shape[-1];
+    const bool transpose_a = config.transpose_a;
+    const bool transpose_b = config.transpose_b;
+    // With transpose_a, input is stored as [K, M], so K = padded[-2] and M = padded[-1].
+    uint32_t K = transpose_a ? in0_tensor_shape[-2] : in0_tensor_shape[-1];
+    // Weight is stored as [N, K] when transpose_b is set, so N = padded[-2] and K_w = padded[-1].
+    uint32_t N = transpose_b ? in1_tensor_shape[-2] : in1_tensor_shape[-1];
 
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
 
-    uint32_t actual_M = input_tensor.physical_volume() / K;
+    // physical_volume / stored_inner gives count along the stored outer dim. With transpose_a
+    // that's K-tiles; the actual M is along the stored inner dim (which is M when transpose_a).
+    uint32_t actual_M =
+        transpose_a ? (input_tensor.physical_volume() / in0_tensor_shape[-2]) : (input_tensor.physical_volume() / K);
     uint32_t actual_M_tiles = actual_M / tt::constants::TILE_HEIGHT;
 
     // Two-program strategy: transpose_core_grid from actual_M vs N.
@@ -207,6 +214,15 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     tt::tt_metal::create_cb(
         intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
 
+    // CB for the transposed in0 block (only used when transpose_a is true). Same data format
+    // and capacity as in0 since the transpose preserves both. Compute kernel transposes
+    // c_0 -> c_7 tile-by-tile, then matmul consumes c_7.
+    if (transpose_a) {
+        constexpr uint32_t in0_transposed_cb_id = tt::CBIndex::c_7;
+        tt::tt_metal::create_cb(
+            in0_transposed_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
+    }
+
     // ----- Defines (empty — no FUSE_BIAS, FUSE_TERNARY, FUSE_AG) -----
     std::map<std::string, std::string> defines;
 
@@ -220,28 +236,29 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in0 sender compile-time args (22 fixed + tensor accessor args)
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        actual_M_tiles,             // 0: M_tiles (unused by kernel, kept for arg layout compat)
-        actual_padded_M_tiles,      // 1: padded_M_tiles (max)
-        K_tiles,                    // 2: K_tiles
-        padded_K_tiles,             // 3: padded_K_tiles
-        N_tiles,                    // 4: N_tiles
-        padded_N_tiles,             // 5: padded_N_tiles
-        M_block_tiles,              // 6: M_block_tiles
-        K_block_tiles,              // 7: K_block_tiles
-        N_block_tiles,              // 8: N_block_tiles
-        actual_M_blocks_per_core,   // 9: M_blocks_per_core (unused by kernel, kept for arg layout compat)
-        N_blocks_per_core,          // 10: N_blocks_per_core
-        in0_tile_size,              // 11: in_tile_size
-        out_tile_size,              // 12: out_tile_size
-        in2_tile_size,              // 13: in2_tile_size (dummy, no bias)
-        in0_sender_semaphore_id,    // 14: sender_sem_id
-        in0_receiver_semaphore_id,  // 15: receiver_sem_id
-        in0_valid_semaphore_id,     // 16: valid_sem_id
-        in0_is_output_writer,       // 17: is_output_writer
-        true,                       // 18: is_injector_core
-        1U,                         // 19: N_chunks (always 1)
-        N_tiles,                    // 20: N_tiles_per_chunk (= N_tiles when N_chunks=1)
-        in3_tile_size,              // 21: in3_tile_size (dummy, no AG)
+        actual_M_tiles,                      // 0: M_tiles (unused by kernel, kept for arg layout compat)
+        actual_padded_M_tiles,               // 1: padded_M_tiles (max)
+        K_tiles,                             // 2: K_tiles
+        padded_K_tiles,                      // 3: padded_K_tiles
+        N_tiles,                             // 4: N_tiles
+        padded_N_tiles,                      // 5: padded_N_tiles
+        M_block_tiles,                       // 6: M_block_tiles
+        K_block_tiles,                       // 7: K_block_tiles
+        N_block_tiles,                       // 8: N_block_tiles
+        actual_M_blocks_per_core,            // 9: M_blocks_per_core (unused by kernel, kept for arg layout compat)
+        N_blocks_per_core,                   // 10: N_blocks_per_core
+        in0_tile_size,                       // 11: in_tile_size
+        out_tile_size,                       // 12: out_tile_size
+        in2_tile_size,                       // 13: in2_tile_size (dummy, no bias)
+        in0_sender_semaphore_id,             // 14: sender_sem_id
+        in0_receiver_semaphore_id,           // 15: receiver_sem_id
+        in0_valid_semaphore_id,              // 16: valid_sem_id
+        in0_is_output_writer,                // 17: is_output_writer
+        true,                                // 18: is_injector_core
+        1U,                                  // 19: N_chunks (always 1)
+        N_tiles,                             // 20: N_tiles_per_chunk (= N_tiles when N_chunks=1)
+        in3_tile_size,                       // 21: in3_tile_size (dummy, no AG)
+        static_cast<uint32_t>(transpose_a),  // 22: transpose_a
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
 
@@ -276,6 +293,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         1U,       // N_chunks
         N_tiles,  // N_tiles_per_chunk
         in3_tile_size,
+        static_cast<uint32_t>(transpose_a),  // 22: transpose_a
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
 
@@ -286,7 +304,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
 
-    // in1 sender compile-time args (21 fixed + tensor accessor args, no in3_tile_size)
+    // in1 sender compile-time args (22 fixed + tensor accessor args; index 21 = transpose_b)
     std::vector<uint32_t> in1_sender_compile_time_args = {
         actual_M_tiles,
         actual_padded_M_tiles,
@@ -306,9 +324,10 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true,     // is_injector_core
-        1U,       // N_chunks
-        N_tiles,  // N_tiles_per_chunk
+        true,                                // is_injector_core
+        1U,                                  // N_chunks
+        N_tiles,                             // N_tiles_per_chunk
+        static_cast<uint32_t>(transpose_b),  // 21: transpose_b
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
 
@@ -339,9 +358,10 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        false,    // is_injector_core
-        1U,       // N_chunks
-        N_tiles,  // N_tiles_per_chunk
+        false,                               // is_injector_core
+        1U,                                  // N_chunks
+        N_tiles,                             // N_tiles_per_chunk
+        static_cast<uint32_t>(transpose_b),  // 21: transpose_b
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
 
@@ -354,14 +374,16 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // ----- Compute kernel -----
     std::vector<uint32_t> compute_compile_time_args = {
-        K_blocks,                  // 0: K_num_blocks
-        M_block_tiles,             // 1: M_block_tiles
-        K_block_tiles,             // 2: K_block_tiles
-        N_block_tiles,             // 3: N_block_tiles
-        actual_M_blocks_per_core,  // 4: M_blocks_per_core (unused by kernel, kept for arg layout compat)
-        N_blocks_per_core,         // 5: N_blocks_per_core
-        subblock_h,                // 6: subblock_h
-        subblock_w,                // 7: subblock_w
+        K_blocks,                            // 0: K_num_blocks
+        M_block_tiles,                       // 1: M_block_tiles
+        K_block_tiles,                       // 2: K_block_tiles
+        N_block_tiles,                       // 3: N_block_tiles
+        actual_M_blocks_per_core,            // 4: M_blocks_per_core (unused, kept for arg layout compat)
+        N_blocks_per_core,                   // 5: N_blocks_per_core
+        subblock_h,                          // 6: subblock_h
+        subblock_w,                          // 7: subblock_w
+        static_cast<uint32_t>(transpose_b),  // 8: transpose_b
+        static_cast<uint32_t>(transpose_a),  // 9: transpose_a
     };
 
     std::map<std::string, std::string> compute_defines;
