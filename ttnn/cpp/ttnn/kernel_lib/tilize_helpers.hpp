@@ -48,6 +48,9 @@ enum class WaitMode : uint8_t {
 // Controls whether fast tilize is used for Float32 data.
 // Fast tilize truncates fp32 to tf32 precision during tilization (lossy).
 // Use Lossless when exact fp32 preservation is required.
+
+// Lossless mode is desired only in cases when exact fp32 preservation is required. This happens rarely, as, in many
+// cases, the produced tilized data needs to be unpacked to srcA and srcB registers, and precision is lost either way.
 enum class Fp32Mode : uint8_t {
     Fast,     // Default — uses fast_tilize for fp32 (lossy, truncates to tf32 precision)
     Lossless  // Forces standard tilize path for fp32 data (exact, no truncation)
