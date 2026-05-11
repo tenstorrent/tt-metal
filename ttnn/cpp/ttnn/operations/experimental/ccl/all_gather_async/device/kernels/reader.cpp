@@ -102,7 +102,7 @@ void kernel_main() {
     // after every reserve_back when using NOC transaction IDs, so get_read/write_ptr()
     // will return stale values.
     auto l1_base_addr = cb.get_write_ptr();
-    auto l1_end_addr = l1_base_addr + (36 * input_page_size);
+    auto l1_end_addr = l1_base_addr + (3 * cb_page_size);  // TODO hardcoded number 3
     auto l1_write_addr = l1_base_addr;
     auto l1_read_addr = l1_base_addr;
 
