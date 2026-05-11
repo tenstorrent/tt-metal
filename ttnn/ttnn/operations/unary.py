@@ -13,14 +13,6 @@ def register_ttnn_cpp_unary_function(unary_function):
         def torch_cbrt(x, *args, **kwargs):
             return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
 
-        def torch_multigammaln(x, *args, **kwargs):
-            result = torch.lgamma(x)
-            result += torch.lgamma(x - 0.5)
-            result += torch.lgamma(x - 1.0)
-            result += torch.lgamma(x - 1.5)
-            result += 3.434189657547
-            return result
-
         def torch_hardmish(x):
             x_f32 = x.to(torch.float32)
             result_f32 = x_f32 * torch.clamp(x_f32 * 0.5 + 1.0, min=0.0, max=1.0)
@@ -97,7 +89,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "log1p": torch.log1p,
             "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
             "hardmish": lambda _x: torch_hardmish(_x),
-            "multigammaln": torch_multigammaln,
             "rad2deg": torch.rad2deg,
             "sinh": torch.sinh,
             "softsign": torch.nn.functional.softsign,
@@ -181,7 +172,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.log1p,
     ttnn.mish,
     ttnn.hardmish,
-    ttnn.multigammaln,
     ttnn.rad2deg,
     ttnn.sinh,
     ttnn.softsign,

@@ -547,18 +547,6 @@ def _golden_function_logit(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.logit_bw, golden_function=_golden_function_logit)
 
 
-def _golden_function_mvlgamma(grad_tensor, input_tensor, *args, **kwargs):
-    import torch
-
-    input_tensor.retain_grad()
-    pyt_y = torch.mvlgamma(input_tensor, 4)
-    pyt_y.backward(gradient=grad_tensor)
-    return [input_tensor.grad]
-
-
-ttnn.attach_golden_function(ttnn.multigammaln_bw, golden_function=_golden_function_mvlgamma)
-
-
 def _golden_function_neg(grad_tensor, input_tensor, *args, **kwargs):
     import torch
 

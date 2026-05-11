@@ -1154,15 +1154,6 @@ void py_module(nb::module_& mod) {
         R"doc(TILE)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
-    bind_unary_backward_op<"multigammaln_bw">(
-        mod,
-        &ttnn::multigammaln_bw,
-        R"doc(Performs backward operations for multivariate logarithmic gamma function (also referred to as mvlgamma) on :attr:`input_tensor` with given :attr:`grad_tensor`.
-        The dimensionality is set to 4.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(TILE)doc",
-        R"doc(Input value must be greater than 2.5f)doc");
-
     bind_unary_backward_prod_bw<"prod_bw">(mod, &ttnn::prod_bw);
 
     bind_unary_backward_op<"lgamma_bw">(

@@ -1952,12 +1952,6 @@ void py_module(nb::module_& mod) {
         R"doc(Performs digamma function on :attr:`input_tensor`.)doc",
         "[supported for values greater than 0].",
         R"doc(BFLOAT16, FLOAT32)doc");
-    bind_unary_composite_2param<"multigammaln", &ttnn::multigammaln>(
-        mod,
-        R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",
-        "[supported range 1.6 to inf].",
-        R"doc(BFLOAT16, FLOAT32)doc",
-        R"doc(TILE)doc");
     bind_unary_operation_subcoregrids<"sinh">(
         mod,
         &ttnn::sinh,

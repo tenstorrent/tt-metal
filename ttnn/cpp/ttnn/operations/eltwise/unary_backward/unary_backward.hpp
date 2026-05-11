@@ -92,11 +92,6 @@ std::vector<Tensor> lgamma_bw(
     const Tensor& input_tensor_arg,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-std::vector<Tensor> multigammaln_bw(
-    const Tensor& grad_tensor_arg,
-    const Tensor& input_tensor_arg,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 std::vector<Tensor> softplus_bw(
     const Tensor& grad_tensor_arg,
     const Tensor& input_tensor_arg,
