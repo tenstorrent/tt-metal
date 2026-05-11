@@ -79,6 +79,10 @@ on:
         description: "Detection mode: max confirmed failures before Phase 2 stops (keeps runs short)"
         type: string
         default: "999"
+      max-candidates-per-workflow:
+        description: "Detection mode: max candidates per workflow (prevents one noisy workflow from saturating the budget)"
+        type: string
+        default: "10"
       max-log-bytes:
         description: "Detection mode: per-run log truncation in bytes"
         type: string
@@ -103,6 +107,7 @@ jobs:
       verify-budget-hours: ${{ inputs.verify-budget-hours }}
       mock-verify: ${{ inputs.mock-verify }}
       max-candidates: ${{ inputs.max-candidates }}
+      max-candidates-per-workflow: ${{ inputs.max-candidates-per-workflow }}
       max-log-bytes: ${{ inputs.max-log-bytes }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
