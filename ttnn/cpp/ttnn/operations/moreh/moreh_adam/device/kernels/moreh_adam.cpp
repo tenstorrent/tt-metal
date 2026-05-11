@@ -56,9 +56,6 @@ ALWI void moreh_bin_chain() {
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
 ALWI void moreh_copy_chain() {
     using namespace compute_kernel_lib;
-    // FIX: explicit pack_reconfig — chain helper does not emit pack_reconfig
-    // for non-clash chains (hoisted_init_for_each skips Pack elements).
-    WITH_FP32_DEST_ACC(pack_reconfig_data_format(CbOut));
     using CopyElt = CopyTile<
         CbIn,
         Dst::D0,
@@ -271,7 +268,6 @@ void kernel_main() {
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_tmp1 = pow(beta2, step);  (T1.32)
-        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp1));  // explicit pack reconfig
         {
             using namespace compute_kernel_lib;
             auto copy_elt = CopyTile<
@@ -380,7 +376,6 @@ void kernel_main() {
 
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_tmp2 = pow(beta1, step);  (T1.33)
-        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp2));  // explicit pack reconfig
         {
             using namespace compute_kernel_lib;
             auto copy_elt = CopyTile<

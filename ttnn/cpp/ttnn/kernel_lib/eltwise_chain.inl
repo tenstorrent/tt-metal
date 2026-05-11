@@ -1032,14 +1032,14 @@ ALWI void hoisted_init_for_each(std::index_sequence<Is...>, Es&... elts) {
     auto run_one = [&](auto idx, auto& elem) {
         constexpr std::size_t II = decltype(idx)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        // Skip Pack elements (their reconfig is fold-driven and pack init() is
-        // already a no-op post-commit-2; pack-side transitions are handled by the
-        // boot pack_init pass and the per-element fold below covers any non-pack
-        // pack-side reconfig ordering).
-        if constexpr (!is_pack_tile_op_v<ElemT>) {
-            emit_pre_element_transitions<ElemT, II, Es...>();
-            ElemT::init();
-        }
+        // FIX (Reg C): previously skipped Pack elements, but emit_pre_element_transitions
+        // is the only emission path for pack_reconfig_data_format declared by
+        // PackTile<...PackTileReconfig::Output>. Skipping PackTile here means non-clash
+        // chains never emit pack reconfig, leaving stale pack format from the previous
+        // chain. Includes PackTile now — its emit_pre_element_transitions fires pack
+        // reconfig; PackTile::init() is empty (no-op) so other side-effects are safe.
+        emit_pre_element_transitions<ElemT, II, Es...>();
+        ElemT::init();
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
