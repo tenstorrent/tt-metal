@@ -83,6 +83,29 @@ def _resolve_model_path():
 DOTS_OCR_LOCAL_PATH = _resolve_model_path()
 
 
+def _dots_ocr_pipeline_batch_size():
+    """Match ``TTNNDotsOCRPipeline`` batch to mesh size when DP is requested.
+
+    DP sharding in the pipeline requires ``batch_size == num_devices`` on the
+    mesh. ``DOTS_OCR_PARALLELISM=DP`` alone only changes the *fixture* mesh
+    shape (e.g. N300 ``(2, 1)``); without this, tests still run batch 1.
+    """
+    if os.environ.get("DOTS_OCR_PARALLELISM", "").upper() != "DP":
+        return 1
+    n = _dots_ocr_mesh_num_devices()
+    return n if n > 1 else 1
+
+
+def _dots_ocr_stack_input_ids_for_dp(input_ids: torch.Tensor) -> torch.Tensor:
+    """Turn ``[1, S]`` into ``[B, S]`` by repeating the same prompt on each stream."""
+    bs = _dots_ocr_pipeline_batch_size()
+    if bs <= 1 or input_ids.shape[0] == bs:
+        return input_ids
+    if input_ids.shape[0] != 1:
+        raise ValueError(f"DP batch stacking expects base shape [1, S], got {tuple(input_ids.shape)}")
+    return input_ids.expand(bs, -1).contiguous()
+
+
 @pytest.mark.parametrize(
     "device_params",
     [_dots_ocr_device_params()],
@@ -96,9 +119,11 @@ DOTS_OCR_LOCAL_PATH = _resolve_model_path()
 def test_dots_ocr_text(mesh_device):
     """Test standalone TTNN pipeline for dots.ocr (text-only, no vision)."""
 
+    pbatch = _dots_ocr_pipeline_batch_size()
     pipeline = TTNNDotsOCRPipeline.from_hf_model(
         model_path=DOTS_OCR_LOCAL_PATH,
         device=mesh_device,
+        batch_size=pbatch,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
@@ -112,7 +137,7 @@ def test_dots_ocr_text(mesh_device):
         return_dict=True,
         return_tensors="pt",
     )
-    input_ids = inputs["input_ids"]
+    input_ids = _dots_ocr_stack_input_ids_for_dp(inputs["input_ids"])
 
     pipeline.warmup(input_ids)
 
@@ -122,11 +147,16 @@ def test_dots_ocr_text(mesh_device):
     ttnn.synchronize_device(mesh_device)
     end_time = time.time()
 
-    text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    if isinstance(generated_ids[0], list):
+        streams = [tokenizer.decode(seq, skip_special_tokens=True) for seq in generated_ids]
+        text = "\n--- stream ---\n".join(streams)
+        num_tokens = sum(len(seq) for seq in generated_ids)
+    else:
+        text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+        num_tokens = len(generated_ids)
     print(f"Pipeline TEXT OUTPUT: {text}")
 
     total_time = end_time - start_time
-    num_tokens = len(generated_ids)
     tokens_per_second = num_tokens / total_time
     ms_per_token = total_time / num_tokens * 1000
 
@@ -164,17 +194,21 @@ def test_dots_ocr_text(mesh_device):
 def test_dots_ocr_vision(mesh_device, image_link):
     """Test standalone TTNN pipeline for dots.ocr with vision (image + text).
 
-    Uses a 1×N mesh only (e.g. TP1DP2 on N300, TP1DP8 on T3K) so the run stays on
-    a single row of chips and does not use a 2D Galaxy-style mesh.
+    Default mesh comes from ``MESH_DEVICE`` (e.g. N300 ``(1, 2)``). With
+    ``DOTS_OCR_PARALLELISM=DP``, the fixture uses ``DOTS_OCR_DP_MESH_DEVICE_MAP``
+    (N300 ``(2, 1)``). In DP mode the test sets ``batch_size == num_devices`` and
+    repeats the same prompt on each stream so dual-stream sharding is exercised.
     """
     pytest.importorskip("qwen_vl_utils")
     from qwen_vl_utils import process_vision_info
     from PIL import Image
     import requests
 
+    pbatch = _dots_ocr_pipeline_batch_size()
     pipeline = TTNNDotsOCRPipeline.from_hf_model(
         model_path=DOTS_OCR_LOCAL_PATH,
         device=mesh_device,
+        batch_size=pbatch,
     )
 
     import json
@@ -224,7 +258,7 @@ def test_dots_ocr_vision(mesh_device, image_link):
         return_tensors="pt",
     )
 
-    input_ids = inputs["input_ids"]
+    input_ids = _dots_ocr_stack_input_ids_for_dp(inputs["input_ids"])
     pixel_values = inputs["pixel_values"].to(torch.bfloat16)
     image_grid_thw = inputs["image_grid_thw"]
 
@@ -241,11 +275,16 @@ def test_dots_ocr_vision(mesh_device, image_link):
     ttnn.synchronize_device(mesh_device)
     end_time = time.time()
 
-    decoded = processor.decode(generated_ids, skip_special_tokens=True)
+    if isinstance(generated_ids[0], list):
+        streams = [processor.decode(seq, skip_special_tokens=True) for seq in generated_ids]
+        decoded = "\n--- stream ---\n".join(streams)
+        num_tokens = sum(len(seq) for seq in generated_ids)
+    else:
+        decoded = processor.decode(generated_ids, skip_special_tokens=True)
+        num_tokens = len(generated_ids)
     print(f"Pipeline VISION OUTPUT: {decoded}")
 
     total_time = end_time - start_time
-    num_tokens = len(generated_ids)
     tokens_per_second = num_tokens / total_time
     ms_per_token = total_time / num_tokens * 1000
 

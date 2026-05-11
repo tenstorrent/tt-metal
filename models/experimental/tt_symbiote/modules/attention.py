@@ -40,6 +40,19 @@ except ImportError:
     CacheLayerMixin = None
 
 
+def dp_batch_shard_tensor_mapper(device, batch_size: int):
+    if not hasattr(device, "get_num_devices") or device.get_num_devices() <= 1:
+        return None
+    if batch_size != device.get_num_devices():
+        return None
+    shp = list(device.shape)
+    if shp[0] == batch_size and shp[1] == 1:
+        return ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(shp), dims=(0, None))
+    if shp[1] == batch_size and shp[0] == 1:
+        return ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(shp), dims=(None, 0))
+    return None
+
+
 class _PagedCacheLayer(CacheLayerMixin if CacheLayerMixin is not None else object):
     """CacheLayerMixin stub so HF Cache.__init__ is satisfied."""
 
@@ -113,7 +126,10 @@ class TTNNPagedAttentionKVCache(Cache):
             return self
 
         self._device = device
-        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
+        bs = self.config.batch_size
+        page_table_mapper = dp_batch_shard_tensor_mapper(device, bs)
+        if page_table_mapper is None and device.get_num_devices() > 1:
+            page_table_mapper = ttnn.ReplicateTensorToMesh(device)
 
         cache_shape = (
             self.config.max_num_blocks,
@@ -143,7 +159,7 @@ class TTNNPagedAttentionKVCache(Cache):
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=page_table_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
