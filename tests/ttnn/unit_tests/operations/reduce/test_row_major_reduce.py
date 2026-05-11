@@ -467,3 +467,111 @@ def test_mean_row_major_matches_tiled_layout_reference(device, input_shape):
         frobenius_threshold=0.003,
         check_ulp=False,
     )
+
+
+# -----------------------------------------------------------------------------
+# Dense RM H-mean path (tilize-in-compute): exercise second-to-last dim H where
+# logical H is not tile-aligned and the H reduction crosses NC slabs. Regression
+# for staging reads / accumulator orientation / writer face-aligned stores vs
+# tiled reference.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_shape, keepdim",
+    [
+        ((1, 1, 5, 1), False),
+        ((1, 1, 5, 1), True),
+        ((2, 3, 33, 4), False),  # H = 32 + 1
+        ((2, 3, 65, 4), True),  # H = 2*32 + 1
+        ((4, 2, 127, 3), False),  # H = 4*32 - 1
+        ((2, 16, 96, 8), False),  # H divisible by 32 (sanity alongside odd heights)
+    ],
+)
+def test_mean_row_major_h_not_multiple_of_tile_height(device, input_shape, keepdim):
+    """Mean over H on 4D ROW_MAJOR when H is not a multiple of tile height (32).
+
+    Frobenius threshold is looser than the W partial-tile test because H mean accumulates up to
+    H_logical values per output column inside a single tile reduce, vs the W path which sums at most
+    TILE_WIDTH values per intra-tile reduction step. Per-column bf16 absolute error remains within
+    1 ULP (ATOL ~ 2^-8), matching the W path's correctness contract.
+    """
+    torch.manual_seed(20250206)
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.mean(torch_input_tensor, dim=-2, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=-2, keepdim=keepdim))
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.01,
+        check_ulp=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (2, 5, 41, 7),
+        (1, 4, 48, 16),
+        (3, 3, 99, 3),
+    ],
+)
+def test_mean_row_major_h_matches_tiled_layout_reference(device, input_shape):
+    """Same tensor: ROW_MAJOR (dense H path when eligible) vs TILE mean along H should match torch and each other."""
+    torch.manual_seed(20250206)
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_ref = torch.mean(torch_input_tensor, dim=-2, keepdim=False)
+
+    rm_input = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tile_input = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    out_rm = ttnn.to_torch(ttnn.mean(rm_input, dim=-2, keepdim=False))
+    out_tile = ttnn.to_torch(ttnn.mean(tile_input, dim=-2, keepdim=False))
+
+    # H mean accumulates up to H_logical values per output column; loosen Frobenius slightly from the
+    # W cross-check test for the same reason. PCC + ATOL/RTOL still hold to the W contract.
+    assert_numeric_metrics(
+        torch_ref,
+        out_rm,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.01,
+        check_ulp=False,
+    )
+    assert_numeric_metrics(
+        torch_ref,
+        out_tile,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.01,
+        check_ulp=False,
+    )
+    assert_numeric_metrics(
+        out_tile,
+        out_rm,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.01,
+        check_ulp=False,
+    )

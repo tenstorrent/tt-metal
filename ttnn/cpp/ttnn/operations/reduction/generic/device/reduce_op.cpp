@@ -109,27 +109,30 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Dense row-major W mean (same shapes as tilized mean): require 4D [N,C,H,W], mean along last dim, BF16/FLOAT32,
+    // Dense row-major mean (same shapes as tilized mean): require 4D [N,C,H,W], mean along W or H, BF16/FLOAT32,
     // and interleaved buffers. Other ROW_MAJOR cases (sum/max/min, other dims, dtypes, sharded I/O) fall back to
     // tilize + tile reduce — matching default tiled coverage from generic_reductions.
-    const bool use_rm_dense_w =
-        reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_math == tt::tt_metal::ReduceOpMath::AVG &&
+    const bool rm_dense_eligible_shape =
         input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
         (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
-        !input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded();
+        !input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded() &&
+        reduce_math == tt::tt_metal::ReduceOpMath::AVG;
+    const bool use_rm_dense_w = rm_dense_eligible_shape && reduce_dim == tt::tt_metal::ReduceOpDim::W;
+    const bool use_rm_dense_h = rm_dense_eligible_shape && reduce_dim == tt::tt_metal::ReduceOpDim::H;
+    const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
     // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
-    // row-major W path we tilize one logical row at a time from a narrow RM page; AVG applies an extra normalization
+    // row-major W/H path we tilize one logical row at a time from a narrow RM page; AVG applies an extra normalization
     // for full tile faces that does not match torch.mean together with partial-row tilize. Use SUM + the same scaler.
     tt::tt_metal::ReduceOpMath prim_reduce_math = reduce_math;
-    if (use_rm_dense_w) {
+    if (use_rm_dense) {
         prim_reduce_math = tt::tt_metal::ReduceOpMath::SUM;
     }
 
     // Reduce only works with tile layout on the classic path; dense path keeps row-major input.
     Tensor tilized_input = input_tensor;
-    if (!use_rm_dense_w) {
+    if (!use_rm_dense) {
         auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
         tilized_input = ttnn::tilize_with_val_padding(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
@@ -193,7 +196,8 @@ Tensor reduce(
             sub_core_grids,
             negate,
             /*post_mul_scaler=*/1.0f,
-            /*row_major_w_dense_path=*/false);
+            /*row_major_w_dense_path=*/false,
+            /*row_major_h_dense_path=*/false);
 
         if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
@@ -210,7 +214,8 @@ Tensor reduce(
             sub_core_grids,
             negate,
             /*post_mul_scaler=*/post_mul,
-            /*row_major_w_dense_path=*/false);
+            /*row_major_w_dense_path=*/false,
+            /*row_major_h_dense_path=*/false);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
@@ -230,7 +235,8 @@ Tensor reduce(
         sub_core_grids,
         negate,
         /*post_mul_scaler=*/post_mul,
-        /*row_major_w_dense_path=*/use_rm_dense_w);
+        /*row_major_w_dense_path=*/use_rm_dense_w,
+        /*row_major_h_dense_path=*/use_rm_dense_h);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail
