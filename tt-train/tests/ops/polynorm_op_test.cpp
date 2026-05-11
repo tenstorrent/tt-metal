@@ -40,12 +40,10 @@ protected:
 namespace {
 constexpr float kForwardRtol = 2.5e-2F;
 constexpr float kForwardAtol = 2.5e-2F;
-constexpr float kBackwardRtol = 5.0e-2F;
-constexpr float kBackwardAtol = 5.0e-2F;
-// Very-short rows can produce larger-magnitude dL/dx values where final BF16 output
-// quantization alone exceeds 5e-2. Keep the relaxed tolerance scoped to that coverage.
-constexpr float kRemainderBackwardRtol = 8.0e-2F;
-constexpr float kRemainderBackwardAtol = 8.0e-2F;
+constexpr float kBackwardRtol = 2.0e-2F;
+constexpr float kBackwardAtol = 2.0e-2F;
+constexpr float kRemainderBackwardRtol = 2.0e-2F;
+constexpr float kRemainderBackwardAtol = 2.0e-2F;
 
 struct PolyNormCaseData {
     xt::xarray<float> input;
