@@ -43,6 +43,38 @@ DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
 
+# --- Device-lock contention profiling ---
+# When $TT_DEVICE_TIMING_LOG is set, on EXIT we append one JSON line:
+#   {source, pid, started_at_ms, wait_ms, run_ms, test_path, exit_code}
+# wait_ms = script entry → flock acquired (contention)
+# run_ms  = flock acquired → script exit  (device occupied)
+# Skipped on sim mode (no flock contention) and when the script exits before
+# acquiring the lock (TT_TIMING_LOCK_ACQUIRED_MS stays 0).
+TT_TIMING_ENTRY_MS=$(date +%s%3N)
+TT_TIMING_LOCK_ACQUIRED_MS=0
+TT_TIMING_SOURCE="run_safe_pytest"
+TT_TIMING_TEST_PATH=""
+
+_emit_device_timing() {
+    local ec=$?
+    if [[ -n "${TT_DEVICE_TIMING_LOG:-}" && "$TT_TIMING_LOCK_ACQUIRED_MS" -ne 0 ]]; then
+        local end_ms wait_ms run_ms log_dir esc_path
+        end_ms=$(date +%s%3N)
+        wait_ms=$(( TT_TIMING_LOCK_ACQUIRED_MS - TT_TIMING_ENTRY_MS ))
+        run_ms=$(( end_ms - TT_TIMING_LOCK_ACQUIRED_MS ))
+        log_dir="$(dirname "$TT_DEVICE_TIMING_LOG")"
+        [[ -n "$log_dir" ]] && mkdir -p "$log_dir" 2>/dev/null
+        # JSON-escape test_path: backslash first, then double-quote.
+        esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
+        esc_path="${esc_path//\"/\\\"}"
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d}\n' \
+            "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
+            >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
+    fi
+    return $ec
+}
+trap _emit_device_timing EXIT
+
 # --- Detect simulator mode ---
 SIM_MODE=false
 if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
@@ -78,6 +110,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 TEST_PATH="$1"
+TT_TIMING_TEST_PATH="$TEST_PATH"
 shift
 
 # --- Acquire flock (hardware only) ---
@@ -86,6 +119,7 @@ if [[ "$SIM_MODE" == false ]]; then
 
     echo "SAFE_PYTEST: Waiting for device lock..." >&2
     flock 9
+    TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     echo "SAFE_PYTEST: Device lock acquired" >&2
 
     # --- Check if device needs reset from previous hang ---
