@@ -6,7 +6,7 @@
 
 Times the four phases that come up when you build (or rebuild) the on-device
 ``Transformer`` for inference, with the same Llama checkpoint your
-``pcc_hf_ttml_ttt.py`` script uses:
+``gen_hf_ttt.py`` script uses:
 
   * ``model_args.load_state_dict()`` — HF safetensors → Meta-named torch dict.
     This is the ``safetensors load`` cost.
@@ -92,7 +92,7 @@ def main() -> None:
     import ttnn
 
     # tt-transformers requires fabric_config set BEFORE the mesh device is
-    # opened. FABRIC_2D matches what pcc_hf_ttml_ttt.py uses.
+    # opened. FABRIC_2D matches what gen_hf_ttt.py uses.
     print(f"[bench] set_fabric_config(FABRIC_2D)")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
