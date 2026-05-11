@@ -136,7 +136,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     ProgramDescriptor desc;
 
     desc.cbs.push_back(CBDescriptor{
-        .total_size = reader_cb_size,
+        .total_size = reader_cb_size,  // reader cb is triple buffered
         .core_ranges = reader_core_range,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(reader_cb_index),
