@@ -43,6 +43,7 @@
 #include <tracy/TracyTTDevice.hpp>
 
 #include "context/metal_context.hpp"
+#include "device/device_manager.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
@@ -336,6 +337,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 
         auto eligibility = evaluate_realtime_profiler_eligibility(device);
         if (!eligibility.enabled) {
+            MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
             continue;
         }
         CoreCoord realtime_profiler_core = eligibility.core;
@@ -387,6 +389,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 "profiler on this device.",
                 device_id,
                 e.what());
+            MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
             continue;
         }
 
@@ -564,6 +567,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 config_buffer_addr);
         }
 
+        MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
     }
 
