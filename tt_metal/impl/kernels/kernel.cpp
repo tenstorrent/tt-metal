@@ -88,6 +88,28 @@ fs::path resolve_path(const fs::path& given_file_name) {
     // Not found
     TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
+
+// Resolve a user-supplied compiler include path (-I):
+//  - Absolute paths pass through unchanged
+//  - Relative paths are resolved against the current working directory
+//
+// If the user-supplied path doesn't exist:
+//  - Absolute path will go straight to gcc, which will warn about the missing dir
+//  - Unresolved relative path will throw here
+//
+fs::path resolve_compiler_include_dir(const fs::path& given) {
+    if (given.is_absolute()) {
+        return given;
+    }
+    auto resolved = fs::current_path() / given;
+    if (!fs::is_directory(resolved)) {
+        TT_THROW(
+            "Compiler include directory '{}' not found relative to current working directory '{}'.",
+            given.string(),
+            fs::current_path().string());
+    }
+    return resolved;
+}
 }  // namespace
 
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
@@ -310,6 +332,17 @@ void Kernel::process_include_paths(const std::function<void(const std::string& p
     if (kernel_src_.source_type_ == KernelSource::FILE_PATH) {
         callback(kernel_src_.path_.parent_path().string());
     }
+    for (const auto& path : this->resolved_compiler_include_paths_) {
+        callback(path);
+    }
+}
+
+void Kernel::set_compiler_include_paths(const std::vector<std::filesystem::path>& paths) {
+    this->resolved_compiler_include_paths_.clear();
+    this->resolved_compiler_include_paths_.reserve(paths.size());
+    for (const auto& p : paths) {
+        this->resolved_compiler_include_paths_.push_back(resolve_compiler_include_dir(p).string());
+    }
 }
 
 bool Kernel::binaries_exist_on_disk(const IDevice* device, const std::string& binary_root) const {
@@ -505,6 +538,16 @@ uint64_t Kernel::compute_hash() const {
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     hasher.update(this->config_hash());
+
+    // Include paths affect compilation: the gcc -I order is significant (left-to-right
+    // header resolution), so different lists or orderings must produce different binaries.
+    // Header contents are tracked separately via the per-object .dephash mechanism.
+    size_t num_include_paths = 0;
+    this->process_include_paths([&](const std::string& path) {
+        hasher.update(path);
+        ++num_include_paths;
+    });
+    hasher.update(static_cast<uint64_t>(num_include_paths));
     return hasher.digest();
 }
 
