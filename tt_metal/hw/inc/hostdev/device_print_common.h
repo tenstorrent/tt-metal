@@ -19,6 +19,7 @@ enum class DevicePrintRiscCoreState : uint8_t {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD) || defined(ENV_LLK_INFRA)
 
 #include "core_config.h"
+#include <atomic>
 
 struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
