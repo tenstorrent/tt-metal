@@ -19,7 +19,7 @@ from loguru import logger
 
 import ttnn
 
-from ...models.transformers.transformer_flux2_new import Flux2Transformer
+from ...models.transformers.transformer_flux2_opt import Flux2Transformer
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
