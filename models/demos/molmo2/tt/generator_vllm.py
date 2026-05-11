@@ -259,6 +259,11 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
                 token_type_ids=_dummy_tti,
                 user_id=0,
             )
+        # Capture ViT trace LAST — all text-decoder and vision-integrated prefill
+        # kernels are now in L1 at stable addresses, so the trace snapshot is safe.
+        logger.info("Capturing ViT trace (last warmup step)...")
+        model.warmup_vit_trace()
+
         logger.info("JIT warmup complete — server ready to serve")
 
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)

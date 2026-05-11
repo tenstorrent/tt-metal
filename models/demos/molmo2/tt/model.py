@@ -337,6 +337,13 @@ class TtMolmo2Model(LightweightModule):
         self._prefill_traces = {}
 
         # ------------------------------------------------------------------ #
+        # ViT trace state — captures a single chunk forward [8,1,729,588]
+        # ------------------------------------------------------------------ #
+        self._vit_trace_id = None
+        self._vit_trace_input = None  # stable device buffer for one ViT chunk
+        self._vit_trace_output = None  # stable device buffer for ViT output
+
+        # ------------------------------------------------------------------ #
         # Decode trace state (populated lazily on first generate() call)
         # ------------------------------------------------------------------ #
         self._decode_trace_id = None
@@ -565,6 +572,75 @@ class TtMolmo2Model(LightweightModule):
         print("[vision warmup] image done", flush=True)
 
         print("[vision warmup] done", flush=True)
+
+    def warmup_vit_trace(self) -> None:
+        """Capture a TTNN trace for one ViT encoder chunk [8, 1, 729, 588].
+
+        The ViT forward always receives a fixed-size chunk (8 crops padded to fill
+        8 devices, 1 frame per device, 729 patches, 588 features). Capturing a
+        trace eliminates per-chunk Python dispatch overhead for all 25 ViT blocks.
+
+        Trace replayed for every chunk of every video/image at inference time.
+        """
+        if self._vit_trace_id is not None:
+            return  # already captured
+
+        N_CROPS_PER_CHUNK = self.mesh_device.get_num_devices()  # 8 for T3K
+        N_PATCHES = 729
+        PX_DIM = 588
+        print(
+            f"[vit trace] capturing ViT trace for chunk [{N_CROPS_PER_CHUNK}, 1, {N_PATCHES}, {PX_DIM}]...",
+            flush=True,
+        )
+
+        # Allocate stable input buffer on device
+        dummy_chunk = torch.zeros(N_CROPS_PER_CHUNK, 1, N_PATCHES, PX_DIM, dtype=torch.bfloat16)
+        self._vit_trace_input = ttnn.from_torch(
+            dummy_chunk,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+        )
+
+        # Warmup pass: compile all ViT kernels
+        warmup_out = self.vit_encoder.forward(self._vit_trace_input, n_crops_per_device=1)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.deallocate(warmup_out)
+
+        # Trace capture. TTNN (this version) allows deallocations during capture.
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._vit_trace_output = self.vit_encoder.forward(self._vit_trace_input, n_crops_per_device=1)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+
+        self._vit_trace_id = trace_id
+        print("[vit trace] ViT trace ready", flush=True)
+
+    def _execute_vit_trace(self, chunk_cpu: torch.Tensor) -> torch.Tensor:
+        """Write one ViT chunk into the stable input buffer and execute the trace.
+
+        Args:
+            chunk_cpu: [8, 1, 729, 588] bfloat16 CPU tensor (padded to 8 crops)
+
+        Returns:
+            [8, 1, 729, 2304] float32 CPU tensor with ViT features
+        """
+        staging = ttnn.from_torch(
+            chunk_cpu,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+        )
+        ttnn.copy(staging, self._vit_trace_input)
+        ttnn.deallocate(staging)
+
+        ttnn.execute_trace(self.mesh_device, self._vit_trace_id, cq_id=0, blocking=True)
+
+        feat_parts = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(self._vit_trace_output)]
+        return torch.cat(feat_parts, dim=0)  # [8, 1, 729, 2304]
 
     def warmup_decode_trace(self, prefill_seq_len: int = None) -> None:
         """Pre-capture the decode trace so first inference has no stall.
@@ -911,21 +987,24 @@ class TtMolmo2Model(LightweightModule):
             if real_n < num_devices:
                 pad = torch.zeros(num_devices - real_n, 1, n_patches, px_dim, dtype=torch.bfloat16)
                 chunk_cpu = torch.cat([chunk_cpu, pad], dim=0)
-            chunk_ttnn = ttnn.from_torch(
-                chunk_cpu,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-            )
-            # n_crops_per_device=1: each device gets its own crop, no pos_emb tiling
-            feat_ttnn = self.vit_encoder.forward(chunk_ttnn, n_crops_per_device=1)
-            ttnn.deallocate(chunk_ttnn)
-            # Collect crop features from all devices (each device has 1 crop)
-            feat_parts = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(feat_ttnn)]
-            ttnn.deallocate(feat_ttnn)
-            feat_chunk = torch.cat(feat_parts, dim=0)  # [num_devices, 1, 729, 2304]
+            if self._vit_trace_id is not None:
+                feat_chunk = self._execute_vit_trace(chunk_cpu)  # [num_devices, 1, 729, 2304]
+            else:
+                chunk_ttnn = ttnn.from_torch(
+                    chunk_cpu,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                )
+                # n_crops_per_device=1: each device gets its own crop, no pos_emb tiling
+                feat_ttnn = self.vit_encoder.forward(chunk_ttnn, n_crops_per_device=1)
+                ttnn.deallocate(chunk_ttnn)
+                # Collect crop features from all devices (each device has 1 crop)
+                feat_parts = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(feat_ttnn)]
+                ttnn.deallocate(feat_ttnn)
+                feat_chunk = torch.cat(feat_parts, dim=0)  # [num_devices, 1, 729, 2304]
             vit_chunks.append(feat_chunk[:real_n].squeeze(1))  # [real_n, 729, 2304]
 
         vit_cpu = torch.cat(vit_chunks, dim=0).reshape(B, n_crops, n_patches, 2304)
@@ -990,6 +1069,15 @@ class TtMolmo2Model(LightweightModule):
         else:
             _S_pad_early = ((S + 255) // 256) * 256
 
+        # ---- Vision backbone (BEFORE embedding) ----
+        # Running vision first ensures the ViT trace (execute_trace) fires before the
+        # embedding tensor x_ttnn is allocated.  The ViT trace replays to fixed DRAM
+        # addresses captured at warmup time; if x_ttnn were already live at one of those
+        # addresses, execute_trace would corrupt it — causing wrong outputs for short
+        # videos (small x_ttnn → lands in the same DRAM region as trace intermediates).
+        if pixel_values is not None:
+            image_features = self.run_vision_backbone(pixel_values, pooled_patches_idx)
+
         # ---- Embedding ----
         if _S_pad_early > S:
             ids_padded = input_ids.new_zeros(B, _S_pad_early)
@@ -1007,10 +1095,8 @@ class TtMolmo2Model(LightweightModule):
         x_ttnn = ttnn.embedding(input_ids_ttnn, self.embedding)  # [B, _S_pad_early, 4096]
         ttnn.deallocate(input_ids_ttnn)
 
-        # ---- Vision backbone + image feature injection ----
+        # ---- Image feature injection ----
         if pixel_values is not None:
-            image_features = self.run_vision_backbone(pixel_values, pooled_patches_idx)
-
             # Additive injection: build delta on CPU (zeros except at patch positions),
             # H2D, then ttnn.add on device. Both delta and x_ttnn are already at
             # _S_pad_early — no on-device concat or per-S JIT stall.

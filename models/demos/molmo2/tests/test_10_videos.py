@@ -190,7 +190,12 @@ def tt_model(mesh_device):
     logger.info("[warmup] Capturing decode trace...")
     model.warmup_decode_trace()
 
-    logger.info("Model fully warmed up (JIT + traces + vision + decode trace)")
+    # Step 5: Capture ViT trace LAST — all text-decoder kernels already in L1 at
+    # their final addresses, so the ViT trace snapshot does not conflict with them.
+    logger.info("[warmup] Capturing ViT trace (last, after all decoder kernels loaded)...")
+    model.warmup_vit_trace()
+
+    logger.info("Model fully warmed up (JIT + traces + vision + decode trace + ViT trace)")
     return model, cfg
 
 
