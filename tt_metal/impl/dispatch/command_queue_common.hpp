@@ -74,8 +74,9 @@ uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
 
 uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
 
-// FIX LT9-PROGRESS (Approach B): XOR of all active fabric ERISC packet counters.
-// Advances whenever any ERISC processes a packet.  Returns 0 when fabric is disabled.
+// FIX LT9-PROGRESS-B2 (Design 2): Rate-based fabric ERISC progress token.
+// Only advances when fabric packet throughput exceeds a threshold (filtering keepalive noise).
+// Returns 0 when fabric is disabled.
 uint32_t get_fabric_erisc_progress();
 
 // FIX LT9-PROGRESS (Approach C): Log heartbeat + packet counter for every active fabric ERISC.

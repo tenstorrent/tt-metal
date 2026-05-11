@@ -822,8 +822,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
                 TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
             };
 
+            // FIX LT9-PROGRESS-B2: XOR fabric progress token into dispatch progress so that
+            // real fabric work (but not keepalive noise) extends the dispatch timeout.
             auto get_dispatch_progress = [&]() -> uint32_t {
-                return get_cq_dispatch_progress(this->device_id, cq_id);
+                return get_cq_dispatch_progress(this->device_id, cq_id) ^ get_fabric_erisc_progress();
             };
             auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
             loop_and_wait_with_timeout(
@@ -874,8 +876,10 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
+    // FIX LT9-PROGRESS-B2: XOR fabric progress token into dispatch progress so that
+    // real fabric work (but not keepalive noise) extends the dispatch timeout.
     auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
-        return get_cq_dispatch_progress(this->device_id, cq_id);
+        return get_cq_dispatch_progress(this->device_id, cq_id) ^ get_fabric_erisc_progress();
     };
 
     loop_and_wait_with_timeout(

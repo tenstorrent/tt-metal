@@ -18,6 +18,29 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include <optional>
+#include <chrono>
+#include <cstdlib>
+
+namespace {
+// FIX LT9-PROGRESS-B2: Rate-based progress detection state.
+// Only the progress_token is returned to callers; it increments only when the per-interval
+// packet counter delta exceeds PROGRESS_THRESHOLD, filtering out background keepalive traffic.
+struct FabricProgressState {
+    uint32_t last_raw_counter_sum = 0;
+    uint32_t progress_token = 0;
+    std::chrono::steady_clock::time_point last_sample_time{};
+    bool initialized = false;
+};
+FabricProgressState fabric_progress_state;
+
+// Default 10 packets per 100ms polling interval.
+// Background keepalive: ~1-50 pkts/100ms/ERISC (below threshold).
+// Active AllGather: >>10,000 pkts/100ms/ERISC (well above threshold).
+static const uint32_t PROGRESS_THRESHOLD = []() {
+    const char* env = std::getenv("TT_METAL_FABRIC_PROGRESS_THRESHOLD");
+    return env ? static_cast<uint32_t>(std::stoul(env)) : 10u;
+}();
+}  // namespace
 
 namespace tt::tt_metal {
 
@@ -173,17 +196,20 @@ uint32_t calculate_expected_workers_to_finish(
     return num_workers;
 }
 
-// FIX LT9-PROGRESS (#42429 Approach B): Read the always-on fabric packet-progress counter from
-// every active fabric ERISC on every device.  The counter lives at FABRIC_KERNEL_HEARTBEAT_ADDR+4
-// (written by fabric_erisc_router.cpp whenever tx_progress||rx_progress is true in the main loop).
-// Returns an XOR of all per-ERISC counter values; any change between two calls means at least one
-// ERISC is processing packets — the host timeout clock should reset.
+// FIX LT9-PROGRESS-B2 (Design 2): Rate-based fabric ERISC progress detection.
 //
-// Returns 0 immediately when:
-//  - Fabric is disabled (FabricConfig::DISABLED)
-//  - DeviceManager is not initialized
-//  - The read throws (e.g. relay broken on non-MMIO device) — we eat the exception to keep the
-//    timeout path non-fatal, at the cost of possibly not seeing ERISC progress for that device.
+// Reads the always-on fabric packet-progress counter from every active fabric ERISC on
+// MMIO-capable chips only (PCIe direct — cannot block).  SUMs all counters to preserve
+// magnitude, then compares the delta against a time-scaled threshold.  Only increments
+// the returned progress_token when the delta indicates real fabric work (not keepalive).
+//
+// Root causes fixed vs Design 1:
+//   1. Non-MMIO hang: Only iterate MMIO-capable chips (PCIe direct reads never block).
+//   2. False-extension: Background keepalive traffic (~1-50 pkts/100ms/ERISC) no longer
+//      resets the timeout — only deltas >= PROGRESS_THRESHOLD (default 10 pkts/100ms) do.
+//
+// Returns progress_token (monotonically increasing, only changes on real fabric progress).
+// Returns 0 when fabric is disabled or DeviceManager is not initialized.
 uint32_t get_fabric_erisc_progress() {
     auto& ctx = MetalContext::instance();
     if (!ctx.is_device_manager_initialized()) {
@@ -200,11 +226,16 @@ uint32_t get_fabric_erisc_progress() {
     const uint32_t packet_counter_addr = heartbeat_addr + 4;
 
     auto& cluster = ctx.get_cluster();
-    uint32_t combined = 0;
+    const auto* cluster_desc = cluster.get_cluster_desc();
+    uint32_t raw_sum = 0;
 
     for (ChipId chip_id : ctx.device_manager()->get_all_active_device_ids()) {
-        // get_active_fabric_eth_channels returns {chan_id, direction} pairs for channels
-        // that are running fabric router kernels.
+        // FIX LT9-PROGRESS-B2: Only read MMIO-capable chips.  Non-MMIO reads go through
+        // the ERISC relay — if the relay is broken the read_core() call blocks indefinitely.
+        if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
+            continue;
+        }
+
         const auto fabric_node_id = [&]() -> std::optional<tt_fabric::FabricNodeId> {
             try {
                 return control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
@@ -226,14 +257,43 @@ uint32_t get_fabric_erisc_progress() {
                     cluster.get_virtual_coordinate_from_logical_coordinates(eth_logical_pair, CoreType::ETH);
                 uint32_t counter_val = 0;
                 cluster.read_core(&counter_val, sizeof(uint32_t), eth_virtual, packet_counter_addr);
-                combined ^= counter_val;
+                raw_sum += counter_val;  // SUM (not XOR) — need magnitude for rate calculation
             } catch (...) {
-                // Non-MMIO relay broken or core unreachable — skip silently.
+                // Core unreachable — skip silently (defensive; MMIO reads should not throw).
             }
         }
     }
 
-    return combined;
+    // Rate-based threshold check: only signal progress when delta >= scaled threshold.
+    auto now = std::chrono::steady_clock::now();
+    if (!fabric_progress_state.initialized) {
+        fabric_progress_state.last_raw_counter_sum = raw_sum;
+        fabric_progress_state.last_sample_time = now;
+        fabric_progress_state.initialized = true;
+        return fabric_progress_state.progress_token;
+    }
+
+    // Unsigned subtraction handles uint32_t wrap correctly.
+    uint32_t delta = raw_sum - fabric_progress_state.last_raw_counter_sum;
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - fabric_progress_state.last_sample_time);
+    float elapsed_ms = static_cast<float>(elapsed.count());
+    if (elapsed_ms < 1.0f) {
+        // Too soon since last sample — return current token without updating state.
+        return fabric_progress_state.progress_token;
+    }
+
+    // Scale threshold by elapsed time (normalized to 100ms baseline).
+    float scaled_threshold = PROGRESS_THRESHOLD * (elapsed_ms / 100.0f);
+
+    if (static_cast<float>(delta) >= scaled_threshold) {
+        fabric_progress_state.progress_token++;
+    }
+
+    fabric_progress_state.last_raw_counter_sum = raw_sum;
+    fabric_progress_state.last_sample_time = now;
+
+    return fabric_progress_state.progress_token;
 }
 
 // FIX LT9-PROGRESS (#42429 Approach C): Diagnostic dump of all active ERISC state when a dispatch
