@@ -425,7 +425,7 @@ class DispatcherData:
         try:
             kernel = self.find_kernel(watcher_kernel_id)
         except Exception:
-            if watcher_kernel_id != -1 and self._etal_device_id_mapping.has_unique_id(location._device.unique_id):
+            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location._device.unique_id):
                 metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
                 kernel_lookup_warning = self._kernel_missing_hint_for_device(metal_device_id)
         try:
