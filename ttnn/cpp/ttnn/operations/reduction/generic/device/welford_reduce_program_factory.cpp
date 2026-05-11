@@ -349,9 +349,27 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     constexpr uint32_t kNumPartialEntries = 4;  // HW: 4-tile depth for double-buffered (mean,var) pair pushes
 
     std::vector<m2::DataflowBufferSpec> dataflow_buffers = {
-        MakeDFB(INPUT_DFB, input_single_tile_size, kNumInputEntries, input_cb_data_format, a.tensor_spec().tile()),
-        MakeDFB(SCALER_DFB, scalar_single_tile_size, kNumScalerEntries, scalar_cb_data_format, a.tensor_spec().tile()),
-        MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()),
+        m2::DataflowBufferSpec{
+            .unique_id = INPUT_DFB,
+            .entry_size = input_single_tile_size,
+            .num_entries = kNumInputEntries,
+            .data_format_metadata = input_cb_data_format,
+            .tile_format_metadata = a.tensor_spec().tile(),
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = SCALER_DFB,
+            .entry_size = scalar_single_tile_size,
+            .num_entries = kNumScalerEntries,
+            .data_format_metadata = scalar_cb_data_format,
+            .tile_format_metadata = a.tensor_spec().tile(),
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = OUTPUT_DFB,
+            .entry_size = dst_single_tile_size,
+            .num_entries = kNumOutputEntries,
+            .data_format_metadata = dst_cb_data_format,
+            .tile_format_metadata = output.tensor_spec().tile(),
+        },
     };
 
     if (reduce_w) {
@@ -360,14 +378,22 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         dataflow_buffers.insert(
             dataflow_buffers.end(),
             {
-                MakeIntraDFB(
-                    VAR_DFB, var_single_tile_size, kNumScratchEntries, var_data_format, a.tensor_spec().tile()),
-                MakeIntraDFB(
-                    SCALED_DFB,
-                    input_single_tile_size,
-                    kNumScratchEntries,
-                    input_cb_data_format,
-                    a.tensor_spec().tile()),
+                m2::DataflowBufferSpec{
+                    .unique_id = VAR_DFB,
+                    .entry_size = var_single_tile_size,
+                    .num_entries = kNumScratchEntries,
+                    .data_format_metadata = var_data_format,
+                    .tile_format_metadata = a.tensor_spec().tile(),
+                    .disable_implicit_sync = true,
+                },
+                m2::DataflowBufferSpec{
+                    .unique_id = SCALED_DFB,
+                    .entry_size = input_single_tile_size,
+                    .num_entries = kNumScratchEntries,
+                    .data_format_metadata = input_cb_data_format,
+                    .tile_format_metadata = a.tensor_spec().tile(),
+                    .disable_implicit_sync = true,
+                },
             });
     }
     if (reduce_hw) {
@@ -376,18 +402,20 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         dataflow_buffers.insert(
             dataflow_buffers.end(),
             {
-                MakeDFB(
-                    PARTIAL_DFB,
-                    partial_single_tile_size,
-                    kNumPartialEntries,
-                    partial_data_format,
-                    a.tensor_spec().tile()),
-                MakeDFB(
-                    COMBINED_DFB,
-                    partial_single_tile_size,
-                    kNumScratchEntries,
-                    partial_data_format,
-                    a.tensor_spec().tile()),
+                m2::DataflowBufferSpec{
+                    .unique_id = PARTIAL_DFB,
+                    .entry_size = partial_single_tile_size,
+                    .num_entries = kNumPartialEntries,
+                    .data_format_metadata = partial_data_format,
+                    .tile_format_metadata = a.tensor_spec().tile(),
+                },
+                m2::DataflowBufferSpec{
+                    .unique_id = COMBINED_DFB,
+                    .entry_size = partial_single_tile_size,
+                    .num_entries = kNumScratchEntries,
+                    .data_format_metadata = partial_data_format,
+                    .tile_format_metadata = a.tensor_spec().tile(),
+                },
             });
     }
 
@@ -430,8 +458,20 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         };
         reader.runtime_arguments_schema.named_runtime_args = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     }
-    BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    reader.dfb_bindings = {
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = INPUT_DFB,
+            .local_accessor_name = "input",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = SCALER_DFB,
+            .local_accessor_name = "scaler",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+    };
     reader.tensor_bindings = {
         m2::KernelSpec::TensorBinding{.tensor_parameter_name = WELFORD_INPUT_TENSOR, .accessor_name = "input_tensor"},
     };
@@ -460,15 +500,39 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         };
         writer.runtime_arguments_schema.named_runtime_args = {"NC_per_core", "output_tile_start_id"};
         // HW writer doesn't propagate reduce_defines (matches Gen1 behavior).
-        BindDFB(writer, PARTIAL_DFB, "partial", m2::KernelSpec::DFBEndpointType::CONSUMER);
-        BindDFB(writer, COMBINED_DFB, "combined", m2::KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
+        writer.dfb_bindings = {
+            m2::KernelSpec::DFBBinding{
+                .dfb_spec_name = PARTIAL_DFB,
+                .local_accessor_name = "partial",
+                .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern = m2::DFBAccessPattern::STRIDED,
+            },
+            m2::KernelSpec::DFBBinding{
+                .dfb_spec_name = COMBINED_DFB,
+                .local_accessor_name = "combined",
+                .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern = m2::DFBAccessPattern::STRIDED,
+            },
+            m2::KernelSpec::DFBBinding{
+                .dfb_spec_name = OUTPUT_DFB,
+                .local_accessor_name = "output",
+                .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern = m2::DFBAccessPattern::STRIDED,
+            },
+        };
     } else {
         writer.source = m2::KernelSpec::SourceFilePath{
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved.cpp"};
         writer.runtime_arguments_schema.named_runtime_args = {"num_pages", "start_id"};
         writer.compiler_options.defines = reduce_defines;
-        BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
+        writer.dfb_bindings = {
+            m2::KernelSpec::DFBBinding{
+                .dfb_spec_name = OUTPUT_DFB,
+                .local_accessor_name = "output",
+                .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern = m2::DFBAccessPattern::STRIDED,
+            },
+        };
     }
     writer.tensor_bindings = {
         m2::KernelSpec::TensorBinding{.tensor_parameter_name = WELFORD_OUTPUT_TENSOR, .accessor_name = "output_tensor"},
@@ -524,18 +588,73 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         };
         compute.runtime_arguments_schema.named_runtime_args = {"NC_per_core"};
     }
-    BindDFB(compute, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFB(compute, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFB(compute, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    compute.dfb_bindings = {
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = INPUT_DFB,
+            .local_accessor_name = "input",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = SCALER_DFB,
+            .local_accessor_name = "scaler",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = OUTPUT_DFB,
+            .local_accessor_name = "output",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+    };
     if (reduce_w) {
-        BindDFB(compute, VAR_DFB, "var_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFB(compute, VAR_DFB, "var_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
-        BindDFB(compute, SCALED_DFB, "scaled_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFB(compute, SCALED_DFB, "scaled_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
+        compute.dfb_bindings.insert(
+            compute.dfb_bindings.end(),
+            {
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = VAR_DFB,
+                    .local_accessor_name = "var_w",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = VAR_DFB,
+                    .local_accessor_name = "var_r",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = SCALED_DFB,
+                    .local_accessor_name = "scaled_w",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = SCALED_DFB,
+                    .local_accessor_name = "scaled_r",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+            });
     }
     if (reduce_hw) {
-        BindDFB(compute, PARTIAL_DFB, "partial", m2::KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFB(compute, COMBINED_DFB, "combined", m2::KernelSpec::DFBEndpointType::CONSUMER);
+        compute.dfb_bindings.insert(
+            compute.dfb_bindings.end(),
+            {
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = PARTIAL_DFB,
+                    .local_accessor_name = "partial",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = COMBINED_DFB,
+                    .local_accessor_name = "combined",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+            });
     }
 
     // ---- Single work unit ----

@@ -47,7 +47,7 @@ namespace {
 // KernelSpec / WorkUnitSpec / TensorParameter ids — kept local with a `W_`
 // prefix so the symbols don't clash with the HW factory's analogues under Unity
 // builds (which merge anonymous namespaces from different .cpp files into one
-// TU). DFB ids and the MakeDFB / BindDFB / DefinesFromMap helpers are shared
+// TU). DFB ids and the DefinesFromMap helper are shared
 // and live in reduce_metal2_factory_helpers.hpp.
 constexpr const char* W_READER_KERNEL = "reduce_w_reader";
 constexpr const char* W_WRITER_KERNEL = "reduce_w_writer";
@@ -236,22 +236,48 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     constexpr uint32_t kNumScratchEntries = 2;
 
     std::vector<m2::DataflowBufferSpec> dataflow_buffers = {
-        MakeDFB(INPUT_DFB, src0_single_tile_size, kNumInputEntries, src0_cb_data_format, a.tensor_spec().tile()),
-        MakeDFB(SCALER_DFB, scaler_single_tile_size, kNumScalerEntries, scaler_cb_data_format, a.tensor_spec().tile()),
-        MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()),
+        m2::DataflowBufferSpec{
+            .unique_id = INPUT_DFB,
+            .entry_size = src0_single_tile_size,
+            .num_entries = kNumInputEntries,
+            .data_format_metadata = src0_cb_data_format,
+            .tile_format_metadata = a.tensor_spec().tile(),
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = SCALER_DFB,
+            .entry_size = scaler_single_tile_size,
+            .num_entries = kNumScalerEntries,
+            .data_format_metadata = scaler_cb_data_format,
+            .tile_format_metadata = a.tensor_spec().tile(),
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = OUTPUT_DFB,
+            .entry_size = dst_single_tile_size,
+            .num_entries = kNumOutputEntries,
+            .data_format_metadata = dst_cb_data_format,
+            .tile_format_metadata = output.tensor_spec().tile(),
+        },
     };
     if (operation_attributes.negate) {
         dataflow_buffers.insert(
             dataflow_buffers.end(),
             {
-                MakeIntraDFB(
-                    ACC_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()),
-                MakeIntraDFB(
-                    INEG_DFB,
-                    dst_single_tile_size,
-                    kNumScratchEntries,
-                    dst_cb_data_format,
-                    output.tensor_spec().tile()),
+                m2::DataflowBufferSpec{
+                    .unique_id = ACC_DFB,
+                    .entry_size = dst_single_tile_size,
+                    .num_entries = kNumScratchEntries,
+                    .data_format_metadata = dst_cb_data_format,
+                    .tile_format_metadata = output.tensor_spec().tile(),
+                    .disable_implicit_sync = true,
+                },
+                m2::DataflowBufferSpec{
+                    .unique_id = INEG_DFB,
+                    .entry_size = dst_single_tile_size,
+                    .num_entries = kNumScratchEntries,
+                    .data_format_metadata = dst_cb_data_format,
+                    .tile_format_metadata = output.tensor_spec().tile(),
+                    .disable_implicit_sync = true,
+                },
             });
     }
 
@@ -279,8 +305,20 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             },
         .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
-    BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    reader.dfb_bindings = {
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = INPUT_DFB,
+            .local_accessor_name = "input",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = SCALER_DFB,
+            .local_accessor_name = "scaler",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+    };
     reader.tensor_bindings = {
         m2::KernelSpec::TensorBinding{.tensor_parameter_name = W_INPUT_TENSOR, .accessor_name = "input_tensor"},
     };
@@ -300,7 +338,14 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             },
         .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
-    BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
+    writer.dfb_bindings = {
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = OUTPUT_DFB,
+            .local_accessor_name = "output",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+    };
     writer.tensor_bindings = {
         m2::KernelSpec::TensorBinding{.tensor_parameter_name = W_OUTPUT_TENSOR, .accessor_name = "output_tensor"},
     };
@@ -329,17 +374,58 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
-    BindDFB(compute, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFB(compute, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFB(compute, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    compute.dfb_bindings = {
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = INPUT_DFB,
+            .local_accessor_name = "input",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = SCALER_DFB,
+            .local_accessor_name = "scaler",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+        m2::KernelSpec::DFBBinding{
+            .dfb_spec_name = OUTPUT_DFB,
+            .local_accessor_name = "output",
+            .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = m2::DFBAccessPattern::STRIDED,
+        },
+    };
     if (operation_attributes.negate) {
         // The acc and ineg DFBs are produced AND consumed by this same kernel. Metal 2.0
         // requires distinct local_accessor_names per binding even when both endpoints are
         // the same kernel; on Gen1 the two accessor ids resolve to the same underlying CB.
-        BindDFB(compute, ACC_DFB, "acc_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFB(compute, ACC_DFB, "acc_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
-        BindDFB(compute, INEG_DFB, "ineg_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFB(compute, INEG_DFB, "ineg_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
+        compute.dfb_bindings.insert(
+            compute.dfb_bindings.end(),
+            {
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = ACC_DFB,
+                    .local_accessor_name = "acc_w",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = ACC_DFB,
+                    .local_accessor_name = "acc_r",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = INEG_DFB,
+                    .local_accessor_name = "ineg_w",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+                m2::KernelSpec::DFBBinding{
+                    .dfb_spec_name = INEG_DFB,
+                    .local_accessor_name = "ineg_r",
+                    .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = m2::DFBAccessPattern::STRIDED,
+                },
+            });
     }
 
     // ---- Single work unit covering all worker cores ----
