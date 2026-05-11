@@ -107,7 +107,6 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
 
     // Reconfigure only SrcB for the B2D broadcast (Float32 intermediates).
     // SrcA is left as-is from the preceding matmul to preserve its format.
-    reconfig_data_format_srca(cb_intermediates);
     reconfig_data_format_srcb(cb_intermediates);
 
     // Lightweight MOP reinit for unary_bcast<COL> with B2D path.

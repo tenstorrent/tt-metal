@@ -285,7 +285,6 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 // Only reprograms UNPACK and MATH MOPs — safe inside a tile_regs_acquire block.
 // Uses reconfig_data_format_srcb so SrcA format register is preserved for the caller.
 void init_unary_bcast_col(uint32_t cb_col_vec) {
-    reconfig_data_format_srca(cb_col_vec);
     reconfig_data_format_srcb(cb_col_vec);
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_col_vec)));
