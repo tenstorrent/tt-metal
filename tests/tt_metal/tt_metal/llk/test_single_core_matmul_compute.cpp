@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -31,6 +33,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
@@ -689,24 +693,60 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f,
-        1.0f,
-        in0_total_size_bytes / sizeof(bfloat16),
-        std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0.03125f,
-        0.03125f,
-        in1_total_size_bytes / sizeof(bfloat16),
-        std::chrono::system_clock::now().time_since_epoch().count());
+    auto packed_input0 = create_random_vector_of_bfloat16(in0_total_size_bytes, 1.0f, 0x1234);
+    auto packed_input1 = create_random_vector_of_bfloat16(in1_total_size_bytes, 1.0f, 0x5678, -0.5f);
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
-    auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f * K * num_blocks,
-        1.0f * K * num_blocks,
-        (out_byte_size) / sizeof(bfloat16),
-        std::chrono::system_clock::now().time_since_epoch().count());
+    // Data in DRAM is in TILED_NFACES layout, stored as num_blocks consecutive
+    // blocks of [M*32, K*32] and [K*32, N*32] respectively.
+    const uint32_t M_elem = M * 32;
+    const uint32_t K_elem = K * 32;
+    const uint32_t N_elem = N * 32;
+    const uint32_t block_in0_elems = M_elem * K_elem;
+    const uint32_t block_in1_elems = K_elem * N_elem;
+    const uint32_t out_elems = M_elem * N_elem;
+
+    auto u16_in0 = u16_from_u32_vector(packed_input0);
+    auto u16_in1 = u16_from_u32_vector(packed_input1);
+
+    std::vector<float> golden_float(out_elems, 0.0f);
+    std::vector<uint32_t> block_shape_in0 = {1, 1, M_elem, K_elem};
+    std::vector<uint32_t> block_shape_in1 = {1, 1, K_elem, N_elem};
+
+    for (uint32_t b = 0; b < num_blocks; b++) {
+        // Extract this block's tile data and untilize to row-major
+        std::vector<uint16_t> block_in0(
+            u16_in0.begin() + b * block_in0_elems, u16_in0.begin() + (b + 1) * block_in0_elems);
+        std::vector<uint16_t> block_in1(
+            u16_in1.begin() + b * block_in1_elems, u16_in1.begin() + (b + 1) * block_in1_elems);
+
+        auto in0_rm = convert_layout<uint16_t>(
+            block_in0, block_shape_in0, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+        auto in1_rm = convert_layout<uint16_t>(
+            block_in1, block_shape_in1, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+
+        for (uint32_t i = 0; i < M_elem; i++) {
+            for (uint32_t j = 0; j < N_elem; j++) {
+                for (uint32_t k = 0; k < K_elem; k++) {
+                    float a = static_cast<float>(std::bit_cast<bfloat16>(in0_rm[i * K_elem + k]));
+                    float bb = static_cast<float>(std::bit_cast<bfloat16>(in1_rm[k * N_elem + j]));
+                    golden_float[i * N_elem + j] += a * bb;
+                }
+            }
+        }
+    }
+
+    // Convert golden from float to bfloat16, tilize, and pack
+    std::vector<uint16_t> golden_u16(out_elems);
+    for (uint32_t i = 0; i < out_elems; i++) {
+        golden_u16[i] = std::bit_cast<uint16_t>(bfloat16(golden_float[i]));
+    }
+    std::vector<uint32_t> out_shape = {1, 1, M_elem, N_elem};
+    auto golden_tiled = convert_layout<uint16_t>(
+        golden_u16, out_shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+    auto packed_golden = u32_from_u16_vector(golden_tiled);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -750,15 +790,20 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    int failed_index;
-    pass &= is_close_packed_vectors<bfloat16, uint32_t>(
-        dest_buffer_data,
-        packed_golden,
-        [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); },
-        &failed_index);
+
+    auto comparison_function = [](float a, float b) {
+        const float rtol = 0.05f;
+        const float atol = 0.05f;
+        float maxabs = fmaxf(fabsf(a), fabsf(b));
+        float absdiff = fabsf(a - b);
+        return (absdiff <= atol) || absdiff < rtol * maxabs;
+    };
+    int argfail = -1;
+    pass &= packed_uint32_t_vector_comparison(dest_buffer_data, packed_golden, comparison_function, &argfail);
     if (not pass) {
-        log_info(tt::LogTest, "Failed Index={}", failed_index);
-        print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
+        log_info(tt::LogTest, "Failed at index={}", argfail);
+        print_vec_of_uint32_as_packed_bfloat16(dest_buffer_data, M * N, "Result");
+        print_vec_of_uint32_as_packed_bfloat16(packed_golden, M * N, "Golden");
     }
     return pass;
 }
