@@ -348,29 +348,47 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     constexpr uint32_t kNumScratchEntries = 2;
     constexpr uint32_t kNumPartialEntries = 4;  // HW: 4-tile depth for double-buffered (mean,var) pair pushes
 
-    std::vector<m2::DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.push_back(
-        MakeDFB(INPUT_DFB, input_single_tile_size, kNumInputEntries, input_cb_data_format, a.tensor_spec().tile()));
-    dataflow_buffers.push_back(
-        MakeDFB(SCALER_DFB, scalar_single_tile_size, kNumScalerEntries, scalar_cb_data_format, a.tensor_spec().tile()));
-    dataflow_buffers.push_back(
-        MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()));
+    std::vector<m2::DataflowBufferSpec> dataflow_buffers = {
+        MakeDFB(INPUT_DFB, input_single_tile_size, kNumInputEntries, input_cb_data_format, a.tensor_spec().tile()),
+        MakeDFB(SCALER_DFB, scalar_single_tile_size, kNumScalerEntries, scalar_cb_data_format, a.tensor_spec().tile()),
+        MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()),
+    };
 
     if (reduce_w) {
         const tt::DataFormat var_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t var_single_tile_size = tile_size(var_data_format);
-        dataflow_buffers.push_back(
-            MakeIntraDFB(VAR_DFB, var_single_tile_size, kNumScratchEntries, var_data_format, a.tensor_spec().tile()));
-        dataflow_buffers.push_back(MakeIntraDFB(
-            SCALED_DFB, input_single_tile_size, kNumScratchEntries, input_cb_data_format, a.tensor_spec().tile()));
+        dataflow_buffers.insert(
+            dataflow_buffers.end(),
+            {
+                MakeIntraDFB(
+                    VAR_DFB, var_single_tile_size, kNumScratchEntries, var_data_format, a.tensor_spec().tile()),
+                MakeIntraDFB(
+                    SCALED_DFB,
+                    input_single_tile_size,
+                    kNumScratchEntries,
+                    input_cb_data_format,
+                    a.tensor_spec().tile()),
+            });
     }
     if (reduce_hw) {
         constexpr tt::DataFormat partial_data_format = tt::DataFormat::Float32;
         const uint32_t partial_single_tile_size = tile_size(partial_data_format);
-        dataflow_buffers.push_back(MakeDFB(
-            PARTIAL_DFB, partial_single_tile_size, kNumPartialEntries, partial_data_format, a.tensor_spec().tile()));
-        dataflow_buffers.push_back(MakeDFB(
-            COMBINED_DFB, partial_single_tile_size, kNumScratchEntries, partial_data_format, a.tensor_spec().tile()));
+        dataflow_buffers.insert(
+            dataflow_buffers.end(),
+            {
+                MakeDFB(
+                    PARTIAL_DFB,
+                    partial_single_tile_size,
+                    kNumPartialEntries,
+                    partial_data_format,
+                    a.tensor_spec().tile()),
+                MakeDFB(
+                    COMBINED_DFB,
+                    partial_single_tile_size,
+                    kNumScratchEntries,
+                    partial_data_format,
+                    a.tensor_spec().tile()),
+            });
     }
 
     std::map<std::string, std::string> reduce_defines_map =
@@ -382,7 +400,6 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     // ---- Reader ----
     m2::KernelSpec reader;
     reader.unique_id = WELFORD_READER_KERNEL;
-    reader.num_threads = 1;
     reader.compiler_options.defines = reduce_defines;
     reader.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
@@ -415,13 +432,13 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     }
     BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
     BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
-    reader.tensor_bindings.push_back(
-        m2::KernelSpec::TensorBinding{.tensor_parameter_name = WELFORD_INPUT_TENSOR, .accessor_name = "input_tensor"});
+    reader.tensor_bindings = {
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = WELFORD_INPUT_TENSOR, .accessor_name = "input_tensor"},
+    };
 
     // ---- Writer ----
     m2::KernelSpec writer;
     writer.unique_id = WELFORD_WRITER_KERNEL;
-    writer.num_threads = 1;
     writer.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
             m2::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -453,8 +470,9 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         writer.compiler_options.defines = reduce_defines;
         BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
     }
-    writer.tensor_bindings.push_back(m2::KernelSpec::TensorBinding{
-        .tensor_parameter_name = WELFORD_OUTPUT_TENSOR, .accessor_name = "output_tensor"});
+    writer.tensor_bindings = {
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = WELFORD_OUTPUT_TENSOR, .accessor_name = "output_tensor"},
+    };
 
     // ---- Compute ----
     std::string compute_kernel_path;
@@ -469,7 +487,6 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     m2::KernelSpec compute;
     compute.unique_id = WELFORD_COMPUTE_KERNEL;
     compute.source = m2::KernelSpec::SourceFilePath{compute_kernel_path};
-    compute.num_threads = 1;
     compute.compiler_options.defines = reduce_defines;
     compute.config_spec = m2::ComputeConfiguration{
         .math_fidelity = math_fidelity,

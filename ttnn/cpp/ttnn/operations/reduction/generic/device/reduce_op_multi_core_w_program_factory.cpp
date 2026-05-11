@@ -235,18 +235,24 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     constexpr uint32_t kNumOutputEntries = 2;
     constexpr uint32_t kNumScratchEntries = 2;
 
-    std::vector<m2::DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.push_back(
-        MakeDFB(INPUT_DFB, src0_single_tile_size, kNumInputEntries, src0_cb_data_format, a.tensor_spec().tile()));
-    dataflow_buffers.push_back(
-        MakeDFB(SCALER_DFB, scaler_single_tile_size, kNumScalerEntries, scaler_cb_data_format, a.tensor_spec().tile()));
-    dataflow_buffers.push_back(
-        MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()));
+    std::vector<m2::DataflowBufferSpec> dataflow_buffers = {
+        MakeDFB(INPUT_DFB, src0_single_tile_size, kNumInputEntries, src0_cb_data_format, a.tensor_spec().tile()),
+        MakeDFB(SCALER_DFB, scaler_single_tile_size, kNumScalerEntries, scaler_cb_data_format, a.tensor_spec().tile()),
+        MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()),
+    };
     if (operation_attributes.negate) {
-        dataflow_buffers.push_back(MakeIntraDFB(
-            ACC_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
-        dataflow_buffers.push_back(MakeIntraDFB(
-            INEG_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
+        dataflow_buffers.insert(
+            dataflow_buffers.end(),
+            {
+                MakeIntraDFB(
+                    ACC_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()),
+                MakeIntraDFB(
+                    INEG_DFB,
+                    dst_single_tile_size,
+                    kNumScratchEntries,
+                    dst_cb_data_format,
+                    output.tensor_spec().tile()),
+            });
     }
 
     // Defines shared by all kernels
@@ -260,7 +266,6 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     reader.source = m2::KernelSpec::SourceFilePath{
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
         "reader_unary_reduce_universal_start_id.cpp"};
-    reader.num_threads = 1;
     reader.compile_time_arg_bindings = {
         {"scaler_bits", scaler_bits},
     };
@@ -276,15 +281,15 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     };
     BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
     BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
-    reader.tensor_bindings.push_back(
-        m2::KernelSpec::TensorBinding{.tensor_parameter_name = W_INPUT_TENSOR, .accessor_name = "input_tensor"});
+    reader.tensor_bindings = {
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = W_INPUT_TENSOR, .accessor_name = "input_tensor"},
+    };
 
     // ---- Writer kernel ----
     m2::KernelSpec writer;
     writer.unique_id = W_WRITER_KERNEL;
     writer.source = m2::KernelSpec::SourceFilePath{
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved.cpp"};
-    writer.num_threads = 1;
     writer.runtime_arguments_schema.named_runtime_args = {"num_pages", "start_id"};
     writer.compiler_options.defines = reduce_defines;
     writer.config_spec = m2::DataMovementConfiguration{
@@ -296,8 +301,9 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
         .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
-    writer.tensor_bindings.push_back(
-        m2::KernelSpec::TensorBinding{.tensor_parameter_name = W_OUTPUT_TENSOR, .accessor_name = "output_tensor"});
+    writer.tensor_bindings = {
+        m2::KernelSpec::TensorBinding{.tensor_parameter_name = W_OUTPUT_TENSOR, .accessor_name = "output_tensor"},
+    };
 
     // ---- Compute kernel ----
     const std::string compute_kernel_path =
@@ -308,7 +314,6 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     m2::KernelSpec compute;
     compute.unique_id = W_COMPUTE_KERNEL;
     compute.source = m2::KernelSpec::SourceFilePath{compute_kernel_path};
-    compute.num_threads = 1;
     compute.compile_time_arg_bindings = {
         {"Wt", Wt},
         {"NC", 1u},
