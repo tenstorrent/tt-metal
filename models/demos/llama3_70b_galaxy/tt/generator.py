@@ -1311,6 +1311,17 @@ class Generator(WarmupForwardMixin):
 
             return tt_out.cpu(), tt_log_probs_cpu
 
+        # Device sampling writes the sampled token into the persistent decode
+        # token tensor so the next traced decode step can consume it without a
+        # host copy. Do not let async readback overlap with reuse of that
+        # tensor, or seeded/mixed batches can observe stale or partially
+        # overwritten sampled-token state.
+        sampled_token_out = tt_out[0] if isinstance(tt_out, tuple) else tt_out
+        if isinstance(sampled_token_out, list):
+            sampled_token_out = sampled_token_out[0]
+        if sampled_token_out.shape[-1] < self.model.vocab_size // 8:
+            return self.read_decode_output(tt_out, async_read=False), None
+
         logits, log_probs, read_event = self.model.process_output_decode(tt_out)
         return (logits, log_probs), [read_event]
 
