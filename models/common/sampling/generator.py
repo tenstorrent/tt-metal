@@ -98,6 +98,7 @@ class SamplingGenerator:
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
 
         self._penalties_active = False
+        self._mixed_top1_sampling = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
@@ -219,8 +220,22 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
+    def _has_mixed_top1_sampling(self, sampling_params, active_slots: list[int] | None = None):
+        top_k = getattr(sampling_params, "top_k", None)
+        if not isinstance(top_k, list):
+            return False
+
+        if active_slots is not None:
+            param_indices = self.seed_manager._expanded_user_ids(active_slots)
+            active_top_k = [top_k[idx] for idx in param_indices if idx < len(top_k)]
+        else:
+            active_top_k = top_k
+
+        return any(k == 1 for k in active_top_k) and any(k != 1 for k in active_top_k)
+
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
+        self._mixed_top1_sampling = self._has_mixed_top1_sampling(sampling_params, empty_slots)
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
@@ -378,7 +393,13 @@ class SamplingGenerator:
         # persistent output-count state after sampling. Keep that path
         # untraced so each decode step observes the current penalty buffers
         # through normal op dependencies.
-        use_internal_trace = enable_trace and self.enable_internal_trace and not penalties_on
+        # Mixed top-1/stochastic batches also stay untraced: the TT sampling
+        # trace contains the stochastic RNG path for the whole batch, and on
+        # Galaxy that can make the deterministic top-1 rows flip between two
+        # valid continuations across repeated batches.
+        use_internal_trace = (
+            enable_trace and self.enable_internal_trace and not penalties_on and not self._mixed_top1_sampling
+        )
 
         if not use_internal_trace:
             tt_out = self._run_sampling(

@@ -1113,7 +1113,7 @@ class Generator(WarmupForwardMixin):
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
             sampling_module = self.model.sampling
-            sampling_module.reset_sampling_params(sampling_params)
+            sampling_module.reset_sampling_params(sampling_params, empty_slots=active_seed_slots)
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
@@ -1269,6 +1269,7 @@ class Generator(WarmupForwardMixin):
                 sampling_module is not None
                 and getattr(sampling_module, "enable_internal_trace", False)
                 and not getattr(sampling_module, "_penalties_active", False)
+                and not getattr(sampling_module, "_mixed_top1_sampling", False)
             ):
                 # Pre-capture the split sampling trace so the first live decode
                 # step does not lazily enter sampling trace capture.
