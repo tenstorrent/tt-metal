@@ -448,8 +448,12 @@ jobs:
           # This ensures the sweep fixture creates a mesh device matching the
           # traced topology (e.g., 4x8 for Galaxy, 1x2 for N300).
           MESH=$(python3 -c "
-          import json, glob, sys
+          import json, glob, sys, os
+          arch = os.environ.get('ARCH_NAME', '').lower()
+          arch_filter = 'wormhole' if 'wormhole' in arch else ('blackhole' if 'blackhole' in arch else '')
           for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
+              if arch_filter and arch_filter not in f.lower():
+                  continue
               with open(f) as fh:
                   data = json.load(fh)
               for suite in data.values():
