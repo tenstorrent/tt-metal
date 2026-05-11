@@ -107,9 +107,11 @@ jobs:
       TT_METAL_RUNTIME_ROOT: /tmp/tt-metal
       LD_LIBRARY_PATH: /tmp/tt-metal/build/lib
       PYTHON_ENV_DIR: /opt/venv
-      PYTHONPATH: /opt/venv/lib/python3.10/site-packages:/tmp/tt-metal
+      PYTHONPATH: /tmp/tt-pydeps:/opt/venv/lib/python3.10/site-packages:/tmp/tt-metal
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
       TT_METAL_CACHE: /tmp/tt-metal-cache
+      HOME: /tmp/tt-home
+      PIP_CACHE_DIR: /tmp/tt-pip-cache
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -220,7 +222,8 @@ jobs:
 
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /tmp/tt-metal
-          mpirun --pernode pip install $(find /ci/artifacts | grep whl)
+          mpirun --pernode bash -lc 'rm -rf /tmp/tt-pydeps /tmp/tt-home /tmp/tt-pip-cache && mkdir -p /tmp/tt-pydeps /tmp/tt-home /tmp/tt-pip-cache'
+          mpirun --pernode bash -lc 'HOME=/tmp/tt-home PIP_CACHE_DIR=/tmp/tt-pip-cache python3 -m pip install --no-input --no-cache-dir --target /tmp/tt-pydeps $(find /ci/artifacts -name "*.whl")'
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
