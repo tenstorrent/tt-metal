@@ -5,7 +5,6 @@
 
 #include "device/dropout_device_operation.hpp"
 #include "dropout.hpp"
-#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::experimental {
 
@@ -17,7 +16,6 @@ Tensor dropout(
     bool use_per_device_seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    py_log_here();
     return ttnn::prim::dropout(
         input_tensor,
         prob,
