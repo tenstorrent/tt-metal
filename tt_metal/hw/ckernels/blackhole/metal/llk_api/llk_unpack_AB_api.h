@@ -40,7 +40,7 @@ inline void llk_unpack_AB(
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
-    const std::uint32_t bcast_row_idx = 0) {
+    [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -64,6 +64,10 @@ inline void llk_unpack_AB(
         get_operand_num_faces(operandB_id)));
 
     WAYPOINT("UABW");
-    _llk_unpack_AB_<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
+    if constexpr (BType == BroadcastType::ROW) {
+        _llk_unpack_AB_<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
+    } else {
+        _llk_unpack_AB_<BType>(address_a, address_b);
+    }
     WAYPOINT("UABD");
 }

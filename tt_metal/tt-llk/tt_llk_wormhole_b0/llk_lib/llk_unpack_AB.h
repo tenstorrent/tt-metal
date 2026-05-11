@@ -197,7 +197,11 @@ inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape,
  * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_(const std::uint32_t address_a, std::uint32_t address_b, const std::uint32_t bcast_row_idx = 0, const std::uint32_t srcb_format = 0)
+inline void _llk_unpack_AB_(
+    const std::uint32_t address_a,
+    std::uint32_t address_b,
+    [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
+    [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
