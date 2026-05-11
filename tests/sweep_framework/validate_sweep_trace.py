@@ -466,9 +466,34 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                     )
                 )
 
+    # Build a lookup of matched configs' normalized arguments by op_name
+    # to detect argument-level duplicates that the tracer collapsed.
+    matched_norm_args: dict[str, set[str]] = {}  # op_name -> set of normalized arg JSON
+    for ch in matched_hashes:
+        if ch in master_index:
+            m_op, _, m_args = master_index[ch]
+            norm = json.dumps(normalize(canonicalize_op_args(m_op, m_args)), sort_keys=True)
+            matched_norm_args.setdefault(m_op, set()).add(norm)
+
     # Report master configs with no sweep execution
     for ch, (op_name, cid, _args) in master_index.items():
         if ch not in matched_hashes:
+            # Check if an identical config (same normalized args) was already matched.
+            # This happens when the same op call is traced on different hardware
+            # (e.g., p100a and p150b), producing different config_hash but identical args.
+            norm_args = json.dumps(normalize(canonicalize_op_args(op_name, _args)), sort_keys=True)
+            if norm_args in matched_norm_args.get(op_name, set()):
+                matched_hashes.add(ch)
+                report.results.append(
+                    ConfigResult(
+                        config_hash=ch,
+                        op_name=op_name,
+                        master_config_id=cid,
+                        sweep_config_id=None,
+                        status="match",
+                    )
+                )
+                continue
             report.results.append(
                 ConfigResult(
                     config_hash=ch,
