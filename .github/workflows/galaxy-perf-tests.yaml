@@ -72,6 +72,4 @@ jobs:
       docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      # Galaxy perf runs on Wormhole Galaxy (wh_galaxy) only.
-      enabled-skus: wh_galaxy_perf
       model: ${{ inputs.model || 'all' }}

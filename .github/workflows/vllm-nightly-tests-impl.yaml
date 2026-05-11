@@ -397,7 +397,12 @@ jobs:
 
       - name: 📀 Install vLLM
         run: |
-          uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 2>&1 | tee "${FILE_INSTALL_LOG}"
+          {
+            uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+            if [ -d vllm/plugins/vllm-tt-plugin ]; then
+              uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+            fi
+          } 2>&1 | tee "${FILE_INSTALL_LOG}"
           exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
@@ -457,11 +462,61 @@ jobs:
           elapsed=0
           interval=20
 
+          # Read the launcher PID once. ``read -r`` consumes only the
+          # first line, so a stray trailing line in the PID file can't
+          # turn ``$server_pid`` into a multi-token argument to
+          # ``kill -0``. A missing file or non-numeric content leaves
+          # ``$server_pid`` empty and the liveness check below silently
+          # skips rather than failing closed.
+          server_pid=""
+          if [ -f "${FILE_SERVER_PID}" ]; then
+            read -r server_pid < "${FILE_SERVER_PID}" || server_pid=""
+          fi
+          if ! [[ "$server_pid" =~ ^[0-9]+$ ]]; then
+            server_pid=""
+          fi
+
+          # vLLM writes one of these to the server log within seconds of
+          # an engine-core crash. Polling /health for the full
+          # server-timeout after one has appeared just burns CI minutes —
+          # fail fast so the rest of the matrix can move on. Using a
+          # single ``grep -m1`` with multiple ``-e`` patterns gives one
+          # bounded-by-first-match file scan per poll cycle even as the
+          # log grows.
+          fatal_grep_args=(
+            -F -m1
+            -e "EngineCore failed to start"
+            -e "EngineCore encountered a fatal error"
+            -e "EngineDeadError"
+            -e "Engine core initialization failed"
+            -e "Failed core proc"
+          )
+
           while [ $elapsed -lt $timeout_seconds ]; do
             if curl -sf http://localhost:8000/health; then
               echo "Server is up! 🚀 [$elapsed sec]"
               exit 0
             fi
+
+            # Fast-fail when the launcher process has already exited.
+            if [ -n "$server_pid" ] && ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "❌ Server launcher (pid=$server_pid) exited before becoming ready [$elapsed sec]."
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+
+            # Fast-fail on a fatal marker in the server log. The launcher
+            # may stay alive after engine cores crash (e.g. multiprocess
+            # DP), so the log signal complements the liveness check.
+            if [ -f "${FILE_SERVER_LOG}" ]; then
+              fatal_match=$(grep "${fatal_grep_args[@]}" "${FILE_SERVER_LOG}" 2>/dev/null) || true
+              if [ -n "$fatal_match" ]; then
+                echo "❌ Fatal marker in server log [$elapsed sec]: $fatal_match"
+                echo "Check out the server log in a step below."
+                exit 1
+              fi
+            fi
+
             sleep $interval
             elapsed=$((elapsed + interval))
           done
@@ -641,7 +696,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["output"],
               "output_dir": "ai_summaries"
@@ -681,7 +736,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE",
               "input_dir": "ai_job_summaries",
               "output_dir": "ai_run_summaries"
@@ -699,6 +754,7 @@ jobs:
         run: |
           if [ -f "$REPORT_FILE" ]; then
             cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::Report file not found: $REPORT_FILE"
           fi

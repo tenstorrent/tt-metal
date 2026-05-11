@@ -267,6 +267,7 @@ RUN adduser --uid 1001 --shell /bin/bash user && \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
+    gh \
     less \
     libmpfr-dev \
     nano \

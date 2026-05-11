@@ -797,6 +797,9 @@ class TestConfig:
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
 
+        if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
+            OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
+
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
     def build_shared_artefacts(self):

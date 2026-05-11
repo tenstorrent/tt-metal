@@ -78,7 +78,6 @@ from tqdm import tqdm
 
 import ttml
 
-from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.common.utils import no_grad
@@ -138,13 +137,12 @@ def evaluate(
     causal_mask,
     distributed=False,
     dp_mapper=None,
-    sharded_loss=False,
-    vocab_padded=0,
     tp_size=1,
     shard_dim=1,
 ):
     """Compute average validation loss over num_batches."""
     model.eval()
+    use_tp = tp_size > 1
     ctx = ttml.autograd.AutoContext.get_instance()
     with no_grad():
         losses = []
@@ -155,10 +153,12 @@ def evaluate(
             input_tensor = create_input_tensor(x_np, dp_mapper)
 
             logits = model(input_tensor, causal_mask, input_ids_np=x_np)
-            if sharded_loss:
-                loss = sharded_cross_entropy_loss(logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim)
+            target_tensor = create_target_tensor(y_np, dp_mapper)
+            if use_tp:
+                loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                    logits, target_tensor, cluster_axis=shard_dim
+                )
             else:
-                target_tensor = create_target_tensor(y_np, dp_mapper)
                 loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
             losses.append(get_loss_value(loss, distributed))
             ctx.reset_graph()
@@ -329,14 +329,6 @@ def main():
         help="Enable memory usage tracking. Optional int N = snapshot every N-th "
         "layer (default: every layer). Use --track_memory or --track_memory 4.",
     )
-    parser.add_argument(
-        "--sharded_loss",
-        action="store_true",
-        default=False,
-        help="Keep LM-head output vocab-sharded and use distributed cross-entropy "
-        "loss (avoids all-gathering the full vocabulary).",
-    )
-
     # Finetuning
     parser.add_argument(
         "--freeze_embeddings",
@@ -534,7 +526,6 @@ def main():
         print(f"\nLoRA enabled: rank={args.lora_rank}, alpha={lora_alpha}, " f"targets={lora_targets}")
 
     from utils.model_factory import create_ttml_model, load_hf_weights
-    from utils.tensor_utils import tile_pad
 
     ttml_model, config, tie, shard_dim, mode_str = create_ttml_model(
         hf_config,
@@ -543,11 +534,7 @@ def main():
         tp_size=tp_size,
         checkpoint=args.checkpoint,
         track_memory=args.track_memory,
-        sharded_loss=args.sharded_loss,
     )
-    if not (tp_size > 1) and args.sharded_loss:
-        args.sharded_loss = False
-    vocab_padded = tile_pad(config.vocab_size)
 
     # Memory snapshot after model creation
     if args.track_memory:
@@ -739,8 +726,6 @@ def main():
         causal_mask,
         distributed,
         dp_mapper,
-        sharded_loss=args.sharded_loss,
-        vocab_padded=vocab_padded,
         tp_size=tp_size,
         shard_dim=shard_dim if shard_dim is not None else 1,
     )
@@ -822,10 +807,12 @@ def main():
                 MemoryUsageTracker.snapshot("FORWARD_PASS")
 
             # Cross-entropy loss
-            if args.sharded_loss:
-                loss = sharded_cross_entropy_loss(logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim)
+            target_tensor = create_target_tensor(y_np, dp_mapper)
+            if tp_size > 1:
+                loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                    logits, target_tensor, cluster_axis=shard_dim
+                )
             else:
-                target_tensor = create_target_tensor(y_np, dp_mapper)
                 loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
             t0 = _tlog(step, "loss_compute", t0)
 
@@ -930,8 +917,6 @@ def main():
                 causal_mask,
                 distributed,
                 dp_mapper,
-                sharded_loss=args.sharded_loss,
-                vocab_padded=vocab_padded,
                 tp_size=tp_size,
                 shard_dim=shard_dim if shard_dim is not None else 1,
             )
