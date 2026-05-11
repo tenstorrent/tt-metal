@@ -10,6 +10,10 @@
 #include "api/compute/transpose_wh.h"
 #include "experimental/circular_buffer.h"
 #include "internal/mod_div_lib.h"
+#include "api/debug/dprint.h"
+#ifdef CHLKC_UNPACK
+#include "llk_operands.h"
+#endif
 
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
@@ -215,6 +219,17 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
+    {UNPACK({
+        const uint32_t cb_in0_id = get_operand_id(in0_cb_id);
+        const uint32_t cb_in1_id = get_operand_id(in1_cb_id);
+        const uint32_t cb_out_id = get_operand_id(out_cb_id);
+        DEVICE_PRINT("cb_in0 unpack_src_format: {}\n", (DataFormat)unpack_src_format[cb_in0_id]);
+        DEVICE_PRINT("cb_in1 unpack_src_format: {}\n", (DataFormat)unpack_src_format[cb_in1_id]);
+        DEVICE_PRINT("cb_out unpack_src_format: {}\n", (DataFormat)unpack_src_format[cb_out_id]);
+    })}
+
+    DEVICE_PRINT("calling mm_block_init\n");
+
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
@@ -236,11 +251,13 @@ void kernel_main() {
 #ifdef PACK_RELU
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
+                    DEVICE_PRINT("calling llk_pack_relu_config (NO_RELU)\n");
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
                 }
 #endif
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
+                    DEVICE_PRINT("calling pack_reconfig_data_format (mm_partials_cb)\n");
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                 }
 
@@ -250,18 +267,25 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
                     if (last_out) {
                         // if last block we pack the final result with relu enabled
+                        DEVICE_PRINT("calling llk_pack_relu_config (ZERO_RELU)\n");
                         PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
                     }
 #endif
 
                     if constexpr (in0_transpose_tile) {
+                        DEVICE_PRINT("calling reconfig_data_format_srca (in1 -> in0_transpose)\n");
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
+                        DEVICE_PRINT("calling transpose_wh_init_short\n");
                         transpose_wh_init_short(in0_transpose_cb_id);
+                        DEVICE_PRINT("calling pack_reconfig_data_format (in0_cb)\n");
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
+                        DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(0)\n");
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
+                        DEVICE_PRINT("calling transpose_tile_block\n");
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
+                        DEVICE_PRINT("calling mm_block_init_short_with_dt\n");
                         mm_block_init_short_with_dt(
                             in0_cb_id,
                             in1_cb_id,
@@ -270,6 +294,7 @@ void kernel_main() {
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
+                        DEVICE_PRINT("calling pack_reconfig_data_format (mm_partials_cb)\n");
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
@@ -284,8 +309,10 @@ void kernel_main() {
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                            DEVICE_PRINT("calling tile_regs_acquire\n");
                             tile_regs_acquire();
                             if (enable_reload) {
+                                DEVICE_PRINT("calling reload_from_cb_to_dst\n");
                                 reload_from_cb_to_dst(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -309,6 +336,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
+                                DEVICE_PRINT("calling matmul_block (inner_dim_idx={})\n", inner_dim_idx);
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -330,56 +358,72 @@ void kernel_main() {
 // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
 #if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
                                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                    DEVICE_PRINT("calling SFPU_OP_FUNC_ACTIVATION (i={})\n", i);
                                     SFPU_OP_FUNC_ACTIVATION
                                 }
 #endif
+                                DEVICE_PRINT("calling tile_regs_commit (last_out)\n");
                                 tile_regs_commit();
                                 // Pack out to output buffer
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
+                                DEVICE_PRINT("calling tile_regs_wait (last_out)\n");
                                 tile_regs_wait();
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
+                                DEVICE_PRINT("calling pack_reconfig_data_format (mm_out_cb)\n");
                                 PACK((pack_reconfig_data_format(mm_out_cb_id)));
 #endif
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                                 if (block == 0) {  // no accumulation for first iteration
+                                    DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(0) (first block, FUSE_BIAS)\n");
                                     PACK((llk_pack_reconfig_l1_acc(0)));
                                 } else {
+                                    DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(1) (FUSE_BIAS)\n");
                                     PACK((llk_pack_reconfig_l1_acc(1)));
                                 }
 #else
+                                DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(0)\n");
                                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                                DEVICE_PRINT("calling pack_tile_block (mm_out_cb)\n");
+                                pack_tile_block(start_dst_index, in0_cb_id, 0);
 
+                                DEVICE_PRINT("calling tile_regs_release (last_out)\n");
                                 tile_regs_release();
                                 mm_out_cb.push_back(out_subblock_num_tiles);
 
                             } else {
+                                DEVICE_PRINT("calling tile_regs_commit (partials)\n");
                                 tile_regs_commit();
                                 mm_partials_cb.reserve_back(out_subblock_num_tiles);
+                                DEVICE_PRINT("calling tile_regs_wait (partials)\n");
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
                                 if (block == 0) {  // no accumulation for first iteration
+                                    DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(0) (first block)\n");
                                     PACK((llk_pack_reconfig_l1_acc(0)));
                                 } else if (block == 1) {
+                                    DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(1) (block 1)\n");
                                     PACK((llk_pack_reconfig_l1_acc(1)));
                                 } else if (in0_transpose_tile) {
                                     // For each block, l1_acc would have been enabled during the
                                     // transpose stage. So let us put it back here.
+                                    DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(1) (transpose restore)\n");
                                     PACK((llk_pack_reconfig_l1_acc(1)));
                                 }
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                                DEVICE_PRINT("calling pack_tile_block (mm_partials_cb)\n");
+                                pack_tile_block(start_dst_index, 0, out_subblock_num_tiles);
 
+                                DEVICE_PRINT("calling tile_regs_release (partials)\n");
                                 tile_regs_release();
                                 mm_partials_cb.push_back(out_subblock_num_tiles);
                             }
@@ -428,16 +472,21 @@ void kernel_main() {
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
+                DEVICE_PRINT("calling llk_pack_relu_config (ZERO_RELU, bias)\n");
                 PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
+                DEVICE_PRINT("calling pack_reconfig_data_format (out_cb, bias)\n");
                 PACK((pack_reconfig_data_format(out_cb_id)));
 #endif
 #ifdef PACKER_L1_ACC
+                DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(0) (bias)\n");
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
+                DEVICE_PRINT("calling reconfig_data_format (bias setup)\n");
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
+                DEVICE_PRINT("calling add_bcast_rows_init_short\n");
                 add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.
@@ -449,16 +498,19 @@ void kernel_main() {
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                         // Redundant wait since we know data was just pushed
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
+                        DEVICE_PRINT("calling tile_regs_acquire (bias)\n");
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bcast_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                                DEVICE_PRINT("calling add_tiles_bcast_rows (i={})\n", i);
                                 add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
                                 bcast_tile_idx++;
                             }
                         }
 // if there's no SFPU fusion, we commit the regs so packer can start packing
 #ifndef SFPU_OP_INIT_ACTIVATION
+                        DEVICE_PRINT("calling tile_regs_commit (bias, no sfpu)\n");
                         tile_regs_commit();
 #endif
 
@@ -467,17 +519,22 @@ void kernel_main() {
 // sfpu activation
 #ifdef SFPU_OP_INIT_ACTIVATION
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            DEVICE_PRINT("calling SFPU_OP_FUNC_ACTIVATION (bias, i={})\n", i);
                             SFPU_OP_FUNC_ACTIVATION
                         }
+                        DEVICE_PRINT("calling tile_regs_commit (bias + sfpu)\n");
                         tile_regs_commit();
 #endif
 
                         // Pack out to output buffer
                         untilize_mode_out_cb.reserve_back(out_subblock_num_tiles);
+                        DEVICE_PRINT("calling tile_regs_wait (bias)\n");
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            DEVICE_PRINT("calling pack_tile (bias, i={})\n", i);
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
+                        DEVICE_PRINT("calling tile_regs_release (bias)\n");
                         tile_regs_release();
                         untilize_mode_out_cb.push_back(out_subblock_num_tiles);
 
@@ -490,34 +547,45 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
+                    DEVICE_PRINT("calling llk_pack_relu_config (NO_RELU, untilize)\n");
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 #endif  // PACK_RELU
 #ifndef FUSE_BIAS
+                    DEVICE_PRINT("calling reconfig_data_format_srca (in1 -> mm_partials, untilize)\n");
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
+                    DEVICE_PRINT("calling pack_reconfig_data_format (out_cb, untilize)\n");
                     PACK((pack_reconfig_data_format(out_cb_id)));
 #endif
 #ifdef PACKER_L1_ACC
+                    DEVICE_PRINT("calling llk_pack_reconfig_l1_acc(0) (untilize)\n");
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif  // FUSE_BIAS
+                    DEVICE_PRINT("calling pack_untilize_dest_init\n");
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
+                    DEVICE_PRINT("calling copy_tile_to_dst_init_short\n");
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
+                        DEVICE_PRINT("calling reblock_and_untilize (in0_subblock_i={})\n", in0_subblock_i);
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);
                     }
+                    DEVICE_PRINT("calling pack_untilize_uninit\n");
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
 #ifdef FUSE_BIAS
                     // reconfigure unpacker df for src A and src B
+                    DEVICE_PRINT("calling reconfig_data_format (mm_partials -> in0/in1, bias)\n");
                     reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
 #else
                     // reconfigure unpacker df for src A
+                    DEVICE_PRINT("calling reconfig_data_format_srca (mm_partials -> in1)\n");
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
                     // reconfigure init for matmul
+                    DEVICE_PRINT("calling mm_block_init_short\n");
                     mm_block_init_short(
                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }

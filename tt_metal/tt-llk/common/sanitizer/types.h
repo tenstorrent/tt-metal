@@ -329,6 +329,18 @@ enum class FsmState : std::uint32_t
     RECONFIGURED
 };
 
+struct UnwindContext
+{
+    std::uintptr_t pc;
+    std::uintptr_t ra;
+    ct_string function;
+};
+
+struct OutputContext
+{
+}
+
+
 struct SanitizerState
 {
     OperandState operand;

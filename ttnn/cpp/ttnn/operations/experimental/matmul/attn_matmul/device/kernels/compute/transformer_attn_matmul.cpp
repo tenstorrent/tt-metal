@@ -10,7 +10,9 @@
 #include "experimental/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-
+#ifdef CHLKC_UNPACK
+#include "llk_operands.h"
+#endif
 using std::uint32_t;
 
 // SAN: marker — prints a line per thread so each llk:san error can be bracketed against the preceding API call.
@@ -49,6 +51,15 @@ void kernel_main() {
     constexpr uint32_t num_rows_in_one_tile = 32;
 
     DEVICE_PRINT("KERNEL START\n");
+
+    {UNPACK({
+        const uint32_t cb_in0_id = get_operand_id(cb_in0);
+        const uint32_t cb_in1_id = get_operand_id(cb_in1);
+        const uint32_t cb_out_id = get_operand_id(out_cb_id);
+        DEVICE_PRINT("cb_in0 unpack_src_format: {}\n", (DataFormat)unpack_src_format[cb_in0_id]);
+        DEVICE_PRINT("cb_in1 unpack_src_format: {}\n", (DataFormat)unpack_src_format[cb_in1_id]);
+        DEVICE_PRINT("cb_out unpack_src_format: {}\n", (DataFormat)unpack_src_format[cb_out_id]);
+    })}
 
     SAN_MARK("before_mm_init");
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
@@ -94,7 +105,7 @@ void kernel_main() {
                     SAN_MARK("after_untilize_helper");
 
                     SAN_MARK("before_mm_init_short_with_dt");
-                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+                    mm_init_short_with_dt(cb_in1, cb_in0, cb_intermed0, transpose_hw);
                     SAN_MARK("after_mm_init_short_with_dt");
                 }
                 cb_in0_obj.pop_front(Kt);

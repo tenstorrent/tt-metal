@@ -238,6 +238,8 @@ ALWI void mm_block_init(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION("mm_block_init");
+
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
 
@@ -302,6 +304,8 @@ ALWI void matmul_block(
     uint32_t rt_dim,
     uint32_t kt_dim,
     uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION("matmul_block");
+
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));

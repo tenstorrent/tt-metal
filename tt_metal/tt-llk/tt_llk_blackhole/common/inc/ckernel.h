@@ -48,6 +48,22 @@
 #endif
 
 #define TT_ALWAYS_INLINE inline __attribute__((always_inline))
+#define TT_NEVER_INLINE __attribute__((noinline))
+
+#if __riscv_xlen == 32
+
+#define RISCV_LOAD(rd, addr)  "lw " rd ", " addr "\n"
+#define RISCV_STORE(rs, addr) "sw " rs ", " addr "\n"
+
+#elif __riscv_xlen == 64
+
+#define RISCV_LOAD(rd, addr)  "ld " rd ", " addr "\n"
+#define RISCV_STORE(rs, addr) "sd " rs ", " addr "\n"
+
+#else
+#error "Unsupported XLEN"
+#endif
+
 
 #include <cstdint>
 

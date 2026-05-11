@@ -95,6 +95,18 @@ static inline void thread_function_pop_impl(SanitizerState& sanitizer)
     }
 }
 
+
+static inline void write_unwind_context(UnwindContext& context)
+{
+    asm volatile(
+        "auipc %[pc], 0\n"
+        RISCV_STORE("%[ra]", "ra")
+        : [pc] "=r"(context.pc), [ra] "=m"(context.ra) // Output operands
+    );
+    return context;
+}
+
+
 // Goes in LLK_LIB in HWConfigure and HWReconfig
 // State set + no hw config within kernel check
 template <bool reconfig>
@@ -179,9 +191,34 @@ static inline void unpack_operand_check_impl(
 {
     if (!silent)
     {
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{} : executing init/execute/uninit before hwconfigure", function);
+        if(state.dest_width_32.assert_cond(dest_acc_en) == false)
+        {
+            if(state.dest_width_32.is_known()){
+                if (state.dest_width_32.get_underlying())
+                {
+                    LLK_SAN_ERROR_MSG("{} : DEST register is CONFIGURED for 32bit access, but {} called LLK with 16bit access", function, function);
+                }
+                else
+                {
+                    LLK_SAN_ERROR_MSG("{} : DEST register is CONFIGURED for 16bit access, but {} called LLK with 32bit access", function, function);
+                }
+            } else {
+                LLK_SAN_ERROR_MSG("{} : DEST register width is UNKNOWN, potential missing/partial CONFIGURE", function);
+            }
+        }
 
-        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{} : dest_acc_en doesn't match state.dest_width_32", function);
+        if(state.src_a.input_format.assert_cond(src_fmt_A) == false)
+        {
+            DataFormat format = static_cast<DataFormat>(src_fmt_A.get_underlying());
+            if(state.src_a.input_format.is_known()){
+                DataFormat state_format = static_cast<DataFormat>(state.src_a.input_format.get_underlying());
+                LLK_SAN_ERROR_MSG("{} : L1 format for unpacking to SRCA is CONFIGURED as {}, but {} called LLK with {}", function, state_format, function, format);
+            } else {
+                LLK_SAN_ERROR_MSG("{} : L1 format for unpacking to SRCA is UNKNOWN, but {} callled LLK with {}, potential missing/partial CONFIGURE", function, function, format);
+            }
+        }
+
+
         LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(src_fmt_A), "{} : src_fmt_A doesn't match state.src_a.input_format", function);
         LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(src_fmt_B), "{} : src_fmt_B doesn't match state.src_b.input_format", function);
         LLK_SAN_ERROR_ASSERT(state.src_a.output_format.assert_cond(dst_fmt_A), "{} : dst_fmt_A doesn't match state.src_a.output_format", function);
