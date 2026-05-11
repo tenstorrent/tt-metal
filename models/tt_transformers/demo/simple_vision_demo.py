@@ -630,13 +630,6 @@ def test_multimodal_demo_text(
             batch_size=max_batch_size,
             seq_len=input_seq_len,
         )
-        if perf_targets is None:
-            perf_targets = resolve_perf_targets(
-                model_name=base_model_name,
-                sku=tt_device_name,
-                batch_size=max_batch_size,
-                seq_len=None,
-            )
         perf_tolerance = (
             float(perf_targets.get("decode_tolerance", perf_targets.get("tolerance", 1.15))) if perf_targets else 1.15
         )
