@@ -47,8 +47,14 @@ from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 from transformers.models.pixtral.modeling_pixtral import position_ids_in_meshgrid
 
 import ttnn
+from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
-from models.experimental.devstarl2_small.devstral_utils import pad_input_ids_and_positions_for_tt_prefill
+from models.experimental.devstarl2_small.devstral_utils import (
+    devstral_supports_on_device_sampling,
+    pad_input_ids_and_positions_for_tt_prefill,
+    tt_lm_head_logits_block,
+    tt_sampling_output_token_id,
+)
 from models.experimental.devstarl2_small.reference.inference_fixtures import REFERENCE_GENERATE_KWARGS
 from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -286,6 +292,7 @@ def run_tt(
     lm_head_max_device_cols: int | None,
     vision_max_edge: int,
     vision_square_pixels: int | None,
+    cpu_sampling: bool,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
@@ -423,6 +430,47 @@ def run_tt(
                 max_columns_per_device=lm_head_max_cols,
             )
 
+        use_device_sampling = (
+            not lm_head_cpu
+            and not cpu_sampling
+            and tt_lm_head is not None
+            and devstral_supports_on_device_sampling(model_args, mesh_device)
+        )
+        if (
+            tt_lm_head is not None
+            and not cpu_sampling
+            and not lm_head_cpu
+            and not devstral_supports_on_device_sampling(model_args, mesh_device)
+        ):
+            logger.warning(
+                "Vocab size / mesh splits exceed on-device sampling limit (64k per split); "
+                "using PyTorch softmax / argmax on host logits."
+            )
+
+        sampling: SamplingGenerator | None = None
+        sampling_empty_slots: list[int] | None = None
+        if use_device_sampling:
+            sampling = SamplingGenerator(
+                args=model_args,
+                mesh_device=mesh_device,
+                tt_ccl=TT_CCL(mesh_device),
+                enable_internal_trace=False,
+            )
+            sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
+            seed_for_params = seed if seed is not None else None
+            if not do_sample:
+                sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=1.0, seed=seed_for_params)
+            else:
+                sampling_in = SamplingParams(
+                    temperature=float(gen_temperature),
+                    top_k=32,
+                    top_p=1.0,
+                    seed=seed_for_params,
+                )
+            formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
+            sampling.reset_sampling_params(formatted_sampling)
+            sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
+
         tokenizer = MistralCommonBackend.from_pretrained(
             model_id,
             trust_remote_code=True,
@@ -444,8 +492,13 @@ def run_tt(
         current_ids = input_ids.clone()
         mode = "greedy" if greedy else f"sample (T={gen_temperature})"
         lm_mode = "CPU lm_head (chunked torch)" if lm_head_cpu else "TT lm_head"
+        samp_mode = (
+            "on-device SamplingGenerator"
+            if sampling is not None
+            else "PyTorch softmax / multinomial / argmax on TT logits (host)"
+        )
         logger.info(
-            f"TT TtDevstral2SmallModel: up to {max_new_tokens} new tokens, {mode}; {lm_mode}; "
+            f"TT TtDevstral2SmallModel: up to {max_new_tokens} new tokens, {mode}; {lm_mode}; {samp_mode}; "
             f"image {image_path} + describe prompt."
         )
 
@@ -471,22 +524,36 @@ def run_tt(
                 sl,
             )
 
-            if lm_head_cpu:
-                assert lm_head_weight_cpu is not None
-                logits_row = _tt_demo.cpu_lm_head_logits_last_token(
-                    tt_out, sl - 1, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
-                )
-            else:
+            if sampling is not None:
                 assert tt_lm_head is not None
-                logits_row = _tt_demo.tt_lm_head_logits_last_token(tt_out, sl - 1, mesh_device, model_args, tt_lm_head)
-            ttnn.deallocate(tt_out)
-
-            if do_sample:
-                probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
-                next_id = torch.multinomial(probs, num_samples=1).view(1, 1)
+                tok_slot = (sl - 1) % 32
+                sampling.seed_manager.get_new_values()
+                logits_tt = tt_lm_head_logits_block(tt_out, sl - 1, model_args, tt_lm_head)
+                sample_result = sampling.sample(logits_tt, enable_trace=False)
+                tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+                next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
+                ttnn.deallocate(logits_tt)
+                ttnn.deallocate(tt_out)
+                next_id = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
             else:
-                next_id = logits_row.argmax(dim=-1, keepdim=True)
-            next_id = next_id.to(id_device)
+                if lm_head_cpu:
+                    assert lm_head_weight_cpu is not None
+                    logits_row = _tt_demo.cpu_lm_head_logits_last_token(
+                        tt_out, sl - 1, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
+                    )
+                else:
+                    assert tt_lm_head is not None
+                    logits_row = _tt_demo.tt_lm_head_logits_last_token(
+                        tt_out, sl - 1, mesh_device, model_args, tt_lm_head
+                    )
+                ttnn.deallocate(tt_out)
+                if do_sample:
+                    probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
+                    next_id = torch.multinomial(probs, num_samples=1).view(1, 1)
+                else:
+                    next_id = logits_row.argmax(dim=-1, keepdim=True)
+                next_id = next_id.to(id_device)
+
             if eos_ids and int(next_id.item()) in eos_ids:
                 break
             current_ids = torch.cat([current_ids, next_id], dim=1)
@@ -523,6 +590,11 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=float(REFERENCE_GENERATE_KWARGS["temperature"]))
     parser.add_argument("--lm-head-cpu", action="store_true")
     parser.add_argument("--lm-head-max-device-cols", type=int, default=None)
+    parser.add_argument(
+        "--cpu-sampling",
+        action="store_true",
+        help="Use PyTorch softmax/multinomial/argmax on host logits instead of on-device SamplingGenerator.",
+    )
     parser.add_argument(
         "--vision-max-edge",
         type=int,
@@ -566,6 +638,7 @@ def main() -> None:
             lm_head_max_device_cols=args.lm_head_max_device_cols,
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
+            cpu_sampling=args.cpu_sampling,
         )
 
 
