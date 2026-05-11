@@ -170,11 +170,43 @@ def annotate_video_with_points(video_path: str, coords_str: str, output_path: st
     from PIL import Image as _Image
     from PIL import ImageDraw as _ImageDraw
 
-    # Parse (time, x_norm, y_norm) triplets using Molmo's 3–4-digit coord format
-    _POINTS_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s+([0-9]{3,4})\s+([0-9]{3,4})")
-    coord_list = []
-    for m in _POINTS_RE.finditer(coords_str):
-        coord_list.append((float(m.group(1)), float(m.group(2)), float(m.group(3))))
+    # Molmo video coord format: frame_time obj_idx x_norm y_norm [obj_idx x_norm y_norm ...]
+    # Multiple objects at the same timestamp share one frame_time:
+    #   "18.0 1 415 650 2 555 669" → two dots both at t=18.0
+    # Tracking repeats across timestamps separated by ';':
+    #   "0.0 1 500 500;0.5 1 520 510;..."
+    # frame_time always has a decimal point (e.g. "0.0", "18.0") to distinguish
+    # it from obj_idx (a small integer like "1", "2").
+    coord_list: list[tuple[float, float, float]] = []  # (t, x_norm, y_norm)
+    tokens = re.split(r"[;,\s]+", coords_str.strip())
+    tokens = [t for t in tokens if t]
+    i = 0
+    current_t: float | None = None
+    while i < len(tokens):
+        tok = tokens[i]
+        try:
+            val = float(tok)
+        except ValueError:
+            i += 1
+            continue
+        # frame_time: has decimal point OR value >= 10 (large timestamps)
+        if "." in tok or val >= 10:
+            current_t = val
+            i += 1
+        elif current_t is not None and i + 2 < len(tokens):
+            # obj_idx (small int) followed by 3-4 digit x, y
+            try:
+                x_str, y_str = tokens[i + 1], tokens[i + 2]
+                x_norm, y_norm = float(x_str), float(y_str)
+                if len(x_str) >= 3 and len(y_str) >= 3:
+                    coord_list.append((current_t, x_norm, y_norm))
+                    i += 3
+                    continue
+            except (ValueError, IndexError):
+                pass
+            i += 1
+        else:
+            i += 1
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -190,13 +222,23 @@ def annotate_video_with_points(video_path: str, coords_str: str, output_path: st
     out_stream.height = H
     out_stream.pix_fmt = "yuv420p"
 
+    # Group coords by timestamp so multi-object frames draw all their dots
+    from collections import defaultdict
+
+    coords_by_t: dict[float, list[tuple[float, float]]] = defaultdict(list)
+    for t_coord, x_norm, y_norm in coord_list:
+        coords_by_t[t_coord].append((x_norm, y_norm))
+    sorted_times = sorted(coords_by_t)
+
     for frame_idx, packet in enumerate(in_container.decode(video=0)):
         t = frame_idx / fps
         arr = packet.to_ndarray(format="rgb24")
         img = _Image.fromarray(arr)
-        draw = _ImageDraw.Draw(img)
-        for t_coord, x_norm, y_norm in coord_list:
-            if abs(t - t_coord) <= 0.5 / fps + 1e-6:
+        if sorted_times:
+            draw = _ImageDraw.Draw(img)
+            # Nearest-timestamp policy: dot always visible, not just on 1-frame window
+            nearest_t = min(sorted_times, key=lambda ts: abs(t - ts))
+            for x_norm, y_norm in coords_by_t[nearest_t]:
                 cx = int(x_norm / 1000 * W)
                 cy = int(y_norm / 1000 * H)
                 _draw_dot(draw, cx, cy)

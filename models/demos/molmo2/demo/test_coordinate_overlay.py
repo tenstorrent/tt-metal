@@ -193,7 +193,7 @@ def test_annotate_video_with_points_creates_mp4(tmp_path):
     _make_test_video(vid, n_frames=10, fps=2.0)
     out = tmp_path / "out.mp4"
     # coords: t=0.0, x=500, y=500 → centre of 64×64 frame
-    annotate_video_with_points(str(vid), "0.0 500 500", str(out))
+    annotate_video_with_points(str(vid), "0.0 1 500 500", str(out))
     assert out.exists(), "Output MP4 must be created"
 
 
@@ -216,7 +216,7 @@ def test_annotate_video_with_points_output_has_same_frame_count(tmp_path):
     vid = tmp_path / "in.mp4"
     _make_test_video(vid, n_frames=8, fps=2.0)
     out = tmp_path / "out.mp4"
-    annotate_video_with_points(str(vid), "0.0 500 500", str(out))
+    annotate_video_with_points(str(vid), "0.0 1 500 500", str(out))
     frames = _read_video_frames(out)
     assert len(frames) == 8, f"Expected 8 frames, got {len(frames)}"
 
@@ -228,27 +228,28 @@ def test_annotate_video_with_points_draws_dot_on_matching_frame(tmp_path):
     vid = tmp_path / "in.mp4"
     _make_test_video(vid, n_frames=6, fps=2.0)  # frames at t=0,0.5,1.0,1.5,2.0,2.5
     out = tmp_path / "out.mp4"
-    annotate_video_with_points(str(vid), "0 500 500", str(out))
+    annotate_video_with_points(str(vid), "0.0 1 500 500", str(out))
     frames = _read_video_frames(out)
     cx, cy = 32, 32  # centre of 64×64
     r, g, b = frames[0][cy, cx]
     assert (int(r), int(g), int(b)) != (200, 200, 200), "Dot must be drawn on frame 0"
 
 
-def test_annotate_video_with_points_undotted_frames_unchanged(tmp_path):
-    """Frames without a coordinate are left unchanged."""
+def test_annotate_video_dot_uses_nearest_timestamp(tmp_path):
+    """With two tracking timestamps, each half of the video uses the nearest one."""
     from models.demos.molmo2.demo.demo import annotate_video_with_points
 
+    # 20-frame video at 10fps → 2s. Two coords: t=0.0 top-left, t=1.5 bottom-right.
     vid = tmp_path / "in.mp4"
-    _make_test_video(vid, n_frames=6, fps=2.0)
+    _make_test_video(vid, n_frames=20, w=64, h=64, fps=10.0)
     out = tmp_path / "out.mp4"
-    # Only annotate frame 0 (t=0.0)
-    annotate_video_with_points(str(vid), "0 500 500", str(out))
+    # t=0.0 → dot at top-left (100,100); t=1.5 → dot at bottom-right (900,900)
+    annotate_video_with_points(str(vid), "0.0 1 100 100;1.5 1 900 900", str(out))
     frames = _read_video_frames(out)
-    # Frame 5 (t=2.5) has no point — centre pixel should still be ~grey (200)
-    cx, cy = 32, 32
-    r, g, b = frames[5][cy, cx]
-    assert (int(r), int(g), int(b)) == (200, 200, 200), "Unannotated frame must be unchanged"
+    # Frame 0 (t=0.0) → nearest is t=0.0 → dot at top-left (6,6)
+    assert tuple(int(v) for v in frames[0][6, 6]) != (200, 200, 200), "Frame 0: dot at top-left"
+    # Frame 19 (t=1.9) → nearest is t=1.5 → dot at bottom-right (57,57)
+    assert tuple(int(v) for v in frames[19][57, 57]) != (200, 200, 200), "Frame 19: dot at bottom-right"
 
 
 def test_save_annotated_outputs_video_produces_mp4(tmp_path):
@@ -326,3 +327,43 @@ def test_dot_radius_is_at_least_16px(tmp_path):
     result = Image.open(out).convert("RGB")
     # A pixel 16px from centre should be covered by the dot
     assert result.getpixel((200 + 16, 200)) != (255, 255, 255), "Dot must extend ≥16px from centre"
+
+
+# ---------------------------------------------------------------------------
+# Video coord parser: multi-object same frame, persistent dot
+# ---------------------------------------------------------------------------
+
+
+def test_annotate_video_multiobject_draws_both_dots(tmp_path):
+    """Two objects at the same timestamp both get dots (format: t obj_idx x y obj_idx x y)."""
+    from models.demos.molmo2.demo.demo import annotate_video_with_points
+
+    # 64×64 white video, 10 frames at 1fps
+    vid = tmp_path / "in.mp4"
+    _make_test_video(vid, n_frames=10, w=64, h=64, fps=1.0)
+    out = tmp_path / "out.mp4"
+    # Frame 2 (t=2.0): two objects — top-left and bottom-right
+    annotate_video_with_points(str(vid), "2.0 1 100 100 2 900 900", str(out))
+    frames = _read_video_frames(out)
+    # Top-left quadrant (10,10) should have dot
+    r, g, b = frames[2][10, 10]
+    assert (int(r), int(g), int(b)) != (200, 200, 200), "First dot must appear (top-left)"
+    # Bottom-right quadrant (54,54) should have dot
+    r, g, b = frames[2][54, 54]
+    assert (int(r), int(g), int(b)) != (200, 200, 200), "Second dot must appear (bottom-right)"
+
+
+def test_annotate_video_dot_persists_across_frames(tmp_path):
+    """The dot is visible on every frame, not just the nearest-timestamp frame."""
+    from models.demos.molmo2.demo.demo import annotate_video_with_points
+
+    vid = tmp_path / "in.mp4"
+    _make_test_video(vid, n_frames=20, w=64, h=64, fps=10.0)  # 2s video at 10fps
+    out = tmp_path / "out.mp4"
+    # Single coord at t=1.0 — dot should stay visible on all frames
+    annotate_video_with_points(str(vid), "1.0 1 500 500", str(out))
+    frames = _read_video_frames(out)
+    cx, cy = 32, 32
+    dotted_frames = sum(1 for f in frames if tuple(int(v) for v in f[cy, cx]) != (200, 200, 200))
+    # All 20 frames should show the dot (nearest-coord policy)
+    assert dotted_frames == 20, f"Dot must persist on all frames, got {dotted_frames}/20"
