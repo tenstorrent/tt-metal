@@ -3452,6 +3452,64 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
         _teardown_subdevice(device, sub_device_manager)
 
 
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("mcast_in0", [True, False], ids=["mcast_in0", "mcast_in1"])
+def test_matmul_on_subdevice_1d_mcast_full_grid(device, mcast_in0):
+    """Regression for issue #43900: 1-D multicast matmul over the full offset
+    worker rectangle. Requesting `cols * (rows - 1)` cores from a sub-device
+    anchored at (0, 1) exceeds the old (0, 0)-anchored helper's underestimate
+    by exactly one row's worth, which used to trip a spurious
+    'target > available' TT_FATAL.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 3:
+        pytest.skip("Need at least 3 rows for the offset full-grid sub-device test")
+
+    sub_device_manager, worker_sub_device_id, _, _ = _setup_subdevice(device)
+    try:
+        sub_grid = ttnn.CoreCoord(grid.x, grid.y - 1)
+        num_cores = sub_grid.x * sub_grid.y
+        tile = 32
+        m_size, n_size = (tile, tile * num_cores) if mcast_in0 else (tile * num_cores, tile)
+        k_size = 1024
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=sub_grid,
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=False,
+            mcast_in0=mcast_in0,
+            fused_activation=None,
+        )
+
+        torch.manual_seed(0)
+        torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
+        torch_input_b = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
+        torch_output = torch_input_a @ torch_input_b
+
+        kwargs = dict(
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        input_a = ttnn.from_torch(torch_input_a, **kwargs)
+        input_b = ttnn.from_torch(torch_input_b, **kwargs)
+
+        output = ttnn.matmul(input_a, input_b, program_config=program_config, sub_device_id=worker_sub_device_id)
+        output = ttnn.to_torch(output)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.004 * k_size,
+            rtol=0.79 * k_size,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+        )
+    finally:
+        _teardown_subdevice(device, sub_device_manager)
+
+
 @pytest.mark.parametrize(
     "weight_dtype, pcc_threshold",
     [
