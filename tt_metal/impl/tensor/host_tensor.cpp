@@ -49,29 +49,29 @@ HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
 HostTensor::~HostTensor() = default;
 
 HostTensorImpl& HostTensor::impl() {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     return *impl_;
 }
 
 const HostTensorImpl& HostTensor::impl() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     return *impl_;
 }
 
 const TensorSpec& HostTensor::tensor_spec() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     return impl_->spec();
 }
 
 const TensorTopology& HostTensor::tensor_topology() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     return impl_->topology();
 }
 
 bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
 const DistributedHostBuffer& HostTensor::buffer() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     return impl_->buffer();
 }
 
@@ -118,7 +118,7 @@ HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer
 }
 
 void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     impl_->update_topology(std::move(tensor_topology));
 }
 

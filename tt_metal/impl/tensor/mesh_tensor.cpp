@@ -19,12 +19,12 @@ MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, Ten
 MeshTensor::~MeshTensor() = default;
 
 MeshTensorImpl& MeshTensor::impl() {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
     return *impl_;
 }
 
 const MeshTensorImpl& MeshTensor::impl() const {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
     return *impl_;
 }
 

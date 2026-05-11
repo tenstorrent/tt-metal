@@ -188,7 +188,7 @@ private:
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
 
     // impl_ could be a nullptr if MeshTensor is in a moved-from state.
-    // Avoid using impl_ pointer directly, use the accessors instead.
+    // Avoid using impl_ pointer directly, use the impl() accessor instead.
     // Otherwise, please add manual TT_FATAL checks for nullptr.
     std::unique_ptr<MeshTensorImpl> impl_;
 };
