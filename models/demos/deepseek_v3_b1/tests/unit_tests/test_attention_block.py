@@ -324,7 +324,7 @@ def test_attention_block(
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
     # ========================================================================
-    metadata = DeepseekMetadata(position_id=position_id, slot_id=slot_id)
+    metadata = DeepseekMetadata(position_id=position_id, request_id=slot_id)
 
     # Create cos/sin matrices in Meta-style format
     base = 10000.0

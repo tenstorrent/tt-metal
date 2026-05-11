@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_b1.metadata.metadata import (
     METADATA_TENSOR_BYTES,
     METADATA_TENSOR_NUM_BF16,
     METADATA_TENSOR_NUM_UINT32,
+    DeepseekMetadata,
 )
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
@@ -85,20 +86,18 @@ EMBEDDING_D2H_CORE_COORD = ttnn.CoreCoord(12, 1)
 # MTP constants
 num_dram_banks = 8
 # Number of bf16 elements appended to each activation shard to carry the full
-# DeepseekMetadata struct (header + p_indices + p_scores). The source unicasts
-# the whole struct from the LM-head input core to the sampling final core; only
-# the first `aligned_size_bytes()` bytes (the header) come from upstream — the
-# trailing region stays zero on the source and is overwritten on the destination
-# by sampling.hpp after top-P.
+# DeepseekMetadata struct. The source unicasts the whole struct from the LM-head
+# input core to the sampling final core; sampling.hpp fills the p/q top-15
+# fields on the destination after sampling.
 METADATA_NUM_ELEMS = METADATA_TENSOR_NUM_BF16
 mtp_n_per_core = ACTIVATION_DIM // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
-# Token metadata payload: full DeepseekMetadata struct (header + p_indices + p_scores).
-# This is the per-iteration metadata that flows through the model: every decoder
-# stage carries it, the BaseLMHeadStage produces the trailing p_indices / p_scores
-# arrays inside it, and the SpecLMHeadStage forwards it. Spec-LM output and the
-# embedding input are the only paths that don't carry the full struct.
+# Token metadata payload: full DeepseekMetadata struct. This is the
+# per-iteration metadata that flows through the model: every decoder stage
+# carries it, the BaseLMHeadStage fills p/q top-15 fields inside it, and the
+# SpecLMHeadStage forwards it. Spec-LM output and the embedding input are the
+# only paths that don't carry the full struct.
 # FIFO depth is kept at TOKEN_FIFO_NUM_PAGES so buffering capacity (in pages) is
 # unchanged from the prior 64 B layout — total L1 footprint scales with page size.
 TOKEN_META_PAGE_SIZE_BYTES = METADATA_TENSOR_BYTES
@@ -107,6 +106,15 @@ TOKEN_META_FIFO_SIZE = TOKEN_META_PAGE_SIZE_BYTES * TOKEN_FIFO_NUM_PAGES
 # Activation + metadata payload: logits + full DeepseekMetadata.
 ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_PAGE_SIZE_BYTES + TOKEN_META_PAGE_SIZE_BYTES
 ACTIVATION_W_TOKEN_META_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES)
+
+
+def _validate_num_speculative_tokens(num_speculative_tokens: int) -> int:
+    if not 1 <= int(num_speculative_tokens) <= DeepseekMetadata.MAX_SPECULATIVE_TOKENS:
+        raise ValueError(
+            f"num_speculative_tokens must be between 1 and {DeepseekMetadata.MAX_SPECULATIVE_TOKENS}, "
+            f"got {num_speculative_tokens}"
+        )
+    return int(num_speculative_tokens)
 
 
 @dataclass
@@ -349,10 +357,12 @@ class SpecLMHeadStage(StageKind):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | None = None,
+        num_speculative_tokens: int = 1,
     ) -> None:
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._spec_weights = spec_weights
+        self._num_speculative_tokens = _validate_num_speculative_tokens(num_speculative_tokens)
         self._state: dict[str, Any] = {}
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
@@ -507,9 +517,8 @@ class SpecLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # Metadata buffer on argmax_final_core (sized for the full DeepseekMetadata
-        # struct: 64 B header from upstream unicast + 192 B for sampling.hpp's
-        # local p_indices / p_scores writes).
+        # Metadata buffer on argmax_final_core, sized for the full DeepseekMetadata
+        # struct including p/q top-15 fields written by sampling.hpp.
         METADATA_ELEMS = METADATA_TENSOR_NUM_UINT32
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -593,6 +602,7 @@ class SpecLMHeadStage(StageKind):
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
             k=1,
+            num_speculative_tokens=self._num_speculative_tokens,
         )
 
     def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -625,6 +635,7 @@ class BaseLMHeadStage(StageKind):
         seed: int = 2005,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        num_speculative_tokens: int = 1,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
@@ -638,6 +649,7 @@ class BaseLMHeadStage(StageKind):
         self._downstream_fifo_pages = downstream_fifo_pages
         self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
         self._seed = seed
+        self._num_speculative_tokens = _validate_num_speculative_tokens(num_speculative_tokens)
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -976,6 +988,7 @@ class BaseLMHeadStage(StageKind):
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
             base_token_buffer=d.get("base_token_buffer"),
             seed=self._seed,
+            num_speculative_tokens=self._num_speculative_tokens,
         )
 
     def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -1182,11 +1195,13 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | None = None,
         loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        num_speculative_tokens: int = 1,
     ) -> None:
         super().__init__(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=spec_weights,
+            num_speculative_tokens=num_speculative_tokens,
         )
         self._embedding_weights = embedding_weights
         self._loopback_input_fifo_pages = loopback_input_fifo_pages

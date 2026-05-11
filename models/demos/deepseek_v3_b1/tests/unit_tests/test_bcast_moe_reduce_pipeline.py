@@ -23,6 +23,7 @@ from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
+from models.demos.deepseek_v3_b1.model import InputField
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
@@ -371,7 +372,7 @@ def test_bcast_moe_reduce_pipeline(
     if is_stage0:
         token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-        torch_token[0, 0] = token_id
+        torch_token[0, InputField.TOKEN_ID] = token_id
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         pipeline_block.write_token(token_tensor)
         logger.info(f"[rank=0] token {token_id} injected")
@@ -915,7 +916,7 @@ def test_persistent_mode_pipeline(
             for iteration in range(iterations):
                 print(f"[rank={my_mesh_id}] iteration {iteration} start")
                 torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
+                torch_token[0, InputField.TOKEN_ID] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
                 d2h_output_tensor = ttnn.from_torch(

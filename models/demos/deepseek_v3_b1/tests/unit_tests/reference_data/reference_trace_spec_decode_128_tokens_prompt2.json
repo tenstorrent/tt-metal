@@ -1,0 +1,2775 @@
+{
+  "schema_version": 1,
+  "name": "spec_decode_host_fsm_case",
+  "metadata": {
+    "num_accepts": 60,
+    "num_rejects": 8
+  },
+  "params": {
+    "prompt_token_ids": [
+      0,
+      128803,
+      65106,
+      270,
+      6672,
+      6461,
+      23916,
+      8947,
+      14,
+      2622,
+      3939,
+      436,
+      344,
+      832,
+      2239,
+      305,
+      1205,
+      1482,
+      2915,
+      78740,
+      943,
+      436,
+      16,
+      128804
+    ],
+    "max_new_tokens": 128,
+    "eos_token_id": 1
+  },
+  "device_to_host": {
+    "prefill_results": [
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 128798,
+          "pos": 24
+        },
+        "token_1": {
+          "token_id": 201,
+          "pos": 25
+        }
+      }
+    ],
+    "read_results": [
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 201,
+          "pos": 25
+        },
+        "token_1": {
+          "token_id": 33001,
+          "pos": 26
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 33001,
+          "pos": 26
+        },
+        "token_1": {
+          "token_id": 14,
+          "pos": 27
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 14,
+          "pos": 27
+        },
+        "token_1": {
+          "token_id": 270,
+          "pos": 28
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 270,
+          "pos": 28
+        },
+        "token_1": {
+          "token_id": 3967,
+          "pos": 29
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 3967,
+          "pos": 29
+        },
+        "token_1": {
+          "token_id": 10059,
+          "pos": 30
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 10059,
+          "pos": 30
+        },
+        "token_1": {
+          "token_id": 260,
+          "pos": 31
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 260,
+          "pos": 31
+        },
+        "token_1": {
+          "token_id": 4521,
+          "pos": 32
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 4521,
+          "pos": 32
+        },
+        "token_1": {
+          "token_id": 11394,
+          "pos": 33
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 11394,
+          "pos": 33
+        },
+        "token_1": {
+          "token_id": 294,
+          "pos": 34
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 294,
+          "pos": 34
+        },
+        "token_1": {
+          "token_id": 270,
+          "pos": 35
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 270,
+          "pos": 35
+        },
+        "token_1": {
+          "token_id": 10252,
+          "pos": 36
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 10252,
+          "pos": 36
+        },
+        "token_1": {
+          "token_id": 55840,
+          "pos": 37
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 55840,
+          "pos": 37
+        },
+        "token_1": {
+          "token_id": 26364,
+          "pos": 38
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 26364,
+          "pos": 38
+        },
+        "token_1": {
+          "token_id": 343,
+          "pos": 39
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 343,
+          "pos": 39
+        },
+        "token_1": {
+          "token_id": 8272,
+          "pos": 40
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 8272,
+          "pos": 40
+        },
+        "token_1": {
+          "token_id": 54,
+          "pos": 41
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 54,
+          "pos": 41
+        },
+        "token_1": {
+          "token_id": 754,
+          "pos": 42
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 754,
+          "pos": 42
+        },
+        "token_1": {
+          "token_id": 1009,
+          "pos": 43
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 1009,
+          "pos": 43
+        },
+        "token_1": {
+          "token_id": 7176,
+          "pos": 44
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 7176,
+          "pos": 44
+        },
+        "token_1": {
+          "token_id": 14,
+          "pos": 45
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 14,
+          "pos": 45
+        },
+        "token_1": {
+          "token_id": 305,
+          "pos": 46
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 305,
+          "pos": 46
+        },
+        "token_1": {
+          "token_id": 2953,
+          "pos": 47
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 2953,
+          "pos": 47
+        },
+        "token_1": {
+          "token_id": 99378,
+          "pos": 48
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 99378,
+          "pos": 48
+        },
+        "token_1": {
+          "token_id": 16,
+          "pos": 49
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 16,
+          "pos": 49
+        },
+        "token_1": {
+          "token_id": 4480,
+          "pos": 50
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 4480,
+          "pos": 50
+        },
+        "token_1": {
+          "token_id": 678,
+          "pos": 51
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 678,
+          "pos": 51
+        },
+        "token_1": {
+          "token_id": 1904,
+          "pos": 52
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 1904,
+          "pos": 52
+        },
+        "token_1": {
+          "token_id": 513,
+          "pos": 53
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 513,
+          "pos": 53
+        },
+        "token_1": {
+          "token_id": 96703,
+          "pos": 54
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 96703,
+          "pos": 54
+        },
+        "token_1": {
+          "token_id": 1205,
+          "pos": 55
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 1205,
+          "pos": 55
+        },
+        "token_1": {
+          "token_id": 270,
+          "pos": 56
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 270,
+          "pos": 56
+        },
+        "token_1": {
+          "token_id": 15449,
+          "pos": 57
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 15449,
+          "pos": 57
+        },
+        "token_1": {
+          "token_id": 54,
+          "pos": 58
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 54,
+          "pos": 58
+        },
+        "token_1": {
+          "token_id": 5756,
+          "pos": 59
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 5756,
+          "pos": 59
+        },
+        "token_1": {
+          "token_id": 16,
+          "pos": 60
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 16,
+          "pos": 60
+        },
+        "token_1": {
+          "token_id": 983,
+          "pos": 61
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 983,
+          "pos": 61
+        },
+        "token_1": {
+          "token_id": 734,
+          "pos": 62
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 734,
+          "pos": 62
+        },
+        "token_1": {
+          "token_id": 943,
+          "pos": 63
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 943,
+          "pos": 63
+        },
+        "token_1": {
+          "token_id": 270,
+          "pos": 64
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 270,
+          "pos": 64
+        },
+        "token_1": {
+          "token_id": 6380,
+          "pos": 65
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 6380,
+          "pos": 65
+        },
+        "token_1": {
+          "token_id": 294,
+          "pos": 66
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 294,
+          "pos": 66
+        },
+        "token_1": {
+          "token_id": 6810,
+          "pos": 67
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 6810,
+          "pos": 67
+        },
+        "token_1": {
+          "token_id": 3189,
+          "pos": 68
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 3189,
+          "pos": 68
+        },
+        "token_1": {
+          "token_id": 32634,
+          "pos": 69
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 32634,
+          "pos": 69
+        },
+        "token_1": {
+          "token_id": 260,
+          "pos": 70
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 260,
+          "pos": 70
+        },
+        "token_1": {
+          "token_id": 5374,
+          "pos": 71
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 5374,
+          "pos": 71
+        },
+        "token_1": {
+          "token_id": 6380,
+          "pos": 72
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 6380,
+          "pos": 72
+        },
+        "token_1": {
+          "token_id": 412,
+          "pos": 73
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 412,
+          "pos": 73
+        },
+        "token_1": {
+          "token_id": 6810,
+          "pos": 74
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 6810,
+          "pos": 74
+        },
+        "token_1": {
+          "token_id": 3701,
+          "pos": 75
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 3701,
+          "pos": 75
+        },
+        "token_1": {
+          "token_id": 9347,
+          "pos": 76
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 9347,
+          "pos": 76
+        },
+        "token_1": {
+          "token_id": 14,
+          "pos": 77
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 14,
+          "pos": 77
+        },
+        "token_1": {
+          "token_id": 17883,
+          "pos": 78
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 17883,
+          "pos": 78
+        },
+        "token_1": {
+          "token_id": 294,
+          "pos": 79
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 294,
+          "pos": 79
+        },
+        "token_1": {
+          "token_id": 270,
+          "pos": 80
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 270,
+          "pos": 80
+        },
+        "token_1": {
+          "token_id": 5185,
+          "pos": 81
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 5185,
+          "pos": 81
+        },
+        "token_1": {
+          "token_id": 734,
+          "pos": 82
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 734,
+          "pos": 82
+        },
+        "token_1": {
+          "token_id": 6380,
+          "pos": 83
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 6380,
+          "pos": 83
+        },
+        "token_1": {
+          "token_id": 16,
+          "pos": 84
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 16,
+          "pos": 84
+        },
+        "token_1": {
+          "token_id": 1004,
+          "pos": 85
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 2275,
+          "pos": 85
+        },
+        "token_1": {
+          "token_id": 3939,
+          "pos": 86
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 3939,
+          "pos": 86
+        },
+        "token_1": {
+          "token_id": 344,
+          "pos": 87
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 3939,
+          "pos": 86
+        },
+        "token_1": {
+          "token_id": 344,
+          "pos": 87
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 344,
+          "pos": 87
+        },
+        "token_1": {
+          "token_id": 396,
+          "pos": 88
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 396,
+          "pos": 88
+        },
+        "token_1": {
+          "token_id": 2239,
+          "pos": 89
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 2239,
+          "pos": 89
+        },
+        "token_1": {
+          "token_id": 1240,
+          "pos": 90
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 33,
+          "pos": 90
+        },
+        "token_1": {
+          "token_id": 17519,
+          "pos": 91
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 17519,
+          "pos": 91
+        },
+        "token_1": {
+          "token_id": 270,
+          "pos": 92
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 17519,
+          "pos": 91
+        },
+        "token_1": {
+          "token_id": 270,
+          "pos": 92
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 270,
+          "pos": 92
+        },
+        "token_1": {
+          "token_id": 3967,
+          "pos": 93
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 3967,
+          "pos": 93
+        },
+        "token_1": {
+          "token_id": 4086,
+          "pos": 94
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 4086,
+          "pos": 94
+        },
+        "token_1": {
+          "token_id": 566,
+          "pos": 95
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 566,
+          "pos": 95
+        },
+        "token_1": {
+          "token_id": 362,
+          "pos": 96
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 362,
+          "pos": 96
+        },
+        "token_1": {
+          "token_id": 260,
+          "pos": 97
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 260,
+          "pos": 97
+        },
+        "token_1": {
+          "token_id": 38701,
+          "pos": 98
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 38701,
+          "pos": 98
+        },
+        "token_1": {
+          "token_id": 1312,
+          "pos": 99
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 1312,
+          "pos": 99
+        },
+        "token_1": {
+          "token_id": 469,
+          "pos": 100
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 469,
+          "pos": 100
+        },
+        "token_1": {
+          "token_id": 260,
+          "pos": 101
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 2041,
+          "pos": 101
+        },
+        "token_1": {
+          "token_id": 27609,
+          "pos": 102
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 27609,
+          "pos": 102
+        },
+        "token_1": {
+          "token_id": 4762,
+          "pos": 103
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 27609,
+          "pos": 102
+        },
+        "token_1": {
+          "token_id": 4762,
+          "pos": 103
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 4762,
+          "pos": 103
+        },
+        "token_1": {
+          "token_id": 16,
+          "pos": 104
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 16,
+          "pos": 104
+        },
+        "token_1": {
+          "token_id": 2359,
+          "pos": 105
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 2359,
+          "pos": 105
+        },
+        "token_1": {
+          "token_id": 2786,
+          "pos": 106
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 2786,
+          "pos": 106
+        },
+        "token_1": {
+          "token_id": 366,
+          "pos": 107
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 366,
+          "pos": 107
+        },
+        "token_1": {
+          "token_id": 260,
+          "pos": 108
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 260,
+          "pos": 108
+        },
+        "token_1": {
+          "token_id": 5347,
+          "pos": 109
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 5347,
+          "pos": 109
+        },
+        "token_1": {
+          "token_id": 469,
+          "pos": 110
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 469,
+          "pos": 110
+        },
+        "token_1": {
+          "token_id": 260,
+          "pos": 111
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 260,
+          "pos": 111
+        },
+        "token_1": {
+          "token_id": 6687,
+          "pos": 112
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 6687,
+          "pos": 112
+        },
+        "token_1": {
+          "token_id": 4735,
+          "pos": 113
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 4735,
+          "pos": 113
+        },
+        "token_1": {
+          "token_id": 304,
+          "pos": 114
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 304,
+          "pos": 114
+        },
+        "token_1": {
+          "token_id": 7263,
+          "pos": 115
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 7263,
+          "pos": 115
+        },
+        "token_1": {
+          "token_id": 566,
+          "pos": 116
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 38701,
+          "pos": 116
+        },
+        "token_1": {
+          "token_id": 339,
+          "pos": 117
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 295,
+          "pos": 117
+        },
+        "token_1": {
+          "token_id": 786,
+          "pos": 118
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 295,
+          "pos": 117
+        },
+        "token_1": {
+          "token_id": 786,
+          "pos": 118
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 786,
+          "pos": 118
+        },
+        "token_1": {
+          "token_id": 1116,
+          "pos": 119
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 786,
+          "pos": 118
+        },
+        "token_1": {
+          "token_id": 1116,
+          "pos": 119
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 1116,
+          "pos": 119
+        },
+        "token_1": {
+          "token_id": 339,
+          "pos": 120
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 339,
+          "pos": 120
+        },
+        "token_1": {
+          "token_id": 671,
+          "pos": 121
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 671,
+          "pos": 121
+        },
+        "token_1": {
+          "token_id": 3967,
+          "pos": 122
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 3967,
+          "pos": 122
+        },
+        "token_1": {
+          "token_id": 43375,
+          "pos": 123
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 43375,
+          "pos": 123
+        },
+        "token_1": {
+          "token_id": 582,
+          "pos": 124
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 582,
+          "pos": 124
+        },
+        "token_1": {
+          "token_id": 44029,
+          "pos": 125
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 44029,
+          "pos": 125
+        },
+        "token_1": {
+          "token_id": 436,
+          "pos": 126
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 436,
+          "pos": 126
+        },
+        "token_1": {
+          "token_id": 344,
+          "pos": 127
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 344,
+          "pos": 127
+        },
+        "token_1": {
+          "token_id": 832,
+          "pos": 128
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 832,
+          "pos": 128
+        },
+        "token_1": {
+          "token_id": 2239,
+          "pos": 129
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 2239,
+          "pos": 129
+        },
+        "token_1": {
+          "token_id": 2148,
+          "pos": 130
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 2148,
+          "pos": 130
+        },
+        "token_1": {
+          "token_id": 342,
+          "pos": 131
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 342,
+          "pos": 131
+        },
+        "token_1": {
+          "token_id": 1531,
+          "pos": 132
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 1531,
+          "pos": 132
+        },
+        "token_1": {
+          "token_id": 11217,
+          "pos": 133
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 11217,
+          "pos": 133
+        },
+        "token_1": {
+          "token_id": 3077,
+          "pos": 134
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 10200,
+          "pos": 134
+        },
+        "token_1": {
+          "token_id": 6532,
+          "pos": 135
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 6532,
+          "pos": 135
+        },
+        "token_1": {
+          "token_id": 1277,
+          "pos": 136
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 6532,
+          "pos": 135
+        },
+        "token_1": {
+          "token_id": 1277,
+          "pos": 136
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 1277,
+          "pos": 136
+        },
+        "token_1": {
+          "token_id": 295,
+          "pos": 137
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 16915,
+          "pos": 137
+        },
+        "token_1": {
+          "token_id": 8273,
+          "pos": 138
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 8273,
+          "pos": 138
+        },
+        "token_1": {
+          "token_id": 14,
+          "pos": 139
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 8273,
+          "pos": 138
+        },
+        "token_1": {
+          "token_id": 14,
+          "pos": 139
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 14,
+          "pos": 139
+        },
+        "token_1": {
+          "token_id": 11198,
+          "pos": 140
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 11198,
+          "pos": 140
+        },
+        "token_1": {
+          "token_id": 22650,
+          "pos": 141
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 22650,
+          "pos": 141
+        },
+        "token_1": {
+          "token_id": 14,
+          "pos": 142
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 14,
+          "pos": 142
+        },
+        "token_1": {
+          "token_id": 4474,
+          "pos": 143
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 4474,
+          "pos": 143
+        },
+        "token_1": {
+          "token_id": 2703,
+          "pos": 144
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 2703,
+          "pos": 144
+        },
+        "token_1": {
+          "token_id": 16,
+          "pos": 145
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 16,
+          "pos": 145
+        },
+        "token_1": {
+          "token_id": 15728,
+          "pos": 146
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 3109,
+          "pos": 146
+        },
+        "token_1": {
+          "token_id": 477,
+          "pos": 147
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 477,
+          "pos": 147
+        },
+        "token_1": {
+          "token_id": 4501,
+          "pos": 148
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 477,
+          "pos": 147
+        },
+        "token_1": {
+          "token_id": 4501,
+          "pos": 148
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 4501,
+          "pos": 148
+        },
+        "token_1": {
+          "token_id": 1479,
+          "pos": 149
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 1479,
+          "pos": 149
+        },
+        "token_1": {
+          "token_id": 15449,
+          "pos": 150
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 15449,
+          "pos": 150
+        },
+        "token_1": {
+          "token_id": 54,
+          "pos": 151
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 54,
+          "pos": 151
+        },
+        "token_1": {
+          "token_id": 344,
+          "pos": 152
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 344,
+          "pos": 152
+        },
+        "token_1": {
+          "token_id": 59972,
+          "pos": 153
+        }
+      }
+    ]
+  },
+  "expected_host": {
+    "generated_tokens": [
+      128798,
+      201,
+      33001,
+      14,
+      270,
+      3967,
+      10059,
+      260,
+      4521,
+      11394,
+      294,
+      270,
+      10252,
+      55840,
+      26364,
+      343,
+      8272,
+      54,
+      754,
+      1009,
+      7176,
+      14,
+      305,
+      2953,
+      99378,
+      16,
+      4480,
+      678,
+      1904,
+      513,
+      96703,
+      1205,
+      270,
+      15449,
+      54,
+      5756,
+      16,
+      983,
+      734,
+      943,
+      270,
+      6380,
+      294,
+      6810,
+      3189,
+      32634,
+      260,
+      5374,
+      6380,
+      412,
+      6810,
+      3701,
+      9347,
+      14,
+      17883,
+      294,
+      270,
+      5185,
+      734,
+      6380,
+      16,
+      2275,
+      3939,
+      344,
+      396,
+      2239,
+      33,
+      17519,
+      270,
+      3967,
+      4086,
+      566,
+      362,
+      260,
+      38701,
+      1312,
+      469,
+      2041,
+      27609,
+      4762,
+      16,
+      2359,
+      2786,
+      366,
+      260,
+      5347,
+      469,
+      260,
+      6687,
+      4735,
+      304,
+      7263,
+      38701,
+      295,
+      786,
+      1116,
+      339,
+      671,
+      3967,
+      43375,
+      582,
+      44029,
+      436,
+      344,
+      832,
+      2239,
+      2148,
+      342,
+      1531,
+      11217,
+      10200,
+      6532,
+      1277,
+      16915,
+      8273,
+      14,
+      11198,
+      22650,
+      14,
+      4474,
+      2703,
+      16,
+      3109,
+      477,
+      4501,
+      1479,
+      15449,
+      54
+    ],
+    "writes": [
+      {
+        "token_id": 128798,
+        "type": "BASE",
+        "pos": 24,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 201,
+        "type": "SPEC",
+        "pos": 25,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 33001,
+        "type": "BASE",
+        "pos": 26,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 27,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 270,
+        "type": "BASE",
+        "pos": 28,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3967,
+        "type": "SPEC",
+        "pos": 29,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 10059,
+        "type": "BASE",
+        "pos": 30,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 31,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 4521,
+        "type": "BASE",
+        "pos": 32,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 11394,
+        "type": "SPEC",
+        "pos": 33,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 294,
+        "type": "BASE",
+        "pos": 34,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 270,
+        "type": "SPEC",
+        "pos": 35,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 10252,
+        "type": "BASE",
+        "pos": 36,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 55840,
+        "type": "SPEC",
+        "pos": 37,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 26364,
+        "type": "BASE",
+        "pos": 38,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 343,
+        "type": "SPEC",
+        "pos": 39,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 8272,
+        "type": "BASE",
+        "pos": 40,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 54,
+        "type": "SPEC",
+        "pos": 41,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 754,
+        "type": "BASE",
+        "pos": 42,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1009,
+        "type": "SPEC",
+        "pos": 43,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 7176,
+        "type": "BASE",
+        "pos": 44,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 45,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 305,
+        "type": "BASE",
+        "pos": 46,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2953,
+        "type": "SPEC",
+        "pos": 47,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 99378,
+        "type": "BASE",
+        "pos": 48,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 16,
+        "type": "SPEC",
+        "pos": 49,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 4480,
+        "type": "BASE",
+        "pos": 50,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 678,
+        "type": "SPEC",
+        "pos": 51,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1904,
+        "type": "BASE",
+        "pos": 52,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 513,
+        "type": "SPEC",
+        "pos": 53,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 96703,
+        "type": "BASE",
+        "pos": 54,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1205,
+        "type": "SPEC",
+        "pos": 55,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 270,
+        "type": "BASE",
+        "pos": 56,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 15449,
+        "type": "SPEC",
+        "pos": 57,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 54,
+        "type": "BASE",
+        "pos": 58,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 5756,
+        "type": "SPEC",
+        "pos": 59,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 16,
+        "type": "BASE",
+        "pos": 60,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 983,
+        "type": "SPEC",
+        "pos": 61,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 734,
+        "type": "BASE",
+        "pos": 62,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 943,
+        "type": "SPEC",
+        "pos": 63,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 270,
+        "type": "BASE",
+        "pos": 64,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 6380,
+        "type": "SPEC",
+        "pos": 65,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 294,
+        "type": "BASE",
+        "pos": 66,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 6810,
+        "type": "SPEC",
+        "pos": 67,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3189,
+        "type": "BASE",
+        "pos": 68,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 32634,
+        "type": "SPEC",
+        "pos": 69,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 260,
+        "type": "BASE",
+        "pos": 70,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 5374,
+        "type": "SPEC",
+        "pos": 71,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 6380,
+        "type": "BASE",
+        "pos": 72,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 412,
+        "type": "SPEC",
+        "pos": 73,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 6810,
+        "type": "BASE",
+        "pos": 74,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3701,
+        "type": "SPEC",
+        "pos": 75,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 9347,
+        "type": "BASE",
+        "pos": 76,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 77,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 17883,
+        "type": "BASE",
+        "pos": 78,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 294,
+        "type": "SPEC",
+        "pos": 79,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 270,
+        "type": "BASE",
+        "pos": 80,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 5185,
+        "type": "SPEC",
+        "pos": 81,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 734,
+        "type": "BASE",
+        "pos": 82,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 6380,
+        "type": "SPEC",
+        "pos": 83,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 16,
+        "type": "BASE",
+        "pos": 84,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1004,
+        "type": "SPEC",
+        "pos": 85,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2275,
+        "type": "BASE",
+        "pos": 85,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3939,
+        "type": "SPEC",
+        "pos": 86,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 344,
+        "type": "BASE",
+        "pos": 87,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 396,
+        "type": "SPEC",
+        "pos": 88,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2239,
+        "type": "BASE",
+        "pos": 89,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1240,
+        "type": "SPEC",
+        "pos": 90,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 33,
+        "type": "BASE",
+        "pos": 90,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 17519,
+        "type": "SPEC",
+        "pos": 91,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 270,
+        "type": "BASE",
+        "pos": 92,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3967,
+        "type": "SPEC",
+        "pos": 93,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 4086,
+        "type": "BASE",
+        "pos": 94,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 566,
+        "type": "SPEC",
+        "pos": 95,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 362,
+        "type": "BASE",
+        "pos": 96,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 97,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 38701,
+        "type": "BASE",
+        "pos": 98,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1312,
+        "type": "SPEC",
+        "pos": 99,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 469,
+        "type": "BASE",
+        "pos": 100,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 101,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2041,
+        "type": "BASE",
+        "pos": 101,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 27609,
+        "type": "SPEC",
+        "pos": 102,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 4762,
+        "type": "BASE",
+        "pos": 103,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 16,
+        "type": "SPEC",
+        "pos": 104,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2359,
+        "type": "BASE",
+        "pos": 105,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2786,
+        "type": "SPEC",
+        "pos": 106,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 366,
+        "type": "BASE",
+        "pos": 107,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 108,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 5347,
+        "type": "BASE",
+        "pos": 109,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 469,
+        "type": "SPEC",
+        "pos": 110,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 260,
+        "type": "BASE",
+        "pos": 111,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 6687,
+        "type": "SPEC",
+        "pos": 112,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 4735,
+        "type": "BASE",
+        "pos": 113,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 304,
+        "type": "SPEC",
+        "pos": 114,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 7263,
+        "type": "BASE",
+        "pos": 115,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 566,
+        "type": "SPEC",
+        "pos": 116,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 38701,
+        "type": "BASE",
+        "pos": 116,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 339,
+        "type": "SPEC",
+        "pos": 117,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 295,
+        "type": "BASE",
+        "pos": 117,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 786,
+        "type": "SPEC",
+        "pos": 118,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1116,
+        "type": "BASE",
+        "pos": 119,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 339,
+        "type": "SPEC",
+        "pos": 120,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 671,
+        "type": "BASE",
+        "pos": 121,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3967,
+        "type": "SPEC",
+        "pos": 122,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 43375,
+        "type": "BASE",
+        "pos": 123,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 582,
+        "type": "SPEC",
+        "pos": 124,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 44029,
+        "type": "BASE",
+        "pos": 125,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 436,
+        "type": "SPEC",
+        "pos": 126,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 344,
+        "type": "BASE",
+        "pos": 127,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 832,
+        "type": "SPEC",
+        "pos": 128,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2239,
+        "type": "BASE",
+        "pos": 129,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2148,
+        "type": "SPEC",
+        "pos": 130,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 342,
+        "type": "BASE",
+        "pos": 131,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1531,
+        "type": "SPEC",
+        "pos": 132,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 11217,
+        "type": "BASE",
+        "pos": 133,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3077,
+        "type": "SPEC",
+        "pos": 134,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 10200,
+        "type": "BASE",
+        "pos": 134,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 6532,
+        "type": "SPEC",
+        "pos": 135,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1277,
+        "type": "BASE",
+        "pos": 136,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 295,
+        "type": "SPEC",
+        "pos": 137,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 16915,
+        "type": "BASE",
+        "pos": 137,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 8273,
+        "type": "SPEC",
+        "pos": 138,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 14,
+        "type": "BASE",
+        "pos": 139,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 11198,
+        "type": "SPEC",
+        "pos": 140,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 22650,
+        "type": "BASE",
+        "pos": 141,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 142,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 4474,
+        "type": "BASE",
+        "pos": 143,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2703,
+        "type": "SPEC",
+        "pos": 144,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 16,
+        "type": "BASE",
+        "pos": 145,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 15728,
+        "type": "SPEC",
+        "pos": 146,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 3109,
+        "type": "BASE",
+        "pos": 146,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 477,
+        "type": "SPEC",
+        "pos": 147,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 4501,
+        "type": "BASE",
+        "pos": 148,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 1479,
+        "type": "SPEC",
+        "pos": 149,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 15449,
+        "type": "BASE",
+        "pos": 150,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 54,
+        "type": "SPEC",
+        "pos": 151,
+        "request_id": 0,
+        "prefill_id": -1
+      }
+    ],
+    "read_count": 136
+  }
+}

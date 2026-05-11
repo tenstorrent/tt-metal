@@ -28,7 +28,7 @@ Interface vs real decoder:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import torch
@@ -40,116 +40,197 @@ from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
+MAX_SPECULATIVE_TOKENS: int = DeepseekMetadata.MAX_SPECULATIVE_TOKENS
+MAX_WINDOW_TOKENS: int = DeepseekMetadata.MAX_WINDOW_TOKENS
+RELAXED_ACCEPT_TOPN: int = DeepseekMetadata.RELAXED_ACCEPT_TOPN
+TOPK_METADATA_COUNT: int = DeepseekMetadata.TOPK_METADATA_COUNT
+SPEC_DECODE_PAGE_SIZE_BYTES: int = DeepseekMetadata.aligned_size_bytes()
 
-# Each H2D page carries the full DeepseekMetadata struct (header + reserved
-# p_indices/p_scores tail) so the on-device fused embedding kernel can copy the
-# entire struct downstream in one shot. The host only fills the header fields
-# (token id, position id, etc.); the trailing bytes stay zero.
-PCIE_PAGE_ALIGNMENT_BYTES: int = DeepseekMetadata.aligned_size_bytes()
+PCIE_PAGE_ALIGNMENT_BYTES: int = 64
 
 
 # ---------------------------------------------------------------------------
-# Speculative-decode page layout (DeepseekMetadata struct, PCIE_PAGE_ALIGNMENT_BYTES total)
+# Speculative-decode page layout.
 # ---------------------------------------------------------------------------
 
 
 class OutputField:
-    """uint32 indices within the 16-word output page."""
+    """uint32 indices within the fixed metadata output page."""
 
-    TOKEN_0 = 0
-    TOKEN_0_TYPE = 1
-    TOKEN_0_POS = 2
-    TOKEN_1 = 3
-    TOKEN_1_TYPE = 4
-    TOKEN_1_POS = 5
+    TOKEN_TYPE = 0
+    REQUEST_ID = 1
+    TOKEN_ID = 2
+    POSITION_ID = 3
+    LANE_IDX = 4
+    TEMPERATURE = 5
+    TOP_K = 6
+    TOP_P = 7
+    CANDIDATE_TOKEN_IDS = 8
+    PREFILL_TOKEN_IDS = 13
+    P_TOP15_INDICES = 17
+    P_TOP15_SCORES = 32
+    Q_TOP15_INDICES = 40
+    Q_TOP15_SCORES = 55
 
 
 class InputField:
-    """uint32 indices within the 16-word input page."""
+    """uint32 indices within the fixed metadata input page."""
 
-    TOKEN_TYPE = 1
-    USER_ID = 6
-    TOKEN_ID = 7
-    POSITION_ID = 8
-    PREFILL_TOKEN_ID = 9
-    TOKEN0_POSITION_ID = 2
-    TEMPERATURE = 10
-    TOP_K = 11
-    PROBABILITY_MASS_THRESHOLD = 12
+    TOKEN_TYPE = 0
+    REQUEST_ID = 1
+    TOKEN_ID = 2
+    POSITION_ID = 3
+    LANE_IDX = 4
+    TEMPERATURE = 5
+    TOP_K = 6
+    TOP_P = 7
+    CANDIDATE_TOKEN_IDS = 8
+    PREFILL_TOKEN_IDS = 13
 
 
 class TokenType:
+    PREFILL = 2
     BASE = 0
     SPEC = 1
 
 
 @dataclass
-class DecodeResult:
-    """Parsed output page from the pipeline (256-byte DeepseekMetadata struct)."""
+class CandidateToken:
+    token_id: int
+    pos: int
 
-    token_0: int
-    token_0_type: int
-    token_0_pos: int
-    token_1: int | None = None
-    token_1_type: int | None = None
-    token_1_pos: int | None = None
-    slot_id: int | None = None
-    p_indices: list[int] | None = None
-    p_scores: list[float] | None = None
+    def __post_init__(self) -> None:
+        self.token_id = int(self.token_id)
+        self.pos = int(self.pos)
+
+
+@dataclass
+class DecodeResult:
+    """Parsed dynamic-depth output page from the pipeline."""
+
+    token_type: int
+    tokens: list[CandidateToken]
+    request_id: int = 0
+    lane_idx: int = 0
+    position_id: int = 0
+    p_top15_indices: list[int] = field(default_factory=list)
+    p_top15_scores: list[float] = field(default_factory=list)
+    q_top15_indices: list[int] = field(default_factory=list)
+    q_top15_scores: list[float] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.token_type = int(self.token_type)
+        self.request_id = int(self.request_id)
+        self.lane_idx = int(self.lane_idx)
+        self.position_id = int(self.position_id)
+        self.tokens = [
+            token if isinstance(token, CandidateToken) else CandidateToken(**token)  # type: ignore[arg-type]
+            for token in self.tokens
+        ]
+        if not self.tokens:
+            raise ValueError("DecodeResult requires at least one candidate token")
+        self.p_top15_indices = [int(token) for token in self.p_top15_indices]
+        self.p_top15_scores = [float(prob) for prob in self.p_top15_scores]
+        self.q_top15_indices = [int(token) for token in self.q_top15_indices]
+        self.q_top15_scores = [float(prob) for prob in self.q_top15_scores]
+
+    @property
+    def token_ids(self) -> list[int]:
+        return [token.token_id for token in self.tokens]
+
+    @property
+    def positions(self) -> list[int]:
+        return [token.pos for token in self.tokens]
+
+    @property
+    def window_start_pos(self) -> int:
+        return self.position_id - self.lane_idx + 1
+
+    @property
+    def num_window_tokens(self) -> int:
+        return len(self.tokens)
+
+    @property
+    def target_topn_tokens(self) -> list[int]:
+        return self.p_top15_indices
+
+    @property
+    def target_topn_probs(self) -> list[float]:
+        return self.p_top15_scores
 
 
 def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
-    """Parse a DeepseekMetadata output page into a structured DecodeResult.
-
-    The output buffer is 64 uint32 words (256 bytes) laid out as:
-      words  0-15 : header (tok0_id … _pad2)
-      words 16-47 : p_indices[32]  (uint32)
-      words 48-63 : p_scores[32]   (bf16 packed as uint16)
-    """
+    """Parse a fixed metadata output page into a structured DecodeResult."""
     raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
 
-    p_indices = None
-    p_scores = None
-    if raw.numel() >= 64:
-        p_indices = raw[16:48].tolist()
-        scores_bf16 = raw[48:64].contiguous().view(torch.bfloat16)
-        p_scores = scores_bf16.float().tolist()
+    def raw_int(idx: int, default: int = 0) -> int:
+        return int(raw[idx].item()) if idx < raw.numel() else default
+
+    def raw_bf16_pair_word(idx: int, default: int = 0) -> int:
+        return raw_int(idx, default) & 0xFFFFFFFF
+
+    def unpack_bf16_scores(start_word: int) -> list[float]:
+        scores = []
+        for word_idx in range((TOPK_METADATA_COUNT + 1) // 2):
+            word = raw_bf16_pair_word(start_word + word_idx)
+            for shift in (0, 16):
+                if len(scores) == TOPK_METADATA_COUNT:
+                    break
+                bf16_bits = (word >> shift) & 0xFFFF
+                scores.append(torch.tensor(bf16_bits << 16, dtype=torch.uint32).view(torch.float32).item())
+        return scores
+
+    position_id = raw_int(OutputField.POSITION_ID)
+    lane_idx = raw_int(OutputField.LANE_IDX)
+    first_candidate_pos = position_id + 1
+    tokens = [
+        CandidateToken(
+            raw_int(OutputField.CANDIDATE_TOKEN_IDS + candidate_idx),
+            first_candidate_pos + candidate_idx,
+        )
+        for candidate_idx in range(MAX_WINDOW_TOKENS)
+    ]
 
     return DecodeResult(
-        token_0=int(raw[OutputField.TOKEN_0].item()),
-        token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
-        token_0_pos=int(raw[OutputField.TOKEN_0_POS].item()),
-        token_1=int(raw[OutputField.TOKEN_1].item()),
-        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
-        token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
-        slot_id=int(raw[InputField.USER_ID].item()),
-        p_indices=p_indices,
-        p_scores=p_scores,
+        token_type=int(raw[OutputField.TOKEN_TYPE].item()),
+        request_id=raw_int(OutputField.REQUEST_ID),
+        lane_idx=lane_idx,
+        position_id=position_id,
+        tokens=tokens,
+        p_top15_indices=[raw_int(OutputField.P_TOP15_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
+        p_top15_scores=unpack_bf16_scores(OutputField.P_TOP15_SCORES),
+        q_top15_indices=[raw_int(OutputField.Q_TOP15_INDICES + idx) for idx in range(TOPK_METADATA_COUNT)],
+        q_top15_scores=unpack_bf16_scores(OutputField.Q_TOP15_SCORES),
     )
 
 
 def to_spec_input(
     token_id: int,
-    prefill_token_id: int,
-    user_id: int,
+    prefill_token_ids: int | list[int],
+    request_id: int,
     position_id: int,
     page_size_datums: int,
     token_type: TokenType,
-    temperature: float,
-    top_k: int,
-    probability_mass_threshold: float,
+    lane_idx: int = 0,
+    temperature: float = 1.0,
+    top_k: int = 32,
+    top_p: float = 1.0,
 ) -> ttnn.Tensor:
-    """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
+    """Build a PCIe-aligned input page carrying (token_id, request_id, position_id)."""
     torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
     torch_padded[0, InputField.TOKEN_ID] = token_id
-    torch_padded[0, InputField.PREFILL_TOKEN_ID] = prefill_token_id
     torch_padded[0, InputField.TOKEN_TYPE] = token_type
-    torch_padded[0, InputField.USER_ID] = user_id
+    torch_padded[0, InputField.REQUEST_ID] = request_id
     torch_padded[0, InputField.POSITION_ID] = position_id
-    torch_padded[0, InputField.TOKEN0_POSITION_ID] = position_id
+    torch_padded[0, InputField.LANE_IDX] = lane_idx
     torch_padded[0, InputField.TEMPERATURE] = float_to_uint32(temperature)
     torch_padded[0, InputField.TOP_K] = top_k
-    torch_padded[0, InputField.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
+    torch_padded[0, InputField.TOP_P] = float_to_uint32(top_p)
+    prefill_ids = (
+        [int(prefill_token_ids)] if isinstance(prefill_token_ids, int) else [int(value) for value in prefill_token_ids]
+    )
+    for idx, value in enumerate(prefill_ids[:MAX_SPECULATIVE_TOKENS]):
+        torch_padded[0, InputField.PREFILL_TOKEN_IDS + idx] = value
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -160,7 +241,7 @@ def align_up(value: int, alignment: int) -> int:
 
 def page_size_bytes(batch_size: int) -> int:
     """PCIe-aligned page (and FIFO) size in bytes for (B, 1) token IDs. Use for socket creation."""
-    return align_up(batch_size * TOKEN_ID_BYTES, PCIE_PAGE_ALIGNMENT_BYTES)
+    return max(align_up(batch_size * TOKEN_ID_BYTES, PCIE_PAGE_ALIGNMENT_BYTES), SPEC_DECODE_PAGE_SIZE_BYTES)
 
 
 def create_output_buffer(page_size_datums: int) -> ttnn.Tensor:
@@ -215,7 +296,8 @@ class DeepSeekV3:
         self.batch_size = batch_size
         self._pipeline_depth = pipeline_depth
         payload_bytes: int = batch_size * TOKEN_ID_BYTES
-        self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
+        logger.debug(f"Payload bytes: {payload_bytes} bytes")
+        self._tensor_size_bytes: int = page_size_bytes(batch_size)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
         self._position: int = 0
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
@@ -287,7 +369,10 @@ class DeepSeekV3:
         assert (
             input_tensor.shape[0] == self.batch_size
         ), f"Input tensor batch size must be {self.batch_size}, got {input_tensor.shape[0]}"
-        padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
+        if isinstance(input_tensor, ttnn.Tensor) and int(input_tensor.shape[-1]) == self._page_size_datums:
+            padded_input = input_tensor
+        else:
+            padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
         self._write_fn(padded_input)
         self._read_fn(self._output_buffer)
         self._position += 1
@@ -296,25 +381,27 @@ class DeepSeekV3:
     def write_input(
         self,
         token_id: int,
-        prefill_token_id: int,
-        user_id: int,
+        prefill_token_ids: int | list[int],
+        request_id: int,
         position_id: int,
         token_type: TokenType,
-        temperature: float,
-        top_k: int,
-        probability_mass_threshold: float,
+        lane_idx: int = 0,
+        temperature: float = 1.0,
+        top_k: int = 32,
+        top_p: float = 1.0,
     ) -> None:
-        """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
+        """Write a single spec-decode input page (token_id, request_id, position_id) to the pipeline."""
         input_tensor = to_spec_input(
             token_id,
-            prefill_token_id,
-            user_id,
+            prefill_token_ids,
+            request_id,
             position_id,
             self._page_size_datums,
             token_type,
-            temperature,
-            top_k,
-            probability_mass_threshold,
+            lane_idx=lane_idx,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
         )
         self._write_fn(input_tensor)
 

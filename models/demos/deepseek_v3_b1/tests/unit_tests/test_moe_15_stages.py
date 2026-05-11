@@ -25,6 +25,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
+from models.demos.deepseek_v3_b1.model import InputField
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
@@ -356,7 +357,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     if is_stage0:
         token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-        torch_token[0, 0] = token_id
+        torch_token[0, InputField.TOKEN_ID] = token_id
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         pipeline_block.write_token(token_tensor)
         logger.info(f"[rank=0] token {token_id} injected")
@@ -775,7 +776,7 @@ def test_persistent_moe_15_stages(
             token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
             num_elements = embedding_size_bytes // 2
             torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-            torch_token[0, 0] = 0
+            torch_token[0, InputField.TOKEN_ID] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             start_time = time.time()
             for iteration in range(iterations):
@@ -1163,7 +1164,7 @@ def test_persistent_moe_multi_token(
             token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
             num_elements = embedding_size_bytes // 2
             torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-            torch_token[0, 0] = 0
+            torch_token[0, InputField.TOKEN_ID] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             start_time = time.time()
             num_tokens_in_flight = 64

@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "name": "spec_decode_host_fsm_case",
+  "metadata": {
+    "num_accepts": 2,
+    "num_rejects": 0
+  },
+  "params": {
+    "prompt_token_ids": [
+      0,
+      128803,
+      21750,
+      260,
+      3107,
+      15255,
+      2019,
+      396,
+      10340,
+      270,
+      48941,
+      26509,
+      1167,
+      16,
+      128804
+    ],
+    "max_new_tokens": 5,
+    "eos_token_id": 1
+  },
+  "device_to_host": {
+    "prefill_results": [
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 128798,
+          "pos": 15
+        },
+        "token_1": {
+          "token_id": 201,
+          "pos": 16
+        }
+      }
+    ],
+    "read_results": [
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 201,
+          "pos": 16
+        },
+        "token_1": {
+          "token_id": 2581,
+          "pos": 17
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 2581,
+          "pos": 17
+        },
+        "token_1": {
+          "token_id": 477,
+          "pos": 18
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "token_0": {
+          "token_id": 477,
+          "pos": 18
+        },
+        "token_1": {
+          "token_id": 2887,
+          "pos": 19
+        }
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "token_0": {
+          "token_id": 2887,
+          "pos": 19
+        },
+        "token_1": {
+          "token_id": 304,
+          "pos": 20
+        }
+      }
+    ]
+  },
+  "expected_host": {
+    "generated_tokens": [
+      128798,
+      201,
+      2581,
+      477,
+      2887
+    ],
+    "writes": [
+      {
+        "token_id": 128798,
+        "type": "BASE",
+        "pos": 15,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 201,
+        "type": "SPEC",
+        "pos": 16,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 2581,
+        "type": "BASE",
+        "pos": 17,
+        "request_id": 0,
+        "prefill_id": -1
+      },
+      {
+        "token_id": 477,
+        "type": "SPEC",
+        "pos": 18,
+        "request_id": 0,
+        "prefill_id": -1
+      }
+    ],
+    "read_count": 4
+  }
+}

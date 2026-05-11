@@ -1,0 +1,6842 @@
+{
+  "schema_version": 2,
+  "name": "spec_decode_host_fsm_case",
+  "metadata": {
+    "num_accepts": 62,
+    "num_rejects": 3
+  },
+  "params": {
+    "prompt_token_ids": [
+      0,
+      128803,
+      21750,
+      260,
+      3107,
+      15255,
+      2019,
+      396,
+      10340,
+      270,
+      48941,
+      26509,
+      1167,
+      16,
+      128804
+    ],
+    "max_new_tokens": 128,
+    "eos_token_id": 1,
+    "num_speculative_tokens": 1
+  },
+  "device_to_host": {
+    "prefill_results": [
+      {
+        "request_id": 0,
+        "type": "PREFILL",
+        "lane_idx": 0,
+        "window_start_pos": 15,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 128798,
+            "pos": 15
+          },
+          {
+            "token_id": 201,
+            "pos": 16
+          }
+        ],
+        "target_topn_tokens": [
+          128798,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "read_results": [
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 16,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 16
+          },
+          {
+            "token_id": 2581,
+            "pos": 17
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 16,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 2581,
+            "pos": 17
+          },
+          {
+            "token_id": 477,
+            "pos": 18
+          }
+        ],
+        "target_topn_tokens": [
+          2581,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 18,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 477,
+            "pos": 18
+          },
+          {
+            "token_id": 2887,
+            "pos": 19
+          }
+        ],
+        "target_topn_tokens": [
+          477,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 18,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 2887,
+            "pos": 19
+          },
+          {
+            "token_id": 304,
+            "pos": 20
+          }
+        ],
+        "target_topn_tokens": [
+          2887,
+          4985,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.8411305546760559,
+          0.15886946022510529,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 20,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 304,
+            "pos": 20
+          },
+          {
+            "token_id": 5085,
+            "pos": 21
+          }
+        ],
+        "target_topn_tokens": [
+          304,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 20,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 5085,
+            "pos": 21
+          },
+          {
+            "token_id": 260,
+            "pos": 22
+          }
+        ],
+        "target_topn_tokens": [
+          5085,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 22,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 260,
+            "pos": 22
+          },
+          {
+            "token_id": 2019,
+            "pos": 23
+          }
+        ],
+        "target_topn_tokens": [
+          260,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 22,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 2019,
+            "pos": 23
+          },
+          {
+            "token_id": 396,
+            "pos": 24
+          }
+        ],
+        "target_topn_tokens": [
+          2019,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 24,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 396,
+            "pos": 24
+          },
+          {
+            "token_id": 10340,
+            "pos": 25
+          }
+        ],
+        "target_topn_tokens": [
+          396,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 24,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 10340,
+            "pos": 25
+          },
+          {
+            "token_id": 270,
+            "pos": 26
+          }
+        ],
+        "target_topn_tokens": [
+          10340,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 26,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 270,
+            "pos": 26
+          },
+          {
+            "token_id": 48941,
+            "pos": 27
+          }
+        ],
+        "target_topn_tokens": [
+          270,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 26,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 48941,
+            "pos": 27
+          },
+          {
+            "token_id": 26509,
+            "pos": 28
+          }
+        ],
+        "target_topn_tokens": [
+          48941,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 28,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 26509,
+            "pos": 28
+          },
+          {
+            "token_id": 1167,
+            "pos": 29
+          }
+        ],
+        "target_topn_tokens": [
+          26509,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 28,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1167,
+            "pos": 29
+          },
+          {
+            "token_id": 603,
+            "pos": 30
+          }
+        ],
+        "target_topn_tokens": [
+          1167,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 30,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 30
+          },
+          {
+            "token_id": 455,
+            "pos": 31
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 30,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 455,
+            "pos": 31
+          },
+          {
+            "token_id": 26509,
+            "pos": 32
+          }
+        ],
+        "target_topn_tokens": [
+          455,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 32,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 26509,
+            "pos": 32
+          },
+          {
+            "token_id": 8205,
+            "pos": 33
+          }
+        ],
+        "target_topn_tokens": [
+          26509,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 32,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 8205,
+            "pos": 33
+          },
+          {
+            "token_id": 344,
+            "pos": 34
+          }
+        ],
+        "target_topn_tokens": [
+          8205,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 34,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 344,
+            "pos": 34
+          },
+          {
+            "token_id": 6428,
+            "pos": 35
+          }
+        ],
+        "target_topn_tokens": [
+          344,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 34,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 6428,
+            "pos": 35
+          },
+          {
+            "token_id": 412,
+            "pos": 36
+          }
+        ],
+        "target_topn_tokens": [
+          6428,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 36,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 412,
+            "pos": 36
+          },
+          {
+            "token_id": 1137,
+            "pos": 37
+          }
+        ],
+        "target_topn_tokens": [
+          412,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 36,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1137,
+            "pos": 37
+          },
+          {
+            "token_id": 262,
+            "pos": 38
+          }
+        ],
+        "target_topn_tokens": [
+          1137,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 38,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 38
+          },
+          {
+            "token_id": 447,
+            "pos": 39
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 38,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 39
+          },
+          {
+            "token_id": 10,
+            "pos": 40
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 40,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 10,
+            "pos": 40
+          },
+          {
+            "token_id": 18,
+            "pos": 41
+          }
+        ],
+        "target_topn_tokens": [
+          10,
+          18,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.602684736251831,
+          0.39731526374816895,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 40,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 41
+          },
+          {
+            "token_id": 11,
+            "pos": 42
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 42,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 42
+          },
+          {
+            "token_id": 438,
+            "pos": 43
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 42,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 438,
+            "pos": 43
+          },
+          {
+            "token_id": 223,
+            "pos": 44
+          }
+        ],
+        "target_topn_tokens": [
+          438,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 44,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 44
+          },
+          {
+            "token_id": 18,
+            "pos": 45
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 44,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 45
+          },
+          {
+            "token_id": 201,
+            "pos": 46
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 46,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 46
+          },
+          {
+            "token_id": 262,
+            "pos": 47
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 46,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 47
+          },
+          {
+            "token_id": 447,
+            "pos": 48
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 48,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 48
+          },
+          {
+            "token_id": 10,
+            "pos": 49
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 48,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 10,
+            "pos": 49
+          },
+          {
+            "token_id": 19,
+            "pos": 50
+          }
+        ],
+        "target_topn_tokens": [
+          10,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 50,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 50
+          },
+          {
+            "token_id": 11,
+            "pos": 51
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 50,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 51
+          },
+          {
+            "token_id": 438,
+            "pos": 52
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 52,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 438,
+            "pos": 52
+          },
+          {
+            "token_id": 223,
+            "pos": 53
+          }
+        ],
+        "target_topn_tokens": [
+          438,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 52,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 53
+          },
+          {
+            "token_id": 19,
+            "pos": 54
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 54,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 54
+          },
+          {
+            "token_id": 201,
+            "pos": 55
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 54,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 55
+          },
+          {
+            "token_id": 262,
+            "pos": 56
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 56,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 56
+          },
+          {
+            "token_id": 447,
+            "pos": 57
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 56,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 57
+          },
+          {
+            "token_id": 3913,
+            "pos": 58
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 58,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 3913,
+            "pos": 58
+          },
+          {
+            "token_id": 11,
+            "pos": 59
+          }
+        ],
+        "target_topn_tokens": [
+          3913,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 58,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 59
+          },
+          {
+            "token_id": 438,
+            "pos": 60
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 60,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 438,
+            "pos": 60
+          },
+          {
+            "token_id": 447,
+            "pos": 61
+          }
+        ],
+        "target_topn_tokens": [
+          438,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 60,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 61
+          },
+          {
+            "token_id": 3913,
+            "pos": 62
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 62,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 3913,
+            "pos": 62
+          },
+          {
+            "token_id": 15,
+            "pos": 63
+          }
+        ],
+        "target_topn_tokens": [
+          3913,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 62,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 15,
+            "pos": 63
+          },
+          {
+            "token_id": 19,
+            "pos": 64
+          }
+        ],
+        "target_topn_tokens": [
+          15,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 64,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 64
+          },
+          {
+            "token_id": 11,
+            "pos": 65
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 64,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 65
+          },
+          {
+            "token_id": 940,
+            "pos": 66
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 66,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 940,
+            "pos": 66
+          },
+          {
+            "token_id": 447,
+            "pos": 67
+          }
+        ],
+        "target_topn_tokens": [
+          940,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 66,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 67
+          },
+          {
+            "token_id": 3913,
+            "pos": 68
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 68,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 3913,
+            "pos": 68
+          },
+          {
+            "token_id": 15,
+            "pos": 69
+          }
+        ],
+        "target_topn_tokens": [
+          3913,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 68,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 15,
+            "pos": 69
+          },
+          {
+            "token_id": 20,
+            "pos": 70
+          }
+        ],
+        "target_topn_tokens": [
+          15,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 70,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 20,
+            "pos": 70
+          },
+          {
+            "token_id": 11,
+            "pos": 71
+          }
+        ],
+        "target_topn_tokens": [
+          20,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 70,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 71
+          },
+          {
+            "token_id": 362,
+            "pos": 72
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 72,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 362,
+            "pos": 72
+          },
+          {
+            "token_id": 313,
+            "pos": 73
+          }
+        ],
+        "target_topn_tokens": [
+          362,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 72,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 73
+          },
+          {
+            "token_id": 1955,
+            "pos": 74
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 74,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 11620,
+            "pos": 74
+          },
+          {
+            "token_id": 223,
+            "pos": 75
+          }
+        ],
+        "target_topn_tokens": [
+          11620,
+          1955,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.8411305546760559,
+          0.1588694453239441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 74,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 75
+          },
+          {
+            "token_id": 19,
+            "pos": 76
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 75,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 75
+          },
+          {
+            "token_id": 20,
+            "pos": 76
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 75,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 20,
+            "pos": 76
+          },
+          {
+            "token_id": 339,
+            "pos": 77
+          }
+        ],
+        "target_topn_tokens": [
+          20,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 77,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 271,
+            "pos": 77
+          },
+          {
+            "token_id": 1350,
+            "pos": 78
+          }
+        ],
+        "target_topn_tokens": [
+          271,
+          339,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.7772998809814453,
+          0.22270014882087708,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 77,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1350,
+            "pos": 78
+          },
+          {
+            "token_id": 588,
+            "pos": 79
+          }
+        ],
+        "target_topn_tokens": [
+          1350,
+          3211,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.889272153377533,
+          0.11072781682014465,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 79,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 588,
+            "pos": 79
+          },
+          {
+            "token_id": 1347,
+            "pos": 80
+          }
+        ],
+        "target_topn_tokens": [
+          588,
+          611,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9241418242454529,
+          0.07585818320512772,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 79,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1347,
+            "pos": 80
+          },
+          {
+            "token_id": 260,
+            "pos": 81
+          }
+        ],
+        "target_topn_tokens": [
+          1347,
+          696,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.7772998809814453,
+          0.22270014882087708,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 81,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 411,
+            "pos": 81
+          },
+          {
+            "token_id": 58112,
+            "pos": 82
+          }
+        ],
+        "target_topn_tokens": [
+          411,
+          58112,
+          78157,
+          260,
+          3,
+          7,
+          8,
+          1,
+          4,
+          9
+        ],
+        "target_topn_probs": [
+          0.4931374788284302,
+          0.32509708404541016,
+          0.14128626883029938,
+          0.04047918692231178,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 81,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 4654,
+            "pos": 82
+          },
+          {
+            "token_id": 58112,
+            "pos": 83
+          }
+        ],
+        "target_topn_tokens": [
+          4654,
+          50494,
+          2767,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.615963339805603,
+          0.26769590377807617,
+          0.1163407489657402,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 83,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 58112,
+            "pos": 83
+          },
+          {
+            "token_id": 4090,
+            "pos": 84
+          }
+        ],
+        "target_topn_tokens": [
+          58112,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 83,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 2142,
+            "pos": 84
+          },
+          {
+            "token_id": 304,
+            "pos": 85
+          }
+        ],
+        "target_topn_tokens": [
+          2142,
+          4090,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.6970582604408264,
+          0.30294179916381836,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 85,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 304,
+            "pos": 85
+          },
+          {
+            "token_id": 5789,
+            "pos": 86
+          }
+        ],
+        "target_topn_tokens": [
+          304,
+          362,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9486640691757202,
+          0.05133591592311859,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 85,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 5789,
+            "pos": 86
+          },
+          {
+            "token_id": 78157,
+            "pos": 87
+          }
+        ],
+        "target_topn_tokens": [
+          5789,
+          23917,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.6970598101615906,
+          0.3029401898384094,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 87,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 78157,
+            "pos": 87
+          },
+          {
+            "token_id": 9335,
+            "pos": 88
+          }
+        ],
+        "target_topn_tokens": [
+          78157,
+          270,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.8411305546760559,
+          0.1588694453239441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 87,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 778,
+            "pos": 88
+          },
+          {
+            "token_id": 344,
+            "pos": 89
+          }
+        ],
+        "target_topn_tokens": [
+          778,
+          30433,
+          305,
+          343,
+          3,
+          7,
+          8,
+          1,
+          4,
+          9
+        ],
+        "target_topn_probs": [
+          0.6250408291816711,
+          0.17907719314098358,
+          0.11805526912212372,
+          0.07782672345638275,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 89,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 588,
+            "pos": 89
+          },
+          {
+            "token_id": 366,
+            "pos": 90
+          }
+        ],
+        "target_topn_tokens": [
+          2786,
+          588,
+          1142,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.5139414072036743,
+          0.3388119041919708,
+          0.14724668860435486,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 89,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 64975,
+            "pos": 90
+          },
+          {
+            "token_id": 362,
+            "pos": 91
+          }
+        ],
+        "target_topn_tokens": [
+          64975,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 90,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 366,
+            "pos": 90
+          },
+          {
+            "token_id": 64975,
+            "pos": 91
+          }
+        ],
+        "target_topn_tokens": [
+          366,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 90,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 64975,
+            "pos": 91
+          },
+          {
+            "token_id": 362,
+            "pos": 92
+          }
+        ],
+        "target_topn_tokens": [
+          64975,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 92,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 362,
+            "pos": 92
+          },
+          {
+            "token_id": 3226,
+            "pos": 93
+          }
+        ],
+        "target_topn_tokens": [
+          362,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 92,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 3226,
+            "pos": 93
+          },
+          {
+            "token_id": 313,
+            "pos": 94
+          }
+        ],
+        "target_topn_tokens": [
+          3226,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 94,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 94
+          },
+          {
+            "token_id": 339,
+            "pos": 95
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 94,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 339,
+            "pos": 95
+          },
+          {
+            "token_id": 30330,
+            "pos": 96
+          }
+        ],
+        "target_topn_tokens": [
+          339,
+          603,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.6970598101615906,
+          0.3029401898384094,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 96,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 30330,
+            "pos": 96
+          },
+          {
+            "token_id": 1137,
+            "pos": 97
+          }
+        ],
+        "target_topn_tokens": [
+          30330,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 96,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1137,
+            "pos": 97
+          },
+          {
+            "token_id": 262,
+            "pos": 98
+          }
+        ],
+        "target_topn_tokens": [
+          1137,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 98,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 98
+          },
+          {
+            "token_id": 19,
+            "pos": 99
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 98,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 2052,
+            "pos": 99
+          },
+          {
+            "token_id": 313,
+            "pos": 100
+          }
+        ],
+        "target_topn_tokens": [
+          2052,
+          855,
+          19,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.5810220241546631,
+          0.2525124251842499,
+          0.16646559536457062,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 99,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 99
+          },
+          {
+            "token_id": 16,
+            "pos": 100
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 99,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 16,
+            "pos": 100
+          },
+          {
+            "token_id": 2052,
+            "pos": 101
+          }
+        ],
+        "target_topn_tokens": [
+          16,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 101,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 2052,
+            "pos": 101
+          },
+          {
+            "token_id": 313,
+            "pos": 102
+          }
+        ],
+        "target_topn_tokens": [
+          2052,
+          60100,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.6970582008361816,
+          0.30294179916381836,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 101,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 102
+          },
+          {
+            "token_id": 344,
+            "pos": 103
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 103,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 344,
+            "pos": 103
+          },
+          {
+            "token_id": 223,
+            "pos": 104
+          }
+        ],
+        "target_topn_tokens": [
+          344,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 103,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 104
+          },
+          {
+            "token_id": 18,
+            "pos": 105
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 105,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 105
+          },
+          {
+            "token_id": 14,
+            "pos": 106
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 105,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 14,
+            "pos": 106
+          },
+          {
+            "token_id": 1354,
+            "pos": 107
+          }
+        ],
+        "target_topn_tokens": [
+          14,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 107,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1354,
+            "pos": 107
+          },
+          {
+            "token_id": 223,
+            "pos": 108
+          }
+        ],
+        "target_topn_tokens": [
+          1354,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 107,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 108
+          },
+          {
+            "token_id": 18,
+            "pos": 109
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 109,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 109
+          },
+          {
+            "token_id": 603,
+            "pos": 110
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 109,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 110
+          },
+          {
+            "token_id": 223,
+            "pos": 111
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 111,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 111
+          },
+          {
+            "token_id": 20,
+            "pos": 112
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 111,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 20,
+            "pos": 112
+          },
+          {
+            "token_id": 16,
+            "pos": 113
+          }
+        ],
+        "target_topn_tokens": [
+          20,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 113,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 16,
+            "pos": 113
+          },
+          {
+            "token_id": 2052,
+            "pos": 114
+          }
+        ],
+        "target_topn_tokens": [
+          16,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 113,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 2052,
+            "pos": 114
+          },
+          {
+            "token_id": 313,
+            "pos": 115
+          }
+        ],
+        "target_topn_tokens": [
+          2052,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 115,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 115
+          },
+          {
+            "token_id": 344,
+            "pos": 116
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 115,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 344,
+            "pos": 116
+          },
+          {
+            "token_id": 223,
+            "pos": 117
+          }
+        ],
+        "target_topn_tokens": [
+          344,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 117,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 117
+          },
+          {
+            "token_id": 19,
+            "pos": 118
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 117,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 118
+          },
+          {
+            "token_id": 14,
+            "pos": 119
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 119,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 14,
+            "pos": 119
+          },
+          {
+            "token_id": 1354,
+            "pos": 120
+          }
+        ],
+        "target_topn_tokens": [
+          14,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 119,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1354,
+            "pos": 120
+          },
+          {
+            "token_id": 223,
+            "pos": 121
+          }
+        ],
+        "target_topn_tokens": [
+          1354,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 121,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 121
+          },
+          {
+            "token_id": 19,
+            "pos": 122
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 121,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 122
+          },
+          {
+            "token_id": 603,
+            "pos": 123
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 123,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 123
+          },
+          {
+            "token_id": 223,
+            "pos": 124
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 123,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 124
+          },
+          {
+            "token_id": 21,
+            "pos": 125
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 125,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 21,
+            "pos": 125
+          },
+          {
+            "token_id": 16,
+            "pos": 126
+          }
+        ],
+        "target_topn_tokens": [
+          21,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 125,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 16,
+            "pos": 126
+          },
+          {
+            "token_id": 1884,
+            "pos": 127
+          }
+        ],
+        "target_topn_tokens": [
+          16,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 127,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1884,
+            "pos": 127
+          },
+          {
+            "token_id": 313,
+            "pos": 128
+          }
+        ],
+        "target_topn_tokens": [
+          35861,
+          1884,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.5,
+          0.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 127,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 128
+          },
+          {
+            "token_id": 11620,
+            "pos": 129
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 129,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 11620,
+            "pos": 129
+          },
+          {
+            "token_id": 223,
+            "pos": 130
+          }
+        ],
+        "target_topn_tokens": [
+          11620,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 129,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 130
+          },
+          {
+            "token_id": 20,
+            "pos": 131
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 131,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 20,
+            "pos": 131
+          },
+          {
+            "token_id": 14,
+            "pos": 132
+          }
+        ],
+        "target_topn_tokens": [
+          20,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 131,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 14,
+            "pos": 132
+          },
+          {
+            "token_id": 579,
+            "pos": 133
+          }
+        ],
+        "target_topn_tokens": [
+          14,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 133,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 579,
+            "pos": 133
+          },
+          {
+            "token_id": 5922,
+            "pos": 134
+          }
+        ],
+        "target_topn_tokens": [
+          579,
+          47460,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9486640691757202,
+          0.05133591219782829,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 133,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 588,
+            "pos": 134
+          },
+          {
+            "token_id": 1347,
+            "pos": 135
+          }
+        ],
+        "target_topn_tokens": [
+          5922,
+          47460,
+          588,
+          1347,
+          3,
+          7,
+          8,
+          1,
+          4,
+          9
+        ],
+        "target_topn_probs": [
+          0.45957478880882263,
+          0.30297115445137024,
+          0.19972987473011017,
+          0.037724196910858154,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 135,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 75183,
+            "pos": 135
+          },
+          {
+            "token_id": 538,
+            "pos": 136
+          }
+        ],
+        "target_topn_tokens": [
+          75183,
+          1347,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.6970598697662354,
+          0.3029401898384094,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 135,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 1234,
+            "pos": 136
+          },
+          {
+            "token_id": 8409,
+            "pos": 137
+          }
+        ],
+        "target_topn_tokens": [
+          1234,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 137,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 8409,
+            "pos": 137
+          },
+          {
+            "token_id": 304,
+            "pos": 138
+          }
+        ],
+        "target_topn_tokens": [
+          8409,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 137,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 304,
+            "pos": 138
+          },
+          {
+            "token_id": 3144,
+            "pos": 139
+          }
+        ],
+        "target_topn_tokens": [
+          304,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 139,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 3144,
+            "pos": 139
+          },
+          {
+            "token_id": 6781,
+            "pos": 140
+          }
+        ],
+        "target_topn_tokens": [
+          3144,
+          3959,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9241418242454529,
+          0.07585818320512772,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 139,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 6781,
+            "pos": 140
+          },
+          {
+            "token_id": 294,
+            "pos": 141
+          }
+        ],
+        "target_topn_tokens": [
+          6781,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 141,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 294,
+            "pos": 141
+          },
+          {
+            "token_id": 270,
+            "pos": 142
+          }
+        ],
+        "target_topn_tokens": [
+          294,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "request_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 141,
+        "num_window_tokens": 2,
+        "tokens": [
+          {
+            "token_id": 270,
+            "pos": 142
+          },
+          {
+            "token_id": 2336,
+            "pos": 143
+          }
+        ],
+        "target_topn_tokens": [
+          270,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "expected_host": {
+    "generated_tokens": [
+      128798,
+      201,
+      2581,
+      477,
+      2887,
+      304,
+      5085,
+      260,
+      2019,
+      396,
+      10340,
+      270,
+      48941,
+      26509,
+      1167,
+      603,
+      455,
+      26509,
+      8205,
+      344,
+      6428,
+      412,
+      1137,
+      262,
+      447,
+      10,
+      18,
+      11,
+      438,
+      223,
+      18,
+      201,
+      262,
+      447,
+      10,
+      19,
+      11,
+      438,
+      223,
+      19,
+      201,
+      262,
+      447,
+      3913,
+      11,
+      438,
+      447,
+      3913,
+      15,
+      19,
+      11,
+      940,
+      447,
+      3913,
+      15,
+      20,
+      11,
+      362,
+      313,
+      11620,
+      223,
+      20,
+      339,
+      1350,
+      588,
+      1347,
+      260,
+      4654,
+      58112,
+      2142,
+      304,
+      5789,
+      78157,
+      778,
+      588,
+      366,
+      64975,
+      362,
+      3226,
+      313,
+      339,
+      30330,
+      1137,
+      223,
+      19,
+      16,
+      2052,
+      313,
+      344,
+      223,
+      18,
+      14,
+      1354,
+      223,
+      18,
+      603,
+      223,
+      20,
+      16,
+      2052,
+      313,
+      344,
+      223,
+      19,
+      14,
+      1354,
+      223,
+      19,
+      603,
+      223,
+      21,
+      16,
+      1884,
+      313,
+      11620,
+      223,
+      20,
+      14,
+      579,
+      588,
+      1347,
+      1234,
+      8409,
+      304,
+      3144,
+      6781,
+      294,
+      270
+    ],
+    "writes": [
+      {
+        "token_id": 128798,
+        "type": "BASE",
+        "pos": 15,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 15,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 201,
+        "type": "SPEC",
+        "pos": 16,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 15,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 2581,
+        "type": "BASE",
+        "pos": 17,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 17,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 477,
+        "type": "SPEC",
+        "pos": 18,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 17,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 2887,
+        "type": "BASE",
+        "pos": 19,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 19,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 304,
+        "type": "SPEC",
+        "pos": 20,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 19,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 5085,
+        "type": "BASE",
+        "pos": 21,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 21,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 22,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 21,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 2019,
+        "type": "BASE",
+        "pos": 23,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 23,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 396,
+        "type": "SPEC",
+        "pos": 24,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 23,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 10340,
+        "type": "BASE",
+        "pos": 25,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 25,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 270,
+        "type": "SPEC",
+        "pos": 26,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 25,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 48941,
+        "type": "BASE",
+        "pos": 27,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 27,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 26509,
+        "type": "SPEC",
+        "pos": 28,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 27,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1167,
+        "type": "BASE",
+        "pos": 29,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 29,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 603,
+        "type": "SPEC",
+        "pos": 30,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 29,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 455,
+        "type": "BASE",
+        "pos": 31,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 31,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 26509,
+        "type": "SPEC",
+        "pos": 32,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 31,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 8205,
+        "type": "BASE",
+        "pos": 33,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 33,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 34,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 33,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 6428,
+        "type": "BASE",
+        "pos": 35,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 35,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 412,
+        "type": "SPEC",
+        "pos": 36,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 35,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1137,
+        "type": "BASE",
+        "pos": 37,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 37,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 38,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 37,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 447,
+        "type": "BASE",
+        "pos": 39,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 39,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 10,
+        "type": "SPEC",
+        "pos": 40,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 39,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 18,
+        "type": "BASE",
+        "pos": 41,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 41,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 11,
+        "type": "SPEC",
+        "pos": 42,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 41,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 438,
+        "type": "BASE",
+        "pos": 43,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 43,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 44,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 43,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 18,
+        "type": "BASE",
+        "pos": 45,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 45,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 201,
+        "type": "SPEC",
+        "pos": 46,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 45,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 262,
+        "type": "BASE",
+        "pos": 47,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 47,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 447,
+        "type": "SPEC",
+        "pos": 48,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 47,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 10,
+        "type": "BASE",
+        "pos": 49,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 49,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 50,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 49,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 11,
+        "type": "BASE",
+        "pos": 51,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 51,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 438,
+        "type": "SPEC",
+        "pos": 52,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 51,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 53,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 53,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 54,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 53,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 201,
+        "type": "BASE",
+        "pos": 55,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 55,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 56,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 55,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 447,
+        "type": "BASE",
+        "pos": 57,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 57,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 3913,
+        "type": "SPEC",
+        "pos": 58,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 57,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 11,
+        "type": "BASE",
+        "pos": 59,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 59,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 438,
+        "type": "SPEC",
+        "pos": 60,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 59,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 447,
+        "type": "BASE",
+        "pos": 61,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 61,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 3913,
+        "type": "SPEC",
+        "pos": 62,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 61,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 15,
+        "type": "BASE",
+        "pos": 63,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 63,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 64,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 63,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 11,
+        "type": "BASE",
+        "pos": 65,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 65,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 940,
+        "type": "SPEC",
+        "pos": 66,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 65,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 447,
+        "type": "BASE",
+        "pos": 67,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 67,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 3913,
+        "type": "SPEC",
+        "pos": 68,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 67,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 15,
+        "type": "BASE",
+        "pos": 69,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 69,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 20,
+        "type": "SPEC",
+        "pos": 70,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 69,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 11,
+        "type": "BASE",
+        "pos": 71,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 71,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 362,
+        "type": "SPEC",
+        "pos": 72,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 71,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 313,
+        "type": "BASE",
+        "pos": 73,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 73,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1955,
+        "type": "SPEC",
+        "pos": 74,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 73,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 11620,
+        "type": "BASE",
+        "pos": 74,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 74,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 75,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 74,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 20,
+        "type": "BASE",
+        "pos": 76,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 76,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 339,
+        "type": "SPEC",
+        "pos": 77,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 76,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1350,
+        "type": "BASE",
+        "pos": 78,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 78,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 588,
+        "type": "SPEC",
+        "pos": 79,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 78,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1347,
+        "type": "BASE",
+        "pos": 80,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 80,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 81,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 80,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 4654,
+        "type": "BASE",
+        "pos": 82,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 82,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 58112,
+        "type": "SPEC",
+        "pos": 83,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 82,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 2142,
+        "type": "BASE",
+        "pos": 84,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 84,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 304,
+        "type": "SPEC",
+        "pos": 85,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 84,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 5789,
+        "type": "BASE",
+        "pos": 86,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 86,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 78157,
+        "type": "SPEC",
+        "pos": 87,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 86,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 778,
+        "type": "BASE",
+        "pos": 88,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 88,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 89,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 88,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 588,
+        "type": "BASE",
+        "pos": 89,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 89,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 366,
+        "type": "SPEC",
+        "pos": 90,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 89,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 64975,
+        "type": "BASE",
+        "pos": 91,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 91,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 362,
+        "type": "SPEC",
+        "pos": 92,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 91,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 3226,
+        "type": "BASE",
+        "pos": 93,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 93,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 313,
+        "type": "SPEC",
+        "pos": 94,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 93,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 339,
+        "type": "BASE",
+        "pos": 95,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 95,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 30330,
+        "type": "SPEC",
+        "pos": 96,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 95,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1137,
+        "type": "BASE",
+        "pos": 97,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 97,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 98,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 97,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 98,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 98,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 99,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 98,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 16,
+        "type": "BASE",
+        "pos": 100,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 100,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 2052,
+        "type": "SPEC",
+        "pos": 101,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 100,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 313,
+        "type": "BASE",
+        "pos": 102,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 102,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 103,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 102,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 104,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 104,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 18,
+        "type": "SPEC",
+        "pos": 105,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 104,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 14,
+        "type": "BASE",
+        "pos": 106,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 106,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1354,
+        "type": "SPEC",
+        "pos": 107,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 106,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 108,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 108,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 18,
+        "type": "SPEC",
+        "pos": 109,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 108,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 603,
+        "type": "BASE",
+        "pos": 110,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 110,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 111,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 110,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 20,
+        "type": "BASE",
+        "pos": 112,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 112,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 16,
+        "type": "SPEC",
+        "pos": 113,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 112,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 2052,
+        "type": "BASE",
+        "pos": 114,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 114,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 313,
+        "type": "SPEC",
+        "pos": 115,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 114,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 344,
+        "type": "BASE",
+        "pos": 116,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 116,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 117,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 116,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 19,
+        "type": "BASE",
+        "pos": 118,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 118,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 119,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 118,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1354,
+        "type": "BASE",
+        "pos": 120,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 120,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 121,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 120,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 19,
+        "type": "BASE",
+        "pos": 122,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 122,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 603,
+        "type": "SPEC",
+        "pos": 123,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 122,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 124,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 124,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 21,
+        "type": "SPEC",
+        "pos": 125,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 124,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 16,
+        "type": "BASE",
+        "pos": 126,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 126,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1884,
+        "type": "SPEC",
+        "pos": 127,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 126,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 313,
+        "type": "BASE",
+        "pos": 128,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 128,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 11620,
+        "type": "SPEC",
+        "pos": 129,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 128,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 130,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 130,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 20,
+        "type": "SPEC",
+        "pos": 131,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 130,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 14,
+        "type": "BASE",
+        "pos": 132,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 132,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 579,
+        "type": "SPEC",
+        "pos": 133,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 132,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 588,
+        "type": "BASE",
+        "pos": 134,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 134,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1347,
+        "type": "SPEC",
+        "pos": 135,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 134,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 1234,
+        "type": "BASE",
+        "pos": 136,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 136,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 8409,
+        "type": "SPEC",
+        "pos": 137,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 136,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 304,
+        "type": "BASE",
+        "pos": 138,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 138,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 3144,
+        "type": "SPEC",
+        "pos": 139,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 138,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 6781,
+        "type": "BASE",
+        "pos": 140,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 140,
+        "num_window_tokens": 2
+      },
+      {
+        "token_id": 294,
+        "type": "SPEC",
+        "pos": 141,
+        "request_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 140,
+        "num_window_tokens": 2
+      }
+    ],
+    "read_count": 130
+  }
+}

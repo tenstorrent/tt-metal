@@ -1390,10 +1390,9 @@ struct TopKSampling {
                             // generate_bcast_unary_scalar writes a correctly-filled tile word.
                             inv_temp_bf16 = float_to_bf16_packed(1.0f / temperature);
                             K = std::min(
-                                std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
+                                std::max(static_cast<uint32_t>(metadata_ptr->top_k), static_cast<uint32_t>(1)),
                                 static_cast<uint32_t>(32));
-                            p = std::min(
-                                std::max(static_cast<float>(metadata_ptr->probability_mass_threshold), 0.0f), 1.0f);
+                            p = std::min(std::max(static_cast<float>(metadata_ptr->top_p), 0.0f), 1.0f);
                         }
 
                         generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
@@ -1459,6 +1458,16 @@ struct TopKSampling {
                                << "p0=" << BF16(prob_u16[0]) << " p1=" << BF16(prob_u16[1])
                                << " p2=" << BF16(prob_u16[2]) << " rand=" << BF16(rand) << ENDL();
                         DPRINT << "rand = " << BF16(rand) << ENDL();
+
+                        uint16_t q_top15_scores[deepseek_b1_ops::TOPK_METADATA_COUNT] = {0};
+                        if constexpr (CTArgs::copy_probabilities) {
+                            for (uint32_t i = 0; i < deepseek_b1_ops::TOPK_METADATA_COUNT; ++i) {
+                                if (i < K) {
+                                    uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
+                                    q_top15_scores[i] = prob_u16[tile_idx];
+                                }
+                            }
+                        }
 
                         // Top-P filter.
                         //
@@ -1557,40 +1566,26 @@ struct TopKSampling {
                         }
 
                         if constexpr (CTArgs::copy_probabilities) {
-                            // Scatter the 32 rescaled top-P probabilities out of the two-face
-                            // tile layout into the contiguous `p_scores[32]` metadata slot,
-                            // and copy the 32 winning indices into `p_indices[32]`. Entries
-                            // beyond `K` are left as whatever is in the tile (garbage, as
-                            // documented in metadata.hpp).
-                            //
-                            // Issue all three packet writes back-to-back so the NOC engine can
-                            // overlap them, then drain with a single barrier:
-                            //   * scores face 0 (tile elems  0..15) -> p_scores[ 0..15]
-                            //   * scores face 1 (tile elems 16..31) -> p_scores[16..31]
-                            //   * winner indices (32 contiguous u32) -> p_indices[ 0..31]
-                            constexpr uint32_t HALF_SCORES_BYTES = 16 * sizeof(uint16_t);
-                            constexpr uint32_t FACE_BYTES_OFFSET = FACE_ELEMS * sizeof(uint16_t);
-
-                            const uint32_t scores_src_face0 = get_read_ptr(CTArgs::softmax_out_cb);
-
-                            const uint32_t scores_dst_face0 =
-                                CTArgs::metadata_output_l1_addr + offsetof(deepseek_b1_ops::DeepseekMetadata, p_scores);
-
-                            noc_async_write_one_packet(
-                                scores_src_face0, get_noc_addr(scores_dst_face0), HALF_SCORES_BYTES);
-                            const uint32_t scores_src_face1 = scores_src_face0 + FACE_BYTES_OFFSET;
-                            const uint32_t scores_dst_face1 = scores_dst_face0 + HALF_SCORES_BYTES;
-                            noc_async_write_one_packet(
-                                scores_src_face1, get_noc_addr(scores_dst_face1), HALF_SCORES_BYTES);
-
-                            const uint32_t indices_src_l1 =
-                                get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes;
-                            const uint32_t indices_dst_l1 = CTArgs::metadata_output_l1_addr +
-                                                            offsetof(deepseek_b1_ops::DeepseekMetadata, p_indices);
-                            noc_async_write_one_packet(
-                                indices_src_l1, get_noc_addr(indices_dst_l1), 32 * sizeof(uint32_t));
-
-                            noc_async_write_barrier();
+                            // Copy pre- and post-top-p top-15 candidates into the fixed metadata page.
+                            // Scores are stored as raw bf16/uint16 values to keep the metadata compact.
+                            auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(
+                                CTArgs::metadata_output_l1_addr);
+                            uint32_t topn = std::min(
+                                static_cast<uint32_t>(deepseek_b1_ops::TOPK_METADATA_COUNT), static_cast<uint32_t>(K));
+                            for (uint32_t i = 0; i < deepseek_b1_ops::TOPK_METADATA_COUNT; ++i) {
+                                if (i < topn) {
+                                    uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
+                                    metadata_ptr->p_top15_indices[i] = global_indices[i];
+                                    metadata_ptr->p_top15_scores[i] = (i < kept_tokens) ? prob_u16[tile_idx] : 0;
+                                    metadata_ptr->q_top15_indices[i] = global_indices[i];
+                                    metadata_ptr->q_top15_scores[i] = q_top15_scores[i];
+                                } else {
+                                    metadata_ptr->p_top15_indices[i] = 0;
+                                    metadata_ptr->p_top15_scores[i] = 0;
+                                    metadata_ptr->q_top15_indices[i] = 0;
+                                    metadata_ptr->q_top15_scores[i] = 0;
+                                }
+                            }
                         }
 
                         cb_pop_front(CTArgs::softmax_out_cb, 1);

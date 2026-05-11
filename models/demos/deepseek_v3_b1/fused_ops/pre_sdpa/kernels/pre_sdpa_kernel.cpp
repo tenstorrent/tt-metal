@@ -1036,7 +1036,7 @@ if constexpr (!Core::skip_ccl) {
         // ====================================================================
         deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_knope_core, Core::is_krope_core>
             kv_cache_update;
-        kv_cache_update.set_pos_and_slot(kv_cache_update_args, local_cur_pos, metadata_ptr->slot_id);
+        kv_cache_update.set_pos_and_slot(kv_cache_update_args, local_cur_pos, metadata_ptr->request_id);
         if (!skip_kv_cache_update) {
             DeviceZoneScopedN("KV CACHE");
             // ================================================================
@@ -1098,7 +1098,7 @@ if constexpr (!Core::skip_ccl) {
         {
             DeviceZoneScopedN("FLASH_MLA");
             deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core> flash_mla;
-            flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->slot_id);
+            flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->request_id);
             flash_mla(flash_mla_args);
         }
     }

@@ -11,6 +11,7 @@ from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSN
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+from models.demos.deepseek_v3_b1.model import InputField
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
@@ -223,7 +224,7 @@ def test_broadcast_rms_fused(
     if use_socket:
         token_size_datums = token_page_size // 4
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-        torch_token[0, 0] = 0
+        torch_token[0, InputField.TOKEN_ID] = 0
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         h2d_socket.write_tensor(token_tensor)
         host_io.terminate(False)
