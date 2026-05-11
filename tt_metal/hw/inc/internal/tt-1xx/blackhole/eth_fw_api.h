@@ -353,15 +353,16 @@ static void update_boot_results_eth_link_status_check() {
 
 // Essentially a copy of what the base erisc main loop does
 FORCE_INLINE void aerisc_context_switch() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     volatile boot_results_t* const boot_results = (volatile boot_results_t*)(MEM_SYSENG_BOOT_RESULTS_BASE);
 
-    // Update heartbeat - base fw use 0xabcdxxxx, to help denote that SW has taken over the core,
-    // we will use 0xdcbaxxxx for the heartbeat value written by this function
+    // Update heartbeat - base fw populates 0xabcdxxxx into heartbeat[0], software
+    // fabric will also populate that heartbeat. To further help denote that SW has
+    // taken over the core, we will populate heartbeat[1] with 0xdcbaxxxx
     volatile uint32_t heartbeat_val = (boot_results->eth_status.heartbeat[0] & 0xFFFF);
     heartbeat_val++;
     heartbeat_val &= 0xFFFF;
-    boot_results->eth_status.heartbeat[0] = 0xdcba0000 | heartbeat_val;
+    boot_results->eth_status.heartbeat[1] = 0xdcba0000 | heartbeat_val;
 
     service_eth_msg();
     update_boot_results_eth_link_status_check();
