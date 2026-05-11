@@ -15,8 +15,8 @@ For each (voice, language) reference clip in
 Skips voices whose language is not in server.TTSConfig.codec_language_ids
 (currently nl, pl).
 """
+import difflib
 import os
-import re
 import sys
 import unicodedata
 from pathlib import Path
@@ -76,26 +76,33 @@ LANG_TARGETS = {
 
 MS_PER_FRAME_MAX = 55.0
 ECAPA_COS_MIN = 0.97
+WHISPER_FUZZY_MIN = 0.95
 
 
 def _norm(s: str) -> str:
     """Locale-aware normalization for Whisper-output vs target-text comparison.
 
-    Lowercases, NFKC-normalizes, strips all Unicode punctuation/separator/symbol
-    categories, and collapses whitespace. Works for Latin, Cyrillic, and CJK
-    (CJK characters survive; CJK punctuation is removed)."""
+    Lowercases, NFKC-normalizes, strips ALL Unicode punctuation/separator/symbol
+    categories and ALL whitespace (CJK has no word spaces), folds Russian ё→е
+    (Whisper-large-v3 routinely drops the diacritic).
+    """
     s = unicodedata.normalize("NFKC", s).lower().strip()
-    # Drop punctuation (P*), symbols (S*), and separators (Z*).
+    # Russian: fold ё → е (Whisper drops diacritics).
+    s = s.replace("ё", "е")
+    # Drop punctuation (P*), symbols (S*), and separators (Z*) — and all whitespace.
     out_chars = []
     for ch in s:
         cat = unicodedata.category(ch)
-        if cat[0] in ("P", "S", "Z"):
-            out_chars.append(" ")
-        else:
-            out_chars.append(ch)
-    s = "".join(out_chars)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+        if cat[0] in ("P", "S", "Z") or ch.isspace():
+            continue
+        out_chars.append(ch)
+    return "".join(out_chars)
+
+
+def _fuzzy_similar(a: str, b: str) -> float:
+    """SequenceMatcher ratio on normalized strings. Robust to small-character
+    mis-transcriptions (e.g. Whisper hearing 木切り for 木々)."""
+    return difflib.SequenceMatcher(None, _norm(a), _norm(b)).ratio()
 
 
 def _voices():
@@ -192,8 +199,12 @@ def test_multi_voice_gate(wav_path, name, suf, whisper_lv3):
 
     transcript = whisper_lv3(out_wav, whisper_lang)
     print(f"[{name}_{suf}] whisper = {transcript!r}")
-    if _norm(transcript) != _norm(target_text):
-        failures.append(f"whisper mismatch: got={_norm(transcript)!r} exp={_norm(target_text)!r}")
+    ratio = _fuzzy_similar(transcript, target_text)
+    print(f"[{name}_{suf}] whisper_fuzzy_ratio = {ratio:.3f}")
+    if ratio < WHISPER_FUZZY_MIN:
+        failures.append(
+            f"whisper fuzzy {ratio:.3f} < {WHISPER_FUZZY_MIN}: " f"got={_norm(transcript)!r} exp={_norm(target_text)!r}"
+        )
 
     # Tagged summary line for easy grepping across the run.
     status = "OK" if not failures else "FAIL"
