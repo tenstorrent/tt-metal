@@ -174,7 +174,18 @@ static bool run_test_integrity_dram_bidir(
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
+
+    wait_to_finish_eth_timeout(
+        fixture,
+        send_program,
+        recv_program,
+        send_mesh_device,
+        recv_mesh_device,
+        device_range,
+        send_core,
+        recv_core,
+        iter_l1_address,
+        dram_end_addr);
 
     bool pass = true;
     pass &= bandwidth_check(
