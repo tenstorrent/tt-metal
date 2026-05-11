@@ -450,9 +450,13 @@ def calculate_tile_and_face_counts(
     Returns:
         tuple: (tile_cnt_A, tile_cnt_B, faces_to_generate)
     """
-    assert (
-        face_r_dim == MAX_FACE_R_DIM or face_r_dim == input_dimensions_A[0]
-    ), f"Invalid face_r_dim, got {face_r_dim}"
+    assert face_r_dim == MAX_FACE_R_DIM or (
+        face_r_dim < MAX_FACE_R_DIM and face_r_dim == input_dimensions_A[0]
+    ), (
+        f"face_r_dim must be {MAX_FACE_R_DIM} (full face) or < {MAX_FACE_R_DIM} "
+        f"and equal to input_dimensions_A[0] (partial single-tile case); "
+        f"got face_r_dim={face_r_dim}, input_dimensions_A={input_dimensions_A}"
+    )
 
     # Handle partial faces
     if face_r_dim < MAX_FACE_R_DIM:
@@ -861,29 +865,22 @@ def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     integer paths use sign-magnitude encoding, and the INT_MIN bit pattern cannot
     be represented correctly in that scheme.
     """
-    bounds: Dict[DataFormat, tuple[int, int]] = {
-        DataFormat.Int8: (torch.iinfo(torch.int8).min + 1, torch.iinfo(torch.int8).max),
-        DataFormat.UInt8: (torch.iinfo(torch.uint8).min, torch.iinfo(torch.uint8).max),
-        DataFormat.Int16: (
-            torch.iinfo(torch.int16).min + 1,
-            torch.iinfo(torch.int16).max,
-        ),
-        DataFormat.UInt16: (
-            torch.iinfo(torch.uint16).min,
-            torch.iinfo(torch.uint16).max,
-        ),
-        DataFormat.Int32: (
-            torch.iinfo(torch.int32).min + 1,
-            torch.iinfo(torch.int32).max,
-        ),
-        DataFormat.UInt32: (
-            torch.iinfo(torch.uint32).min,
-            torch.iinfo(torch.uint32).max,
-        ),
+    integer_format_dtype: Dict[DataFormat, torch.dtype] = {
+        DataFormat.Int8: torch.int8,
+        DataFormat.UInt8: torch.uint8,
+        DataFormat.Int16: torch.int16,
+        DataFormat.UInt16: torch.uint16,
+        DataFormat.Int32: torch.int32,
+        DataFormat.UInt32: torch.uint32,
     }
-    return bounds.get(
-        stimuli_format, (torch.iinfo(torch.int8).min + 1, torch.iinfo(torch.int8).max)
-    )
+
+    if stimuli_format not in integer_format_dtype:
+        raise ValueError(f"Unsupported integer format: {stimuli_format}")
+
+    dtype = integer_format_dtype[stimuli_format]
+    info = torch.iinfo(dtype)
+    lo = info.min + 1 if info.min < 0 else info.min
+    return lo, info.max
 
 
 def _sample_uniform_intervals(
@@ -1268,25 +1265,19 @@ def _generate_sequential(
     step = spec.std
     high = spec.high
 
+    idx = torch.arange(size, dtype=torch.float32)
+    vals = low + step * idx
+
     if high == 1.0 and low != 0.0:
-        idx = torch.arange(size, dtype=torch.float32)
-        vals = low + step * idx
-    else:
-        vals_list: list = []
-        v = low
-        if step > 0:
-            while len(vals_list) < size and v <= high:
-                vals_list.append(v)
-                v += step
-        elif step < 0:
-            while len(vals_list) < size and v >= high:
-                vals_list.append(v)
-                v += step
-        else:
-            vals_list = [low] * size
-        if len(vals_list) < size:
-            vals_list.extend([0.0] * (size - len(vals_list)))
-        vals = torch.tensor(vals_list[:size], dtype=torch.float32)
+        # Special case: unbounded ramp — skip the zero-fill cutoff entirely.
+        pass
+    elif step > 0:
+        # Forward ramp: zero-fill positions where the value exceeds high
+        vals = torch.where(vals <= high, vals, torch.zeros_like(vals))
+    elif step < 0:
+        # Backward ramp: zero-fill positions where the value drops below high
+        vals = torch.where(vals >= high, vals, torch.zeros_like(vals))
+    # step == 0: every element equals low
 
     if is_int:
         int_min, int_max = _get_integer_bounds(stimuli_format)
