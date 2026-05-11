@@ -3,10 +3,11 @@
 
 """TTNN ``KokoroGenerator`` vs PyTorch: waveform PCC, shape, finiteness (``disable_complex=True``).
 
-``KokoroGenerator`` uses device ``KokoroTtnnSineGen`` (see ``ttnn_kokoro_generator``). The full
-waveform PCC vs PyTorch is dominated by SineGen/STFT numerics under deterministic zeros; tighter
-checks live in ``test_ttnn_sinegen_pcc.py`` and ``test_source_module_hn_nsf_pcc.py``. Upsampling PCC
-also lives in ``test_kokoro_generator_ups_pcc.py``.
+``KokoroGenerator`` uses device ``KokoroTtnnSineGen`` by default; set ``use_torch_sinegen=True`` in
+``preprocess_kokoro_generator_parameters`` to run the reference PyTorch ``SineGen`` on CPU for harmonics
+(see ``test_kokoro_generator_waveform_pcc_sinegen_modes``). The full waveform PCC vs PyTorch is lower with
+pure device SineGen under deterministic zeros; tighter checks live in ``test_ttnn_sinegen_pcc.py`` and
+``test_source_module_hn_nsf_pcc.py``. Upsampling PCC also lives in ``test_kokoro_generator_ups_pcc.py``.
 
 Decoder prefix: TTNN ``F0_conv`` / ``N_conv`` / ``asr_res``, then TTNN ``encode`` + ``decode`` (:class:`KokoroDecoderBody`).
 """
@@ -26,6 +27,7 @@ ttnn = pytest.importorskip("ttnn")
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.kokoro_istftnet import load_decoder_from_huggingface
+from models.experimental.kokoro.tests.kokoro_generator_pcc_inputs import decoder_tensors_for_generator
 from models.experimental.kokoro.tt import (
     KokoroDecoderBody,
     KokoroDecoderFront,
@@ -48,136 +50,11 @@ def kokoro_decoder_cpu_disable_complex():
     return load_decoder_from_huggingface(device="cpu", disable_complex=True)
 
 
-def _decoder_tensors_for_generator(
-    dec,
-    batch: int,
-    time_asr: int,
-    seed: int,
-    *,
-    tt_front: KokoroDecoderFront | None = None,
-    tt_body: KokoroDecoderBody | None = None,
-    ttnn_device=None,
+@pytest.mark.parametrize("use_torch_sinegen,min_pcc", [(False, 0.61), (True, 0.85)])
+def test_kokoro_generator_waveform_pcc_sinegen_modes(
+    ttnn_device, kokoro_decoder_cpu_disable_complex, use_torch_sinegen: bool, min_pcc: float
 ):
-    """Match ``Decoder.forward`` tensor sizes up to the generator call.
-
-    When ``tt_front``, ``tt_body``, and ``ttnn_device`` are set, the full prefix through decode runs on TTNN.
-
-    When only ``tt_front`` and ``ttnn_device`` are set, ``encode``/``decode`` stay PyTorch.
-    """
-    torch.manual_seed(seed)
-    dim_in = dec.asr_res[0].in_channels
-    # ``F0_conv`` / ``N_conv`` stride 2: length ``(Tf + 2 - 3) // 2 + 1`` must equal ``time_asr``.
-    # Use ``Tf = 2 * time_asr`` (not ``2 * time_asr - 1``) so the generator harmonic path matches upsampling.
-    tf = 2 * time_asr
-    asr = torch.randn(batch, dim_in, time_asr, dtype=torch.float32)
-    f0_curve = torch.randn(batch, tf, dtype=torch.float32) * 100.0 + 120.0
-    n = torch.randn(batch, tf, dtype=torch.float32)
-    s = torch.randn(batch, 128, dtype=torch.float32)
-    l1 = ttnn.L1_MEMORY_CONFIG
-
-    with torch.no_grad():
-        if tt_front is not None and tt_body is not None and ttnn_device is not None:
-            asr_tt = ttnn.from_torch(
-                asr,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_device,
-                memory_config=l1,
-            )
-            f0_in = ttnn.from_torch(
-                f0_curve.unsqueeze(1),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_device,
-                memory_config=l1,
-            )
-            f0_tt = tt_front.f0_conv(f0_in, batch, tf)
-            ttnn.deallocate(f0_in)
-            n_in = ttnn.from_torch(
-                n.unsqueeze(1),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_device,
-                memory_config=l1,
-            )
-            n_tt = tt_front.n_conv(n_in, batch, tf)
-            ttnn.deallocate(n_in)
-            asr_res_tt = tt_front.asr_res(asr_tt, batch, time_asr)
-            x0_tt = ttnn.concat([asr_tt, f0_tt, n_tt], dim=1, memory_config=l1)
-            s_tt = ttnn.from_torch(
-                s,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_device,
-                memory_config=l1,
-            )
-            x_tt = tt_body(x0_tt, s_tt, asr_res_tt, f0_tt, n_tt)
-            x = ttnn.to_torch(x_tt).reshape(batch, 512, 2 * time_asr)
-        elif tt_front is not None and ttnn_device is not None:
-            f0_in = ttnn.from_torch(
-                f0_curve.unsqueeze(1),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_device,
-                memory_config=l1,
-            )
-            f0_tt = tt_front.f0_conv(f0_in, batch, tf)
-            f0 = ttnn.to_torch(f0_tt).reshape(batch, 1, time_asr)
-            ttnn.deallocate(f0_in)
-            ttnn.deallocate(f0_tt)
-
-            n_in = ttnn.from_torch(
-                n.unsqueeze(1),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_device,
-                memory_config=l1,
-            )
-            n_tt = tt_front.n_conv(n_in, batch, tf)
-            n_b = ttnn.to_torch(n_tt).reshape(batch, 1, time_asr)
-            ttnn.deallocate(n_in)
-            ttnn.deallocate(n_tt)
-
-            asr_in = ttnn.from_torch(
-                asr,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_device,
-                memory_config=l1,
-            )
-            asr_tt = tt_front.asr_res(asr_in, batch, time_asr)
-            asr_res = ttnn.to_torch(asr_tt).reshape(batch, 64, time_asr)
-            ttnn.deallocate(asr_in)
-            ttnn.deallocate(asr_tt)
-
-            x = torch.cat([asr, f0, n_b], dim=1)
-            x = dec.encode(x, s)
-            res = True
-            for block in dec.decode:
-                if res:
-                    x = torch.cat([x, asr_res, f0, n_b], dim=1)
-                x = block(x, s)
-                if block.upsample_type != "none":
-                    res = False
-        else:
-            f0 = dec.F0_conv(f0_curve.unsqueeze(1))
-            n_b = dec.N_conv(n.unsqueeze(1))
-            asr_res = dec.asr_res(asr)
-
-            x = torch.cat([asr, f0, n_b], dim=1)
-            x = dec.encode(x, s)
-            res = True
-            for block in dec.decode:
-                if res:
-                    x = torch.cat([x, asr_res, f0, n_b], dim=1)
-                x = block(x, s)
-                if block.upsample_type != "none":
-                    res = False
-    return x, s, f0_curve
-
-
-def test_kokoro_generator_forward_smoke(ttnn_device, kokoro_decoder_cpu_disable_complex):
-    """Same tensors as PyTorch ref; assert waveform PCC, shape match, and finite TT output."""
+    """Generator waveform vs PyTorch ref; ``use_torch_sinegen`` selects harmonic backend."""
     dec = kokoro_decoder_cpu_disable_complex.decoder
     gen = dec.generator
     time_asr = 8
@@ -187,7 +64,7 @@ def test_kokoro_generator_forward_smoke(ttnn_device, kokoro_decoder_cpu_disable_
     body_p = preprocess_kokoro_decoder_body_parameters(dec, ttnn_device)
     tt_body = KokoroDecoderBody(ttnn_device, body_p)
 
-    x, s, f0_curve = _decoder_tensors_for_generator(
+    x, s, f0_curve = decoder_tensors_for_generator(
         dec, batch, time_asr, seed=42, tt_front=tt_front, tt_body=tt_body, ttnn_device=ttnn_device
     )
 
@@ -210,6 +87,7 @@ def test_kokoro_generator_forward_smoke(ttnn_device, kokoro_decoder_cpu_disable_
         ttnn_device,
         f0_upsampled_time=f0_up_t,
         disable_complex=True,
+        use_torch_sinegen=use_torch_sinegen,
     )
     tt_gen = KokoroGenerator(ttnn_device, params)
 
@@ -246,7 +124,7 @@ def test_kokoro_generator_forward_smoke(ttnn_device, kokoro_decoder_cpu_disable_
     y_hat = ttnn.to_torch(y_tt).reshape(y_ref.shape)
     assert y_hat.shape == y_ref.shape
     assert torch.isfinite(y_hat).all(), "TTNN generator output has non-finite values"
-    # CPU ``SineGen`` vs ``KokoroTtnnSineGen`` + STFT chain: deterministic PCC is ~0.62 here (WH B0).
-    ok, p = comp_pcc(y_ref, y_hat, pcc=0.61)
-    print(f"generator waveform PCC={p:.6f} pass={ok} (min 0.61)")
-    assert ok, f"generator waveform PCC {p} (expected >= 0.61; CPU vs device harmonic source)"
+    ok, p = comp_pcc(y_ref, y_hat, pcc=min_pcc)
+    mode = "torch_cpu_sinegen" if use_torch_sinegen else "ttnn_device_sinegen"
+    print(f"generator waveform PCC mode={mode} pcc={p:.6f} pass={ok} (min {min_pcc})")
+    assert ok, f"generator waveform PCC {p} (mode={mode}, min {min_pcc})"

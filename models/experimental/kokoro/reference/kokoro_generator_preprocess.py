@@ -144,12 +144,15 @@ def preprocess_kokoro_generator_parameters(
     *,
     f0_upsampled_time: int,
     disable_complex: bool = False,
+    use_torch_sinegen: bool = False,
 ) -> dict[str, Any]:
     """
     Args:
         gen: ``Decoder.generator`` (``kokoro_istftnet.Generator``).
         f0_upsampled_time: Time length after ``f0_upsamp`` (matches ``SourceModuleHnNSF`` preprocess).
         disable_complex: Same as reference ``Decoder`` (``CustomSTFT`` vs ``TorchSTFT``).
+        use_torch_sinegen: If True, run PyTorch ``SineGen`` on CPU inside :class:`SourceModuleHnNSF`
+            (harmonics only); TTNN still runs ``Linear``/``tanh`` and the rest of the generator on device.
     """
     for m in list(gen.ups) + [gen.conv_post]:
         _safe_remove_weight_norm(m)
@@ -222,7 +225,7 @@ def preprocess_kokoro_generator_parameters(
         else float(gen.f0_upsamp.scale_factor[0])
     )
 
-    return {
+    out: dict[str, Any] = {
         "style_dim": int(gen.noise_res[0].adain1[0].fc.weight.shape[1]),
         "num_upsamples": int(gen.num_upsamples),
         "num_kernels": int(gen.num_kernels),
@@ -238,3 +241,10 @@ def preprocess_kokoro_generator_parameters(
         "inv_num_kernels": float(1.0 / float(gen.num_kernels)),
         "disable_complex": bool(disable_complex),
     }
+    if use_torch_sinegen:
+        out["use_torch_sinegen"] = True
+        out["torch_sin_gen"] = gen.m_source.l_sin_gen
+    else:
+        out["use_torch_sinegen"] = False
+        out["torch_sin_gen"] = None
+    return out

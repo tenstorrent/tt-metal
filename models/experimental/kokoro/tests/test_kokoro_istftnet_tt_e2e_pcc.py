@@ -4,9 +4,9 @@
 """
 End-to-end PCC: full TTNN ``KokoroDecoderTt`` vs PyTorch ``Decoder`` (``disable_complex=True``).
 
-``KokoroGenerator`` uses device ``KokoroTtnnSineGen``; deterministic waveform PCC vs full PyTorch
-is ~0.58 on Wormhole B0 (harmonic path + rest of stack). Tighter SineGen checks live in
-``test_ttnn_sinegen_pcc.py``.
+``KokoroGenerator`` harmonic path is toggled via ``use_torch_sinegen`` on ``preprocess_kokoro_decoder_tt_parameters``.
+Deterministic waveform PCC vs full PyTorch is ~0.58 on Wormhole B0 with device ``KokoroTtnnSineGen`` and higher with
+PyTorch ``SineGen`` on CPU. See ``test_kokoro_pcc_sinegen_comparison_report.py`` (``pytest -s``) for a one-shot table.
 
     pytest models/experimental/kokoro/tests/test_kokoro_istftnet_tt_e2e_pcc.py --confcutdir=models/experimental/kokoro -v
 """
@@ -36,7 +36,8 @@ def ttnn_device():
     ttnn.close_device(device)
 
 
-def test_kokoro_decoder_tt_e2e_waveform_pcc(ttnn_device):
+@pytest.mark.parametrize("use_torch_sinegen,min_pcc", [(False, 0.58), (True, 0.72)])
+def test_kokoro_decoder_tt_e2e_waveform_pcc(ttnn_device, use_torch_sinegen: bool, min_pcc: float):
     """Full decoder on TTNN vs PyTorch reference waveform (deterministic ``m_source``)."""
     dec_ref = load_decoder_from_huggingface(device="cpu", disable_complex=True).decoder
     dec_tt = load_decoder_from_huggingface(device="cpu", disable_complex=True).decoder
@@ -74,6 +75,7 @@ def test_kokoro_decoder_tt_e2e_waveform_pcc(ttnn_device):
         ttnn_device,
         f0_coarse_time=tf,
         disable_complex=True,
+        use_torch_sinegen=use_torch_sinegen,
     )
     tt_dec = KokoroDecoderTt(ttnn_device, params)
     l1 = ttnn.L1_MEMORY_CONFIG
@@ -117,6 +119,7 @@ def test_kokoro_decoder_tt_e2e_waveform_pcc(ttnn_device):
     y_hat = ttnn.to_torch(y_tt).reshape(y_ref.shape)
     assert y_hat.shape == y_ref.shape
     assert torch.isfinite(y_hat).all()
-    ok, p = comp_pcc(y_ref, y_hat, pcc=0.58)
-    print(f"decoder_tt e2e PCC={p:.6f} pass={ok} (min 0.58)")
-    assert ok, f"E2E waveform PCC {p} expected >= 0.58 (device SineGen vs CPU ref stack)"
+    ok, p = comp_pcc(y_ref, y_hat, pcc=min_pcc)
+    tag = "torch_cpu_sinegen" if use_torch_sinegen else "ttnn_device_sinegen"
+    print(f"decoder_tt e2e PCC mode={tag} pcc={p:.6f} pass={ok} (min {min_pcc})")
+    assert ok, f"E2E waveform PCC {p} mode={tag} expected >= {min_pcc}"

@@ -5,23 +5,25 @@
 """
 TTNN Kokoro ``SourceModuleHnNSF``: harmonic-plus-noise source for the generator.
 
-``KokoroTtnnSineGen`` runs entirely on device; the final ``Linear`` + ``Tanh`` also run on TTNN.
-Weights come from
-``models.experimental.kokoro.reference.kokoro_source_module_preprocess.preprocess_source_module_hn_nsf_parameters``.
+By default ``KokoroTtnnSineGen`` runs on device. Set ``use_torch_sinegen`` (via
+``preprocess_kokoro_generator_parameters(..., use_torch_sinegen=True)``) to run the
+reference PyTorch ``SineGen`` on CPU, upload harmonics, then apply the same TTNN
+``Linear`` + ``Tanh`` as the device path — useful for PCC A/B vs full device SineGen.
 """
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
+import torch.nn as nn
 import ttnn
 
 from models.experimental.kokoro.tt.ttnn_sinegen import KokoroTtnnSineGen, sinegen_fp32_matmul_cfg
 
 
 class SourceModuleHnNSF:
-    """Kokoro harmonic-plus-noise source; all computation runs on TTNN device."""
+    """Kokoro harmonic-plus-noise source; TTNN linear path with device or PyTorch SineGen."""
 
     def __init__(self, device, parameters: dict):
         self.device = device
@@ -29,13 +31,19 @@ class SourceModuleHnNSF:
         self.sine_amp = float(parameters["sine_amp"])
         self.dim = int(parameters["harmonic_num"]) + 1
 
+        self._use_torch_sg = bool(parameters.get("use_torch_sinegen", False))
+        self._torch_sin_gen: Optional[nn.Module] = parameters.get("torch_sin_gen")
+
         if bool(parameters.get("flag_for_pulse", False)):
             raise NotImplementedError("SourceModuleHnNSF: flag_for_pulse=True not supported on TTNN")
 
-        self._ttnn_sg = KokoroTtnnSineGen(device, parameters)
-        self._linear_weight = parameters["linear_weight"]
-        self._linear_bias = parameters["linear_bias"]
-        self._compute_cfg = sinegen_fp32_matmul_cfg(device)
+        if self._use_torch_sg:
+            if self._torch_sin_gen is None:
+                raise ValueError("use_torch_sinegen=True requires torch_sin_gen (reference SineGen module)")
+            self._ttnn_sg = None
+        else:
+            self._torch_sin_gen = None
+            self._ttnn_sg = KokoroTtnnSineGen(device, parameters)
 
         vt = float(parameters["voiced_threshold"])
         self._voiced_threshold = ttnn.from_torch(
@@ -53,6 +61,9 @@ class SourceModuleHnNSF:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self._linear_weight = parameters["linear_weight"]
+        self._linear_bias = parameters["linear_bias"]
+        self._compute_cfg = sinegen_fp32_matmul_cfg(device)
 
     def __call__(self, f0: ttnn.Tensor, *, deterministic: bool = False) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
@@ -74,11 +85,30 @@ class SourceModuleHnNSF:
         if f0_l1.dtype != ttnn.float32:
             f0_l1 = ttnn.typecast(f0_l1, ttnn.float32, memory_config=l1)
 
-        uv_gt = ttnn.gt(f0_l1, self._voiced_threshold, memory_config=l1)
-        uv = ttnn.typecast(uv_gt, ttnn.float32, memory_config=l1)
-        ttnn.deallocate(uv_gt)
+        if self._use_torch_sg:
+            f0_cpu = ttnn.to_torch(f0_l1).to(torch.float32).contiguous()
+            with torch.no_grad():
+                sine_wavs, uv_t, _noise_t = self._torch_sin_gen(f0_cpu)
+            sine_wavs_tt = ttnn.from_torch(
+                sine_wavs,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=l1,
+            )
+            uv = ttnn.from_torch(
+                uv_t.to(torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=l1,
+            )
+        else:
+            uv_gt = ttnn.gt(f0_l1, self._voiced_threshold, memory_config=l1)
+            uv = ttnn.typecast(uv_gt, ttnn.float32, memory_config=l1)
+            ttnn.deallocate(uv_gt)
 
-        sine_wavs_tt, _, _ = self._ttnn_sg(f0_l1, deterministic=deterministic)
+            sine_wavs_tt, _, _ = self._ttnn_sg(f0_l1, deterministic=deterministic)
 
         pre = ttnn.linear(
             sine_wavs_tt,

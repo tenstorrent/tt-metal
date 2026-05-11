@@ -25,6 +25,8 @@ from models.experimental.kokoro.tt.preprocessing import preprocess_bert_encoder_
 from models.experimental.kokoro.tt.ttnn_kokoro_albert import TtKokoroAlbert
 from models.experimental.kokoro.tt.ttnn_kokoro_plbert_projection import TtKokoroPlBertProjection
 
+from loguru import logger
+
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_ttnn_albert_and_projection_match_torch(mesh_device):
@@ -51,8 +53,9 @@ def test_ttnn_albert_and_projection_match_torch(mesh_device):
     d_en_cpu = ttnn.to_torch(d_en_tt).to(torch.float32)
     ttnn.deallocate(bert_tt)
     ttnn.deallocate(d_en_tt)
-
-    ok_b, pcc_b = comp_pcc(bert_ref, bert_tt_cpu, pcc=0.96)
+    ok_b, pcc_b = comp_pcc(bert_ref, bert_tt_cpu, pcc=0.99)
+    logger.info(f"bert_dur PCC: {pcc_b}")
     assert ok_b, f"bert_dur PCC low: {pcc_b}"
-    ok_d, pcc_d = comp_pcc(d_en_ref, d_en_cpu, pcc=0.94)
+    ok_d, pcc_d = comp_pcc(d_en_ref, d_en_cpu, pcc=0.99)
+    logger.info(f"d_en PCC: {pcc_d}")
     assert ok_d, f"d_en PCC low: {pcc_d}"
