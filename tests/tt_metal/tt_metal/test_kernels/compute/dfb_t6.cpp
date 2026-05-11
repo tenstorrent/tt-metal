@@ -5,8 +5,16 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"
 #include "api/debug/dprint.h"
+#ifdef ARCH_QUASAR
+#include "experimental/kernel_args.h"
+#endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t num_entries = get_arg(args::num_entries);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
+#else
     const uint32_t num_entries = get_compile_time_arg_val(0);
 
     uint32_t logical_dfb_in = get_arg_val<uint32_t>(0);
@@ -14,6 +22,7 @@ void kernel_main() {
 
     DataflowBuffer dfb_in(logical_dfb_in);
     DataflowBuffer dfb_out(logical_dfb_out);
+#endif
 
     for (uint32_t tile_id = 0; tile_id < num_entries; tile_id++) {
         // DPRINT << "rbw" << ENDL();

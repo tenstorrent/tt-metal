@@ -16,12 +16,58 @@
 // arrive, then block on the next DFB until the Neo fills it.
 //
 // Compile-time args:
-//   [0]: num_dfbs                  � number of DFBs to loop through
+//   [0]: num_dfbs                  � number of DFBs to loop through (legacy)
 //   [1]: num_entries_per_producer  � entries to signal per DFB (same for all)
+//
+// QUASAR named args:
+//   args::num_dfbs                  - same as legacy CTA[0]
+//   args::num_entries_per_producer  - same as legacy CTA[1]
+// QUASAR compiler defines:
+//   NUM_DFBS                        - matches args::num_dfbs; gates per-DFB binding
+//                                     dispatch (each unrolled case references
+//                                     dfb::dfb_<i> which only exists for declared
+//                                     bindings).
 
 #include "api/dataflow/dataflow_buffer.h"
+#ifdef ARCH_QUASAR
+#include "experimental/kernel_args.h"
+#endif
+
+#ifdef ARCH_QUASAR
+#define DFB_T6_SEQ_PRODUCE(I)                                                       \
+    do {                                                                            \
+        DataflowBuffer dfb(dfb::dfb_##I);                                           \
+        for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) { \
+            dfb.reserve_back(1);                                                    \
+            dfb.push_back(1);                                                       \
+        }                                                                           \
+        dfb.finish();                                                               \
+    } while (0)
+#endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
+
+#if NUM_DFBS >= 1
+    DFB_T6_SEQ_PRODUCE(0);
+#endif
+#if NUM_DFBS >= 2
+    DFB_T6_SEQ_PRODUCE(1);
+#endif
+#if NUM_DFBS >= 3
+    DFB_T6_SEQ_PRODUCE(2);
+#endif
+#if NUM_DFBS >= 4
+    DFB_T6_SEQ_PRODUCE(3);
+#endif
+#if NUM_DFBS >= 5
+    DFB_T6_SEQ_PRODUCE(4);
+#endif
+#if NUM_DFBS >= 6
+    DFB_T6_SEQ_PRODUCE(5);
+#endif
+#else
     constexpr uint32_t num_dfbs               = get_compile_time_arg_val(0);
     const uint32_t     num_entries_per_producer = get_compile_time_arg_val(1);
 
@@ -34,4 +80,5 @@ void kernel_main() {
         // Blocks until all consumers of this DFB have acked every entry.
         dfb.finish();
     }
+#endif
 }

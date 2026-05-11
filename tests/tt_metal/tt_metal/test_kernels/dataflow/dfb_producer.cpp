@@ -6,8 +6,24 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
+#ifdef ARCH_QUASAR
+#include "experimental/kernel_args.h"
+#include "api/kernel_thread_globals.h"
+#endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
+    constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
+    constexpr uint32_t num_producers = get_arg(args::num_producers);
+
+    const uint32_t chunk_offset = get_arg(args::chunk_offset);
+    const uint32_t entries_per_core = get_arg(args::entries_per_core);
+    const uint32_t producer_idx = get_my_thread_id();
+
+    DataflowBuffer dfb(dfb::out);
+    Noc noc;
+#else
     const uint32_t src_addr_base = get_compile_time_arg_val(0);
     const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
     constexpr uint32_t implicit_sync = get_compile_time_arg_val(2);
@@ -25,17 +41,15 @@ void kernel_main() {
     DataflowBuffer dfb(0);
     Noc noc;
 
-    // TODO: Replace with get_thread_idx() kernel API when available
-#ifdef ARCH_QUASAR
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
-    uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));
-#else
     uint32_t producer_idx = 0;
 #endif
 
     uint32_t entry_size = dfb.get_entry_size();
+#ifdef ARCH_QUASAR
+    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+#else
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base);
+#endif
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         // Strided access: producer i owns pages i, i+P, i+2P, ...
