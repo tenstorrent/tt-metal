@@ -120,6 +120,11 @@ def _tt_speech_enc_attn(sub_lens_list: List[float], enc_seq: int, bsz: int, devi
     return mask_u32
 
 
+def _tile_align(seq: int) -> int:
+    """Round up to the next multiple of 32 (tile alignment for ttnn TILE_LAYOUT)."""
+    return ((seq + 31) // 32) * 32
+
+
 # ---------------------------------------------------------------------------
 # CPU-side helpers (scalars / tiny tensors that do NOT flow through the model)
 # ---------------------------------------------------------------------------
@@ -445,7 +450,12 @@ class TTSeamlessM4Tv2Model:
         *,
         inputs_embeds: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
-        """Text encoder: position IDs on device; encoder self-attn mask matches HF ``_prepare_4d_attention_mask``."""
+        """Text encoder: position IDs on device; encoder self-attn mask matches HF ``_prepare_4d_attention_mask``.
+
+        Inputs are zero-padded on host to a multiple of 32 (tile-aligned) before encoding so SDPA does
+        not score real queries against tile-padded garbage keys (parity collapse for non-aligned seq).
+        The returned attention mask reflects the padded length: 1 for real positions, 0 for padding.
+        """
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("Specify only one of input_ids or inputs_embeds for the text encoder.")
         if input_ids is None and inputs_embeds is None:
@@ -453,31 +463,89 @@ class TTSeamlessM4Tv2Model:
 
         if input_ids is not None:
             bsz, seq = int(input_ids.shape[0]), int(input_ids.shape[1])
-            enc_pos_tt = _tt_position_ids(input_ids, self.pad_token_id)
         else:
             assert inputs_embeds is not None
             bsz, seq = int(inputs_embeds.shape[0]), int(inputs_embeds.shape[1])
-            enc_pos_tt = _tt_seq_position_ids(bsz, seq, self.pad_token_id, self.device)
 
-        enc_mask_tt = None
+        padded_seq = _tile_align(seq)
+        pad_n = padded_seq - seq
+
         if attention_mask is not None:
             attn_cpu = ttnn.to_torch(ttnn.from_device(attention_mask)).to(torch.long).cpu().contiguous()
             if attn_cpu.ndim != 2:
                 raise ValueError("attention_mask must decode to a 2D [batch, seq] long tensor.")
             if attn_cpu.shape != (bsz, seq):
                 raise ValueError(f"attention_mask shape {tuple(attn_cpu.shape)} does not match inputs ({bsz}, {seq}).")
-            enc_mask_4d = _prepare_4d_attention_mask(attn_cpu, torch.bfloat16)
-            enc_mask_tt = self._torch_additive_4d_to_tt(enc_mask_4d)
+        else:
+            attn_cpu = torch.ones(bsz, seq, dtype=torch.long)
+
+        if pad_n > 0:
+            attn_cpu_padded = torch.cat([attn_cpu, torch.zeros(bsz, pad_n, dtype=torch.long)], dim=1)
+        else:
+            attn_cpu_padded = attn_cpu
 
         if input_ids is not None:
-            enc_out = self.text_encoder.forward(input_ids, enc_pos_tt, enc_mask_tt)
+            if pad_n > 0:
+                id_cpu = ttnn.to_torch(ttnn.from_device(input_ids)).to(torch.int64).cpu().contiguous()
+                pad_ids = torch.full((bsz, pad_n), self.pad_token_id, dtype=id_cpu.dtype)
+                id_cpu_padded = torch.cat([id_cpu, pad_ids], dim=1)
+                input_ids_for_enc = ttnn.from_torch(
+                    id_cpu_padded.to(torch.int32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                input_ids_for_enc = input_ids
+            enc_pos_tt = _tt_position_ids(input_ids_for_enc, self.pad_token_id)
+            inputs_embeds_for_enc = None
         else:
-            enc_out = self.text_encoder.forward(None, enc_pos_tt, enc_mask_tt, inputs_embeds=inputs_embeds)
-        ttnn.deallocate(enc_pos_tt)
-        if enc_mask_tt is not None:
-            ttnn.deallocate(enc_mask_tt)
+            if pad_n > 0:
+                emb_cpu = ttnn.to_torch(ttnn.from_device(inputs_embeds)).to(torch.bfloat16).cpu().contiguous()
+                emb_cpu = emb_cpu.reshape(bsz, seq, self.hidden_size)
+                emb_pad = torch.zeros(bsz, pad_n, self.hidden_size, dtype=torch.bfloat16)
+                emb_padded = torch.cat([emb_cpu, emb_pad], dim=1)
+                inputs_embeds_for_enc = ttnn.from_torch(
+                    emb_padded,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                inputs_embeds_for_enc = inputs_embeds
+            enc_pos_tt = _tt_seq_position_ids(bsz, padded_seq, self.pad_token_id, self.device)
+            input_ids_for_enc = None
 
-        return enc_out, attention_mask  # pass raw 2D mask through for cross-attn
+        enc_mask_4d = _prepare_4d_attention_mask(attn_cpu_padded, torch.bfloat16)
+        enc_mask_tt = self._torch_additive_4d_to_tt(enc_mask_4d)
+
+        if input_ids_for_enc is not None:
+            enc_out = self.text_encoder.forward(input_ids_for_enc, enc_pos_tt, enc_mask_tt)
+        else:
+            enc_out = self.text_encoder.forward(None, enc_pos_tt, enc_mask_tt, inputs_embeds=inputs_embeds_for_enc)
+        ttnn.deallocate(enc_pos_tt)
+        ttnn.deallocate(enc_mask_tt)
+        if pad_n > 0:
+            if input_ids_for_enc is not None and input_ids_for_enc is not input_ids:
+                ttnn.deallocate(input_ids_for_enc)
+            if inputs_embeds_for_enc is not None and inputs_embeds_for_enc is not inputs_embeds:
+                ttnn.deallocate(inputs_embeds_for_enc)
+
+        # Return a padded 2D attention mask (uint32) that reflects the padded encoder length so that
+        # downstream cross-attn builds an additive mask masking out the tile padding.
+        if pad_n > 0:
+            enc_attn_out = ttnn.from_torch(
+                attn_cpu_padded.to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            enc_attn_out = attention_mask
+        return enc_out, enc_attn_out
 
     def _encode_speech_from_ttnn(
         self,
@@ -518,11 +586,25 @@ class TTSeamlessM4Tv2Model:
         # Compute subsampled lengths on CPU (scalar readout — one integer per batch element).
         sub = _subsample_lengths_from_frame_mask(attn_cpu, self.adaptor_kernel_size, self.adaptor_stride)
         logical_len = int(sub.min().item())
+        # Pad/slice the encoder output to a tile-aligned length so the downstream decoder cross-attn
+        # does not score real queries against tile-padded encoder keys (parity collapse for non-aligned).
+        padded_len = _tile_align(logical_len)
         physical_len = int(enc_out.shape[1])
-        if physical_len > logical_len:
-            sliced = ttnn.slice(enc_out, [0, 0, 0], [batch, logical_len, self.hidden_size], (1, 1, 1))
+        if physical_len != padded_len:
+            enc_cpu_out = ttnn.to_torch(ttnn.from_device(enc_out)).to(torch.bfloat16).cpu().contiguous()
+            enc_cpu_out = enc_cpu_out.reshape(batch, physical_len, self.hidden_size)
+            enc_cpu_out = enc_cpu_out[:, :logical_len, :].contiguous()
+            if padded_len > logical_len:
+                pad = torch.zeros(batch, padded_len - logical_len, self.hidden_size, dtype=torch.bfloat16)
+                enc_cpu_out = torch.cat([enc_cpu_out, pad], dim=1)
             ttnn.deallocate(enc_out)
-            enc_out = sliced
+            enc_out = ttnn.from_torch(
+                enc_cpu_out,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         enc_seq = int(enc_out.shape[1])
         sub_list = sub.tolist()  # tiny list of Python floats (batch_size elements)
@@ -553,7 +635,12 @@ class TTSeamlessM4Tv2Model:
         deallocate_encoder: bool,
         decoder_inputs_embeds_tt: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Build decoder position IDs on device; causal + cross masks match HF prepare helpers."""
+        """Build decoder position IDs on device; causal + cross masks match HF prepare helpers.
+
+        Decoder input is zero-padded on host to a multiple of 32 (tile-aligned) so SDPA does not score
+        real queries against tile-padded garbage keys. Logits are returned at the padded length; callers
+        slice down to the logical decoder sequence (e.g. ``[:, :sd, :]``).
+        """
         if decoder_input_ids_tt is not None and decoder_inputs_embeds_tt is not None:
             raise ValueError("Specify only one of decoder_input_ids or decoder_inputs_embeds.")
         if decoder_input_ids_tt is None and decoder_inputs_embeds_tt is None:
@@ -562,15 +649,51 @@ class TTSeamlessM4Tv2Model:
         if decoder_input_ids_tt is not None:
             bsz = int(decoder_input_ids_tt.shape[0])
             dec_seq = int(decoder_input_ids_tt.shape[1])
-            dec_pos_tt = _tt_position_ids(decoder_input_ids_tt, self.pad_token_id)
         else:
             bsz = int(decoder_inputs_embeds_tt.shape[0])  # type: ignore[union-attr]
             dec_seq = int(decoder_inputs_embeds_tt.shape[1])  # type: ignore[union-attr]
-            dec_pos_tt = _tt_seq_position_ids(bsz, dec_seq, self.pad_token_id, self.device)
+
+        padded_dec_seq = _tile_align(dec_seq)
+        pad_n = padded_dec_seq - dec_seq
+
+        if decoder_input_ids_tt is not None:
+            if pad_n > 0:
+                id_cpu = ttnn.to_torch(ttnn.from_device(decoder_input_ids_tt)).to(torch.int64).cpu().contiguous()
+                pad_ids = torch.full((bsz, pad_n), self.pad_token_id, dtype=id_cpu.dtype)
+                id_cpu_padded = torch.cat([id_cpu, pad_ids], dim=1)
+                decoder_input_ids_for_dec = ttnn.from_torch(
+                    id_cpu_padded.to(torch.int32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                decoder_input_ids_for_dec = decoder_input_ids_tt
+            dec_pos_tt = _tt_position_ids(decoder_input_ids_for_dec, self.pad_token_id)
+            decoder_inputs_embeds_for_dec = None
+        else:
+            if pad_n > 0:
+                emb_cpu = (
+                    ttnn.to_torch(ttnn.from_device(decoder_inputs_embeds_tt)).to(torch.bfloat16).cpu().contiguous()
+                )
+                emb_cpu = emb_cpu.reshape(bsz, dec_seq, self.hidden_size)
+                emb_pad = torch.zeros(bsz, pad_n, self.hidden_size, dtype=torch.bfloat16)
+                emb_padded = torch.cat([emb_cpu, emb_pad], dim=1)
+                decoder_inputs_embeds_for_dec = ttnn.from_torch(
+                    emb_padded,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                decoder_inputs_embeds_for_dec = decoder_inputs_embeds_tt
+            dec_pos_tt = _tt_seq_position_ids(bsz, padded_dec_seq, self.pad_token_id, self.device)
+            decoder_input_ids_for_dec = None
 
         enc_seq = int(encoder_hidden_tt.shape[1])
 
-        dummy_dec = torch.zeros(bsz, dec_seq, self.hidden_size, dtype=torch.bfloat16)
         if decoder_attention_mask_tt is None:
             dec_attn_cpu: Optional[torch.Tensor] = None
         else:
@@ -578,8 +701,14 @@ class TTSeamlessM4Tv2Model:
             if dec_attn_cpu.shape != (bsz, dec_seq):
                 raise ValueError(f"decoder_attention_mask shape {tuple(dec_attn_cpu.shape)} != ({bsz}, {dec_seq}).")
 
+        if pad_n > 0:
+            if dec_attn_cpu is None:
+                dec_attn_cpu = torch.ones(bsz, dec_seq, dtype=torch.long)
+            dec_attn_cpu = torch.cat([dec_attn_cpu, torch.zeros(bsz, pad_n, dtype=torch.long)], dim=1)
+
+        dummy_dec = torch.zeros(bsz, padded_dec_seq, self.hidden_size, dtype=torch.bfloat16)
         dec_causal_torch = _prepare_4d_causal_attention_mask(
-            dec_attn_cpu, (bsz, dec_seq), dummy_dec, past_key_values_length=0
+            dec_attn_cpu, (bsz, padded_dec_seq), dummy_dec, past_key_values_length=0
         )
 
         if encoder_attn_tt is None:
@@ -591,23 +720,31 @@ class TTSeamlessM4Tv2Model:
             if int(enc_cpu.shape[0]) != bsz:
                 raise ValueError(f"encoder attention batch {int(enc_cpu.shape[0])} != decoder batch {bsz}.")
             enc_cpu = enc_cpu[:, :enc_seq].contiguous()
-            dec_cross_torch = _prepare_4d_attention_mask(enc_cpu, torch.bfloat16, tgt_len=dec_seq)
+            dec_cross_torch = _prepare_4d_attention_mask(enc_cpu, torch.bfloat16, tgt_len=padded_dec_seq)
 
         dec_causal_tt = self._torch_additive_4d_to_tt(dec_causal_torch)
         dec_cross_tt = self._torch_additive_4d_to_tt(dec_cross_torch) if dec_cross_torch is not None else None
 
         logits = self._decoder_lm_logits(
             encoder_hidden_tt,
-            decoder_input_ids_tt,
+            decoder_input_ids_for_dec,
             dec_pos_tt,
             dec_causal_tt,
             dec_cross_tt,
-            decoder_inputs_embeds=decoder_inputs_embeds_tt,
+            decoder_inputs_embeds=decoder_inputs_embeds_for_dec,
         )
         ttnn.deallocate(dec_pos_tt)
         ttnn.deallocate(dec_causal_tt)
         if dec_cross_tt is not None:
             ttnn.deallocate(dec_cross_tt)
+        if pad_n > 0:
+            if decoder_input_ids_for_dec is not None and decoder_input_ids_for_dec is not decoder_input_ids_tt:
+                ttnn.deallocate(decoder_input_ids_for_dec)
+            if (
+                decoder_inputs_embeds_for_dec is not None
+                and decoder_inputs_embeds_for_dec is not decoder_inputs_embeds_tt
+            ):
+                ttnn.deallocate(decoder_inputs_embeds_for_dec)
         if deallocate_encoder:
             ttnn.deallocate(encoder_hidden_tt)
         return logits
@@ -706,8 +843,6 @@ class TTSeamlessM4Tv2Model:
             if encoder_modality not in ("text", "speech"):
                 raise ValueError('encoder_modality must be "text" or "speech".')
             enc_tt = self._encoder_hidden_from_outputs_ttnn(encoder_outputs)
-            if attention_mask is None:
-                raise ValueError("attention_mask is required when encoder_outputs is provided.")
             if encoder_modality == "speech":
                 # Replicate HF forward(): subsample the frame-level attention_mask to match
                 # the encoder output sequence (post-adaptor striding).
@@ -727,11 +862,12 @@ class TTSeamlessM4Tv2Model:
             enc_attn_tt,
             decoder_input_ids,
             decoder_attention_mask,
-            deallocate_encoder=True,
+            deallocate_encoder=False,
             decoder_inputs_embeds_tt=decoder_inputs_embeds,
         )
 
         if not return_dict:
+            ttnn.deallocate(enc_tt)
             return (logits_tt,)
 
         return Seq2SeqLMOutput(
@@ -741,7 +877,7 @@ class TTSeamlessM4Tv2Model:
             decoder_hidden_states=None,
             decoder_attentions=None,
             cross_attentions=None,
-            encoder_last_hidden_state=None,
+            encoder_last_hidden_state=enc_tt,
             encoder_hidden_states=None,
             encoder_attentions=None,
         )
@@ -937,8 +1073,6 @@ class TTSeamlessM4Tv2Model:
         t2u_char_input_ids = _get_char_input_ids(
             gc, t2u_input_ids, t2u_subwords, t2u_char_count_per_id, pad_token_id=pad_token_id
         )
-
-        from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 
         mask_4d = _prepare_4d_attention_mask(t2u_model_attention_mask, torch.bfloat16)
         enc_seq_t2u = int(t2u_input_embeds.shape[1])
