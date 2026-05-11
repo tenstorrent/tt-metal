@@ -1,6 +1,6 @@
 # MoE PCC sweep — partial results
 
-Sweep status: **in progress** (running in detached tmux on bh-glx-120-a08u02). Will continue through pos 128 — this file is a snapshot.
+Sweep status: **stopped** at user request after positions 60-77 fully covered + pos 78 partial (layers 3-8). Did not extend to pos 128 since the data through pos 78 already shows no per-step PCC drop that would explain the kv_cache divergence.
 
 Setup:
 - `test_moe_fused_with_reduce` parametrized dynamically from `accepted_experts.json` so each (layer, pos) combo loads exactly the 8 experts the compressed pod selected at that layer/position.
@@ -8,32 +8,32 @@ Setup:
 - **Real BSPM** (`BSPM_DIR=/data/bliu/bit_sculpt/results/deepseek-r1-0528`, variant B, budget 3.5).
 - TP8 compressed, slow dispatch, allocator mode HYBRID.
 
-## Coverage so far (145 rows)
+## Coverage (186 rows)
 
 | Metric | Value |
 |---|---|
-| Position range covered | 60–74 (15 positions, layer 4-12 of pos 74 still pending) |
-| Layers | 3-12 (all MoE layers, full coverage) |
-| Total rows | 145 |
-| Status | 145/145 PASSED, 0 below the 0.99 test threshold... |
+| Position range covered | 60–78 (19 positions; pos 78 partial: layers 3-8 only) |
+| Layers | 3-12 (all MoE layers) |
+| Total rows | 186 |
+| Status | 186/186 PASSED |
 | **PCC range** | **0.975372 – 0.991904** |
-| Mean PCC | 0.986418 |
+| Mean PCC | 0.986492 |
 | Rows with PCC < 0.97 | **0** |
 
-## Per-layer PCC range (sampled across 14-15 positions each)
+## Per-layer PCC range
 
-| Layer | min | max | mean | observation |
-|---|---|---|---|---|
-| 3  | 0.9852 | 0.9870 | 0.9865 | mid |
-| 4  | 0.9769 | 0.9806 | 0.9788 | **second lowest** |
-| 5  | 0.9854 | 0.9874 | 0.9864 | mid |
-| 6  | 0.9815 | 0.9853 | 0.9827 | mid-low |
-| 7  | **0.9754** | 0.9813 | **0.9783** | **lowest consistently** |
-| 8  | 0.9914 | 0.9919 | 0.9917 | high |
-| 9  | 0.9914 | 0.9919 | 0.9917 | high |
-| 10 | 0.9866 | 0.9889 | 0.9881 | mid-high |
-| 11 | 0.9898 | 0.9904 | 0.9902 | high |
-| 12 | 0.9911 | 0.9915 | 0.9913 | high |
+| Layer | min | max | mean | n | observation |
+|---|---|---|---|---|---|
+| 3  | 0.9852 | 0.9870 | 0.9864 | 19 | mid |
+| 4  | 0.9769 | 0.9806 | 0.9789 | 19 | **second lowest** |
+| 5  | 0.9854 | 0.9874 | 0.9864 | 19 | mid |
+| 6  | 0.9814 | 0.9853 | 0.9826 | 19 | mid-low |
+| 7  | **0.9754** | 0.9813 | **0.9784** | 19 | **lowest consistently** |
+| 8  | 0.9914 | 0.9919 | 0.9916 | 19 | high |
+| 9  | 0.9914 | 0.9919 | 0.9917 | 18 | high |
+| 10 | 0.9866 | 0.9890 | 0.9882 | 18 | mid-high |
+| 11 | 0.9896 | 0.9904 | 0.9901 | 18 | high |
+| 12 | 0.9911 | 0.9915 | 0.9913 | 18 | high |
 
 **Key finding so far**: layers 4 and 7 consistently have the worst PCC (~0.978-0.981). Other layers cluster around 0.987-0.992. No layer × position combination yet drops below 0.97 — i.e., the test still passes its 0.99 threshold (PCC > 0.97 for the routed-output PCC checked).
 
