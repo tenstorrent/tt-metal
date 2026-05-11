@@ -387,10 +387,10 @@ ttnn::Tensor all_reduce_async(
             dim,
             cluster_axis,
             worker_subdevice_id_opt,
-            out_memory_config,
+            change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             std::nullopt,
             std::nullopt,
-            num_preferred_links,
+            resolved_num_links,
             topology_,
             std::nullopt,
             std::nullopt,
@@ -431,9 +431,9 @@ ttnn::Tensor all_reduce_async(
             dim,
             cluster_axis,
             worker_subdevice_id_opt,
-            out_memory_config,
+            change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             std::nullopt,
-            num_preferred_links,
+            resolved_num_links,
             topology_);
     }
     scattered_tensor.deallocate();
