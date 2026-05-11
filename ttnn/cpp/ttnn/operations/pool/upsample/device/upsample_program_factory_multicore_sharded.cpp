@@ -262,13 +262,10 @@ UpsampleMultiCoreShardedProgramFactory::Resources UpsampleMultiCoreShardedProgra
     const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
 
-    if (input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_THROW("Unsupported sharding layout");
-    }
-    if (input.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
-        input.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_THROW("Unsupported sharding layout");
-    }
+    const TensorMemoryLayout memory_layout = input.memory_config().memory_layout();
+    TT_FATAL(
+        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported sharding layout");
 
     const CoreRangeSet cores_with_work = get_cores_with_work(
         shard_spec.grid, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
@@ -404,7 +401,7 @@ ProgramDescriptor UpsampleMultiCoreShardedProgramFactory::create_descriptor(
     // Create config CB only for cores that have work
     const uint32_t config_cb_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = config_buffer_page_size * 1,
+        .total_size = config_buffer_page_size,
         .core_ranges = cores_with_work,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(config_cb_id),

@@ -193,33 +193,35 @@ ProgramDescriptor UpsampleMultiCoreInterleavedProgramFactory::create_descriptor(
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
 
         if (core_group_1.num_cores() > 0) {
-            KernelDescriptor cd;
-            cd.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-            cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            cd.core_ranges = core_group_1;
-            cd.compile_time_args = {
+            KernelDescriptor compute_desc;
+            compute_desc.kernel_source =
+                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+            compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            compute_desc.core_ranges = core_group_1;
+            compute_desc.compile_time_args = {
                 work_per_core_group_1,   // per_core_block_cnt (compile-time)
                 num_input_tiles_in_row,  // per_block_ntiles
                 src0_cb_index,           // src_cb_id
                 output_cb_index,         // out_cb_id
             };
-            cd.config = ComputeConfigDescriptor{};
-            compute_desc_g1 = std::move(cd);
+            compute_desc.config = ComputeConfigDescriptor{};
+            compute_desc_g1 = std::move(compute_desc);
         }
 
         if (core_group_2.num_cores() > 0) {
-            KernelDescriptor cd;
-            cd.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-            cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            cd.core_ranges = core_group_2;
-            cd.compile_time_args = {
+            KernelDescriptor compute_desc;
+            compute_desc.kernel_source =
+                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+            compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            compute_desc.core_ranges = core_group_2;
+            compute_desc.compile_time_args = {
                 work_per_core_group_2,
                 num_input_tiles_in_row,
                 src0_cb_index,
                 output_cb_index,
             };
-            cd.config = ComputeConfigDescriptor{};
-            compute_desc_g2 = std::move(cd);
+            compute_desc.config = ComputeConfigDescriptor{};
+            compute_desc_g2 = std::move(compute_desc);
         }
     }
 

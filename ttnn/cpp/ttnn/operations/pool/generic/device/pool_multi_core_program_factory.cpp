@@ -988,38 +988,38 @@ struct PoolSetup {
 
 PoolSetup compute_pool_setup(const Pool2D::operation_attributes_t& op_attr, const Tensor& input) {
     const auto& sliding_window_config = op_attr.sliding_window_config_;
-    PoolSetup s;
-    s.parallel_config = sliding_window::ParallelConfig{
+    PoolSetup setup;
+    setup.parallel_config = sliding_window::ParallelConfig{
         .grid = input.shard_spec().value().grid,
         .shard_scheme = input.memory_config().memory_layout(),
         .shard_orientation = input.shard_spec().value().orientation,
     };
 
     auto output_shape = sliding_window_config.get_output_shape();
-    s.out_h = output_shape[1];
-    s.out_w = output_shape[2];
-    s.out_c = output_shape[3];
+    setup.out_h = output_shape[1];
+    setup.out_w = output_shape[2];
+    setup.out_c = output_shape[3];
 
-    s.is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    s.in_n = sliding_window_config.batch_size;
-    s.in_c = sliding_window_config.channels;
-    s.in_h = sliding_window_config.input_hw.first;
-    s.in_w = sliding_window_config.input_hw.second;
-    s.kernel_h = sliding_window_config.window_hw.first;
-    s.kernel_w = sliding_window_config.window_hw.second;
-    s.stride_h = sliding_window_config.stride_hw.first;
-    s.stride_w = sliding_window_config.stride_hw.second;
-    s.pad_t = sliding_window_config.get_pad_top();
-    s.pad_b = sliding_window_config.get_pad_bottom();
-    s.pad_l = sliding_window_config.get_pad_left();
-    s.pad_r = sliding_window_config.get_pad_right();
-    s.ceil_pad_h = sliding_window_config.get_ceil_pad_h();
-    s.ceil_pad_w = sliding_window_config.get_ceil_pad_w();
-    s.ceil_mode = sliding_window_config.ceil_mode;
-    s.dilation_h = sliding_window_config.dilation_hw.first;
-    s.dilation_w = sliding_window_config.dilation_hw.second;
-    s.num_shards_c = sliding_window_config.num_cores_c;
-    return s;
+    setup.is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    setup.in_n = sliding_window_config.batch_size;
+    setup.in_c = sliding_window_config.channels;
+    setup.in_h = sliding_window_config.input_hw.first;
+    setup.in_w = sliding_window_config.input_hw.second;
+    setup.kernel_h = sliding_window_config.window_hw.first;
+    setup.kernel_w = sliding_window_config.window_hw.second;
+    setup.stride_h = sliding_window_config.stride_hw.first;
+    setup.stride_w = sliding_window_config.stride_hw.second;
+    setup.pad_t = sliding_window_config.get_pad_top();
+    setup.pad_b = sliding_window_config.get_pad_bottom();
+    setup.pad_l = sliding_window_config.get_pad_left();
+    setup.pad_r = sliding_window_config.get_pad_right();
+    setup.ceil_pad_h = sliding_window_config.get_ceil_pad_h();
+    setup.ceil_pad_w = sliding_window_config.get_ceil_pad_w();
+    setup.ceil_mode = sliding_window_config.ceil_mode;
+    setup.dilation_h = sliding_window_config.dilation_hw.first;
+    setup.dilation_w = sliding_window_config.dilation_hw.second;
+    setup.num_shards_c = sliding_window_config.num_cores_c;
+    return setup;
 }
 }  // namespace
 
@@ -1027,7 +1027,7 @@ Pool2D::MultiCore::Resources Pool2D::MultiCore::prepare_resources(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     const auto& input = tensor_args.input_tensor_;
     const auto& sliding_window_config = op_attr.sliding_window_config_;
-    PoolSetup s = compute_pool_setup(op_attr, input);
+    PoolSetup setup = compute_pool_setup(op_attr, input);
 
     // Build the per-core sliding-window halo lookup table on host, then upload it.
     // The resulting Tensor's buffer must outlive the program, so it lives in Resources.
@@ -1036,12 +1036,16 @@ Pool2D::MultiCore::Resources Pool2D::MultiCore::prepare_resources(
     std::vector<sliding_window::ShardBoundary> shard_boundaries =
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
     std::vector<std::vector<uint16_t>> top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, s.stride_w);
+        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, setup.stride_w);
 
     Tensor reader_indices_host = sliding_window::construct_on_host_config_tensor(
-        top_left_indices, s.parallel_config, op_attr.config_tensor_in_dram);
+        top_left_indices, setup.parallel_config, op_attr.config_tensor_in_dram);
     Tensor reader_indices_on_device = sliding_window::move_config_tensor_to_device(
-        reader_indices_host, s.parallel_config, s.is_block_sharded, input.device(), op_attr.config_tensor_in_dram);
+        reader_indices_host,
+        setup.parallel_config,
+        setup.is_block_sharded,
+        input.device(),
+        op_attr.config_tensor_in_dram);
 
     Resources resources;
     resources.reader_indices_device = std::move(reader_indices_on_device);
@@ -1049,13 +1053,13 @@ Pool2D::MultiCore::Resources Pool2D::MultiCore::prepare_resources(
     // For avg-pool, decide whether a single bf16 scalar per core is sufficient.  When it isn't
     // (ceil_mode w/ ceil_pad, or !count_include_pad with non-zero padding, both with no
     // divisor_override), we materialize the per-output-stick scalar config tensor and upload it.
-    const uint32_t pad_h = s.pad_t + s.pad_b;
-    const uint32_t pad_w = s.pad_l + s.pad_r;
+    const uint32_t pad_h = setup.pad_t + setup.pad_b;
+    const uint32_t pad_w = setup.pad_l + setup.pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         op_attr.pool_type_,
-        s.ceil_mode,
-        s.ceil_pad_h,
-        s.ceil_pad_w,
+        setup.ceil_mode,
+        setup.ceil_pad_h,
+        setup.ceil_pad_w,
         op_attr.count_include_pad_,
         pad_h,
         pad_w,
@@ -1066,29 +1070,29 @@ Pool2D::MultiCore::Resources Pool2D::MultiCore::prepare_resources(
         const uint32_t ncores = input.shard_spec().value().grid.num_cores();
 
         AvgPoolConfig avg_pool_config = {
-            .kernel_h = s.kernel_h,
-            .kernel_w = s.kernel_w,
-            .in_h = s.in_h,
-            .in_w = s.in_w,
-            .out_h = s.out_h,
-            .out_w = s.out_w,
-            .stride_h = s.stride_h,
-            .stride_w = s.stride_w,
-            .ceil_mode = s.ceil_mode,
-            .ceil_h = s.ceil_pad_h,
-            .ceil_w = s.ceil_pad_w,
+            .kernel_h = setup.kernel_h,
+            .kernel_w = setup.kernel_w,
+            .in_h = setup.in_h,
+            .in_w = setup.in_w,
+            .out_h = setup.out_h,
+            .out_w = setup.out_w,
+            .stride_h = setup.stride_h,
+            .stride_w = setup.stride_w,
+            .ceil_mode = setup.ceil_mode,
+            .ceil_h = setup.ceil_pad_h,
+            .ceil_w = setup.ceil_pad_w,
             .count_include_pad = op_attr.count_include_pad_,
-            .pad_t = s.pad_t,
-            .pad_b = s.pad_b,
-            .pad_l = s.pad_l,
-            .pad_r = s.pad_r,
+            .pad_t = setup.pad_t,
+            .pad_b = setup.pad_b,
+            .pad_l = setup.pad_l,
+            .pad_r = setup.pad_r,
             .max_out_nhw_per_core = max_out_nhw_per_core,
             .divisor_override = op_attr.divisor_override_};
         Tensor config_tensor = create_scalar_config_tensor(
             avg_pool_config,
             input.memory_config().memory_layout(),
-            s.in_n,
-            s.num_shards_c,
+            setup.in_n,
+            setup.num_shards_c,
             ncores,
             op_attr.config_tensor_in_dram);
 
@@ -1120,7 +1124,7 @@ tt::tt_metal::ProgramDescriptor Pool2D::MultiCore::create_descriptor(
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
     bool return_indices = op_attr.return_indices_;
 
-    PoolSetup s = compute_pool_setup(op_attr, input);
+    PoolSetup setup = compute_pool_setup(op_attr, input);
 
     // Re-derive the top-left indices to recover top_left_indices[0].size(); this is a host
     // computation that produces the same value across cache miss/hit, so it's safe to repeat.
@@ -1129,7 +1133,7 @@ tt::tt_metal::ProgramDescriptor Pool2D::MultiCore::create_descriptor(
     std::vector<sliding_window::ShardBoundary> shard_boundaries =
         ttnn::operations::sliding_window::generate_shard_boundaries(op_attr.sliding_window_config_);
     std::vector<std::vector<uint16_t>> top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, s.stride_w);
+        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, setup.stride_w);
 
     std::vector<uint32_t> core_starting_indices;
     if (return_indices) {
@@ -1146,30 +1150,30 @@ tt::tt_metal::ProgramDescriptor Pool2D::MultiCore::create_descriptor(
         top_left_indices[0].size(),
         output_tensors,
         pool_type,
-        s.in_n,
-        s.in_c,
-        s.in_h,
-        s.in_w,
-        s.out_h,
-        s.out_w,
-        s.out_c,
-        s.kernel_h,
-        s.kernel_w,
-        s.stride_h,
-        s.stride_w,
-        s.pad_t,
-        s.pad_b,
-        s.pad_l,
-        s.pad_r,
-        s.ceil_pad_h,
-        s.ceil_pad_w,
-        s.ceil_mode,
+        setup.in_n,
+        setup.in_c,
+        setup.in_h,
+        setup.in_w,
+        setup.out_h,
+        setup.out_w,
+        setup.out_c,
+        setup.kernel_h,
+        setup.kernel_w,
+        setup.stride_h,
+        setup.stride_w,
+        setup.pad_t,
+        setup.pad_b,
+        setup.pad_l,
+        setup.pad_r,
+        setup.ceil_pad_h,
+        setup.ceil_pad_w,
+        setup.ceil_mode,
         return_indices,
         core_starting_indices,
         count_include_pad,
-        s.dilation_h,
-        s.dilation_w,
-        s.num_shards_c,
+        setup.dilation_h,
+        setup.dilation_w,
+        setup.num_shards_c,
         compute_kernel_config,
         divisor_override,
         op_attr.memory_used,
