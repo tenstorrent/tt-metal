@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: TTNN ``KokoroGenerator`` vs PyTorch (``disable_complex=True`` for STFT parity)."""
+"""TTNN ``KokoroGenerator`` vs PyTorch: waveform PCC, shape, finiteness (``disable_complex=True``).
+
+``SourceModuleHnNSF`` uses CPU PyTorch for the harmonic source; remaining drift is STFT / AdaIN /
+ups / post. Upsampling PCC also lives in ``test_kokoro_generator_ups_pcc.py``.
+"""
 
 import sys
 from pathlib import Path
@@ -14,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 ttnn = pytest.importorskip("ttnn")
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.kokoro_istftnet import load_decoder_from_huggingface
 from models.experimental.kokoro.reference.kokoro_generator_preprocess import preprocess_kokoro_generator_parameters
 from models.experimental.kokoro.tt import KokoroGenerator
@@ -59,7 +64,7 @@ def _decoder_tensors_for_generator(dec, batch: int, time_asr: int, seed: int):
 
 
 def test_kokoro_generator_forward_smoke(ttnn_device, kokoro_decoder_cpu_disable_complex):
-    """Runs TTNN ``KokoroGenerator`` on-device; compares shape to PyTorch (PCC tracked separately)."""
+    """Same tensors as PyTorch ref; assert waveform PCC, shape match, and finite TT output."""
     dec = kokoro_decoder_cpu_disable_complex.decoder
     gen = dec.generator
     time_asr = 8
@@ -121,3 +126,5 @@ def test_kokoro_generator_forward_smoke(ttnn_device, kokoro_decoder_cpu_disable_
     y_hat = ttnn.to_torch(y_tt).reshape(y_ref.shape)
     assert y_hat.shape == y_ref.shape
     assert torch.isfinite(y_hat).all(), "TTNN generator output has non-finite values"
+    ok, p = comp_pcc(y_ref, y_hat, pcc=0.90)
+    assert ok, f"generator waveform PCC {p} (expected >= 0.90)"

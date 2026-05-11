@@ -51,6 +51,8 @@ def test_official_kmodel_produces_finite_audio():
     hf_repo_id = KokoroConfig().repo_id
     km = load_reference_model(repo_id=hf_repo_id, device=device).kmodel
 
+    # Fixed RNG: random `ref_s` without a seed can destabilize the vocoder with OOD token rows.
+    torch.manual_seed(0)
     input_ids = torch.zeros((1, 8), dtype=torch.long, device=device)
     ref_s = torch.randn(1, 256, dtype=torch.float32, device=device)
 

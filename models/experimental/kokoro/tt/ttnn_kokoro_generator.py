@@ -146,7 +146,13 @@ class _StridedNoiseConv1d:
 
 
 class _UpsConvTranspose1d:
-    """ConvTranspose1d along time via ``conv_transpose2d``."""
+    """
+    ConvTranspose1d along time via ``conv_transpose2d``.
+
+    Use ``mirror_kernel=True`` with unflipped PyTorch ``ConvTranspose1d`` weights so TTNN
+    matches ``nn.functional.conv_transpose2d`` / ``nn.ConvTranspose1d`` (see
+    ``tests/ttnn/nightly/unit_tests/operations/conv/test_conv_transpose2d.py``).
+    """
 
     def __init__(self, device, spec: dict[str, Any]):
         self.device = device
@@ -199,7 +205,7 @@ class _UpsConvTranspose1d:
             conv_config=self.conv_config,
             compute_config=self.compute_cfg,
             groups=1,
-            mirror_kernel=False,
+            mirror_kernel=True,
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=ttnn.float32,
@@ -222,6 +228,24 @@ def _reflect_pad1_left_bct(x: ttnn.Tensor) -> ttnn.Tensor:
         return x
     left = ttnn.slice(x, [0, 0, 1], [b, c, 2])
     return ttnn.concat([left, x], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+def _f0_nearest_upsample_match_torch(f0_coarse: ttnn.Tensor, scale: int, device) -> ttnn.Tensor:
+    """
+    Nearest-neighbor upsample along time (dim=1), matching ``nn.Upsample`` / ``torch.repeat_interleave``.
+
+    ``ttnn.repeat_interleave`` can diverge from PyTorch on device for large ``scale``; host repeat preserves
+    vocoder PCC against the reference checkpoint.
+    """
+    host = ttnn.to_torch(f0_coarse).contiguous()
+    up = host.repeat_interleave(int(scale), dim=1).contiguous()
+    return ttnn.from_torch(
+        up,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
 
 class KokoroGenerator:
@@ -279,8 +303,9 @@ class KokoroGenerator:
             f0_coarse = ttnn.typecast(f0_coarse, ttnn.float32)
 
         batch_size = int(x.shape[0])
-        f0_up = ttnn.repeat_interleave(f0_coarse, self.f0_up_scale_int, dim=1)
+        f0_up = _f0_nearest_upsample_match_torch(f0_coarse, self.f0_up_scale_int, self.device)
         har_bt1, _noise, _uv = self.m_source(f0_up, deterministic=deterministic)
+        ttnn.deallocate(f0_up)
         har_b1t = ttnn.permute(har_bt1, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
         t_audio = int(har_b1t.shape[2])
         mag, phase = self.stft.transform(har_b1t)

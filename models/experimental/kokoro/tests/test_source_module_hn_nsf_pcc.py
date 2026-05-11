@@ -86,7 +86,7 @@ def test_source_module_hn_nsf_deterministic_pcc(ttnn_device, kokoro_decoder_cpu)
     noise_hat = ttnn.to_torch(noise_tt).reshape(noise_ref.shape)
     uv_hat = ttnn.to_torch(uv_tt).reshape(uv_ref.shape)
 
-    # ``har_source`` uses device ``sin`` + ``tanh``; SFPU vs float32 PyTorch is often ~0.98 PCC.
+    # ``har_source`` matches PyTorch (CPU ``SineGen``, TTNN linear+tanh in ``SourceModuleHnNSF``).
     min_pcc = {"har_source": 0.975, "noise_merge": 0.99, "uv": 0.99}
     for name, ref, hat in (
         ("har_source", har_ref, har_hat),
