@@ -301,10 +301,21 @@ class SamplingGenerator:
         logger.debug(
             f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
         )
-        # Penalties mutate logits in-place. Pre-compile on a clone so trace
-        # capture sees the model logits, not logits that were already
-        # transformed by the compile run.
-        compile_logits = ttnn.clone(logits) if penalties_on else logits
+        # Penalties mutate logits in-place. Pre-compile on a separate tensor
+        # so trace capture sees the model logits, not logits that were already
+        # transformed by the compile run. Avoid ttnn.clone here: during Galaxy
+        # warmup it can pick a kernel core range outside the active sub-device.
+        op_kwargs = {"sub_core_grids": self.sub_core_grids} if self.sub_core_grids else {}
+        compile_logits = (
+            ttnn.multiply(
+                logits,
+                1.0,
+                memory_config=logits.memory_config(),
+                **op_kwargs,
+            )
+            if penalties_on
+            else logits
+        )
         self._run_sampling(
             compile_logits,
             penalties_on=penalties_on,
