@@ -149,13 +149,20 @@ class TtOlmoModelArgs(TtModelArgs):
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
         # sub_core_grids: cores used for memory layout / sharding.
-        # Keep original 50-core grid for compatibility:
-        # - CREATE_HEAD_OUTPUT_MEMCFG uses sub_core_grids directly for HEIGHT_SHARDED output
-        # - RoPE core mapping assumes cores start at (1,0) with specific bounding box
+        # OLMo3 has use_prefetcher=False, so col 4 (Wormhole prefetcher right
+        # sender per models/tt_transformers/tt/prefetcher/prefetcher_config.yaml)
+        # is free to be used as worker space. Widening to a single contiguous
+        # rectangle cols 1-6 × rows 0-9 (60 cores) lets the SDPA decode kernel
+        # and any other op picking N cores row-wise pick a contiguous layout.
+        # Col 7 stays excluded: it's the dispatch core when
+        # dispatch_core_axis=COL. Col 0 stays excluded: flagged for
+        # long-prefill NOC hangs when used as worker space (separate
+        # follow-up).
+        # CREATE_HEAD_OUTPUT_MEMCFG pins to its own narrow 50-core literal so
+        # its shard-shape contract (50 × 32 = 1600 rows) is unaffected.
         self.sub_core_grids = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
             ]
         )
         self.start_core = ttnn.CoreCoord(1, 0)
