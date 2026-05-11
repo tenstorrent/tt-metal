@@ -258,7 +258,17 @@ void dump_fabric_erisc_state() {
 
     log_warning(tt::LogMetal, "=== ERISC Fabric State Dump (timeout diagnostic) ===");
 
+    const auto* cluster_desc = cluster.get_cluster_desc();
+
     for (ChipId chip_id : ctx.device_manager()->get_all_active_device_ids()) {
+        // FIX LT9-PROGRESS-SAFE: Only read MMIO-capable chips.  Non-MMIO reads go through the
+        // ERISC relay — if the relay is broken (which is WHY we timed out) the read_core() call
+        // blocks indefinitely, preventing on_dispatch_timeout_detected() from ever running.
+        if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
+            log_warning(tt::LogMetal, "  dev={} SKIPPED (non-MMIO — read would block)", chip_id);
+            continue;
+        }
+
         const auto fabric_node_id = [&]() -> std::optional<tt_fabric::FabricNodeId> {
             try {
                 return control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
