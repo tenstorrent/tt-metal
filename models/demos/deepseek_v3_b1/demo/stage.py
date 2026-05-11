@@ -1117,7 +1117,10 @@ class _CombinedPipelineBlock:
             f"[COMBINED P{my_stage_idx}] _CombinedPipelineBlock created: "
             f"exit_dev={exit_node_coord} "
             f"spec_root={spec_root_device_coord} spec_exit={spec_exit_device_coord} "
-            f"d2h_dev={loopback_exit_coord}",
+            f"d2h_dev={loopback_exit_coord} "
+            f"loopback_entry={loopback_entry_coord} "
+            f"prev_stage_exit={prev_stage_exit_coord} "
+            f"next_stage_entry={next_stage_entry_coord}",
         )
 
     def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str = "deepseek") -> None:

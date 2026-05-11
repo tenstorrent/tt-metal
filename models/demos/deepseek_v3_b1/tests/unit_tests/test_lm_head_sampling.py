@@ -1793,7 +1793,7 @@ def create_input_page(
 
 
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("num_mtp_levels", [1, 2, 3])
+@pytest.mark.parametrize("num_mtp_levels", [1, 2, 3, 4])
 @pytest.mark.parametrize(
     "mesh_device",
     [(4, 2)],
@@ -1825,10 +1825,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, num_mtp_levels):
     num_procs = int(ttnn.distributed_context_get_size())
     max_mtp = min(num_procs - 1, 4)
     if num_mtp_levels > max_mtp:
-        pytest.skip(
-            f"num_mtp_levels={num_mtp_levels} exceeds max {max_mtp} "
-            f"for {num_procs} processes"
-        )
+        pytest.skip(f"num_mtp_levels={num_mtp_levels} exceeds max {max_mtp} " f"for {num_procs} processes")
 
     iterations = 50
     run_golden = False
@@ -1885,6 +1882,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, num_mtp_levels):
             logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
 
             prefill_ids = [10 if lvl < num_mtp_levels else -1 for lvl in range(4)]
+            logger.info(f"[TEST P{pid}] iter {iteration} prefill_ids={prefill_ids}")
             token_tensor = create_input_page(
                 token_id=10,
                 position_id=iteration,
@@ -1895,7 +1893,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, num_mtp_levels):
                 top_p=1.0,
                 prefill_token_ids=prefill_ids,
             )
-            
+
             t0 = time.perf_counter()
             pipeline.write_token(token_tensor)
             pipeline.read_output(output_tensor)

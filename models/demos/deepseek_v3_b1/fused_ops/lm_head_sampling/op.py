@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import get_max_page_size_and_num_pages
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_root3_row as get_reduce_root3_row
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -714,6 +715,15 @@ class LMHeadSampling:
         if is_mtp_base_stage and not skip_ccl:
             if mtp_bcast_semaphores is None:
                 raise ValueError("mtp_bcast_semaphores required when is_mtp_base_stage=True and skip_ccl=False")
+            logger.debug(
+                "[MTP_BCAST CONFIG] base_stage sender_coord={} mtp_level={} "
+                "broadcast_topology_override={} mesh_shape=({}x{})",
+                argmax_final_mesh_coord,
+                mtp_level,
+                broadcast_topology_override,
+                int(mesh_device.shape[0]),
+                int(mesh_device.shape[1]),
+            )
             mtp_bcast_config = DeepseekMinimalBroadcast.configure(
                 mesh_device=mesh_device,
                 input_tensor_mesh=base_token_buffer,
@@ -828,6 +838,17 @@ class LMHeadSampling:
                     is_exit_device = row == int(argmax_final_mesh_coord[0]) and col == int(argmax_final_mesh_coord[1])
 
                 enable_mtp_on_device = is_mtp_base_stage
+                if device_idx == 0:
+                    logger.debug(
+                        "[OP DEVICES] is_mtp_base={} is_mtp_verify={} mtp_level={} "
+                        "argmax_final_mesh_coord={} mesh=({}x{})",
+                        is_mtp_base_stage,
+                        is_mtp_verify_stage,
+                        mtp_level,
+                        argmax_final_mesh_coord,
+                        mesh_rows,
+                        mesh_cols,
+                    )
 
                 num_devices_in_stage = mesh_rows * mesh_cols
                 is_e_norm_device = enable_mtp_on_device and (device_idx < num_devices_in_stage // 2)
@@ -1236,6 +1257,22 @@ class LMHeadSampling:
                 mtp_argmax_output_l1_addr = (
                     int(output_index_tensor_device.buffer_address()) if enable_mtp_on_device else 0
                 )
+                if is_exit_device and (is_mtp_base_stage or is_mtp_verify_stage):
+                    logger.debug(
+                        "[OP EXIT_DEV is_base={} is_verify={} mtp_level={}] dev=({},{}) "
+                        "argmax_final={} mtp_input_core_noc=({},{}) mtp_token_l1=0x{:x} "
+                        "mtp_argmax_output_l1=0x{:x}",
+                        is_mtp_base_stage,
+                        is_mtp_verify_stage,
+                        mtp_level,
+                        row,
+                        col,
+                        argmax_final_mesh_coord,
+                        mtp_input_core_noc_x,
+                        mtp_input_core_noc_y,
+                        mtp_token_l1_addr,
+                        mtp_argmax_output_l1_addr,
+                    )
 
                 # ================================================================
                 # ReduceToOne per-device setup
@@ -1245,22 +1282,47 @@ class LMHeadSampling:
                 reduce_dest_fabric_node_id = None
                 reduce_output_core_phys_x = 0
                 reduce_output_core_phys_y = 0
+                reduce_num_hops = 1
                 if enable_reduce_to_one:
                     reduce_root_row = int(reduce_params["root_coord"][0])
-                    reduce_use_torus = reduce_root_row in [0, 3]
+                    reduce_root_col = int(reduce_params["root_coord"][1])
+                    # Always use linear mode. Torus auto-enable was the source of the
+                    # corner-root hang: when root_row in {0,3}, the reduce was wiring
+                    # ROOT3→ROOT2 across 3 rows expecting fabric wrap, but fabric_2D is
+                    # not a torus, so packets sent with num_hops=1 never landed.
+                    reduce_use_torus = False
+                    reduce_root3_row = get_reduce_root3_row(reduce_root_row, reduce_use_torus)
                     reduce_device_role = get_reduce_device_role(coord, reduce_params["root_coord"], reduce_use_torus)
                     if reduce_device_role == MESH_LEAF:
-                        if reduce_use_torus:
-                            reduce_dest_coord = ttnn.MeshCoordinate(row - 1 if row == 1 else row + 1, col)
+                        # LEAVES live on the 2 rows that are not root_row/root3_row.
+                        # Send to whichever round-1 receiver is on the SAME column and
+                        # NOT separated from the leaf by the other receiver. This keeps
+                        # every LEAF→receiver hop exactly 1 row.
+                        lo = min(reduce_root_row, reduce_root3_row)
+                        hi = max(reduce_root_row, reduce_root3_row)
+                        if lo < row < hi:
+                            # Leaf sits between root and root3 → send to root row.
+                            leaf_dest_row = reduce_root_row
+                        elif abs(row - reduce_root3_row) < abs(row - reduce_root_row):
+                            leaf_dest_row = reduce_root3_row
                         else:
-                            reduce_dest_coord = ttnn.MeshCoordinate(row + 1 if row == 0 else row - 1, col)
+                            leaf_dest_row = reduce_root_row
+                        reduce_dest_coord = ttnn.MeshCoordinate(leaf_dest_row, col)
                     elif reduce_device_role == MESH_ROOT3:
-                        reduce_dest_coord = ttnn.MeshCoordinate(int(reduce_params["root_coord"][0]), col)
+                        reduce_dest_coord = ttnn.MeshCoordinate(reduce_root_row, col)
                     elif reduce_device_role == MESH_ROOT2:
                         reduce_dest_coord = reduce_params["root_coord"]
                     else:
                         reduce_dest_coord = reduce_params["root_coord"]
                     reduce_dest_fabric_node_id = mesh_device.get_fabric_node_id(reduce_dest_coord)
+                    # Multi-hop routing: when root is at a corner row, ROOT3→ROOT_ROW
+                    # spans 2 rows (e.g. root_row=3 → root3_row=1, dist=2). Fabric_2D
+                    # routes multi-hop transparently iff the kernel's fabric send
+                    # advertises the correct hop count; num_hops=1 silently truncates.
+                    reduce_num_hops = max(
+                        1,
+                        abs(int(coord[0]) - int(reduce_dest_coord[0])) + abs(int(coord[1]) - int(reduce_dest_coord[1])),
+                    )
                     roc_phys = device.worker_core_from_logical_core(reduce_params["output_core"])
                     reduce_output_core_phys_x = int(roc_phys.x)
                     reduce_output_core_phys_y = int(roc_phys.y)
@@ -1552,7 +1614,7 @@ class LMHeadSampling:
                     ("reduce_local_cb", reduce_local_cb),
                     ("reduce_scratch_cb", reduce_scratch_cb),
                     ("reduce_packet_cb", reduce_packet_cb),
-                    ("reduce_num_hops", 1),
+                    ("reduce_num_hops", reduce_num_hops if enable_reduce_to_one else 1),
                     (
                         "reduce_dst_fabric_node_chip_id",
                         int(reduce_dest_fabric_node_id.chip_id) if enable_reduce_to_one else 0,
@@ -1908,7 +1970,9 @@ class LMHeadSampling:
                         [ttnn.CoreRange(argmax_final_core, argmax_final_core)]
                     )
                     metadata_num_tiles = socket_page_size_bytes // eh_output_tile_size
-                    eh_gather_cb_descriptor.total_size = (eh_gather_dst_num_pages + metadata_num_tiles) * eh_output_tile_size
+                    eh_gather_cb_descriptor.total_size = (
+                        eh_gather_dst_num_pages + metadata_num_tiles
+                    ) * eh_output_tile_size
 
                     # CB 37: Sync CB for h_rmsnorm and lm head norm on TRISC
                     hnorm_ready_cb_format = ttnn.CBFormatDescriptor(
@@ -2331,7 +2395,10 @@ class LMHeadSampling:
                             ttnn.SemaphoreDescriptor(
                                 id=token_bcast_turn_semaphore_id,
                                 core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
-                                initial_value=0,
+                                # Init=1 mirrors fabric_gate_bcast_turn_semaphore: the first iter's
+                                # NCRISC wait passes immediately and the BRISC inc at the end of
+                                # lm_head_sampling() unblocks subsequent iterations.
+                                initial_value=1,
                             ),
                             ttnn.SemaphoreDescriptor(
                                 id=mtp_ready_semaphore_id,

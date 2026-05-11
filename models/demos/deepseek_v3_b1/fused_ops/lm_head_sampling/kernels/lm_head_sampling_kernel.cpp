@@ -768,10 +768,10 @@ void kernel_main() {
     // LM HEAD SAMPLING Lambda
     // ====================================================================
     auto lm_head_sampling = [&]() {
-        
-        // ====================================================================
-        // Phase 0: CCL Broadcast (multi-device only) (NCRISC only)
-        // ====================================================================
+
+    // ====================================================================
+    // Phase 0: CCL Broadcast (multi-device only) (NCRISC only)
+    // ====================================================================
 #if defined(COMPILE_FOR_BRISC) && !defined(SKIP_CCL)
         constexpr bool is_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
         if constexpr (Core::persistent_mode && is_root && Core::is_input_core) {
@@ -902,16 +902,14 @@ void kernel_main() {
             DeviceZoneScopedN("SAMPLING");
             sampling_op(sampling_args);
         }
-    };
-
-    // ====================================================================
-    // MTP Lambda
-    // ====================================================================
-    auto mtp = [&]() {
 
 #if defined(COMPILE_FOR_BRISC)
-        // MTP: release token MTP Broadcast path after main sampling (separate from activation CCL gate).
-        if constexpr (Core::sampling_is_final_core && !Core::skip_ccl) {
+        // MTP: release token-broadcast gate now that sampling is done. Placed at
+        // the END of lm_head_sampling (not the start of mtp()) so the BRISC
+        // inc lands strictly after the prior iteration's NCRISC `set(0)` —
+        // otherwise iter N+1's inc can land between iter N's NCRISC
+        // `wait`-ack and `set(0)` and get wiped out, hanging iter N+1's wait.
+        if constexpr (Core::sampling_is_final_core && !Core::skip_ccl && Core::is_base_stage && Core::enable_mtp) {
             auto token_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_bcast_noc_x,
                 Core::fabric_gate_bcast_noc_y,
@@ -920,8 +918,12 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
 #endif
+    };
 
-
+    // ====================================================================
+    // MTP Lambda
+    // ====================================================================
+    auto mtp = [&]() {
     // ====================================================================
     // [MTP] Token unicast from argmax_final_core to input_core on exit device
     // ====================================================================
@@ -1034,14 +1036,13 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_src_addr);
             // Prefill: use ground-truth next token for this MTP level.
             // Decode (prefill_token_ids[0] == -1): use the sampled token from argmax.
-            static_assert(Core::mtp_level <= 3, "MTP supports up to 4 levels (0..3)");
+            static_assert(Core::mtp_level <= 4, "MTP supports up to 4 levels (0..3)");
             uint32_t token_id;
-            if (metadata_ptr->prefill_token_ids[0] != static_cast<uint32_t>(-1)) {
+            if (metadata_ptr->prefill_token_ids[Core::mtp_level] != static_cast<uint32_t>(-1)) {
                 token_id = metadata_ptr->prefill_token_ids[Core::mtp_level];
             } else {
                 token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
             }
-            DPRINT << "MTP: embedding lookup token_id=" << token_id << ENDL();
             cb_reserve_back(emb_cb, e_num_tiles);
             noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
             noc_async_read_barrier();
@@ -1207,7 +1208,7 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
 
             invalidate_l1_cache();
-            
+
             // Each base/MTP stage increments position_id by 1 for downstream.
             uint32_t downstream_position_id = metadata_ptr->position_id + 1;
 
@@ -1276,7 +1277,6 @@ void kernel_main() {
     mcast.init(mcast_args);
 
     // Persistent loop
-    DPRINT << "LM_HEAD_SAMPLING: entering persistent loop" << ENDL();
     while (loop.next()) {
         // Base Stage: run LM head sampling and MTP ops
         if constexpr (Core::is_base_stage) {

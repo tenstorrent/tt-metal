@@ -1194,8 +1194,6 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
-                
-                
                 auto recv_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
@@ -1237,15 +1235,6 @@ struct TopKSampling {
                     phase2_merge_global_topk(p2_scores_base, p2_indices_base, global_scores_addr, global_indices_addr);
                 }
 
-                {
-                    auto* dbg_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
-                    auto* dbg_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices);
-                    DPRINT << "Phase2 top-3: "
-                           << "[0] idx=" << dbg_indices[0] << " s=" << BF16(dbg_scores[0])
-                           << " [1] idx=" << dbg_indices[1] << " s=" << BF16(dbg_scores[1])
-                           << " [2] idx=" << dbg_indices[2] << " s=" << BF16(dbg_scores[2]) << ENDL();
-                }
-
                 // Mesh inter-device reduction stages via LLK (k==32) or scalar merge.
                 if constexpr (CTArgs::mesh_mode) {
                     if constexpr (CTArgs::stage1_receiver) {
@@ -1278,12 +1267,6 @@ struct TopKSampling {
 
                             cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
-                        }
-
-                        {
-                            auto* dbg_s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
-                            auto* dbg_i = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices);
-                            DPRINT << "Mesh S1 top1: idx=" << dbg_i[0] << " s=" << BF16(dbg_s[0]) << ENDL();
                         }
                     }
 
@@ -1323,12 +1306,6 @@ struct TopKSampling {
 
                             cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
-                        }
-
-                        {
-                            auto* dbg_s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
-                            auto* dbg_i = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices);
-                            DPRINT << "Mesh S2 top1: idx=" << dbg_i[0] << " s=" << BF16(dbg_s[0]) << ENDL();
                         }
                     }
                 }
@@ -1409,23 +1386,9 @@ struct TopKSampling {
                                 std::min(K - ELEMS_PER_FACE_ROW, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
                         }
                         noc_async_read_barrier();
-                        auto softmax_in_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
-                        for (uint32_t i = 0; i < 4; ++i) {
-                            DPRINT << "softmax_in_ptr[" << i << "] = " << BF16(softmax_in_ptr[i]) << ENDL();
-                        }
-                        DPRINT << "Softmax DPRINT Finish" << ENDL();
-
                         cb_push_back(CTArgs::softmax_in_cb, 1);
-
                         cb_wait_front(CTArgs::softmax_out_cb, 1);
                         cb_wait_front(CTArgs::rand_cb, 1);
-
-                        auto softmax_out_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_out_cb));
-                        for (uint32_t i = 0; i < 4; ++i) {
-                            DPRINT << "softmax_out_ptr[" << i << "] = " << BF16(softmax_out_ptr[i]) << ENDL();
-                        }
-                        DPRINT << "Softmax Out DPRINT Finish" << ENDL();
 
                         auto prob_u16 =
                             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_out_cb));
@@ -1434,11 +1397,6 @@ struct TopKSampling {
                             get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes);
 
                         uint16_t rand = rand_u16[0];
-
-                        DPRINT << "Softmax probs top3: "
-                               << "p0=" << BF16(prob_u16[0]) << " p1=" << BF16(prob_u16[1])
-                               << " p2=" << BF16(prob_u16[2]) << " rand=" << BF16(rand) << ENDL();
-                        DPRINT << "rand = " << BF16(rand) << ENDL();
 
                         // Top-P filter.
                         //
@@ -1464,9 +1422,6 @@ struct TopKSampling {
                                 }
                             }
                         }
-                        DPRINT << "BRISC: Top-P kept=" << kept_tokens << " skip_rescale=" << (uint32_t)skip_rescale
-                               << ENDL();
-
                         // Compute the rescale denominator from a *clean* second-pass sum
                         // over exactly the kept tokens.  Don't reuse the filter-loop value
                         // because (a) it carries the spurious bf16-noise overshoot, and

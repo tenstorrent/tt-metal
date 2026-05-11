@@ -16,8 +16,7 @@ authoritative layout.
 
 from __future__ import annotations
 
-import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
@@ -25,14 +24,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.metadata.metadata import (
-    METADATA_TENSOR_BYTES,
-    METADATA_TENSOR_NUM_UINT32,
     MAX_MTP_LEVELS,
-    NUM_OUTPUT_TOKENS,
     METADATA_P_INDICES_CAPACITY,
     METADATA_P_SCORES_CAPACITY,
     METADATA_Q_INDICES_CAPACITY,
     METADATA_Q_SCORES_CAPACITY,
+    NUM_OUTPUT_TOKENS,
     DeepseekMetadata,
 )
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
@@ -46,6 +43,7 @@ PCIE_PAGE_ALIGNMENT_BYTES: int = DeepseekMetadata.aligned_size_bytes()
 # Must stay in sync with metadata.hpp.
 # ---------------------------------------------------------------------------
 
+
 class Field:
     """uint32 word indices into the DeepseekMetadata struct."""
 
@@ -53,21 +51,22 @@ class Field:
     SLOT_ID = 1
     TOKEN_ID = 2
     POSITION_ID = 3
-    OUTPUT_TOKENS = 4       # words 4..8  (5 slots: base + 4 spec)
-    PREFILL_TOKENS = 9      # words 9..12 (4 slots, one per MTP level)
-    TEMPERATURE = 13        # float stored as uint32 bits
+    OUTPUT_TOKENS = 4  # words 4..8  (5 slots: base + 4 spec)
+    PREFILL_TOKENS = 9  # words 9..12 (4 slots, one per MTP level)
+    TEMPERATURE = 13  # float stored as uint32 bits
     TOP_K = 14
-    TOP_P = 15              # float stored as uint32 bits
+    TOP_P = 15  # float stored as uint32 bits
 
-    P_INDICES = 16          # words 16..47  (32 uint32)
-    P_SCORES = 48           # words 48..63  (32 bf16 packed two-per-uint32)
-    Q_INDICES = 64          # words 64..95  (32 uint32)
-    Q_SCORES = 96           # words 96..111 (32 bf16 packed two-per-uint32)
+    P_INDICES = 16  # words 16..47  (32 uint32)
+    P_SCORES = 48  # words 48..63  (32 bf16 packed two-per-uint32)
+    Q_INDICES = 64  # words 64..95  (32 uint32)
+    Q_SCORES = 96  # words 96..111 (32 bf16 packed two-per-uint32)
 
 
 # ---------------------------------------------------------------------------
 # Decode result
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class DecodeResult:
@@ -104,6 +103,7 @@ class DecodeResult:
 # Output parsing
 # ---------------------------------------------------------------------------
 
+
 def _unpack_bf16_scores(raw: torch.Tensor, start_word: int, count: int) -> list[float]:
     """Unpack *count* bf16 values packed two-per-uint32 starting at *start_word*."""
     num_words = (count + 1) // 2
@@ -138,6 +138,7 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
 # Input building
 # ---------------------------------------------------------------------------
 
+
 def to_spec_input(
     token_id: int,
     *,
@@ -162,7 +163,7 @@ def to_spec_input(
     page[0, Field.TOKEN_ID] = token_id
     page[0, Field.POSITION_ID] = position_id
     if prefill_token_ids:
-        for i, ptid in enumerate(prefill_token_ids[: MAX_MTP_LEVELS]):
+        for i, ptid in enumerate(prefill_token_ids[:MAX_MTP_LEVELS]):
             page[0, Field.PREFILL_TOKENS + i] = ptid
     page[0, Field.TEMPERATURE] = float_to_uint32(temperature)
     page[0, Field.TOP_K] = top_k
@@ -173,6 +174,7 @@ def to_spec_input(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def align_up(value: int, alignment: int) -> int:
     """Round value up to the next multiple of alignment."""
@@ -209,6 +211,7 @@ def to_padded_input(
 # ---------------------------------------------------------------------------
 # Model class
 # ---------------------------------------------------------------------------
+
 
 class DeepSeekV3:
     """Host-side model interface for prefill and decode via injectable write/read."""
@@ -264,7 +267,7 @@ class DeepSeekV3:
             self._read_fn(self._output_buffer)
             read_count += 1
             if read_count > total_reads - 1:
-                last_results.append(parse_output_page(s elf._output_buffer))
+                last_results.append(parse_output_page(self._output_buffer))
 
         self._position += len(prompt_tokens)
         return last_results
