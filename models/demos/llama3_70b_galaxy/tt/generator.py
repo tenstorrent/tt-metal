@@ -1082,6 +1082,13 @@ class Generator(WarmupForwardMixin):
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
+        active_seed_slots = None
+        if sampling_params is not None and start_pos is not None:
+            active_seed_slots = (
+                torch.nonzero(torch.as_tensor(start_pos) >= 0, as_tuple=False)
+                .flatten()
+                .tolist()
+            )
         # Apply slot remap from condense before advancing seeds.
         if slot_remap is not None:
             sm_bs = self.model.sampling.seed_manager.max_batch_size
@@ -1096,18 +1103,16 @@ class Generator(WarmupForwardMixin):
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
-                if not had_prefill_sampling:
-                    sampling_module.seed_manager.reset_seed(
-                        sampling_params.seed,
-                        list(range(self.model_args.max_batch_size)),
-                    )
-        active_seed_slots = None
-        if sampling_params is not None and start_pos is not None:
-            active_seed_slots = (
-                torch.nonzero(torch.as_tensor(start_pos) >= 0, as_tuple=False)
-                .flatten()
-                .tolist()
-            )
+                sampling_module.seed_manager.reset_seed(
+                    sampling_params.seed,
+                    list(range(self.model_args.max_batch_size)),
+                )
+                if active_seed_slots is not None:
+                    sampling_module.seed_manager.clear_inactive_slots(active_seed_slots)
+                    if had_prefill_sampling:
+                        # Prefill sampling already consumed the first RNG value
+                        # for these requests; keep decode on the next value.
+                        sampling_module.seed_manager.advance_rngs(active_seed_slots)
         self.model.sampling.seed_manager.get_new_values(active_seed_slots)
 
         if tt_out_logits_saved is not None:
@@ -1212,6 +1217,9 @@ class Generator(WarmupForwardMixin):
         Captures a trace for the decode_forward method.
         """
 
+        if hasattr(self.model.tt_ccl, "reset_gather_and_buffer_idx"):
+            self.model.tt_ccl.reset_gather_and_buffer_idx()
+
         # Compile run
         self._decode_logits_no_trace_text(
             tokens,
@@ -1222,7 +1230,11 @@ class Generator(WarmupForwardMixin):
             is_page_table_sharded=is_page_table_sharded,
             return_logits=return_logits,
         )
+        ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
+
+        if hasattr(self.model.tt_ccl, "reset_gather_and_buffer_idx"):
+            self.model.tt_ccl.reset_gather_and_buffer_idx()
 
         # Get inputs ready for trace run
         tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = self.model.prepare_inputs_decode(

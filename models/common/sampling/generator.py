@@ -712,6 +712,22 @@ class SeedManager:
                 self.rngs[old_slot].seed(secrets.randbits(64))
         self._seed_active = any(s is not None for s in self.seeds)
 
+    def clear_inactive_slots(self, user_ids):
+        """Clear seed state for slots that are not active in the current batch."""
+        active_users = set(self._expanded_user_ids([int(user) for user in user_ids]))
+        for slot in range(self.max_batch_size):
+            if slot not in active_users:
+                self.seeds[slot] = None
+                self.rngs[slot].seed(secrets.randbits(64))
+        self._seed_active = any(s is not None for s in self.seeds)
+
+    def advance_rngs(self, user_ids, steps=1):
+        """Advance host RNG streams without copying new seed values to device."""
+        expanded_users = self._expanded_user_ids([int(user) for user in user_ids])
+        for user in expanded_users:
+            for _ in range(steps):
+                self.rngs[user].randint(0, 1000000)
+
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.
 
