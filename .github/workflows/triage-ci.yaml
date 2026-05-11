@@ -74,6 +74,14 @@ on:
         description: "Detection mode: if 'true', verification writes mock results without dispatching real CI runs (for testing)"
         type: string
         default: "false"
+      workflow-batch:
+        description: "Detection mode: comma-separated workflow basenames to process (B1 post-Phase1 filter)"
+        type: string
+        default: ""
+      max-workflows-per-run:
+        description: "Detection mode: hard cap on workflows processed per run (B7 safety limit)"
+        type: string
+        default: "999"
 
 permissions:
   contents: write
@@ -93,6 +101,8 @@ jobs:
       auto-verify: ${{ inputs.auto-verify }}
       verify-budget-hours: ${{ inputs.verify-budget-hours }}
       mock-verify: ${{ inputs.mock-verify }}
+      workflow-batch: ${{ inputs.workflow-batch }}
+      max-workflows-per-run: ${{ inputs.max-workflows-per-run }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
