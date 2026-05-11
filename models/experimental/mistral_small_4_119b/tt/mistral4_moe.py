@@ -61,7 +61,20 @@ from models.experimental.mistral_small_4_119b.constants import (
 # ── Weight loading helpers ─────────────────────────────────────────────────
 
 
-def _bf16(t: torch.Tensor) -> torch.Tensor:
+def _bf16(t: torch.Tensor, scale_inv: torch.Tensor | None = None) -> torch.Tensor:
+    """Cast to bfloat16, dequantizing FP8 weights if scale_inv is provided.
+
+    scale_inv may be scalar () or per-expert [N]; it is reshaped to broadcast
+    against the weight tensor correctly.
+    """
+    if t.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+        t = t.to(torch.float32)
+        if scale_inv is not None:
+            s = scale_inv.to(torch.float32)
+            # Reshape for broadcasting: expand trailing dims to match weight ndim
+            while s.dim() < t.dim():
+                s = s.unsqueeze(-1)
+            t = t * s
     return t.to(torch.bfloat16).contiguous()
 
 
@@ -93,7 +106,8 @@ def _load_stacked_experts(
     gate_up_key = f"{prefix}experts.gate_up_proj"
 
     if proj_name in ("gate_proj", "up_proj") and gate_up_key in state_dict:
-        gu = _bf16(state_dict[gate_up_key])
+        scale_inv = state_dict.get(f"{prefix}experts.gate_up_proj_scale_inv")
+        gu = _bf16(state_dict[gate_up_key], scale_inv)
         if gu.shape[0] != num_experts or gu.shape[1] != 2 * half:
             raise ValueError(f"{gate_up_key}: expected shape ({num_experts}, {2 * half}, *), got {tuple(gu.shape)}")
         w = gu[:, :half, :] if proj_name == "gate_proj" else gu[:, half:, :]
@@ -103,10 +117,12 @@ def _load_stacked_experts(
         bare_key = f"{prefix}experts.{proj_name}"
 
         if stacked_key in state_dict:
-            w = _bf16(state_dict[stacked_key])
+            scale_inv = state_dict.get(stacked_key.replace(".weight", ".weight_scale_inv"))
+            w = _bf16(state_dict[stacked_key], scale_inv)
             w = w.permute(0, 2, 1).contiguous()
         elif bare_key in state_dict:
-            w = _bf16(state_dict[bare_key])
+            scale_inv = state_dict.get(f"{bare_key}_scale_inv")
+            w = _bf16(state_dict[bare_key], scale_inv)
             w = w.permute(0, 2, 1).contiguous()
         else:
             experts = []
@@ -114,7 +130,8 @@ def _load_stacked_experts(
                 key = f"{prefix}experts.{i}.{proj_name}.weight"
                 if key not in state_dict:
                     key = f"{prefix}experts.{i}.{proj_name}"
-                experts.append(_bf16(state_dict[key]).T.contiguous())  # [in, out]
+                scale_inv = state_dict.get(key.replace(".weight", ".weight_scale_inv"))
+                experts.append(_bf16(state_dict[key], scale_inv).T.contiguous())  # [in, out]
             w = torch.stack(experts, dim=0)  # [num_experts, in, out]
 
     # For ttnn batched matmul we need 4D: [num_experts, 1, in, out]
@@ -137,7 +154,8 @@ def _load_replicated(
     dtype: ttnn.DataType,
     mesh_device: ttnn.MeshDevice,
 ) -> ttnn.Tensor:
-    w = _bf16(state_dict[key])
+    scale_inv = state_dict.get(key.replace(".weight", ".weight_scale_inv"))
+    w = _bf16(state_dict[key], scale_inv)
     if transpose:
         w = w.T.contiguous()
     return ttnn.as_tensor(
@@ -301,7 +319,7 @@ class TtMistral4MoELayer(LightweightModule):
         layer_prefix: str,
         use_ttnn_moe: bool = True,
         moe_hf_torch_routing: bool = False,
-        expert_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        expert_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -318,10 +336,10 @@ class TtMistral4MoELayer(LightweightModule):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
         mlp_prefix = layer_prefix + "mlp."
@@ -335,6 +353,21 @@ class TtMistral4MoELayer(LightweightModule):
             dtype=ttnn.bfloat16,
             mesh_device=mesh_device,
         )  # [HIDDEN_SIZE, NUM_EXPERTS]
+
+        # Gate correction bias (additive, applied before softmax; uploaded to device or None)
+        gate_bias_key = mlp_prefix + "gate.e_score_correction_bias"
+        if gate_bias_key in state_dict:
+            gate_bias_t = state_dict[gate_bias_key].to(torch.bfloat16).reshape(1, 1, 1, -1)
+            self.gate_bias_tt = ttnn.as_tensor(
+                gate_bias_t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )  # [1, 1, 1, NUM_EXPERTS] replicated on all devices
+        else:
+            self.gate_bias_tt = None
 
         # ── Stacked routed expert weights (sharded on expert axis) ─────────
         self.expert_gate = _load_stacked_experts(
@@ -391,20 +424,23 @@ class TtMistral4MoELayer(LightweightModule):
         seq_len: int,
     ) -> ttnn.Tensor:
         """
-        Compute per-device routing-weight tensors.
+        Compute per-device routing-weight tensors — fully on device.
 
         Returns a TTNN tensor sharded on dim=3 across devices:
           each device's slice: [1, 1, seq_len, experts_per_device]
           device k holds the weights for its local experts k*E..(k+1)*E-1.
 
-        Routing algorithm (host top-k):
-          1. Gate logits on device via TTNN matmul.
-          2. Pull logits to host, compute softmax + top-k + renorm.
-          3. Build full [1, 1, seq, NUM_EXPERTS] weight mask on host.
-          4. Push back to device, sharded on expert axis.
+        Routing algorithm (all TTNN ops):
+          1. Gate logits on device (HiFi2).
+          2. Add e_score_correction_bias if present (replicated device tensor).
+          3. Softmax over all experts (on device).
+          4. TopK on device → values + indices.
+          5. Sum-normalize top-k weights on device.
+          6. Scatter into dense [1, 1, seq, NUM_EXPERTS] on device.
+          7. To-host / re-upload only for sharding along expert axis (data movement, no compute).
         """
-        # Gate logits on device
-        gate_logits = ttnn.linear(
+        # 1. Gate logits on device: [1, 1, seq, NUM_EXPERTS]
+        gate_logits_tt = ttnn.linear(
             x,
             self.gate_weight,
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
@@ -416,41 +452,53 @@ class TtMistral4MoELayer(LightweightModule):
             ),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, seq, NUM_EXPERTS]
+        )
 
-        # Pull to host (small tensor: seq × 128 bfloat16)
-        gate_logits_host = ttnn.to_torch(
-            gate_logits,
+        # 2. Apply correction bias if present (device tensor, broadcast [1,1,1,E] → [1,1,S,E])
+        if self.gate_bias_tt is not None:
+            gate_logits_tt = ttnn.add(gate_logits_tt, self.gate_bias_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # 3. Softmax over all experts on device
+        probs_tt = ttnn.softmax(gate_logits_tt, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate_logits_tt)
+
+        # 4. TopK on device → values [1,1,seq,k], indices [1,1,seq,k]
+        topk_vals_tt, topk_idx_tt = ttnn.topk(probs_tt, k=self.num_active, dim=-1)
+
+        # 5. Sum-normalize top-k weights on device
+        topk_sum_tt = ttnn.sum(topk_vals_tt, dim=-1, keepdim=True)
+        topk_vals_tt = ttnn.div(topk_vals_tt, topk_sum_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(topk_sum_tt)
+
+        # 6. Scatter into dense [1, 1, seq, NUM_EXPERTS] on device
+        dense_routing_tt = ttnn.scatter(
+            ttnn.zeros_like(probs_tt),
+            dim=-1,
+            index=topk_idx_tt,
+            src=topk_vals_tt,
+        )
+        ttnn.deallocate(probs_tt)
+        ttnn.deallocate(topk_vals_tt)
+        ttnn.deallocate(topk_idx_tt)
+
+        # 7. Re-shard along expert axis so each device sees only its local expert slice.
+        #    This requires a host round-trip (data movement only, no compute on host).
+        routing_host = ttnn.to_torch(
+            dense_routing_tt,
             mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
-        )[0:1].to(
-            torch.float32
-        )  # [1, 1, seq, NUM_EXPERTS]
-        ttnn.deallocate(gate_logits)
+        )[
+            0:1
+        ].to(torch.bfloat16)
+        ttnn.deallocate(dense_routing_tt)
 
-        # softmax + top-k + renorm on host
-        probs = torch.softmax(gate_logits_host.squeeze(0).squeeze(0), dim=-1)
-        # probs: [seq, NUM_EXPERTS]
-        topk_vals, topk_idx = torch.topk(probs, self.num_active, dim=-1)
-        topk_vals = topk_vals / topk_vals.sum(dim=-1, keepdim=True)
-
-        # Build routing weight mask [1, 1, seq, NUM_EXPERTS]
-        routing = torch.zeros(1, 1, seq_len, self.num_experts, dtype=torch.bfloat16)
-        for tok in range(seq_len):
-            for k in range(self.num_active):
-                e = topk_idx[tok, k].item()
-                routing[0, 0, tok, e] = topk_vals[tok, k].item()
-
-        # Push to device sharded along expert axis (dim=3)
-        routing_tt = ttnn.as_tensor(
-            routing,
+        return ttnn.as_tensor(
+            routing_host,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=3),
         )
-        # Each device slice: [1, 1, seq, experts_per_device]
-        return routing_tt
 
     # ── Forward ────────────────────────────────────────────────────────────
 
@@ -494,7 +542,7 @@ class TtMistral4MoELayer(LightweightModule):
                 [local_e + 1, 1, HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )  # [1, 1, HIDDEN_SIZE, intermediate]
-            gate_w = ttnn.squeeze(gate_w, dim=0)  # [1, HIDDEN_SIZE, intermediate]
+            gate_w = ttnn.reshape(gate_w, [HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE])
 
             up_w = ttnn.slice(
                 self.expert_up,
@@ -502,7 +550,7 @@ class TtMistral4MoELayer(LightweightModule):
                 [local_e + 1, 1, HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            up_w = ttnn.squeeze(up_w, dim=0)
+            up_w = ttnn.reshape(up_w, [HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE])
 
             down_w = ttnn.slice(
                 self.expert_down,
@@ -510,7 +558,7 @@ class TtMistral4MoELayer(LightweightModule):
                 [local_e + 1, 1, EXPERT_INTERMEDIATE_SIZE, HIDDEN_SIZE],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            down_w = ttnn.squeeze(down_w, dim=0)
+            down_w = ttnn.reshape(down_w, [EXPERT_INTERMEDIATE_SIZE, HIDDEN_SIZE])
 
             # Expert forward: SiLU(gate_proj(x)) * up_proj(x) → down_proj
             gate_out = ttnn.linear(

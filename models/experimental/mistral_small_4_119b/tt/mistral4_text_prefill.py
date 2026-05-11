@@ -135,6 +135,53 @@ class TtMistral4DecoderLayer(LightweightModule):
 
         return x
 
+    def forward_with_cache(
+        self,
+        x: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        kv_cache: tuple,
+    ) -> ttnn.Tensor:
+        """Prefill forward that also fills the attention KV cache in-place."""
+        residual = x
+        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config)
+        attn_out = self.attn.forward(normed, cos, sin, kv_cache=kv_cache)
+        ttnn.deallocate(normed)
+        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
+
+        residual = x
+        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config)
+        moe_out = self.moe.forward(normed)
+        ttnn.deallocate(normed)
+        x = ttnn.add(residual, moe_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(moe_out)
+        return x
+
+    def forward_decode(
+        self,
+        x: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        kv_cache: tuple,
+        current_pos: int,
+    ) -> ttnn.Tensor:
+        """Decode one token, updating the KV cache at current_pos."""
+        residual = x
+        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config)
+        attn_out = self.attn.forward_decode(normed, cos, sin, kv_cache, current_pos)
+        ttnn.deallocate(normed)
+        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
+
+        residual = x
+        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config)
+        moe_out = self.moe.forward(normed)
+        ttnn.deallocate(normed)
+        x = ttnn.add(residual, moe_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(moe_out)
+        return x
+
 
 # ── Full prefill model ─────────────────────────────────────────────────────
 
