@@ -835,10 +835,9 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     auto-detects from available hardware so that the sweep device topology
     matches the trace topology.
     """
-    shape = get_mesh_shape()
-    if shape:
-        return shape
-    # Read mesh shape from master JSON — use the shape the model was traced on.
+    # Read mesh shape from master JSON FIRST — the model was traced on this shape.
+    # This takes priority over MESH_DEVICE_SHAPE env var which may be auto-detected
+    # from vectors containing mixed hardware (e.g. N300 1x2 + BH 1x1).
     try:
         _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
         if not _master_path:
@@ -875,6 +874,10 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                             return tuple(_ms_val)
     except Exception:
         pass
+    # Env var override (used when master JSON is not available)
+    shape = get_mesh_shape()
+    if shape:
+        return shape
     # Auto-detect mesh shape from available hardware when env var not set.
     # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
     # mesh matching the topology used during model tracing.
