@@ -5151,9 +5151,10 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_Path48OnRing64_FourChannelsStric
             << "Logical edge (" << i << "," << (i + 1) << ") must map to adjacent ring nodes";
     }
 
-    // Labeled path P_48 in cycle C_64: choose image of target 0 on any of 64 ring positions, then traverse in one of
-    // two directions along the cycle → 64 × 2 = 128 distinct embeddings.
-    constexpr size_t kExpectedEmbeddings = 128;
+    // Labeled path P_L in cycle C_N with L<=N: choose image of target 0 on any of N ring positions, then one of two
+    // directions along the cycle → N×2 distinct STRICT embeddings (parallel ring channels do not change this count).
+    static_assert(kPathNodes >= 2 && kPathNodes <= kRingNodes);
+    constexpr size_t kExpectedEmbeddings = 2 * kRingNodes;
     const auto all_embeddings = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
         target_graph,
         global_graph,
@@ -5162,8 +5163,8 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_Path48OnRing64_FourChannelsStric
         /*quiet_mode=*/true,
         TopologyMappingSolverEngine::Dfs);
 
-    EXPECT_EQ(all_embeddings.size(), kExpectedEmbeddings)
-        << "solve_topology_mapping_all (DFS) should find exactly 128 STRICT embeddings (64 offsets × 2 orientations)";
+    EXPECT_EQ(all_embeddings.size(), kExpectedEmbeddings) << "solve_topology_mapping_all (DFS) should find exactly 2*N "
+                                                             "STRICT embeddings (N ring offsets × 2 orientations)";
     std::set<std::map<TestTargetNode, TestGlobalNode>> distinct_maps;
     for (const auto& emb : all_embeddings) {
         EXPECT_TRUE(emb.success) << emb.error_message;
@@ -5257,20 +5258,11 @@ AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace() {
 }  // namespace
 
 // Logical mesh-level path (48 meshes in a line, unit edges) into the physical mesh-level graph from a captured
-// cluster trace. Both engines enumerate a bounded sample; we assert SAT-engine results are valid distinct embeddings
-// that are also present in the DFS reference sample.
-//
-// Why bounded:
-//   - DFS enumeration of all 4734 valid path embeddings on this fixture is ~27s.
-//   - SAT enumeration runs a fresh Kissat solve per blocking step (Kissat is non-incremental). Even with the
-//     encoder-cache replay in topology_sat_search_n, doing all 4734 SAT solves is multi-minute.
-//   - A bounded sample is sufficient to validate the API end-to-end: SAT produces valid distinct embeddings, all
-//     contained in the DFS reference set under the same cap.
-// The full-enumeration count regression (4734) is intentionally not asserted here to keep this test in unit-test
-// runtime; cover it in a heavier suite if needed.
-TEST_F(TopologySolverTest, SolveTopologyMapping_MeshLevelClusterTrace48Into64_BoundedSample) {
+// cluster trace. solve_topology_mapping_all (RELAXED): offline reference count is 4734 embeddings; DFS and SAT must
+// return identical sets. Timings logged. Expect on the order of ~25 s DFS + ~3 min SAT on typical dev hardware.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MeshLevelClusterTrace48Into64_SolveAll) {
     constexpr size_t kPathNodes = 48;
-    constexpr size_t kSampleCap = 50;
+    constexpr size_t kExpectedFullEmbeddings = 4734;
     auto target_graph = create_1d_chain_graph<TestTargetNode>(kPathNodes);
     auto global_graph = make_mesh_level_physical_graph_cluster_trace();
 
@@ -5279,79 +5271,97 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_MeshLevelClusterTrace48Into64_Bo
 
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
 
-    auto sat_once = solve_topology_mapping(
+    using clock = std::chrono::steady_clock;
+
+    const auto t_sat_full = clock::now();
+    const auto sat_all = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
         target_graph,
         global_graph,
         constraints,
         ConnectionValidationMode::RELAXED,
-        /* quiet_mode= */ true,
+        /*quiet_mode=*/true,
         TopologyMappingSolverEngine::Sat);
-    EXPECT_TRUE(sat_once.success) << sat_once.error_message;
-    EXPECT_EQ(sat_once.target_to_global.size(), kPathNodes);
+    const auto sat_full_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_sat_full).count();
 
-    using clock = std::chrono::steady_clock;
-    const auto t_dfs_start = clock::now();
-    const auto dfs_embeddings = solve_topology_mapping_n<TestTargetNode, TestGlobalNode>(
+    const auto t_dfs_full = clock::now();
+    const auto dfs_all = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
         target_graph,
         global_graph,
         constraints,
-        kSampleCap,
         ConnectionValidationMode::RELAXED,
         /*quiet_mode=*/true,
         TopologyMappingSolverEngine::Dfs);
-    const auto dfs_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_dfs_start).count();
+    const auto dfs_full_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_dfs_full).count();
 
-    const auto t_sat_start = clock::now();
-    const auto sat_engine_embeddings = solve_topology_mapping_n<TestTargetNode, TestGlobalNode>(
-        target_graph,
-        global_graph,
-        constraints,
-        kSampleCap,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat);
-    const auto sat_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_sat_start).count();
+    EXPECT_EQ(dfs_all.size(), kExpectedFullEmbeddings);
+    EXPECT_EQ(sat_all.size(), kExpectedFullEmbeddings);
 
-    log_info(
-        tt::LogFabric,
-        "Bounded sample (cap {}): Sat {} solutions ({} ms), DFS {} solutions ({} ms)",
-        kSampleCap,
-        sat_engine_embeddings.size(),
-        sat_ms,
-        dfs_embeddings.size(),
-        dfs_ms);
+    std::set<std::map<TestTargetNode, TestGlobalNode>> sat_all_maps;
+    for (const auto& emb : sat_all) {
+        ASSERT_TRUE(emb.success) << "SAT: " << emb.error_message;
+        ASSERT_TRUE(emb.warnings.empty()) << "SAT";
+        ASSERT_EQ(emb.target_to_global.size(), kPathNodes) << "SAT";
+        sat_all_maps.insert(emb.target_to_global);
+    }
+    EXPECT_EQ(sat_all_maps.size(), kExpectedFullEmbeddings);
 
-    ASSERT_EQ(sat_engine_embeddings.size(), kSampleCap)
-        << "Sat-engine should saturate the requested cap on this fixture (≥" << kSampleCap << " embeddings exist)";
-    ASSERT_EQ(dfs_embeddings.size(), kSampleCap)
-        << "DFS should saturate the requested cap on this fixture (≥" << kSampleCap << " embeddings exist)";
-
-    std::set<std::map<TestTargetNode, TestGlobalNode>> dfs_maps;
-    for (const auto& emb : dfs_embeddings) {
+    std::set<std::map<TestTargetNode, TestGlobalNode>> dfs_all_maps;
+    for (const auto& emb : dfs_all) {
         ASSERT_TRUE(emb.success) << "DFS: " << emb.error_message;
         ASSERT_TRUE(emb.warnings.empty()) << "DFS";
         ASSERT_EQ(emb.target_to_global.size(), kPathNodes) << "DFS";
-        dfs_maps.insert(emb.target_to_global);
+        dfs_all_maps.insert(emb.target_to_global);
     }
-    ASSERT_EQ(dfs_maps.size(), dfs_embeddings.size()) << "DFS enumeration must not list duplicate mappings";
+    EXPECT_EQ(dfs_all_maps.size(), kExpectedFullEmbeddings);
 
-    std::set<std::map<TestTargetNode, TestGlobalNode>> sat_maps;
-    for (const auto& emb : sat_engine_embeddings) {
-        ASSERT_TRUE(emb.success) << "Sat-engine: " << emb.error_message;
-        ASSERT_TRUE(emb.warnings.empty()) << "Sat-engine";
-        ASSERT_EQ(emb.target_to_global.size(), kPathNodes) << "Sat-engine";
-        sat_maps.insert(emb.target_to_global);
-    }
-    ASSERT_EQ(sat_maps.size(), sat_engine_embeddings.size())
-        << "Sat-engine enumeration must not list duplicate mappings";
+    EXPECT_EQ(dfs_all_maps, sat_all_maps)
+        << "DFS and SAT must agree on the complete RELAXED embedding set for this fixture";
 
-    // SAT and DFS sample different orderings of the same feasible space; both must produce VALID path embeddings of
-    // the target into the global graph (validated above via target_to_global size and absence of warnings). We do
-    // not require sat_maps ⊆ dfs_maps for a bounded sample since the two engines may pick different subsets of the
-    // 4734-element solution set under the same cap.
+    log_info(
+        tt::LogFabric,
+        "Mesh cluster trace solve_all ({} embeddings RELAXED): SAT {} ms, DFS {} ms",
+        kExpectedFullEmbeddings,
+        sat_full_ms,
+        dfs_full_ms);
 }
 
-// 32-node ring on 8×8 mesh with forbidden + required + cardinality constraints.
+// -----------------------------------------------------------------------------
+// SAT-only benchmark: 1×128 strip → 4×32 grid (solve_n, first two solutions).
+// DFS omitted — poor scaling on this Hamiltonian-style embedding.
+// -----------------------------------------------------------------------------
+
+TEST_F(TopologySolverTest, SolveN_Benchmark_1x128Strip_4x32Grid_Relaxed_FirstTwoSolutions_SatOnly) {
+    constexpr size_t kMaxSolutions = 2;
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(/*rows=*/1, /*cols=*/128);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(/*rows=*/4, /*cols=*/32);
+    ASSERT_EQ(target_graph.get_nodes().size(), 128u);
+    ASSERT_EQ(global_graph.get_nodes().size(), 128u);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    using clock = std::chrono::steady_clock;
+    const auto t_sat = clock::now();
+    const auto sat_n = solve_topology_mapping_n<TestTargetNode, TestGlobalNode>(
+        target_graph,
+        global_graph,
+        constraints,
+        kMaxSolutions,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/false,
+        TopologyMappingSolverEngine::Sat);
+    const auto sat_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_sat).count();
+
+    ASSERT_EQ(sat_n.size(), kMaxSolutions) << "SAT should find two embeddings on this fixture";
+    for (const auto& emb : sat_n) {
+        ASSERT_TRUE(emb.success) << emb.error_message;
+    }
+
+    log_info(
+        tt::LogFabric,
+        "1x128 strip -> 4x32 grid: SAT first {} solutions (RELAXED) in {} ms (DFS omitted — poor scaling here)",
+        kMaxSolutions,
+        sat_ms);
+}
+
 TEST_F(TopologySolverTest, SatStress_RingOnMesh_Forbidden_Required_Cardinality) {
     constexpr size_t N = 32;
     auto target_graph = create_1d_ring_graph<TestTargetNode>(N);
@@ -5520,6 +5530,127 @@ using IntResult = MappingResult<int, int>;
 static std::map<int, int> multi_result_map(const IntResult& r) { return r.target_to_global; }
 
 // ---------------------------------------------------------------------------
+// Enumeration performance: K4→K6 clique (int graphs). DFS vs SAT full enumeration; SAT unique_shapes vs SAT full.
+// ---------------------------------------------------------------------------
+TEST_F(TopologySolverTest, SolveAll_Performance_DfsFasterThanSat_K4InK6Clique) {
+    IntAdj target(IntAdjMap{
+        {0, {1, 2, 3}},
+        {1, {0, 2, 3}},
+        {2, {0, 1, 3}},
+        {3, {0, 1, 2}},
+    });
+    IntAdj global(IntAdjMap{
+        {10, {11, 12, 13, 14, 15}},
+        {11, {10, 12, 13, 14, 15}},
+        {12, {10, 11, 13, 14, 15}},
+        {13, {10, 11, 12, 14, 15}},
+        {14, {10, 11, 12, 13, 15}},
+        {15, {10, 11, 12, 13, 14}},
+    });
+    IntConstraints constraints;
+
+    using clock = std::chrono::steady_clock;
+    const auto t_sat = clock::now();
+    const auto sat_results = solve_topology_mapping_all<int, int>(
+        target,
+        global,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        /*unique_shapes=*/false);
+    const auto sat_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_sat).count();
+
+    const auto t_dfs = clock::now();
+    const auto dfs_results = solve_topology_mapping_all<int, int>(
+        target,
+        global,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Dfs,
+        /*unique_shapes=*/false);
+    const auto dfs_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_dfs).count();
+
+    EXPECT_EQ(sat_results.size(), 360u);
+    EXPECT_EQ(dfs_results.size(), 360u);
+
+    std::set<std::map<int, int>> sat_set, dfs_set;
+    for (const auto& r : sat_results) {
+        ASSERT_TRUE(r.success);
+        sat_set.insert(multi_result_map(r));
+    }
+    for (const auto& r : dfs_results) {
+        ASSERT_TRUE(r.success);
+        dfs_set.insert(multi_result_map(r));
+    }
+    EXPECT_EQ(sat_set, dfs_set);
+
+    log_info(
+        tt::LogFabric,
+        "Perf K4→K6 full enumeration: SAT {} ms, DFS {} ms ({} solns)",
+        sat_ms,
+        dfs_ms,
+        dfs_results.size());
+
+    EXPECT_LT(dfs_ms, sat_ms) << "DFS is expected to beat SAT on this small clique embedding enumeration";
+}
+
+TEST_F(TopologySolverTest, SolveAll_Performance_SatUniqueShapesFasterThanSatFull_K4InK6Clique) {
+    IntAdj target(IntAdjMap{
+        {0, {1, 2, 3}},
+        {1, {0, 2, 3}},
+        {2, {0, 1, 3}},
+        {3, {0, 1, 2}},
+    });
+    IntAdj global(IntAdjMap{
+        {10, {11, 12, 13, 14, 15}},
+        {11, {10, 12, 13, 14, 15}},
+        {12, {10, 11, 13, 14, 15}},
+        {13, {10, 11, 12, 14, 15}},
+        {14, {10, 11, 12, 13, 15}},
+        {15, {10, 11, 12, 13, 14}},
+    });
+    IntConstraints constraints;
+
+    using clock = std::chrono::steady_clock;
+    const auto t_unique = clock::now();
+    const auto unique_results = solve_topology_mapping_all<int, int>(
+        target,
+        global,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        /*unique_shapes=*/true);
+    const auto unique_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_unique).count();
+
+    const auto t_full = clock::now();
+    const auto full_results = solve_topology_mapping_all<int, int>(
+        target,
+        global,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        /*unique_shapes=*/false);
+    const auto full_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_full).count();
+
+    EXPECT_EQ(unique_results.size(), 15u);
+    EXPECT_EQ(full_results.size(), 360u);
+
+    log_info(
+        tt::LogFabric,
+        "Perf K4→K6 SAT: unique_shapes {} ms ({} solns), full {} ms ({} solns)",
+        unique_ms,
+        unique_results.size(),
+        full_ms,
+        full_results.size());
+
+    EXPECT_LT(unique_ms, full_ms) << "unique_shapes should use fewer SAT rounds than full enumeration on this fixture";
+}
+
+// ---------------------------------------------------------------------------
 // Test 1: SingleNode_TwoGlobals_FindsBoth
 //
 // 1-node target can map to either of the 2 global nodes => 2 solutions.
@@ -5609,7 +5740,7 @@ TEST_F(TopologySolverTest, UniqueShapes_TwoNodeChain_ImageSetsCollapsetoThree) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: SolveN_RespectsMaxLimit
+// SolveN_RespectsMaxLimit
 //
 // 4-clique target into 6-clique global — request max=2, must get at most 2 results.
 // ---------------------------------------------------------------------------

@@ -37,7 +37,9 @@ namespace tt::tt_fabric {
 
 namespace {
 // Single definition of the enumeration safety cap for solve_topology_mapping_n (max_solutions 0 or over-limit).
-constexpr std::size_t kTopologyMappingEnumerateSolutionsHardCap = 10000;
+// Set high enough for “path in ring” style workloads where embedding count grows as 2·|V(ring)| (e.g. large rings),
+// while still bounding worst-case memory/time if enumeration is invoked accidentally.
+constexpr std::size_t kTopologyMappingEnumerateSolutionsHardCap = 500000;
 }  // namespace
 
 // AdjacencyGraph template method implementations
@@ -1191,8 +1193,8 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
     const bool use_sat_engine =
         topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global);
 
-    // CaDiCaL is incremental: topology_sat_search_n keeps one solver, encodes hard constraints once, then appends
-    // blocking clauses between solves. When SAT is requested (Auto→SAT or Sat), use that path for every max_solutions.
+    // CaDiCaL: one solver, encode hard constraints once, append blocking clauses after each model, repeated solve().
+    // configure_for_blocking_clause_enumeration() enables ILB/trail reuse tuned for this AllSAT-style loop.
     if (use_sat_engine) {
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
         sat_engine.search_n(

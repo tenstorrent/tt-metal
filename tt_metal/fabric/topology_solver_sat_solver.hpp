@@ -28,6 +28,12 @@ struct TopologySatSolver {
     int solve();
     int val(int lit) const;
 
+    /**
+     * Must be called immediately after construction, before any add() / encoding.
+     * Tunes CaDiCaL for AllSAT-style enumeration: repeated solve() after permanent blocking clauses.
+     */
+    void configure_for_blocking_clause_enumeration();
+
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;
 

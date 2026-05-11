@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
@@ -1363,7 +1364,7 @@ bool topology_sat_search_n(
     ConnectionValidationMode validation_mode,
     size_t max_solutions,
     std::vector<std::vector<int>>& all_mappings_out,
-    [[maybe_unused]] bool quiet_mode,
+    bool quiet_mode,
     bool unique_shapes,
     const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
     TopologySearchState& state) {
@@ -1371,7 +1372,6 @@ bool topology_sat_search_n(
     state.mapping.assign(graph_data.n_target, -1);
     state.used.assign(graph_data.n_global, false);
     all_mappings_out.clear();
-    (void)quiet_mode;
 
     if (max_solutions == 0) {
         return false;
@@ -1386,9 +1386,10 @@ bool topology_sat_search_n(
         return false;
     }
 
-    // CaDiCaL is incremental: encode hard constraints once on a single solver, then append blocking clauses after
-    // each satisfiable model instead of rebuilding CNF or replaying into a fresh solver each iteration.
+    // One CaDiCaL::Solver for the whole enumeration: encode once, then add blocking clauses and solve() in a loop.
+    // (No full re-encode / new solver per model.)
     TopologySatSolver solver;
+    solver.configure_for_blocking_clause_enumeration();
     TopologySatHardEncoding enc;
     if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
         return false;
@@ -1399,6 +1400,11 @@ bool topology_sat_search_n(
         topology_sat_build_shape_blocking_clause(enc, shape_key, forbid_clause);
         topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
     }
+
+    using enum_clock = std::chrono::steady_clock;
+    constexpr auto kEnumProgressLogInterval = std::chrono::seconds(5);
+    // Eligible for an immediate first progress line, then at most once per kEnumProgressLogInterval.
+    auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
 
     while (all_mappings_out.size() < max_solutions) {
         const int status = solver.solve();
@@ -1411,6 +1417,19 @@ bool topology_sat_search_n(
             break;
         }
         all_mappings_out.push_back(std::move(current_mapping));
+
+        if (!quiet_mode) {
+            const auto now = enum_clock::now();
+            const bool reached_cap = all_mappings_out.size() >= max_solutions;
+            if (reached_cap || now - last_enum_progress_log >= kEnumProgressLogInterval) {
+                log_info(
+                    tt::LogFabric,
+                    "topology_sat_search_n: found {} / {} solution(s) so far",
+                    all_mappings_out.size(),
+                    max_solutions);
+                last_enum_progress_log = now;
+            }
+        }
 
         if (unique_shapes) {
             const auto shape_key = topology_mapping_shape_key(all_mappings_out.back());
