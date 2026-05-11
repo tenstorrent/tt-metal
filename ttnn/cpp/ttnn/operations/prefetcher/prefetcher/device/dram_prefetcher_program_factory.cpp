@@ -57,12 +57,14 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     std::transform(
         tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
 
+    /* Tiles */
     std::vector<tt::tt_metal::Tile> tensor_tiles;
     tensor_tiles.reserve(tensors.size());
     std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_tiles), [](const auto& t) {
         return t.tensor_spec().tile();
     });
 
+    /* Dataformats */
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     std::vector<tt::DataFormat> tensor_data_formats;
     tensor_data_formats.reserve(tensors.size());
@@ -70,6 +72,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         return tt::tt_metal::datatype_to_dataformat_converter(t.dtype());
     });
 
+    // In validate we make sure that all tensors are on the same device
     uint32_t num_tensors = tensors.size();
     auto sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping()[0];
     uint32_t num_receivers_per_reader = sender_receiver_core_mapping.second.num_cores();
@@ -107,6 +110,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         max_tensor_size,
         global_cb.size());
 
+    /* Cores setup */
     const auto& all_reader_core_range = global_cb.sender_cores();
     auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
     std::vector<CoreRange> active_reader_core_range_vec;
@@ -116,6 +120,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     }
     auto reader_core_range = CoreRangeSet{active_reader_core_range_vec};
 
+    /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
     const uint32_t total_num_blocks_in_buffer = 3;  // reader cb is triple buffered
     uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
