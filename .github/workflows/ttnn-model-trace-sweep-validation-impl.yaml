@@ -473,15 +473,8 @@ jobs:
           print('')
           " 2>/dev/null || true)
           if [[ -n "$MESH" ]]; then
-            # Verify runner has enough devices for the detected mesh shape
-            REQUESTED=$(echo "$MESH" | awk -Fx '{print $1 * $2}')
-            AVAILABLE=$(python3 -c "import ttnn; print(ttnn.get_num_devices())" 2>/dev/null || echo "1")
-            if [[ "$REQUESTED" -le "$AVAILABLE" ]]; then
-              echo "Detected MESH_DEVICE_SHAPE=$MESH from vector metadata ($AVAILABLE devices available)"
-              echo "MESH_DEVICE_SHAPE=$MESH" >> "$GITHUB_ENV"
-            else
-              echo "Detected mesh $MESH from vectors but runner only has $AVAILABLE device(s), skipping"
-            fi
+            echo "Detected MESH_DEVICE_SHAPE=$MESH from vector metadata"
+            echo "MESH_DEVICE_SHAPE=$MESH" >> "$GITHUB_ENV"
           else
             echo "No multi-device mesh shape detected in vectors, using default"
           fi
