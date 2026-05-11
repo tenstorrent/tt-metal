@@ -267,6 +267,18 @@ void kernel_main() {
             cb_ex2pe.push_back(1);
 
             // reduce only one final tile
+            //
+            // Note that reader_mcast_sender_unary_sharded_gn_v2.cpp depends on the
+            // documented behavior of REDUCE_SCALAR's packer to set every
+            // non-result datum of cb_ex_partial to zero.
+            // If this `reduce<…, REDUCE_SCALAR>` pack into cb_ex_partial is
+            // ever replaced by something that does not have the same
+            // packer-zero contract (e.g. a `pack_tile` / `pack_tile_block`
+            // path like welford_groupnorm_sharded_v2.cpp uses), the sharded
+            // reader's "single-tile-overwrite trick" must be adjusted accordingly
+            // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
+            // mcast reader). Same applies to the second REDUCE_SCALAR pack into
+            // cb_ex_partial later in this kernel (variance).
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
                 cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
 
@@ -364,6 +376,11 @@ void kernel_main() {
             tile_regs_release();
             cb_ex2pe.push_back(1);
 
+            // If modifying this code, see the long comment at the first REDUCE_SCALAR
+            // pack into cb_ex_partial earlier in this kernel.
+            // The sharded reader's "single-tile-overwrite trick" depends on
+            // this pack also clearing every non-result datum of cb_ex_partial
+            // to exact zero (documented packer behavior for REDUCE_SCALAR).
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
                 cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
 

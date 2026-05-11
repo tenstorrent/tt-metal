@@ -130,9 +130,11 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
 
     reconfig_data_format_srca(in0_cb);
     eqz_tile_init();
+    copy_tile_to_dst_init_short(in0_cb);
     cb_wait_front(in0_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
+        copy_tile(in0_cb, 0, 0);
         eqz_tile(0);
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);

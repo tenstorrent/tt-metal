@@ -452,12 +452,10 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-            auto runtime_id = program.get_runtime_id();
 
             // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
-            local_launch_msg.view().kernel_config().host_assigned_id() =
-                runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device_id);
+            local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
@@ -826,7 +824,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
         } else {
-            TT_ASSERT(!MetalContext::instance().device_manager()->is_dispatch_firmware_active());
+            auto& dm = MetalContext::instance().device_manager();
+            const bool fd_active = dm->is_dispatch_firmware_active();
+            const bool rt_done = dm->is_rt_profiler_device_init_complete(device->id());
+            TT_ASSERT(
+                !(fd_active && rt_done),
+                "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
+                "completed on this device.");
         }
 
 #ifdef TT_METAL_USE_EMULE
@@ -872,9 +876,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     hal.get_programmable_core_type(programmable_core_type_index);
                 for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                     auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                    auto runtime_id = program.get_runtime_id();
-                    kg->launch_msg.view().kernel_config().host_assigned_id() =
-                        runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
+                    // Raw runtime id matches Tracy / fast dispatch; profiler ingest encodes with device_id once.
+                    kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
                     auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     not_done_cores.insert(physical_core);

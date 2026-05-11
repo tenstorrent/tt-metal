@@ -8,6 +8,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sd_mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device_view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket_utils.cpp

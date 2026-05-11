@@ -56,6 +56,11 @@ std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
     return CreateBuffer(cfg);
 }
 
+std::shared_ptr<Buffer> MakeL1Buffer(IDevice* device, uint32_t size = 2048) {
+    InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::L1};
+    return CreateBuffer(cfg);
+}
+
 // ============================================================================
 // SECTION 1: Pure unit tests — no device required
 // ============================================================================
@@ -325,6 +330,42 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_RepeatedApplic
     EXPECT_EQ(GetRuntimeArgs(program, 0, {0, 0})[0], buf_a->address());
 }
 
+// Regression: a descriptor with sharded CB buffers but no emplace_runtime_args()
+// Buffer* calls must produce empty ResolvedBindings, so the adapter falls through
+// to the slow path.  Before the fix, CB-only bindings made empty() return false,
+// causing the fast path to activate for factories that never opted in.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_ReturnsEmpty) {
+    auto buf_dram = MakeDramBuffer(device());
+    auto buf_l1 = MakeL1Buffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // Old-style: push buffer address as plain uint32_t (no Buffer* binding).
+    kd.runtime_args.emplace_back(CoreCoord{0, 0}, KernelDescriptor::CoreRuntimeArgs{buf_dram->address(), 42u});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    // Simulate a sharded CB: set .buffer on the CB descriptor (must be L1).
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .buffer = buf_l1.get(),
+    });
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_l1.get()});
+
+    // No rt_arg bindings were declared, so both rt_args and cbs must be empty.
+    EXPECT_TRUE(resolved.rt_args.empty());
+    EXPECT_TRUE(resolved.cbs.empty());
+    EXPECT_TRUE(resolved.empty());
+}
+
 // resolve_bindings fires TT_FATAL when a binding buffer is not in tensor_buffers.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorList_Throws) {
     auto buf_a = MakeDramBuffer(device());
@@ -340,6 +381,51 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorLis
 
     // buf_a is not in the tensor list — should throw.
     EXPECT_ANY_THROW(resolve_bindings(program, desc, {buf_other.get()}));
+}
+
+// Regression: a scalar runtime arg whose value happens to numerically equal a
+// registered buffer's address must NOT trigger a safety-scan false positive.
+//
+// An earlier version of resolve_bindings ran a value-match scan that looked for
+// any uint32_t arg matching a registered buffer address but lacking a
+// BufferBinding at that position, and fired TT_FATAL. The intent was to catch
+// the push_back(buf->address()) factory-author mistake, but the check produced
+// false positives whenever a legitimate scalar arg (loop counter, shape dim,
+// etc.) happened to share the same numeric value as a buffer's address — most
+// notably under graph-capture (sentinel addresses) and for low-address buffers.
+//
+// The check was removed; this test pins that behavior so it is not silently
+// reintroduced.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_ScalarMatchingBufferAddress_DoesNotThrow) {
+    auto buf_a = MakeDramBuffer(device());
+    const uint32_t collision_value = buf_a->address();
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // arg[0] is the registered buffer; arg[1] is a plain scalar that happens to
+    // equal buf_a's address. The legacy value-match scan would have flagged
+    // arg[1] as an undeclared address; the current implementation must not.
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), collision_value});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
+}
+
+// Regression: same idea for common runtime args.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonScalarMatchingBufferAddress_DoesNotThrow) {
+    auto buf_a = MakeDramBuffer(device());
+    const uint32_t collision_value = buf_a->address();
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_common_runtime_args({buf_a.get(), collision_value});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
 }
 
 }  // namespace

@@ -14,6 +14,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/moe_compute/device/kernels/moe_ring_common.h"
+#include "ttnn/operations/experimental/ccl/moe_compute/device/hostdevcommon/config.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -21,10 +22,10 @@ struct MoEComputeParams {
     // MoE compute attributes
     uint32_t layer_id;
     uint32_t output_height_shard_dim;
-    uint32_t output_width_shard_dim;
     bool has_bias;
     SelectiveReduceCombineParams combine_params;
-    ::detail::MoEActivationFunction activation_type = ::detail::MoEActivationFunction::SILU;  // Default to SILU
+    ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
+        ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
     // Same value as combine_params.axis (single source of truth)
     std::optional<uint32_t> cluster_axis() const { return combine_params.axis; }
@@ -34,7 +35,6 @@ struct MoEComputeParams {
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
-        attrs.emplace_back("output_width_shard_dim", output_width_shard_dim);
         attrs.emplace_back("has_bias", has_bias);
         attrs.emplace_back("combine_params", combine_params);
         attrs.emplace_back("activation_type", static_cast<uint32_t>(activation_type));

@@ -16,8 +16,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_common.h"
-#include "llk_unpack_tilize.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -26,10 +26,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // This handles both A and B inputs which need to be tilized before binary ops
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
-    _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
 
     // Unpack and tilize single tile A (stored in src A register - index 0)
-    _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_wrapper_(
+        L1_ADDRESS(params.buffer_A[0]),
+        0 /* tile_index */,
+        formats.unpack_A_src,
+        formats.unpack_A_dst,
+        BLOCK_CT_DIM,
+        FACE_R_DIM,
+        4 /* num_faces */,
+        false /* narrow_tile */);
 }
 
 #endif
@@ -94,7 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false, TILIZE>(formats.pack_dst);
+    _llk_pack_init_<UNTILIZE, false, TILIZE>();
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);

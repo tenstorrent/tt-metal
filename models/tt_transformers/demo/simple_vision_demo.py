@@ -29,6 +29,9 @@ from models.tt_transformers.tt.generator import Generator, create_submeshes
 
 _MISTRAL_SMALL_31_24B_BASE = "Mistral-Small-3.1-24B"
 _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
+_BERTSCORE_MODEL_TYPE = "microsoft/deberta-xlarge-mnli"
+_BERTSCORE_MIN_F1 = 0.55
+_BERTSCORE_MEAN_F1 = 0.70
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -134,6 +137,25 @@ def load_expected_text(input_prompts, model_name, batch):
 
         expected_output.extend(output)
     return expected_output
+
+
+def should_run_bertscore(is_ci_env, mesh_device, model_name):
+    if not is_ci_env:
+        return False
+    if "Llama-3.2-11B" not in model_name and "Llama-3.2-90B" not in model_name:
+        return False
+
+    return mesh_device.get_num_devices() <= 2 or "Llama-3.2-90B" in model_name
+
+
+def trim_generated_text(generated_text, tokenizer):
+    stop_tokens = [getattr(tokenizer, "eos_token", None), "<|eot_id|>", "<|eom_id|>"]
+    stop_positions = [
+        generated_text.index(stop_token) for stop_token in stop_tokens if stop_token and stop_token in generated_text
+    ]
+    if stop_positions:
+        generated_text = generated_text[: min(stop_positions)]
+    return generated_text.strip()
 
 
 def create_multimodal_model(
@@ -518,8 +540,7 @@ def test_multimodal_demo_text(
                 logger.info(f"User {user_id} full text: {text}")
                 if batch_idx >= num_trace_batches:
                     generated_text = tokenizer.decode(tokens_out[prefill_lens[user_id] :])
-                    if tokenizer.eos_token in generated_text:
-                        generated_text = generated_text[: generated_text.index(tokenizer.eos_token)]
+                    generated_text = trim_generated_text(generated_text, tokenizer)
                     non_trace_generated_texts.append(generated_text)
 
             prefill_time_ms = (prefill_end - prefill_start) * 1000
@@ -532,8 +553,7 @@ def test_multimodal_demo_text(
     # End profiling
     profiler.end("run")
 
-    if is_ci_env and mesh_device.get_num_devices() <= 2:
-        # TODO: fix issue that models on T3K "don't see images" https://github.com/tenstorrent/tt-metal/issues/32284
+    if should_run_bertscore(is_ci_env, mesh_device, model_args[0].base_model_name):
         expected_output = load_expected_text(input_prompts, model_args[0].base_model_name, max_batch_size)
         from bert_score import score as bert_score
 
@@ -544,15 +564,19 @@ def test_multimodal_demo_text(
             candidates,
             references,
             lang="en",
-            model_type="microsoft/deberta-xlarge-mnli",
+            model_type=_BERTSCORE_MODEL_TYPE,
             rescale_with_baseline=False,
             batch_size=64,
         )
         for i, (p, r, f) in enumerate(zip(P0, R0, F10)):
-            logger.info(f"BERTScore (rescaled) P/R/F1 for sample {i}: {p.item():.3f}/{r.item():.3f}/{f.item():.3f}")
+            logger.info(f"BERTScore P/R/F1 for sample {i}: {p.item():.3f}/{r.item():.3f}/{f.item():.3f}")
         # TODO: create separate targets for different samples, investigate different outputs for different batch_size (4 vs 16)
-        assert F10.min().item() > 0.55, f"min BERTScore F1 ({F10.min().item()}) is lower than expected (0.55)."
-        assert F10.mean().item() > 0.70, f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected (0.70)."
+        assert (
+            F10.min().item() > _BERTSCORE_MIN_F1
+        ), f"min BERTScore F1 ({F10.min().item()}) is lower than expected ({_BERTSCORE_MIN_F1})."
+        assert (
+            F10.mean().item() > _BERTSCORE_MEAN_F1
+        ), f"mean BERTScore F1 ({F10.mean().item()}) is lower than expected ({_BERTSCORE_MEAN_F1})."
 
     # Calculate measurements
     compile_prefill_time = profiler.get_duration("compile_prefill")
@@ -601,14 +625,10 @@ def test_multimodal_demo_text(
         run_config = (tt_device_name, base_model_name, max_batch_size)
         targets_prefill_tok_s = {
             ("N300", "Llama-3.2-11B", 16): 19.3,
-            ("T3K", "Llama-3.2-90B", 1): 11.7,
+            ("T3K", "Llama-3.2-90B", 1): 10.6,
         }
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (15.9, None),  # None to default to tolerance percentage (1.15)
-            # second value to override default tolerance percentage (1.15); observing variance across different CI machines
-            # For T3K Llama-3.2-90B, the decode_t/s/u target used to be set to 3 with a wide tolerance (4.3, i.e. 330% increase) due to high variance observed across CI machines.
-            # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
-            # The slow CI machine seems to be out of circulation for now, so we can use a high target to avoid spurious test failures.
             ("T3K", "Llama-3.2-90B", 1): (9.5, None),
         }
 

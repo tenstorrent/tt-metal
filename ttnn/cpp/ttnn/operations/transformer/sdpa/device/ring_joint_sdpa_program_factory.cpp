@@ -417,6 +417,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Requires even num_q_chunks for symmetric light/heavy work distribution
     const bool enable_zigzag_balancing = args.is_balanced && args.is_causal && (num_q_chunks % 2 == 0);
 
+    // Cores actually issuing Q reads. When the flat q-chunk distribution is smaller
+    // than the grid the trailing cores get zero work; zigzag distributes pairs, so
+    // the unit count is total_pairs = all_heads_num_q_chunks / 2.
+    const uint32_t num_active_cores = enable_zigzag_balancing ? std::min(num_cores, all_heads_num_q_chunks / 2)
+                                                              : std::min(num_cores, all_heads_num_q_chunks);
+
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
@@ -442,7 +448,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        static_cast<uint32_t>(use_streaming_compute)};
+        static_cast<uint32_t>(use_streaming_compute),
+        num_active_cores,  // num_q_readers for get_barrier_read_threshold
+    };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
