@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from .format_config import DataFormat
@@ -24,6 +25,13 @@ from .stimuli_generator_v2 import DistributionKind, StimuliSpec
 # ─────────────────────────────────────────────────────────────────────────────
 # OperandSpecs
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+class Operand(str, Enum):
+    """Identifies which operand of an OperandSpecs a value refers to."""
+
+    A = "spec_A"
+    B = "spec_B"
 
 
 @dataclass
@@ -338,13 +346,27 @@ def for_op(
 # Undefined-region subtraction
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SFPU_UNDEFINED_RANGES: Dict[MathOperation, List[Tuple[float, float]]] = {
-    MathOperation.Reciprocal: [(-1e-6, 1e-6)],
-    MathOperation.Log: [(-float("inf"), 0.0)],
-    MathOperation.Sqrt: [(-float("inf"), 0.0)],
-    MathOperation.Atanh: [(-float("inf"), -1.0), (1.0, float("inf"))],
-    # log1p(x) = log(1 + x) — undefined for x <= -1.
-    MathOperation.Log1p: [(-float("inf"), -1.0)],
+_SFPU_UNDEFINED_RANGES: Dict[
+    MathOperation,
+    Dict[Operand, List[Tuple[float, float]]],
+] = {
+    # ── Unary: only spec_A has a hole ────────────────────────────────────────
+    MathOperation.Reciprocal: {Operand.A: [(-1e-6, 1e-6)]},
+    MathOperation.Log: {Operand.A: [(-float("inf"), 1e-6)]},
+    MathOperation.Sqrt: {Operand.A: [(-float("inf"), 0.0)]},
+    MathOperation.Atanh: {
+        Operand.A: [(-float("inf"), -1.0 + 1e-6), (1.0 - 1e-6, float("inf"))]
+    },
+    MathOperation.Log1p: {Operand.A: [(-float("inf"), -1.0 + 1e-6)]},
+    MathOperation.Rsqrt: {Operand.A: [(-float("inf"), 1e-6)]},
+    MathOperation.Acosh: {Operand.A: [(-float("inf"), 1.0)]},
+    # ── Binary: per-operand holes ────────────────────────────────────────────
+    # div: divisor (srcB) must avoid 0
+    MathOperation.SfpuElwdiv: {Operand.B: [(-1e-6, 1e-6)]},
+    # xlogy: y (srcB) must be > 0 for log(y) to be finite
+    MathOperation.SfpuXlogy: {Operand.B: [(-float("inf"), 1e-6)]},
+    # pow: base (srcA) must be > 0 for the exp(b·log(a)) implementation
+    MathOperation.SfpuElwpow: {Operand.A: [(-float("inf"), 1e-6)]},
 }
 
 
@@ -417,14 +439,47 @@ def exclude_values(
     return exclude_intervals(spec, holes)
 
 
-def exclude_undefined(op: MathOperation, spec: StimuliSpec) -> StimuliSpec:
-    """Return a copy of *spec* with its domain clipped to where *op* is defined.
+def exclude_undefined(
+    op: MathOperation,
+    spec: StimuliSpec,
+    operand: Operand = Operand.A,
+) -> StimuliSpec:
+    """Return a copy of *spec* with its domain clipped to where *op* is defined
+    for the named *operand*.
 
-    Looks up the undefined regions for *op* in _SFPU_UNDEFINED_RANGES
-    and delegates to exclude_intervals.  Returns *spec* unchanged if
-    the op has no registered undefined regions.
+    Looks up the undefined regions for (*op*, *operand*) in
+    _SFPU_UNDEFINED_RANGES and delegates to exclude_intervals.  Returns *spec*
+    unchanged if the op (or that operand) has no registered undefined regions.
+
+    Args:
+        op: Target math operation.
+        spec: Input stimuli spec to clip.
+        operand: Which operand the spec corresponds to (Operand.A or Operand.B).
+            For unary ops use Operand.A (the default).  For binary ops with
+            per-operand restrictions (e.g. div, xlogy, pow), pass the operand
+            whose domain you are sanitizing.
     """
-    undefined = _SFPU_UNDEFINED_RANGES.get(op)
+    op_ranges = _SFPU_UNDEFINED_RANGES.get(op, {})
+    undefined = op_ranges.get(operand)
     if not undefined:
         return spec
     return exclude_intervals(spec, undefined)
+
+
+def exclude_undefined_pair(
+    op: MathOperation,
+    specs: "OperandSpecs",
+) -> "OperandSpecs":
+    """Apply per-operand undefined-region subtraction to both operands of an
+    OperandSpecs in one call.
+
+    Convenience wrapper around exclude_undefined.  Returns a deep copy so the
+    caller can mutate further without aliasing the registry.
+    """
+    op_ranges = _SFPU_UNDEFINED_RANGES.get(op, {})
+    new = copy.deepcopy(specs)
+    if Operand.A in op_ranges:
+        new.spec_A = exclude_intervals(new.spec_A, op_ranges[Operand.A])
+    if Operand.B in op_ranges and new.spec_B is not None:
+        new.spec_B = exclude_intervals(new.spec_B, op_ranges[Operand.B])
+    return new
