@@ -1,0 +1,17 @@
+[
+    [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video",
+                    "video": "/home/ttuser/ssinghal/PR-fix/tt-metal/models/demos/molmo2/verification/videos/d02d399003cca14e2a5c822d389821e553e6b7942c5640d48c075703e533d1dc.mp4"
+                },
+                {
+                    "type": "text",
+                    "text": "Point to the main subject in this video."
+                }
+            ]
+        }
+    ]
+]

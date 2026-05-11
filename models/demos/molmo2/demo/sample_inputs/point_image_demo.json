@@ -1,0 +1,17 @@
+[
+    [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": "/home/ttuser/.cache/huggingface/hub/models--allenai--Molmo2-8B/snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b/molmo_2_logo_RGB.png"
+                },
+                {
+                    "type": "text",
+                    "text": "Point to the logo in this image."
+                }
+            ]
+        }
+    ]
+]

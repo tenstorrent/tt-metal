@@ -34,6 +34,7 @@ CLI overrides (passed via pytest addopts or --flag):
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -44,6 +45,27 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
+
+# ---------------------------------------------------------------------------
+# Coordinate output helper (pointing / tracking use cases)
+# ---------------------------------------------------------------------------
+
+_COORD_RE = re.compile(
+    r"<(?:points?|tracks?)[^>]*\s+coords=\"([0-9\t:;,. ]+)\"[^>]*/?>",
+    re.IGNORECASE,
+)
+
+
+def _format_response(text: str) -> str:
+    """Pretty-print coordinate tags if present; otherwise return text unchanged."""
+    coords = _COORD_RE.findall(text)
+    if not coords:
+        return text
+    clean = _COORD_RE.sub("", text).strip()
+    coord_lines = "\n  ".join(c.strip() for c in coords)
+    prefix = f"{clean}\n" if clean else ""
+    return f"{prefix}  [coords] {coord_lines}"
+
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -358,7 +380,7 @@ def run_demo(
             if isinstance(prompts[u][-1]["content"], str)
             else next((c["text"] for c in prompts[u][-1]["content"] if c.get("type") == "text"), "")
         )
-        logger.info(f"\n=== USER {u} ===\nPROMPT:   {prompt_text[:120]}\nRESPONSE: {text.strip()}\n")
+        logger.info(f"\n=== USER {u} ===\nPROMPT:   {prompt_text[:120]}\nRESPONSE: {_format_response(text).strip()}\n")
 
     return responses
 
@@ -401,6 +423,26 @@ def run_demo(
             200,
             1,
         ),
+        (  # single image + pointing prompt — model outputs <points coords="..."/>
+            str(SAMPLE_DIR / "point_image_demo.json"),
+            200,
+            1,
+        ),
+        (  # video + pointing prompt — model outputs per-frame <points coords="..."/>
+            str(SAMPLE_DIR / "point_video_demo.json"),
+            200,
+            1,
+        ),
+        (  # video + tracking prompt — model outputs <tracks coords="..."/>
+            str(SAMPLE_DIR / "track_video_demo.json"),
+            200,
+            1,
+        ),
+        (  # 2 images + multi-image pointing — model outputs per-image <points coords="..."/>
+            str(SAMPLE_DIR / "point_multi_image_demo.json"),
+            200,
+            1,
+        ),
     ],
     ids=[
         "text_only-batch1",
@@ -409,6 +451,10 @@ def run_demo(
         "video-batch1",
         "multi-image-2-batch1",
         "multi-image-20-batch1",
+        "image-point-batch1",
+        "video-point-batch1",
+        "video-track-batch1",
+        "multi-image-point-batch1",
     ],
 )
 def test_demo(
