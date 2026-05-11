@@ -12,6 +12,7 @@ from .ttnn_adain_resblk_encode import (
 from ..reference.kokoro_source_module_preprocess import preprocess_source_module_hn_nsf_parameters
 from ..reference.kokoro_stft_preprocess import preprocess_kokoro_conv_stft_parameters
 from .ttnn_adain_resblock1 import AdaINResBlock1
+from .ttnn_kokoro_decoder import KokoroDecoderTt, KokoroIstftNetTt, preprocess_kokoro_decoder_tt_parameters
 from .ttnn_kokoro_decoder_body import KokoroDecoderBody, preprocess_kokoro_decoder_body_parameters
 from .ttnn_kokoro_decoder_front import KokoroDecoderFront
 from .ttnn_kokoro_generator import KokoroGenerator
@@ -35,10 +36,13 @@ __all__ = [
     "KokoroConvStft",
     "KokoroDecoderBody",
     "KokoroDecoderFront",
+    "KokoroDecoderTt",
+    "KokoroIstftNetTt",
     "KokoroGenerator",
     "SourceModuleHnNSF",
     "preprocess_adain_resblock1_parameters",
     "preprocess_kokoro_decoder_body_parameters",
+    "preprocess_kokoro_decoder_tt_parameters",
     "preprocess_kokoro_decoder_front_parameters",
     "preprocess_kokoro_generator_parameters",
 ]
