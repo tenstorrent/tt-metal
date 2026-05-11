@@ -367,19 +367,24 @@ class SamplingGenerator:
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
             if slot["id"] is None:
-                return self.capture_trace(
+                tt_out = self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                 )
-
-            self._validate_trace_inputs(slot, logits, tt_out_tok)
-            tt_out = self._execute_trace(key)
+            else:
+                self._validate_trace_inputs(slot, logits, tt_out_tok)
+                tt_out = self._execute_trace(key)
 
         if penalties_on and tt_out is not None:
             if isinstance(tt_out, tuple):
                 self.tt_penalties.update_output_tokens(tt_out[0])
             else:
                 self.tt_penalties.update_output_tokens(tt_out)
+            # Penalty state is a persistent side effect consumed by the next
+            # decode. The returned token/logprob tensors do not carry a
+            # dependency on these buffers, so finish the update before callers
+            # can enqueue another decode step.
+            ttnn.synchronize_device(self.mesh_device)
         return tt_out
 
 
