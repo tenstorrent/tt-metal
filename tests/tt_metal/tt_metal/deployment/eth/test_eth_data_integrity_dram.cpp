@@ -240,7 +240,7 @@ static bool run_test_integrity_dram(
 TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDram) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
-    bool pass = true;
+    vector<LinkError> errors;
     int n = 0;
 
     distributed::MeshDevice* prev_sender = 0;
@@ -269,7 +269,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDram) {
 
                     log_info(tt::LogTest, "    running on {}", processor);
 
-                    pass &= run_test_integrity_dram(
+                    bool passed = run_test_integrity_dram(
                         this,
                         sender_mesh_device,
                         receiver_mesh_device,
@@ -278,6 +278,11 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDram) {
                         processor,
                         prev_sender != sender_mesh_device.get(),
                         prev_recv != receiver_mesh_device.get());
+
+                    if (!passed) {
+                        errors.emplace_back(
+                            sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
+                    }
 
                     prev_recv = receiver_mesh_device.get();
                     prev_sender = sender_mesh_device.get();
@@ -288,7 +293,9 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDram) {
     }
 
     log_info(tt::LogTest, "Ran {} tests", n);
-    ASSERT_TRUE(pass);
+
+    print_summary(errors);
+    ASSERT_TRUE(!errors.size());
 }
 
 }  // namespace tt::tt_metal
