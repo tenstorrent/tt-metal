@@ -687,12 +687,16 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             // After PCIe hard reset (FIX AC), UMD base firmware raises its heartbeat (FIX AR, 5s
             // window) but then takes additional time to write 0x49706550 to edm_status_address.
             // Poll for up to 10s so the next session sees 0x49706550, not the ROM postcode.
+            // FIX AY-C (#42429): edm_status address needed both by FIX AQ (poll loop) and
+            // FIX AY (per-pair stagger check).  Declare here so FIX AY can use it.
+            std::optional<uint32_t> ay_edm_status_addr;
             if (get_control_plane_) {
                 try {
                     const auto& fabric_ctx = this->get_control_plane_().get_fabric_context();
                     const auto& builder_ctx = fabric_ctx.get_builder_context();
                     const auto edm_status_addr_aq =
                         builder_ctx.get_fabric_router_sync_address_and_status().first;
+                    ay_edm_status_addr = edm_status_addr_aq;  // hoist for FIX AY stagger
                     // FIX AQ-3 (#42429): The ERISC BRISC ROM writes a family of intermediate
                     // postcodes during boot: 0x49705180 → 0x49705530 → ... → 0x49706550
                     // (base-UMD sentinel).  The original check (edm_val != kRomPostcode) only
@@ -836,6 +840,20 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     relay_broken_non_mmio.size());
                 uint32_t ay_succeeded = 0;
                 uint32_t ay_failed = 0;
+                uint32_t ay_skipped_relay_not_ready = 0;
+                // FIX AY-C (#42429): per-pair MMIO relay readiness guard (Mitigation C).
+                // Before sending a write-only reset to a non-MMIO ETH channel, verify that
+                // its MMIO peer channel has fully exited ROM boot (edm_status == 0x49706550).
+                // This prevents the simultaneous-boot race where both sides of the inter-chip
+                // ETH link start ROM boot simultaneously, stalling PHY link training.
+                //
+                // Approach: for each non-MMIO (non_mmio_id, eth_chan_id) pair, look up its
+                // peer via get_ethernet_connections() → (peer_chip_id, peer_eth_chan).  If
+                // the peer is an MMIO device, read its edm_status via PCIe-direct reg read.
+                // If still in 0x4970xxxx ROM boot family, skip the reset for this channel.
+                // Channels skipped here are handled by FIX RR in the next session's init.
+                const auto& eth_connections = cluster_.get_ethernet_connections();
+                constexpr uint32_t kAyBaseUmdSentinel = 0x49706550u;
                 for (const tt::ChipId non_mmio_id : relay_broken_non_mmio) {
                     bool device_relay_dead = false;
                     for (const auto& eth_logical_core :
@@ -851,6 +869,73 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         } catch (...) {
                             ++ay_failed;
                             continue;
+                        }
+                        // FIX AY-C: stagger per MMIO↔non-MMIO channel pair.
+                        // Resolve logical core → channel id → MMIO peer → edm_status check.
+                        if (ay_edm_status_addr.has_value()) {
+                            try {
+                                const auto& non_mmio_soc = cluster_.get_soc_desc(non_mmio_id);
+                                const int eth_chan_id = non_mmio_soc.get_eth_channel_for_core(
+                                    tt::umd::CoreCoord(
+                                        eth_logical_core.x, eth_logical_core.y,
+                                        CoreType::ETH, CoordSystem::LOGICAL),
+                                    CoordSystem::LOGICAL);
+                                auto dev_it = eth_connections.find(non_mmio_id);
+                                if (dev_it != eth_connections.end()) {
+                                    auto chan_it = dev_it->second.find(eth_chan_id);
+                                    if (chan_it != dev_it->second.end()) {
+                                        const ChipId peer_chip = std::get<0>(chan_it->second);
+                                        const auto peer_chan = std::get<1>(chan_it->second);
+                                        // Only stagger when peer is the MMIO relay chip.
+                                        if (mmio_ids_set.count(peer_chip)) {
+                                            const CoreCoord peer_logical =
+                                                cluster_.get_soc_desc(peer_chip)
+                                                    .get_eth_core_for_channel(peer_chan, CoordSystem::LOGICAL);
+                                            const CoreCoord peer_virt =
+                                                cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                                    peer_chip, peer_logical, CoreType::ETH);
+                                            uint32_t peer_status = 0;
+                                            try {
+                                                cluster_.read_reg(
+                                                    &peer_status,
+                                                    tt_cxy_pair(peer_chip, peer_virt),
+                                                    *ay_edm_status_addr);
+                                            } catch (...) {
+                                                // Read failed — relay may not yet be up.
+                                                // Skip this channel; next session handles it.
+                                                log_warning(
+                                                    tt::LogAlways,
+                                                    "teardown: FIX AY-C — could not read peer "
+                                                    "edm_status for non-MMIO dev={} chan={} "
+                                                    "(peer dev={} chan={}) — skipping reset. "
+                                                    "Next session FIX RR will recover. (#42429)",
+                                                    non_mmio_id, eth_chan_id, peer_chip, peer_chan);
+                                                ++ay_skipped_relay_not_ready;
+                                                continue;
+                                            }
+                                            const bool peer_still_in_rom_boot =
+                                                (peer_status & 0xFFFF0000u) == 0x49700000u &&
+                                                peer_status != kAyBaseUmdSentinel;
+                                            if (peer_still_in_rom_boot) {
+                                                log_warning(
+                                                    tt::LogAlways,
+                                                    "teardown: FIX AY-C — MMIO peer dev={} chan={} "
+                                                    "edm_status=0x{:08x} (ROM boot family) — "
+                                                    "skipping write-only reset of non-MMIO dev={} "
+                                                    "chan={} to prevent simultaneous-boot race. "
+                                                    "Next session FIX RR will recover. (#42429)",
+                                                    peer_chip, peer_chan, peer_status,
+                                                    non_mmio_id, eth_chan_id);
+                                                ++ay_skipped_relay_not_ready;
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (...) {
+                                // Could not resolve channel/peer — proceed with the reset
+                                // (safe: worst case we might race, but the A fix covers that).
+                            }
                         }
                         try {
                             // Write-only reset: skips relay read that times out when
@@ -884,7 +969,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         }
                     }
                 }
-                if (ay_failed == 0) {
+                if (ay_failed == 0 && ay_skipped_relay_not_ready == 0) {
                     log_info(
                         tt::LogAlways,
                         "teardown: FIX AY — all {} non-MMIO ETH ERISCs reset to base firmware "
@@ -893,11 +978,13 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 } else {
                     log_warning(
                         tt::LogAlways,
-                        "teardown: FIX AY/AV — {}/{} non-MMIO ETH ERISCs reset successfully "
-                        "({} failed/skipped). Next session may encounter stale FABRIC fw on failed channels.",
+                        "teardown: FIX AY/AV/C — {}/{} non-MMIO ETH ERISCs reset successfully "
+                        "({} failed, {} skipped by FIX AY-C relay-not-ready guard). "
+                        "Skipped channels will be recovered by FIX RR in next session. (#42429)",
                         ay_succeeded,
-                        ay_succeeded + ay_failed,
-                        ay_failed);
+                        ay_succeeded + ay_failed + ay_skipped_relay_not_ready,
+                        ay_failed,
+                        ay_skipped_relay_not_ready);
                 }
             } else if (get_control_plane_ && !relay_broken_non_mmio.empty()) {
                 log_warning(
