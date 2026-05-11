@@ -123,7 +123,7 @@ struct KernelSpec {
     // Kernel compiler options
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
-        using IncludePaths = std::vector<std::string>;
+        using IncludePaths = std::vector<std::filesystem::path>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 

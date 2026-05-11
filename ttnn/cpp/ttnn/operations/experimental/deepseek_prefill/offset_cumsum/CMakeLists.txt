@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_offset_cumsum ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
@@ -28,9 +30,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/offset_cumsum_device_operation.cpp
-        device/offset_cumsum_program_factory.cpp
-        offset_cumsum.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_OFFSET_CUMSUM_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_prefill_offset_cumsum PRIVATE ${FixmeOpIncDirs})

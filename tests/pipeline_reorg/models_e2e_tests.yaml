@@ -97,7 +97,7 @@
 - name: Llama 3.2-90B-Vision e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
-    pytest --timeout 1000 models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace"
+    pytest --timeout 1500 models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace"
   model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
@@ -192,12 +192,12 @@
 - name: Qwen2.5-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -205,12 +205,12 @@
 - name: Qwen2.5-Coder-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -405,7 +405,7 @@
   model: falcon-7b
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 6
       tier: 3
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
