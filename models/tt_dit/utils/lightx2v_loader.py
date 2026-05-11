@@ -135,10 +135,10 @@ def _resolve_path(
     if not allow_download:
         raise WeightsNotFoundError(
             f"lightx2v weights '{filename}' not found for repo '{repo_id}'.\n"
+            f"Searched: {repo_cache}\n"
             f"To download from HuggingFace, re-run with TT_DIT_ALLOW_HF_DOWNLOAD=1 "
             f"or pass allow_download=True to the pipeline.\n"
-            f"Alternatively, place the file at: "
-            f"{local_dir or _hf_cache_root() / 'hub'}/{filename}"
+            f"Alternatively, place the file under a snapshot directory in: {repo_cache}"
         )
 
     from huggingface_hub import hf_hub_download

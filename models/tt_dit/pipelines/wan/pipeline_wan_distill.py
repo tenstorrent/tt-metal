@@ -68,8 +68,9 @@ def _patch_torch_transformer_random(seed: int = 0):
     saved = cls.__dict__.get("from_pretrained", sentinel)
 
     def _stub(_cls, *args, **kwargs):
-        torch.manual_seed(seed)
-        return _cls(**_RANDOM_I2V_TRANSFORMER_CONFIG)
+        with torch.random.fork_rng():
+            torch.manual_seed(seed)
+            return _cls(**_RANDOM_I2V_TRANSFORMER_CONFIG)
 
     cls.from_pretrained = classmethod(_stub)
     try:
@@ -167,6 +168,14 @@ class WanDistillPipelineI2V(WanPipelineI2V):
     @staticmethod
     def create_pipeline(*args, random_weights: bool | None = None, **kwargs):
         kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or WanDistillPipelineI2V.BASE_DIFFUSERS_REPO
+        if "allow_download" in kwargs:
+            allow = kwargs.pop("allow_download")
+            if allow:
+                os.environ["TT_DIT_ALLOW_HF_DOWNLOAD"] = "1"
+        if "lightx2v_local_dir" in kwargs:
+            val = kwargs.pop("lightx2v_local_dir")
+            if val is not None:
+                os.environ["LIGHTX2V_LOCAL_DIR"] = val
         if random_weights:
             os.environ["TT_DIT_RANDOM_WEIGHTS"] = "1"
         try:

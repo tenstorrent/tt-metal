@@ -60,11 +60,11 @@ pip install huggingface_hub   # if not already installed
 python -c "
 from huggingface_hub import hf_hub_download
 import os
-os.makedirs('/storage/sdawle/lora-camera', exist_ok=True)
+os.makedirs('/path/to/lora-camera', exist_ok=True)
 for f in ['loras/wan/wan22-camera-earthzoomout.safetensors',
           'loras/wan/wan22-camera-rotation-rank16-v2.safetensors']:
     hf_hub_download('wangkanai/wan22-fp16-i2v-loras', f,
-                    local_dir='/storage/sdawle/lora-camera')
+                    local_dir='/path/to/lora-camera')
 "
 ```
 
@@ -91,7 +91,7 @@ export PYTHONPATH=$(pwd)
 export TT_DIT_ALLOW_HF_DOWNLOAD=1
 
 # LoRA config
-export LORA_HIGH_PATH=/storage/sdawle/lora-camera/wan22-camera-earthzoomout.safetensors
+export LORA_HIGH_PATH=/path/to/lora-camera/wan22-camera-earthzoomout.safetensors
 unset LORA_LOW_PATH          # single-file: low-noise expert uses base weights
 export LORA_SCALE=1.0
 
@@ -112,7 +112,7 @@ pytest models/tt_dit/tests/models/wan2_2/test_pipeline_lora.py \
 ### Camera rotation LoRA (40 steps)
 
 ```bash
-export LORA_HIGH_PATH=/storage/sdawle/lora-camera/wan22-camera-rotation-rank16-v2.safetensors
+export LORA_HIGH_PATH=/path/to/lora-camera/wan22-camera-rotation-rank16-v2.safetensors
 unset LORA_LOW_PATH
 export LORA_SCALE=1.0
 

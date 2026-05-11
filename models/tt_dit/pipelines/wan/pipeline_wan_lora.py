@@ -173,7 +173,7 @@ def fuse_lora_state_dict(
         alpha = alphas.get(base_path, float(rank))
         effective_scale = scale * (alpha / rank)
         delta = effective_scale * (ab["B"].to(torch.float32) @ ab["A"].to(torch.float32))
-        fused[diffusers_key] = (base_weight.to(torch.float32) + delta).to(base_weight.dtype)
+        fused[diffusers_key] = base_weight.to(torch.float32).add_(delta).to(base_weight.dtype)
         applied_pairs += 1
 
     applied_direct = 0
@@ -388,12 +388,12 @@ class WanLoraPipelineI2V(WanPipelineI2V):
 
     @staticmethod
     def create_pipeline(*args, **kwargs):
-        # Pass through the LoRA-specific kwargs to the constructor. Everything
-        # else (mesh, parallelism, height/width) flows through the base
-        # WanPipeline.create_pipeline which forwards to WanLoraPipelineI2V.
         kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
         # WanPipeline.create_pipeline drops kwargs it doesn't recognize, so
         # surface the LoRA settings via env vars that __init__ already reads.
+        # Save previous values so we can restore after the call.
+        _env_keys = ("LORA_HIGH_PATH", "LORA_LOW_PATH", "LORA_SCALE")
+        saved = {k: os.environ.get(k) for k in _env_keys}
         if "lora_high_path" in kwargs:
             os.environ["LORA_HIGH_PATH"] = kwargs.pop("lora_high_path")
         if "lora_low_path" in kwargs:
@@ -404,4 +404,11 @@ class WanLoraPipelineI2V(WanPipelineI2V):
                 os.environ.pop("LORA_LOW_PATH", None)
         if "lora_scale" in kwargs:
             os.environ["LORA_SCALE"] = str(kwargs.pop("lora_scale"))
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanLoraPipelineI2V, **kwargs)
+        try:
+            return WanPipeline.create_pipeline(*args, pipeline_class=WanLoraPipelineI2V, **kwargs)
+        finally:
+            for k in _env_keys:
+                if saved[k] is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = saved[k]

@@ -78,6 +78,7 @@ def test_pipeline_inference(
     guidance_scale = float(os.environ.get("GUIDANCE_SCALE", "3.5"))
     guidance_scale_2 = float(os.environ.get("GUIDANCE_SCALE_2", str(guidance_scale)))
     lora_scale = float(os.environ.get("LORA_SCALE", "1.0"))
+    _prev_boundary = os.environ.get("BOUNDARY_RATIO")
     os.environ.setdefault("BOUNDARY_RATIO", "0.875")
 
     pipeline = WanLoraPipelineI2V.create_pipeline(
@@ -144,13 +145,19 @@ def test_pipeline_inference(
         except ImportError:
             logger.info("Could not export video - imageio_ffmpeg not available")
 
-    if no_prompt:
-        run(prompt=prompt, number=0, seed=42)
-    else:
-        for i in itertools.count():
-            new_prompt = input("Enter the input prompt, or q to exit: ")
-            if new_prompt:
-                prompt = new_prompt
-            if prompt[0] == "q":
-                break
-            run(prompt=prompt, number=i, seed=i)
+    try:
+        if no_prompt:
+            run(prompt=prompt, number=0, seed=42)
+        else:
+            for i in itertools.count():
+                new_prompt = input("Enter the input prompt, or q to exit: ")
+                if new_prompt:
+                    prompt = new_prompt
+                if prompt[0] == "q":
+                    break
+                run(prompt=prompt, number=i, seed=i)
+    finally:
+        if _prev_boundary is None:
+            os.environ.pop("BOUNDARY_RATIO", None)
+        else:
+            os.environ["BOUNDARY_RATIO"] = _prev_boundary
