@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tunnels_from_mmio_device.hpp"
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/cluster.hpp>
+
 
 #include <tt_stl/assert.hpp>
 
@@ -11,13 +14,12 @@ namespace tt::llrt {
 // TODO: Stop using these functions here and in PhysicalSystemDescriptor once UMD provides support for ASIC index/offset
 // in WH systems
 const std::unordered_set<ChipId>& get_devices_controlled_by_mmio_device(
-    tt::umd::Cluster& cluster, ChipId mmio_device_id) {
-    const auto& cluster_descriptor = cluster.get_cluster_description();
+    tt::umd::ClusterDescriptor& cluster_descriptor, ChipId mmio_device_id) {
     TT_ASSERT(
-        cluster_descriptor->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
+        cluster_descriptor.get_chips_grouped_by_closest_mmio().count(mmio_device_id),
         "Expected device {} to be an MMIO device!",
         mmio_device_id);
-    return cluster_descriptor->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
+    return cluster_descriptor.get_chips_grouped_by_closest_mmio().at(mmio_device_id);
 }
 
 #define MAX_TUNNEL_DEPTH 4
@@ -94,10 +96,5 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
 
       return tunnels_from_mmio_device;
   }
-
-std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_device(
-    tt::umd::Cluster& cluster) {
-    return discover_tunnels_from_mmio_device(*cluster.get_cluster_description());
-}
 
 }  // namespace tt::llrt

@@ -173,32 +173,9 @@ uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id) {
     return bus_id;
 }
 
-uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
-    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto* cluster_desc = cluster.get_cluster_description();
-    if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
-        chip_id = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-    }
-    uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
-    return bus_id;
-}
-
 UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id) {
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc.get_arch());
     const auto bus_id = get_bus_id(cluster_desc, chip_id);
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-    if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_id = bus_id & 0x0F;
-        return UbbId{
-            static_cast<uint32_t>(tray_bus_id_it - tray_bus_ids.begin() + 1), static_cast<uint32_t>(ubb_asic_id)};
-    }
-    return UbbId{0, 0};  // Invalid UBB ID if not found
-}
-
-UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
-    auto* cluster_desc = cluster.get_cluster_description();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
-    const auto bus_id = get_bus_id(cluster, chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
         auto ubb_asic_id = bus_id & 0x0F;

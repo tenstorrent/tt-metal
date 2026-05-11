@@ -9,10 +9,6 @@
 
 #include <memory>
 
-namespace tt::umd {
-class Cluster;
-}
-
 namespace tt::tt_metal {
 class Hal;
 }
