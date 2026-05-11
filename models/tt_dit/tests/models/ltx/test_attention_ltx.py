@@ -25,16 +25,18 @@ sys.path.insert(0, "LTX-2/packages/ltx-core/src")
     [
         [(1, 1), 0, 1],
         [(2, 4), 0, 1],
+        [(4, 8), 1, 0],
     ],
-    ids=["1x1sp0tp1", "2x4sp0tp1"],
+    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """
     Test LTX-2 self-attention: compare TT LTXAttention vs PyTorch Attention.
     """
     from ltx_core.model.transformer.attention import Attention as TorchAttention
+    from ltx_core.model.transformer.rope import LTXRopeType
 
     dim = 4096
     num_heads = 32
@@ -42,13 +44,16 @@ def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis:
     B = 1
     seq_len = 256  # Small for fast test
 
-    # Create PyTorch reference
-    torch_model = TorchAttention(query_dim=dim, heads=num_heads, dim_head=head_dim, norm_eps=1e-6)
+    # INTERLEAVED matches rope_ltx.py precompute_freqs_cis which returns (B, N, D) format
+    torch_model = TorchAttention(
+        query_dim=dim, heads=num_heads, dim_head=head_dim, norm_eps=1e-6, rope_type=LTXRopeType.INTERLEAVED
+    )
     torch_model.eval()
     torch_state = torch_model.state_dict()
 
     # Create TT model
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    topology = ttnn.Topology.Ring if mesh_device.get_num_devices() > 8 else ttnn.Topology.Linear
+    ccl_manager = CCLManager(mesh_device, topology=topology)
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
         sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
@@ -66,7 +71,7 @@ def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis:
     )
     tt_model.load_torch_state_dict(torch_state)
 
-    # Create input + RoPE
+    # seq_len=256 → N_local=32 for 4x8 (sp=8); exactly 1 tile, the minimum
     torch.manual_seed(42)
     x = torch.randn(B, seq_len, dim, dtype=torch.float32)
 
@@ -135,11 +140,12 @@ def test_ltx_self_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis:
     [
         [(1, 1), 0, 1],
         [(2, 4), 0, 1],
+        [(4, 8), 1, 0],
     ],
-    ids=["1x1sp0tp1", "2x4sp0tp1"],
+    ids=["1x1sp0tp1", "2x4sp0tp1", "4x8sp1tp0"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_ltx_cross_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
     """
     Test LTX-2 cross-attention: compare TT LTXAttention vs PyTorch Attention.
@@ -161,7 +167,8 @@ def test_ltx_cross_attention(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis
     torch_model.eval()
     torch_state = torch_model.state_dict()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    topology = ttnn.Topology.Ring if mesh_device.get_num_devices() > 8 else ttnn.Topology.Linear
+    ccl_manager = CCLManager(mesh_device, topology=topology)
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
         sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),

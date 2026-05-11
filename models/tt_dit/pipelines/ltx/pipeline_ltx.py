@@ -1223,7 +1223,7 @@ class LTXPipeline:
             else None
         )
 
-        sigmas = compute_sigmas(steps=num_inference_steps)
+        sigmas = compute_sigmas(steps=num_inference_steps, num_tokens=video_N + audio_N)
         if seed is not None:
             torch.manual_seed(seed)
         video_lat = torch.randn(B, video_N, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
