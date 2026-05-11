@@ -93,6 +93,11 @@ jobs:
       PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
       PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+      PRTE_MCA_prte_fwd_environment: "true"
+      PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
+      TT_METAL_CACHE: /home/user/.cache
     strategy:
       max-parallel: 1  # Run tests sequentially to avoid resource contention
       fail-fast: false
@@ -216,11 +221,6 @@ jobs:
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
         working-directory: /ci/tt-metal
-        env:
-          LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-          TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-          TT_METAL_CACHE: /home/user/.cache
-          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'
