@@ -104,6 +104,9 @@ void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
+    // Separate semaphore for the exit handshake. Reusing init_semaphore_address
+    // for both phases is racy
+    uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
@@ -188,7 +191,8 @@ void kernel_main() {
     // Sentinel-terminated fabric send loop
     while (true) {
         cb_wait_front(cb_route_info_id, 1);
-        volatile uint32_t* route_info = (volatile uint32_t*)(get_read_ptr(cb_route_info_id));
+        volatile tt_l1_ptr uint32_t* route_info =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
 
         uint32_t route = route_info[0];
         if (route == ROUTE_INFO_SENTINEL) {
@@ -222,11 +226,16 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
+    // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
+    // so the exit-sem signal cannot reach peers ahead of the last data writes.
     noc_async_write_barrier();
 
-    // Exit semaphore exchange
+    // Exit semaphore exchange - uses a dedicated semaphore (exit_semaphore_address) and
+    // the dedicated sem_packet_header. flush=true: EDM holds the atomic-inc on the receiver
+    // until our prior fabric writes to that destination have committed, so the peer's
+    // wait-completes ordering implies all data writes have landed.
     {
-        const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -235,13 +244,21 @@ void kernel_main() {
             mesh_cols,
             axis,
             total_mesh_devices>(
-            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
+            fabric_connections,
+            sem_packet_header,
+            dest_chip_ids,
+            dest_mesh_ids,
+            exit_noc_semaphore_addr,
+            /*flush=*/true);
 
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
         noc_semaphore_set(exit_sem_ptr, 0);
     }
+
+    // Final drain: ensure any in-flight atomic-inc and writes settle before kernel exit.
+    noc_async_full_barrier();
 
     close_direction_connections(directions, fabric_connections);
 #endif
