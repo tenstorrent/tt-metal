@@ -16,6 +16,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 
 namespace ttnn::operations::experimental::test {
 
@@ -60,10 +61,12 @@ uint64_t measure_ns(Fn&& fn) {
 
 TEST_F(DropoutDescriptorBenchmark, CorrectnessNonCached) {
     auto& device = *device_;
+    ttnn::graph::GraphProcessor::begin_graph_capture(graph::GraphProcessor::RunMode::NORMAL);
     const auto input = make_input(device);
 
     const auto old_output = call_old(input);
     const auto new_output = call_new(input);
+    ttnn::graph::GraphProcessor::end_graph_capture_to_file("dropout_visualizer.tmp.json");
 
     ASSERT_TRUE(outputs_match(old_output, new_output));
 }
