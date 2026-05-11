@@ -101,9 +101,13 @@ sleep 5
 wait "$container0_initial_pid" || true
 
 echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
+reset_ok=1
 if ! timeout 120 docker exec "${container0}" tt-smi -r "$RESET_DEVICE_IDS"; then
     echo ">>> tt-smi -r timed out or failed, falling back to tt-smi -glx_reset ..."
-    timeout 120 docker exec "${container0}" tt-smi -glx_reset "$RESET_DEVICE_IDS"
+    if ! timeout 120 docker exec "${container0}" tt-smi -glx_reset "$RESET_DEVICE_IDS"; then
+        echo ">>> tt-smi -glx_reset also failed; recording failure and unblocking survivors."
+        reset_ok=0
+    fi
 fi
 echo ">>> Reset complete."
 
@@ -111,13 +115,18 @@ echo ">>> Reset complete."
 touch "$RESET_DONE_FLAG"
 
 # --- Step 4: Restart workload in container-0 ---
-echo ">>> Restarting workload in ${container0}..."
-(
-    rc=0
-    docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || rc=$?
-    echo "$rc" > "${RESULTS_DIR}/${container0}.status"
-) &
-bg_pids+=($!)
+if [ "$reset_ok" = "1" ]; then
+    echo ">>> Restarting workload in ${container0}..."
+    (
+        rc=0
+        docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || rc=$?
+        echo "$rc" > "${RESULTS_DIR}/${container0}.status"
+    ) &
+    bg_pids+=($!)
+else
+    # Reset failed entirely; mark container-0 as failed and skip its post-reset run.
+    echo 1 > "${RESULTS_DIR}/${container0}.status"
+fi
 
 # --- Step 5: Wait for all background jobs ---
 echo ">>> Waiting for all containers to finish..."
