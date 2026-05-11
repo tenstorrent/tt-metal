@@ -1102,6 +1102,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // (inline) or launch_eth_cores_for_quiesce() (deferred) to deassert those RISCs after
     // writing the launch message.
     pending_phase25_force_reset_chans_.clear();
+    phase25_already_clean_chans_.clear();  // FIX P25-CLEAN (#42429)
 
     if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
         log_warning(
@@ -1216,6 +1217,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         this->id(),
                         eth_chan_id,
                         status_buf[0]);
+                    phase25_already_clean_chans_.insert(eth_chan_id);  // FIX P25-CLEAN (#42429): track for Phase 3
                     continue;
                 }
 
@@ -1770,6 +1772,33 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 }
             }
 
+            // FIX P25-CLEAN (#42429): skip channels Phase 2.5 found already TERMINATED.
+            // These are channels whose peers are not active in the current quiesce session —
+            // launching quiesce firmware on them would cause stuck STARTED state (peer can't
+            // respond to quiesce handshake), blocking in-mesh channels from advancing past
+            // REMOTE_HANDSHAKE_COMPLETE.
+            if (!phase25_already_clean_chans_.empty()) {
+                try {
+                    auto eth_chan_p25 = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (phase25_already_clean_chans_.count(eth_chan_p25)) {
+                        log_info(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} skipping ETH logical ({},{}) chan {} "
+                            "— Phase 2.5 already-clean (TERMINATED before quiesce; peer not quiescing). "
+                            "(FIX P25-CLEAN: #42429)",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan_p25);
+                        continue;
+                    }
+                } catch (...) {
+                    // Cannot resolve channel — fall through to normal launch path.
+                }
+            }
+
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
             dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
@@ -1892,6 +1921,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // FIX AR (#42429): clear force-reset set after inline ETH launch pass — channels are
     // now either launched or skipped; no further deassert needed.
     pending_phase25_force_reset_chans_.clear();
+    phase25_already_clean_chans_.clear();  // FIX P25-CLEAN: consumed by inline Phase 3 launch
 
     // FIX P REMOVED (#42429): The per-device MAGIC injection (FIX P) was removed because it
     // caused a regression when BOTH MMIO and non-MMIO devices have
@@ -1985,15 +2015,20 @@ void Device::launch_eth_cores_for_quiesce() {
     // FIX AR (#42429): Take local copy of Phase 2.5 force-reset channels for Pass-0 deassert.
     const auto p25_force_reset = std::move(pending_phase25_force_reset_chans_);
     pending_phase25_force_reset_chans_.clear();
+    // FIX P25-CLEAN (#42429): Take local copy of Phase 2.5 already-clean channels.
+    // These will be skipped in Phase 3 launch — their peers are not quiescing.
+    const auto p25_already_clean = std::move(phase25_already_clean_chans_);
+    phase25_already_clean_chans_.clear();  // FIX P25-CLEAN: consumed
 
     log_info(
         tt::LogMetal,
         "launch_eth_cores_for_quiesce: Device {} — launching ETH ERISC cores "
-        "(mmio={}, newly_dead_count={}, p25_force_reset_count={}).",
+        "(mmio={}, newly_dead_count={}, p25_force_reset_count={}, p25_already_clean_count={}).",
         this->id(),
         this->is_mmio_capable(),
         newly_dead.size(),
-        p25_force_reset.size());
+        p25_force_reset.size(),
+        p25_already_clean.size());
 
     // FIX AR (#42429): Deassert Phase-2.5 force-reset channels BEFORE writing launch
     // messages, then sleep briefly to let base UMD firmware complete .bss init.
@@ -2222,6 +2257,33 @@ void Device::launch_eth_cores_for_quiesce() {
                         logical_core.x,
                         logical_core.y);
                     continue;
+                }
+            }
+
+            // FIX P25-CLEAN (#42429): skip channels Phase 2.5 found already TERMINATED.
+            // These are channels whose peers are not active in the current quiesce session —
+            // launching quiesce firmware on them would cause stuck STARTED state (peer can't
+            // respond to quiesce handshake), blocking in-mesh channels from advancing past
+            // REMOTE_HANDSHAKE_COMPLETE.
+            if (!p25_already_clean.empty()) {
+                try {
+                    auto eth_chan = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (p25_already_clean.count(eth_chan)) {
+                        log_info(
+                            tt::LogMetal,
+                            "launch_eth_cores_for_quiesce: Device {} skipping ETH logical ({},{}) chan {} "
+                            "— Phase 2.5 already-clean (TERMINATED before quiesce; peer not quiescing). "
+                            "(FIX P25-CLEAN: #42429)",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan);
+                        continue;
+                    }
+                } catch (...) {
+                    // Cannot resolve channel — fall through to normal launch path.
                 }
             }
 

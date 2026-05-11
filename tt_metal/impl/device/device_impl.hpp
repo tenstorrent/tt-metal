@@ -450,6 +450,10 @@ private:
     // FIX AI-2 (#42429): ETH channels that Phase 2.5 force-halted with assert_risc_reset(ALL).
     // Phase 3 / launch_eth_cores_for_quiesce() must deassert these after write_launch_msg.
     std::unordered_set<uint32_t> pending_phase25_force_reset_chans_;
+    // FIX P25-CLEAN (#42429): channels that Phase 2.5 found already TERMINATED
+    // (status=0xa4b4c4d4 "already clean") — skip Phase 3 launch for these, as
+    // their peers are not active in the current fabric/quiesce session.
+    std::unordered_set<uint32_t> phase25_already_clean_chans_;
 
     // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
     // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which
