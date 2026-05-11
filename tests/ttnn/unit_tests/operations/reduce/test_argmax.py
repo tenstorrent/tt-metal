@@ -95,8 +95,14 @@ def _argmax_nc_nd_rank4():
         _ac([2, 3, 64, 64], TL, 1, False, False, torch.float32),
         _ac([2, 3, 64, 64], TL, -2 - 1, False, False, torch.bfloat16),
         _ac([2, 3, 64, 64], RM, 1, True, False, torch.bfloat16),
+        _ac([2, 5, 70, 130], TL, 0, True, False, torch.float32),
         _ac([2, 5, 70, 130], TL, 0, True, False, torch.bfloat16),
         _ac([2, 5, 70, 130], TL, 1, False, False, torch.bfloat16),
+        _ac([1, 5, 32, 32], TL, 1, False, False, torch.float32),
+        _ac([5, 1, 64, 64], TL, 0, True, False, torch.bfloat16),
+        _ac([3, 5, 256, 256], TL, 0, True, False, torch.bfloat16),
+        _ac([2, 3, 64, 64], TL, 2, True, False, torch.bfloat16),
+        _ac([2, 3, 70, 130], TL, 2, False, False, torch.bfloat16),
     ]
 
 
@@ -105,6 +111,7 @@ def _argmax_nc_nd_rank5():
         _ac([2, 3, 4, 32, 32], TL, 0, True, False, torch.bfloat16),
         _ac([2, 3, 4, 32, 32], TL, 1, False, False, torch.bfloat16),
         _ac([2, 3, 4, 32, 32], TL, 2, True, False, torch.float32),
+        _ac([2, 3, 4, 64, 64], TL, 3, True, False, torch.bfloat16),
     ]
 
 
@@ -190,3 +197,26 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
 
     # test for equivalance
     assert_equal(torch_result, ttnn_result)
+
+
+def test_argmax_nc_ties_first_index_wins(device):
+    """Constant tensor: argmax tie-break must match PyTorch (smallest index wins)."""
+    t = torch.full([4, 3, 64, 64], 1.0, dtype=torch.bfloat16)
+    for dim in (0, 1):
+        ref = torch.argmax(t, dim=dim, keepdim=True)
+        ttnn_t = ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT)
+        ttnn_t = ttnn.fill_implicit_tile_padding(ttnn_t, TEST_PADDING_VALUE)
+        out = ttnn.argmax(ttnn_t, dim=dim, keepdim=True, use_multicore=False)
+        assert_equal(ref, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+def test_argmax_nc_preallocated_output(device):
+    torch.manual_seed(0)
+    t = torch.randn(2, 3, 64, 64, dtype=torch.float32)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_in = ttnn.fill_implicit_tile_padding(ttnn_in, TEST_PADDING_VALUE)
+    ref = torch.argmax(t, dim=1, keepdim=True)
+    out_shape = ref.shape
+    ttnn_out = ttnn.zeros(list(out_shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn.argmax(ttnn_in, dim=1, keepdim=True, use_multicore=False, output_tensor=ttnn_out)
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
