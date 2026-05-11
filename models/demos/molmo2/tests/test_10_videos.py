@@ -52,7 +52,7 @@ VERIF_DIR = Path(
 VIDEO_DIR = VERIF_DIR / "videos"
 TEST_JSONL = VERIF_DIR / "test.jsonl"
 RESULTS_JSONL = VERIF_DIR / "test_results.jsonl"
-WEIGHT_CACHE = Path("/tmp/molmo2_weight_cache")
+WEIGHT_CACHE = Path(os.environ.get("MOLMO2_WEIGHT_CACHE", f"/tmp/molmo2_weight_cache_u{os.getuid()}"))
 
 _MESH_SHAPE = {
     "N150": (1, 1),
@@ -260,8 +260,9 @@ def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
 
     pass_count = fail_count = 0
     results = []
-    results_path = Path("/tmp/molmo2_ttnn_results.jsonl")
-    results_path.unlink(missing_ok=True)  # fresh file for this run
+    results_path = Path(os.environ.get("MOLMO2_RESULTS_PATH", f"/tmp/molmo2_ttnn_results_u{os.getuid()}.jsonl"))
+    if results_path.exists() and os.access(results_path, os.W_OK):
+        results_path.unlink(missing_ok=True)  # fresh file for this run
 
     logger.info(f"\n{'='*70}")
     logger.info(f"Running {len(video_tests)} video tests back-to-back")

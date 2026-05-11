@@ -11,7 +11,7 @@ we unfold to patch format [n, 729, 588] before passing to TtMolmo2Model.
 """
 
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional
 
 import torch
 from loguru import logger
@@ -20,6 +20,7 @@ import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.molmo2.tt.model_config import Molmo2Config
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.generator import create_submeshes
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
@@ -76,7 +77,9 @@ try:
 except ImportError:
     _registry_decorator = lambda cls: cls  # no-op for reference vllm
 
-WEIGHT_CACHE_PATH = Path("/tmp/molmo2_weight_cache")
+import os as _os
+
+WEIGHT_CACHE_PATH = Path(_os.environ.get("MOLMO2_WEIGHT_CACHE", f"/tmp/molmo2_weight_cache_u{_os.getuid()}"))
 _PATCH_SIZE = 14
 _PATCH_FEATURES = _PATCH_SIZE * _PATCH_SIZE * 3  # 588
 
@@ -120,12 +123,20 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         "supports_async_decode": False,
     }
 
-    def __init__(self, model, cfg, mesh_device, processor):
-        self.model = model
-        self.cfg = cfg
-        self.mesh_device = mesh_device
+    def __init__(self, models, cfgs, submesh_devices, full_mesh_device, processor):
+        assert len(models) == len(cfgs) == len(submesh_devices)
+        self.models: List = list(models)
+        self.cfgs: List = list(cfgs)
+        self.submesh_devices: List = list(submesh_devices)
+        self.dp = len(models)
+        self.batch_per_dp = cfgs[0].max_batch_size
+        # Single-replica back-compat aliases (helpers that still reach for
+        # self.model / self.cfg / self.mesh_device pick up replica 0).
+        self.model = models[0]
+        self.cfg = cfgs[0]
+        self.mesh_device = full_mesh_device
         self.processor = processor
-        self._decode_trace_captured = False
+        self._decode_trace_captured = [True] * self.dp  # captured eagerly during init
 
     @classmethod
     def initialize_vllm_model(
@@ -159,114 +170,123 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
         processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True)
 
-        cfg = Molmo2Config(mesh_device=mesh_device)
-        cfg.max_batch_size = max_batch_size
-        cfg.max_seq_len = max_seq_len
+        # Detect Galaxy (8,4) and split into 4 (1,8) submeshes for DP=4 inside one
+        # EngineCore. We override the loader-provided tt_data_parallel because in
+        # tt-inference-server we set vllm's data_parallel_size=1 (the alternative
+        # spawns 4 EngineCore processes which exhausts Galaxy PCIe TLBs).
+        try:
+            mesh_shape = tuple(mesh_device.shape)
+        except Exception:
+            mesh_shape = None
+        galaxy_dp4_forced = False
+        if tt_data_parallel == 1 and mesh_shape == (8, 4):
+            logger.info("Galaxy mesh detected (8,4); forcing internal tt_data_parallel=4")
+            tt_data_parallel = 4
+            galaxy_dp4_forced = True
 
-        ccl = TT_CCL(mesh_device)
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        assert (
+            len(submesh_devices) == tt_data_parallel
+        ), f"create_submeshes returned {len(submesh_devices)} submeshes, expected {tt_data_parallel}"
+        batch_per_dp = max(1, max_batch_size // tt_data_parallel)
+        logger.info(
+            f"Building {tt_data_parallel} TtMolmo2Model replica(s) on submeshes "
+            f"of shape {[tuple(m.shape) for m in submesh_devices]}, batch_per_dp={batch_per_dp}"
+        )
+
         WEIGHT_CACHE_PATH.mkdir(parents=True, exist_ok=True)
 
-        model = TtMolmo2Model(
-            mesh_device=mesh_device,
-            tt_ccl=ccl,
-            state_dict=state_dict,
-            weight_cache_path=WEIGHT_CACHE_PATH,
-            dtype=ttnn.bfloat16,
-            configuration=cfg,
-        )
+        models: List = []
+        cfgs: List = []
+        for dp_idx, submesh in enumerate(submesh_devices):
+            cfg = Molmo2Config(mesh_device=submesh)
+            cfg.max_batch_size = batch_per_dp
+            cfg.max_seq_len = max_seq_len
+            ccl = TT_CCL(submesh)
+            logger.info(f"Replica {dp_idx + 1}/{tt_data_parallel}: building TtMolmo2Model")
+            model = TtMolmo2Model(
+                mesh_device=submesh,
+                tt_ccl=ccl,
+                state_dict=state_dict,
+                weight_cache_path=WEIGHT_CACHE_PATH,
+                dtype=ttnn.bfloat16,
+                configuration=cfg,
+            )
+            models.append(model)
+            cfgs.append(cfg)
         del state_dict
-        logger.info("TtMolmo2Model ready")
+        logger.info(f"All {tt_data_parallel} TtMolmo2Model replica(s) ready")
 
-        # Pre-compile JIT kernels for all prefill bucket sizes and vision ops
-        # before the server starts serving — avoids stall on first inference.
-        # Use the same PREFILL_BUCKETS as the demo (test_10_videos.py).
-        from models.demos.molmo2.tt.model import PREFILL_BUCKETS
+        # Warmup matches the 105-test demo (models/demos/molmo2/tests/test_10_videos.py:179):
+        #   1) JIT compile all prefill buckets,
+        #   2) capture prefill traces ≤ MAX_TRACE_BUCKET,
+        #   3) vision JIT,
+        #   4) capture decode trace at a canonical position.
+        # Without this, prefill JITs cold per request and the decode trace gets captured
+        # lazily at request-0's actual position — different memory layouts across requests
+        # cause run-to-run non-determinism in prefill outputs.
+        # Skipped on the Galaxy DP=4 submesh path until re-validated under the current
+        # tt-metal pin (the old pin leaked tensors on (1,8) submeshes during warmup).
+        if galaxy_dp4_forced:
+            logger.info("Galaxy DP=4 submesh path — skipping per-replica warmup (re-validate before enabling)")
+        else:
+            # Two-step warmup: JIT compile prefill kernels + vision kernels. This
+            # makes prefill deterministic (cold-JIT allocations otherwise vary the
+            # memory layout across requests → bf16 reduction-order non-determinism).
+            #
+            # We deliberately do NOT call:
+            #   - warmup_all_buckets(use_trace=True): prefill traces conflict with
+            #     the decode trace for video/image eager prefill (commit 1dd8490d7d2).
+            #   - warmup_decode_trace(): captures decode trace at PREFILL_BUCKETS[-1]
+            #     =32768. While the comment claims position-agnostic, in our server
+            #     (concurrent users on one model) it produces garbage decode at
+            #     S≪32768. Lazy capture at first request's actual position works.
+            from models.demos.molmo2.tt.model import PREFILL_BUCKETS
 
-        # Match the demo (test_10_videos.py) warmup sequence exactly:
-        #   1. JIT-compile text decoder buckets
-        #   2. Capture prefill traces (same as demo's warmup_all_buckets(use_trace=True))
-        #   3. JIT-compile vision ops
-        #   4. Capture decode trace
-        #   5. Vision-integrated prefill (server-specific: warms up ttnn.add delta path)
-        logger.info(f"Pre-compiling prefill JIT kernels for buckets {PREFILL_BUCKETS}...")
-        model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+            for dp_idx, m in enumerate(models):
+                logger.info(f"[warmup {dp_idx + 1}/{len(models)}] JIT prefill buckets {PREFILL_BUCKETS}")
+                m.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+                logger.info(f"[warmup {dp_idx + 1}/{len(models)}] vision compile")
+                m.warmup_vision_compile()
+            logger.info("All replicas warmed up (JIT prefill + vision). Decode trace will capture lazily.")
 
-        # NOTE: warmup_all_buckets(use_trace=True) is intentionally SKIPPED here.
-        # Prefill traces (is_causal=True) + decode trace cannot coexist with
-        # bidirectional image/video eager prefill — _capture_prefill_trace docstring:
-        # "is_causal=False with explicit mask SDPA cannot coexist with the decode trace".
-        # With prefill traces captured, image prefills (S≤4096, bidirectional) hang
-        # permanently after the decode trace is also captured. Skipping prefill traces
-        # avoids this conflict. The text-only decoder path still benefits from the
-        # JIT compilation in warmup_all_buckets(use_trace=False) above.
-
-        # After warmup_all_buckets, KV cache is filled by the last bucket's forward_prefill.
-        # Run one decode step to JIT-compile the decode kernel.
-        logger.info("Pre-compiling decode JIT kernel...")
-        _ = model.forward_decode_step(0, PREFILL_BUCKETS[-1])
-        logger.info("Pre-compiling vision JIT kernels...")
-        model.warmup_vision_compile()
-
-        # Vision-integrated prefill: warms the ttnn.add delta-injection path used by
-        # forward_prefill when pixel_values is not None (not covered by text-only warmup).
-        #
-        # Two passes required:
-        #   1. Video pass  (k_pool=9, n_pooled=81)   — 81 image tokens, matches video frames
-        #   2. Image pass  (k_pool=4, n_pooled=392)  — 392 image tokens = 2 crops × 196
-        #      The mask pattern difference (81 vs 392 nonzero token_type_ids) triggers a
-        #      separate JIT compile of the decoder. Without this, the first image request
-        #      hits a 6-7s JIT stall that causes a TT Metal dispatch timeout.
-        for _pass_name, _k_pool, _n_pooled_per_crop, _n_crops_warmup in [
-            ("video", 9, 81, 8),  # video: k_pool=9, 81 pooled/frame, 8 frames/chunk
-            ("image", 4, 196, 2),  # image: k_pool=4, 196 pooled/crop, 2 crops (typical)
-        ]:
-            _n_pooled = _n_pooled_per_crop * _n_crops_warmup
-            _n_patches = 729
-            _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max ViT batch)
-            _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
-            logger.info(f"Pre-compiling vision-integrated prefill ({_pass_name}, n_pooled={_n_pooled})...")
-            for _S_warmup in PREFILL_BUCKETS:
-                if _S_warmup < _n_pooled:
-                    continue
-                _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
-                _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
-                _dummy_tti = None
-                if _S_warmup <= 8192:
-                    _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
-                    _dummy_tti[0, :_n_pooled] = 1
-                logger.info(f"  {_pass_name} vision-integrated prefill bucket {_S_warmup}...")
-                _ = model.forward_prefill(
-                    input_ids=_dummy_ids,
-                    pixel_values=_dummy_pv,
-                    pooled_patches_idx=_dummy_pool_idx,
-                    token_type_ids=_dummy_tti,
-                    user_id=0,
-                )
-
-        # Capture decode trace — matches demo step 4.
-        logger.info("Capturing decode trace (matches demo warmup step 4)...")
-        model.warmup_decode_trace()
-        logger.info("JIT warmup complete — server ready to serve")
-
-        return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
+        return cls(
+            models=models,
+            cfgs=cfgs,
+            submesh_devices=submesh_devices,
+            full_mesh_device=mesh_device,
+            processor=processor,
+        )
 
     @property
     def cache_path(self):
         return WEIGHT_CACHE_PATH
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_molmo2_kv_cache(*args, **kwargs, model=self.model, cfg=self.cfg)
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        """Allocate KV cache on every replica; vLLM only calls this once on rank 0.
 
-    def _unwrap(self, val):
-        """Unwrap up to two layers of list nesting."""
+        Returns a list-of-lists (per-replica layer caches). vLLM treats it as
+        opaque since Molmo2 sets supports_prefix_caching=False.
+        """
+        return [
+            allocate_molmo2_kv_cache(kv_cache_shape, dtype, num_layers, model=m, cfg=c)
+            for m, c in zip(self.models, self.cfgs)
+        ]
+
+    def _route(self, user_id: int) -> int:
+        """Map a user/batch index to a DP replica index."""
+        return min(user_id // self.batch_per_dp, self.dp - 1)
+
+    def _unwrap(self, val, idx=0):
+        """Unwrap up to two layers of list nesting, optionally indexing instead of [0]."""
         if isinstance(val, list):
-            val = val[0] if val else None
+            val = val[idx] if idx < len(val) else (val[0] if val else None)
         if isinstance(val, list):
             val = val[0] if val else None
         return val
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, enable_trace=False, **kwargs):
-        """Run prefill for a single user (batch_size=1).
+        """Run prefill for each user in the batch; route per-user to a DP replica.
 
         tokens: [batch, padded_seq_len] int32
         prompt_lens: [batch] int — actual length before padding
@@ -274,69 +294,80 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
           [n, 729, 588] pre-processed patches (new vllm / our processor)
           [n, 3, H, W]  raw normalized frames  (reference vllm)
         """
-        pv = None
-        pool_idx = None
-        token_type_ids = self._unwrap(kwargs.get("token_type_ids"))
-
-        pixel_values_videos = self._unwrap(kwargs.get("pixel_values_videos"))
-        video_token_pooling = self._unwrap(kwargs.get("video_token_pooling"))
-        pixel_values = self._unwrap(kwargs.get("pixel_values"))
-        image_token_pooling = self._unwrap(kwargs.get("image_token_pooling"))
-
-        if pixel_values_videos is not None:
-            t = pixel_values_videos.float()
-            # Reference vllm sends raw frames [n, 3, H, W]; convert to patches
-            if t.dim() == 4 and t.shape[1] == 3:
-                logger.info(f"Converting raw frames {t.shape} → patches")
-                t = _raw_frames_to_patches(t)
-            pv = t.unsqueeze(0)  # [1, n_frames, 729, 588]
-            if video_token_pooling is not None:
-                pool_idx = video_token_pooling.unsqueeze(0)
-        elif pixel_values is not None:
-            t = pixel_values.float()
-            if t.dim() == 4 and t.shape[1] == 3:
-                t = _raw_frames_to_patches(t)
-            pv = t.unsqueeze(0)
-            if image_token_pooling is not None:
-                pool_idx = image_token_pooling.unsqueeze(0)
-
-        seq_len = int(prompt_lens[0].item()) if hasattr(prompt_lens[0], "item") else int(prompt_lens[0])
-        input_ids = tokens[:1, :seq_len]
-
-        # Reconstruct token_type_ids matching HF processor's output exactly:
-        # type=1 for image_patch_id (151938) AND frame markers <im_start> (151936) / <im_end> (151937).
-        # The HF processor marks all three as type=1 (4233 positions for 51 frames = 51×83).
-        # Without frame markers: only 4131 type=1 positions — markers get causal-only attention,
-        # breaking the bidirectional image↔marker attention the model was trained with.
-        if token_type_ids is None and pv is not None:
-            _IMAGE_PATCH_ID = 151938
-            _IM_START = 151936  # <im_start> frame boundary token
-            _IM_END = 151937  # <im_end>   frame boundary token
-            token_type_ids = ((input_ids == _IMAGE_PATCH_ID) | (input_ids == _IM_START) | (input_ids == _IM_END)).long()
-
         import time
 
-        self.model.reset_kv_cache(user_id=0)
-        vision_str = "video" if pixel_values_videos is not None else "image" if pixel_values is not None else "none"
-        logger.info(f"Prefill: S={seq_len}, vision={vision_str}")
+        token_type_ids_all = kwargs.get("token_type_ids")
+        pixel_values_videos_all = kwargs.get("pixel_values_videos")
+        video_token_pooling_all = kwargs.get("video_token_pooling")
+        pixel_values_all = kwargs.get("pixel_values")
+        image_token_pooling_all = kwargs.get("image_token_pooling")
 
-        t0 = time.perf_counter()
-        logits = self.model.forward_prefill(
-            input_ids=input_ids,
-            pixel_values=pv,
-            pooled_patches_idx=pool_idx,
-            token_type_ids=token_type_ids,
-            user_id=0,
-        )
-        self._last_prefill_ms = (time.perf_counter() - t0) * 1000
-        self._decode_step_count = 0
-        self._decode_total_ms = 0.0
-        logger.info(f"Prefill done: {self._last_prefill_ms:.0f}ms")
+        batch_size = tokens.shape[0]
+        out_logits = []
+        for u in range(batch_size):
+            rank = self._route(u)
+            model = self.models[rank]
+            local_uid = u % self.batch_per_dp
 
-        # Decode trace is pre-captured at server bringup (initialize_vllm_model).
-        # No lazy capture here — nothing should JIT or trace during inference.
+            token_type_ids = self._unwrap(token_type_ids_all, idx=u)
+            pixel_values_videos = self._unwrap(pixel_values_videos_all, idx=u)
+            video_token_pooling = self._unwrap(video_token_pooling_all, idx=u)
+            pixel_values = self._unwrap(pixel_values_all, idx=u)
+            image_token_pooling = self._unwrap(image_token_pooling_all, idx=u)
 
-        return logits, None  # (logits, rope_deltas=None)
+            pv = None
+            pool_idx = None
+            if pixel_values_videos is not None:
+                t = pixel_values_videos.float()
+                if t.dim() == 4 and t.shape[1] == 3:
+                    logger.info(f"Converting raw frames {t.shape} → patches")
+                    t = _raw_frames_to_patches(t)
+                pv = t.unsqueeze(0)
+                if video_token_pooling is not None:
+                    pool_idx = video_token_pooling.unsqueeze(0)
+            elif pixel_values is not None:
+                t = pixel_values.float()
+                if t.dim() == 4 and t.shape[1] == 3:
+                    t = _raw_frames_to_patches(t)
+                pv = t.unsqueeze(0)
+                if image_token_pooling is not None:
+                    pool_idx = image_token_pooling.unsqueeze(0)
+
+            seq_len = int(prompt_lens[u].item()) if hasattr(prompt_lens[u], "item") else int(prompt_lens[u])
+            input_ids = tokens[u : u + 1, :seq_len]
+
+            if token_type_ids is None and pv is not None:
+                _IMAGE_PATCH_ID = 151938
+                _IM_START = 151936
+                _IM_END = 151937
+                token_type_ids = (
+                    (input_ids == _IMAGE_PATCH_ID) | (input_ids == _IM_START) | (input_ids == _IM_END)
+                ).long()
+
+            model.reset_kv_cache(user_id=local_uid)
+            vision_str = "video" if pixel_values_videos is not None else "image" if pixel_values is not None else "none"
+            logger.info(f"Prefill rank={rank} user={u} local_uid={local_uid}: S={seq_len}, vision={vision_str}")
+
+            t0 = time.perf_counter()
+            logits = model.forward_prefill(
+                input_ids=input_ids,
+                pixel_values=pv,
+                pooled_patches_idx=pool_idx,
+                token_type_ids=token_type_ids,
+                user_id=local_uid,
+            )
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info(f"Prefill done (rank={rank}): {elapsed_ms:.0f}ms")
+            self._last_prefill_ms = elapsed_ms
+            self._decode_step_count = 0
+            self._decode_total_ms = 0.0
+            out_logits.append(logits)
+
+        # Stack along batch dim, then add a unit seq-len dim so the runner can do
+        # prefill_output[:, -1, :]. Bare-tensor return (no tuple) keeps both
+        # tt_model_runner code paths happy (mixed-batch + single-request).
+        stacked = torch.cat([l if l.dim() == 2 else l.unsqueeze(0) for l in out_logits], dim=0)  # [batch, vocab]
+        return stacked.unsqueeze(1)  # [batch, 1, vocab]
 
     def _capture_decode_trace(self, prefill_seq_len: int):
         self.model._decode_trace_tensors = self.model._allocate_decode_trace_tensors()
@@ -357,24 +388,46 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         sampling_params=None,
         **kwargs,
     ):
-        """Run single-token decode."""
-        token_id = int(tokens[0, 0].item())
-        position = int(start_pos[0].item()) if hasattr(start_pos[0], "item") else int(start_pos[0])
+        """Run single-token decode for each user; route per-user to its DP replica.
 
+        Padding slots (start_pos < 0, from runner pad-to-max_num_reqs) get a
+        zeros logit shaped to match the real outputs (vocab inferred from a real
+        forward).
+        """
         import time
 
-        t0 = time.perf_counter()
-        # Use forward_decode_step (eager, no trace) — decode JIT is pre-compiled during
-        # initialize_vllm_model warmup so no first-inference stall happens.
-        logits = self.model.forward_decode_step(token_id, position).squeeze(0)
-        step_ms = (time.perf_counter() - t0) * 1000
+        batch_size = tokens.shape[0]
+        out_logits = [None] * batch_size
+        for u in range(batch_size):
+            position = int(start_pos[u].item()) if hasattr(start_pos[u], "item") else int(start_pos[u])
+            if position < 0:
+                continue  # padding slot; fill in below
+            rank = self._route(u)
+            token_id = int(tokens[u, 0].item())
+            t0 = time.perf_counter()
+            # Route through the captured decode trace (lazy capture on first call).
+            # Eager forward_decode_step hits a system_memory_manager dispatch hang
+            # on Galaxy hardware after ~10-15 steps; the traced path doesn't.
+            # NOTE: capture at the *actual* position (not the default 32768 bucket)
+            # because the captured trace's SDPA reads KV cache up to current_pos —
+            # capturing at 32768 when only ~2700 positions are filled reads garbage
+            # and hangs. Demo's model.generate() does this same lazy-capture at S.
+            m = self.models[rank]
+            if m._decode_trace_id is None:
+                m._decode_trace_tensors = m._allocate_decode_trace_tensors()
+                m._decode_trace_id, m._decode_trace_output = m._capture_decode_trace(m._decode_trace_tensors, position)
+            logits = m._execute_decode_trace(token_id, position).squeeze(0)
+            step_ms = (time.perf_counter() - t0) * 1000
+            self._decode_step_count = getattr(self, "_decode_step_count", 0) + 1
+            self._decode_total_ms = getattr(self, "_decode_total_ms", 0.0) + step_ms
+            logger.info(f"Decode rank={rank} user={u} step {self._decode_step_count}: pos={position} {step_ms:.0f}ms")
+            out_logits[u] = logits.unsqueeze(0)
 
-        self._decode_step_count = getattr(self, "_decode_step_count", 0) + 1
-        self._decode_total_ms = getattr(self, "_decode_total_ms", 0.0) + step_ms
-        logger.info(
-            f"Decode step {self._decode_step_count}: pos={position} {step_ms:.0f}ms  "
-            f"(total decode {self._decode_total_ms:.0f}ms, "
-            f"prefill {getattr(self,'_last_prefill_ms',0):.0f}ms)"
-        )
-
-        return logits.unsqueeze(0)  # [1, vocab_size]
+        real = next((l for l in out_logits if l is not None), None)
+        if real is None:
+            return torch.zeros(0, 0)
+        vocab = real.shape[-1]
+        for u in range(batch_size):
+            if out_logits[u] is None:
+                out_logits[u] = torch.zeros(1, vocab, dtype=real.dtype)
+        return torch.cat(out_logits, dim=0)  # [batch, vocab]
