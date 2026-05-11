@@ -42,7 +42,7 @@ model.eval()
 _device = next(model.parameters()).device
 
 # Load image
-image = Image.open("models/experimental/devstarl2_small/reference/sample.jpeg").convert("RGB")
+image = Image.open("models/experimental/devstarl2_small/reference/testimage1.jpeg").convert("RGB")
 
 # Build prompt with the correct image placeholder(s). Mistral3 uses token id `image_token_id`
 # (decoded as "[IMG]"), NOT the string "<image>". The processor expands one logical "[IMG]"
