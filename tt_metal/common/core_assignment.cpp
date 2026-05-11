@@ -104,6 +104,14 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
                             coord.x--;
                         }
                     };
+                    // Saturating decrement: x_step is unsigned and the number of
+                    // shifts in pathological harvesting configurations could otherwise
+                    // wrap it to UINT32_MAX, producing out-of-grid coord.x values.
+                    auto decrement_x_step = [&]() {
+                        if (x_step > 0) {
+                            x_step--;
+                        }
+                    };
                     bool found_new_row = false;
                     for (int j = start; step > 0 ? j <= end : j >= end; j += step) {
                         if (std::find(non_worker_rows.begin(), non_worker_rows.end(), j) == non_worker_rows.end() &&
@@ -111,7 +119,7 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
                             coord.y = j;
                             coord.x += x_step;
                             clamp_x_to_valid_col();
-                            x_step--;
+                            decrement_x_step();
                             found_new_row = true;
                             break;
                         }
@@ -122,7 +130,7 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
                                 coord.y = j;
                                 coord.x += x_step;
                                 clamp_x_to_valid_col();
-                                x_step--;
+                                decrement_x_step();
                                 found_new_row = true;
                                 break;
                             }
@@ -217,6 +225,18 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
                worker_x < full_grid_size_x - 1) {
             worker_x++;
         }
+        // If walking right hit the boundary on a non-worker column (e.g. the rightmost
+        // column is the reserved dispatch column on harvested WH + COL dispatch), fall
+        // back to walking left to find the nearest valid worker column.
+        while (std::find(non_worker_cols.begin(), non_worker_cols.end(), worker_x) != non_worker_cols.end() &&
+               worker_x > 0) {
+            worker_x--;
+        }
+        TT_FATAL(
+            std::find(non_worker_cols.begin(), non_worker_cols.end(), worker_x) == non_worker_cols.end(),
+            "Could not find a valid worker column adjacent to DRAM core at physical (x={}, y={})",
+            dram_core.x,
+            dram_core.y);
         dram_interface_workers.push_back(CoreCoord(worker_x, dram_core_y));
     }
 

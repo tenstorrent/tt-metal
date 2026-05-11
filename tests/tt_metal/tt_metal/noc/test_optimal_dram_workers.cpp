@@ -19,6 +19,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -43,7 +44,7 @@ class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
 //
 // Blackhole rejects ROW dispatch (see ttnn::Device guard:
 // "ROW dispatch core axis is not supported for blackhole arch"), so we omit ROW on BH.
-static std::vector<DispatchCoreAxis> supported_dispatch_axes() {
+std::vector<DispatchCoreAxis> supported_dispatch_axes() {
     std::vector<DispatchCoreAxis> axes = {DispatchCoreAxis::COL};
     const char* arch = std::getenv("ARCH_NAME");
     if (arch == nullptr || std::string(arch) != "blackhole") {
