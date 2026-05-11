@@ -145,10 +145,18 @@ class TTSConfig:
 
     def __post_init__(self):
         if self.codec_language_ids is None:
+            # Codec language IDs as used by demo_pure_reference_tts.py / HF Qwen3-TTS.
             self.codec_language_ids = {
                 "english": 2050,
                 "chinese": 2055,
+                "german": 2053,
+                "italian": 2070,
+                "portuguese": 2071,
+                "spanish": 2054,
                 "japanese": 2058,
+                "korean": 2064,
+                "french": 2061,
+                "russian": 2069,
             }
 
 
