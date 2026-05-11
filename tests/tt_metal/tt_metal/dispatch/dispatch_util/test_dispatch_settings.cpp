@@ -63,7 +63,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBuffer) {
 TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBufferWith2ByteEntries) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_entries = 0x1000;
-    const uint32_t expected_buffer_bytes = expected_buffer_entries * 2;  // 2-byte entry size for wormhole-eth
+    const uint32_t expected_buffer_bytes = expected_buffer_entries * 2;
     DispatchSettings settings(hw_cqs, CoreType::ETH, false, false, default_l1_alignment, 2);
     settings.prefetch_q_entries(expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_entries_, expected_buffer_entries);
