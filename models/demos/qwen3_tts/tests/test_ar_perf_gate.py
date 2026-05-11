@@ -22,9 +22,10 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT))
 
 TARGET_TEXT = (
-    "Hello, this is a test of the Qwen3 TTS speech system running on "
-    "Tenstorrent hardware. The autoregressive decoder loop is what we want "
-    "to profile here today."
+    "Good morning. Today is a beautiful day for a walk in the park. "
+    "The trees are full of bright green leaves, and a gentle breeze is "
+    "blowing through the air. Children are playing on the grass while "
+    "the sun warms the ground beneath them."
 )
 REF_TEXT = "Jason, can we take a look at the review slides"
 REF_AUDIO = str(REPO_ROOT / "models" / "demos" / "qwen3_tts" / "demo" / "jim_reference.wav")
