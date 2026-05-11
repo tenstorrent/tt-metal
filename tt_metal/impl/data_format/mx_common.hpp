@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -87,5 +89,16 @@ void unpack_elem_words(
     uint32_t elem_count,
     const FormatParams& params,
     std::vector<uint8_t>& out);
+
+// 2^k for integer k, avoiding the libm overhead of std::ldexp on the hot
+// per-element MX unpack path. Fast path bit-constructs a normal float for
+// k in [-126, 127]; the rare edges (subnormal scale, E8M0 NaN scale) defer
+// to std::ldexp so behavior matches at boundaries.
+inline float pow2_f32(int k) {
+    if (k >= -126 && k <= 127) {
+        return std::bit_cast<float>(static_cast<uint32_t>(127 + k) << 23);
+    }
+    return std::ldexp(1.0f, k);
+}
 
 }  // namespace tt::tt_metal::mx
