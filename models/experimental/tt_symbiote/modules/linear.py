@@ -10,7 +10,12 @@ from torch import nn
 import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.module import (
+    TTNNModule,
+    deallocate_weights_after,
+    run_on_devices,
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+)
 from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 
@@ -83,6 +88,13 @@ def _dp_prefill_matmul_program_config(device, input_shape, weight_shape):
         fused_activation=None,
         fuse_batch=False,
     )
+
+
+def _linear_mesh_num_devices(device) -> int:
+    """Rank count on the active mesh. Single-device meshes cannot use fabric CCLs."""
+    if device is None or not hasattr(device, "get_num_devices"):
+        return 1
+    return int(device.get_num_devices())
 
 
 @trace_enabled
@@ -208,7 +220,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, input_dim=-1, weight_dim=-2)
 
-    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
@@ -225,7 +237,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
-        if _tp_requires_ccl(self.device):
+        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
@@ -241,7 +253,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
 
 
 class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
-    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass: matmul + all_reduce.
 
@@ -272,7 +284,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
         # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
         # is incompatible with TTNN trace capture (requires stable buffer addresses).
-        if _tp_requires_ccl(self.device):
+        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
@@ -336,7 +348,7 @@ class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
     @deallocate_weights_after
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with automatic weight deallocation."""
         return super().forward(input_tensor)
@@ -385,7 +397,7 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, weight_dim=-1)
 
-    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer.
 

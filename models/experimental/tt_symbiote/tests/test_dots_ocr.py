@@ -141,7 +141,11 @@ def test_dots_ocr_text(mesh_device):
     ],
 )
 def test_dots_ocr_vision(mesh_device, image_link):
-    """Test standalone TTNN pipeline for dots.ocr with vision (image + text)."""
+    """Test standalone TTNN pipeline for dots.ocr with vision (image + text).
+
+    Uses a 1×N mesh only (e.g. TP1DP2 on N300, TP1DP8 on T3K) so the run stays on
+    a single row of chips and does not use a 2D Galaxy-style mesh.
+    """
     pytest.importorskip("qwen_vl_utils")
     from qwen_vl_utils import process_vision_info
     from PIL import Image

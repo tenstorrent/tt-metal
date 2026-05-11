@@ -7,8 +7,18 @@
 from torch import nn
 import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.module import (
+    TTNNModule,
+    run_on_devices,
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+)
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
+
+
+def _mesh_num_devices(device) -> int:
+    if device is None or not hasattr(device, "get_num_devices"):
+        return 1
+    return int(device.get_num_devices())
 
 
 class TTNNLayerNorm(TTNNModule):
@@ -206,10 +216,31 @@ class TTNNDistributedRMSNorm(TTNNModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+        # Single-device meshes cannot use fabric-backed all_gather in the distributed path.
+        self.tt_weight_local = None
+        if _mesh_num_devices(self.device) <= 1:
+            self.tt_weight_local = ttnn.from_torch(
+                weight.unsqueeze(0).expand(32, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self.tt_weight_local = ttnn.to_device(self.tt_weight_local, self.device)
 
-    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, inp):
         original_shape = inp.shape
+        eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
+
+        if _mesh_num_devices(self.device) <= 1:
+            if len(original_shape) == 3:
+                inp = ttnn.unsqueeze(inp, 1)
+            if inp.layout != ttnn.TILE_LAYOUT:
+                inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            tt_out = ttnn.rms_norm(inp, weight=self.tt_weight_local, epsilon=eps)
+            if len(original_shape) == 3 and len(tt_out.shape) == 4:
+                tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+            return tt_out
+
         if len(original_shape) == 3:
             inp = ttnn.unsqueeze(inp, 1)  # Add batch dimension for RMSNorm
         if inp.layout != ttnn.TILE_LAYOUT:
@@ -238,7 +269,6 @@ class TTNNDistributedRMSNorm(TTNNModule):
             topology=ttnn.Topology.Ring,
         )
         # Run distributed rmsnorm part 2
-        eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
         tt_out = ttnn.rms_norm_post_all_gather(
             inp,
             tt_stats,

@@ -4,13 +4,18 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
-from models.experimental.tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from models.experimental.tt_symbiote.core.module import (
+    TTNNModule,
+    run_on_devices,
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+)
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
     _dp_prefill_matmul_program_config,
     _tp_requires_ccl,
     _tp_mesh_mapper,
+    _linear_mesh_num_devices,
 )
 
 
@@ -70,7 +75,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             packer_l1_acc=True,
         )
 
-    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -88,7 +93,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
-        if _tp_requires_ccl(self.device):
+        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
@@ -127,7 +132,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             packer_l1_acc=True,
         )
 
-    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -143,7 +148,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
-        if _tp_requires_ccl(self.device):
+        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,

@@ -351,6 +351,20 @@ MeshShapeToDeviceArch = {
     "BHGLX": DeviceArch.BHGLX,
 }
 
+# Ring / mesh collectives used by column-sharded linears (reduce_scatter, all_gather, all_reduce).
+# Keep in sync with keys in ``MeshShapeToDeviceArch`` so ``MESH_DEVICE`` always maps to an allowed arch.
+SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS = (
+    DeviceArch.N150,
+    DeviceArch.N300,
+    DeviceArch.T3K,
+    DeviceArch.TG,
+    DeviceArch.P150,
+    DeviceArch.P300,
+    DeviceArch.P150x4,
+    DeviceArch.P150x8,
+    DeviceArch.BHGLX,
+)
+
 
 def run_on_devices(*allowed_archs: DeviceArch):
     """
