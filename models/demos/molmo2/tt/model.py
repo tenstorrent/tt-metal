@@ -768,38 +768,35 @@ class TtMolmo2Model(LightweightModule):
 
         return trace_id, trace_logits
 
-    def _execute_decode_trace(self, token_id: int, position: int) -> torch.Tensor:
+    def _execute_decode_trace(self, token_id: int, position: int) -> int:
         """Update stable input buffers and execute the captured decode trace.
 
-        Each update allocates a small staging tensor, copies into the stable buffer
-        in-place (ttnn.copy requires both to be device tensors), then frees staging.
-        This follows the same pattern used by the reference demo generator.
+        Uses copy_host_to_device_tensor (direct DMA into pre-allocated device buffers)
+        instead of creating intermediate staging device tensors. This matches the
+        tt_transformers pattern (prepare_decode_inputs_host + copy_host_to_device) and
+        eliminates 4x device alloc/copy/dealloc per step.
 
-        Returns logits [vocab_size] on CPU.
+        Returns next token ID (int) via on-device argmax.
         """
         tt = self._decode_trace_tensors
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
-        def _upload(t_cpu, dtype, layout, device_buf):
-            staging = ttnn.from_torch(
-                t_cpu,
-                dtype=dtype,
-                layout=layout,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            ttnn.copy(staging, device_buf)
-            ttnn.deallocate(staging)
+        def _host(t_cpu, dtype, layout):
+            return ttnn.from_torch(t_cpu, dtype=dtype, layout=layout, device=None, mesh_mapper=mapper)
 
-        # Update token ID ([1, 1, 1] uint32)
-        _upload(torch.tensor([[[token_id]]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, tt["tok_id"])
-        # Update position ([1] int32)
-        _upload(torch.tensor([position], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, tt["cur_pos"])
-        # Update RoPE cos/sin for this position ([1, 1, 1, head_dim])
+        # Build host tensors (no device allocation) then DMA directly into stable buffers
+        ttnn.copy_host_to_device_tensor(
+            _host(torch.tensor([[[token_id]]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            tt["tok_id"],
+        )
+        ttnn.copy_host_to_device_tensor(
+            _host(torch.tensor([position], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            tt["cur_pos"],
+        )
         cos_p = self._cos_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
         sin_p = self._sin_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
-        _upload(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["cos"])
-        _upload(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["sin"])
+        ttnn.copy_host_to_device_tensor(_host(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT), tt["cos"])
+        ttnn.copy_host_to_device_tensor(_host(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT), tt["sin"])
 
         # Replay the captured trace — non-blocking so CPU can continue while device runs.
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
