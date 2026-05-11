@@ -93,7 +93,7 @@ struct OutputContext {
     OutputContext() = delete;
     OutputContext(const OutputContext&) = delete;
 
-    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_cb_addr, uint32_t out_count, bool keep_dim) :
+    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_cb_addr, uint32_t out_count) :
         collected_count(0),
         output_page_id(0),
         stack_ptr(ptr),

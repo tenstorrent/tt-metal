@@ -173,12 +173,30 @@ Tensor argmax(
         !optional_output_tensor.has_value() || is_device_tensor(optional_output_tensor.value()),
         "Preallocated output tensor must be on device");
 
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto rank = input_shape.size();
+    if (dim.has_value()) {
+        if (rank > 0) {
+            const int32_t r = static_cast<int32_t>(rank);
+            TT_FATAL(
+                dim.value() >= -r && dim.value() < r,
+                "argmax: Dimension out of range (expected to be in range of [{}, {}], but got {})",
+                -r,
+                r - 1,
+                dim.value());
+        } else {
+            // Rank 0 (scalar): only the virtual axis 0 / -1 is valid.
+            TT_FATAL(
+                dim.value() == 0 || dim.value() == -1,
+                "argmax: Dimension out of range for scalar tensor (expected 0 or -1, but got {})",
+                dim.value());
+        }
+    }
+
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return zero_volume_argmax(input_tensor, dim, keepdim, output_memory_config, optional_output_tensor);
     }
 
-    const auto& input_shape = input_tensor.logical_shape();
-    auto rank = input_shape.size();
     if (rank == 0) [[unlikely]] {
         if (!optional_output_tensor.has_value()) {
             return full(
@@ -214,9 +232,8 @@ Tensor argmax(
     }
 
     // Register-based NC path for reductions along any non-HW dimension. This
-    // uses DST accumulation (similar to fast_reduce_nc) for significantly
-    // better performance than the scalar-loop readers and, unlike the legacy
-    // path, supports arbitrary non-last dims. It does not take sub_core_grids;
+    // uses DST accumulation (similar to fast_reduce_nc).
+    // It does not take sub_core_grids;
     // use_multicore is also not threaded through (prim::argmax cannot serve this
     // ROW_MAJOR layout + dim combo either), so callers must omit sub_core_grids.
     if (should_use_nc_path(input_tensor, dim, output_memory_config)) {

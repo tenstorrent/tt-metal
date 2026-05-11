@@ -34,12 +34,8 @@ void kernel_main() {
 
     constexpr uint32_t outer_dim_size = get_compile_time_arg_val(10);
 
-    // Must match the width reader's compile args for TensorAccessor alignment; TILE path is always dim-reduce.
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(11);
-    constexpr bool keepdim = (bool)get_compile_time_arg_val(12);
-    (void)reduce_all;
-
-    constexpr uint32_t num_c_time_args = 13;
+    // TensorAccessor follows the kernel-specific compile-time args (no reduce_all/keepdim; width reader adds those).
+    constexpr uint32_t num_c_time_args = 11;
 
     const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_base_addr = get_arg_val<uint32_t>(1);
@@ -84,7 +80,7 @@ void kernel_main() {
         src_data_format,
         src_cb_addr);
 
-    OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_cb_addr, output_page_elements, keepdim);
+    OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_cb_addr, output_page_elements);
 
     constexpr uint32_t inner_size = input_height * input_width;
 

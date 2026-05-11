@@ -109,7 +109,6 @@ def _argmax_nc_nd_rank5():
 
 
 def argmax_torch_ttnn_cases():
-    """Yield all curated argmax vs torch cases (order matches the original monolithic list)."""
     yield from chain(
         _argmax_misc_and_rank_special(),
         _argmax_row_major_wide_reduce_last_dim(),
@@ -119,12 +118,9 @@ def argmax_torch_ttnn_cases():
     )
 
 
-ARGMAX_TORCH_TTNN_CASES = list(argmax_torch_ttnn_cases())
-
-
 @pytest.mark.parametrize(
     argnames="tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype",
-    argvalues=ARGMAX_TORCH_TTNN_CASES,
+    argvalues=list(argmax_torch_ttnn_cases()),
 )
 def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype):
     """

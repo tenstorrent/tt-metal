@@ -108,7 +108,7 @@ void kernel_main() {
         src_data_format,
         src_cb_addr);
 
-    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements, keepdim);
+    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {

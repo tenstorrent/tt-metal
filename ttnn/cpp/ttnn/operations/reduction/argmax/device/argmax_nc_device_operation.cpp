@@ -3,18 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_nc_device_operation.hpp"
+#include "argmax_utils.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
-
-namespace {
-
-// Normalize a possibly-negative dim into [0, rank).
-int32_t normalize_dim(int32_t dim, int32_t rank) { return dim < 0 ? dim + rank : dim; }
-
-}  // namespace
 
 ArgMaxNCDeviceOperation::program_factory_t ArgMaxNCDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
