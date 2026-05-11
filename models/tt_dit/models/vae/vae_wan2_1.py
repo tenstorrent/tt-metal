@@ -1452,6 +1452,8 @@ class WanDecoder(Module):
         """
         assert t_chunk_size is None or t_chunk_size >= 1, f"t_chunk_size must be None or >= 1, got {t_chunk_size}"
         B, T, H, W, C = z_BTHWC.shape
+        if logical_w == 0:
+            logical_w = W
 
         self.clear_cache()
         z_tile_BTHWC = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
@@ -1785,6 +1787,8 @@ class WanEncoder(Module):
             encoder_t_chunk_size is None or encoder_t_chunk_size >= 4
         ), f"encoder_t_chunk_size must be None or >= 4, got {encoder_t_chunk_size}"
         B, T, H, W, C = x_BTHWC.shape
+        if logical_w == 0:
+            logical_w = W
         logger.info(f"WanEncoder.forward: T={T}, encoder_t_chunk_size={encoder_t_chunk_size}")
 
         if encoder_t_chunk_size is None:

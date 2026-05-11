@@ -1028,7 +1028,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             latents = latents.to(self.vae.dtype)
             latents = latents * self._vae_latents_std + self._vae_latents_mean
 
-            tt_latents_BTHWC, logical_h = self.tt_vae.prepare_input(latents)
+            tt_latents_BTHWC, logical_h, logical_w = self.tt_vae.prepare_input(latents)
 
             tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
@@ -1045,6 +1045,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 tt_latents_BTHWC,
                 logical_h,
                 t_chunk_size=self.vae_t_chunk_size,
+                logical_w=logical_w,
             )
 
             concat_dims = [None, None]
