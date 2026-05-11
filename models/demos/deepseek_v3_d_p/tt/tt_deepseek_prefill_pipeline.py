@@ -332,6 +332,13 @@ class TtDeepSeekPrefillPipeline:
 
         assert dst_slot is not None, "dst_slot must be passed in or set in the config"
 
+        # DEBUG: full KV cache zero-out per request (in-place, preserves buffer_address
+        # so migration table stays valid). Tests whether stale data across requests
+        # causes request-2 gibberish.
+        print(f"[debug][prefill] zeroing full kvpe_cache for slot={slot_id}", flush=True)
+        ttnn.kv_cache.zero_cache_range(self.kvpe_cache, 0, self.kvpe_cache.shape[2])
+        ttnn.synchronize_device(self.mesh_device)
+
         tt_token_ids = self._prepare_input_tensor(token_ids)
         on_layer_complete = self._build_migration_callback(slot_id, actual_isl, dst_slot)
 
@@ -515,6 +522,12 @@ class TtDeepSeekPrefillPipeline:
                         f"FAILED: {type(e).__name__}: {e}",
                         flush=True,
                     )
+            print(
+                f"[migration][prefill] CALL migrate_layer("
+                f"layer={layer_idx}, pos_start=0, pos_end={end_pos}, "
+                f"src_slot={slot_id}, dst_slot={dst_slot})",
+                flush=True,
+            )
             uuid = migration_layer.migrate_layer(layer_idx, 0, end_pos, slot_id, dst_slot)
             ## Wait for each one for initial bringup
             # if layer_idx == last_layer_idx:
