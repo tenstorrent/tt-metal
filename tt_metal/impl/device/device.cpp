@@ -2521,7 +2521,8 @@ bool Device::phase5b_erisc_health_check(
     const std::set<std::pair<tt::tt_fabric::chan_id_t, tt::tt_fabric::eth_chan_directions>>& active_channels,
     const metal_SocDescriptor& soc_desc_p5,
     uint32_t router_sync_addr,
-    uint32_t expected_ready) {
+    uint32_t expected_ready,
+    tt::tt_fabric::chan_id_t master_router_chan) {
     constexpr uint32_t kHealthCheckTimeoutMs = 2000;
     // Log unhealthy channels every 200ms for observability.
     constexpr uint32_t kHCIntermediateLogMs = 200;
@@ -2870,6 +2871,28 @@ bool Device::phase5b_erisc_health_check(
                            u.actual_status == static_cast<uint32_t>(EDMSt::LOCAL_HANDSHAKE_COMPLETE);
                 });
             if (all_handshake_incomplete) {
+                // FIX AP (#42429): Even when all stuck channels have out-of-mesh peers, if any
+                // of them is the master_router_chan, the UMD ETH relay path to this device is
+                // broken.  A stuck master router channel means commands dispatched to this device
+                // will hang (as observed in Cycle 6: Device 4 chan1 stuck at
+                // REMOTE_HANDSHAKE_COMPLETE → 5s dispatch timeout).  Set fabric_relay_path_broken_
+                // so subsequent dispatch and quiesce skip relay-dependent operations.
+                const bool master_chan_stuck = std::any_of(
+                    truly_unhealthy.begin(), truly_unhealthy.end(), [master_router_chan](const UnhealthyChannel& u) {
+                        return u.eth_chan_id == static_cast<uint32_t>(master_router_chan);
+                    });
+                if (master_chan_stuck) {
+                    fabric_relay_path_broken_ = true;
+                    log_error(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5b FIX AP (#42429): "
+                        "master_router_chan={} is stuck at/below REMOTE_HANDSHAKE_COMPLETE — "
+                        "UMD dispatch relay is broken.  Setting fabric_relay_path_broken_=true "
+                        "to prevent dispatch hang.\n{}",
+                        this->id(),
+                        master_router_chan,
+                        details);
+                }
                 log_warning(
                     tt::LogMetal,
                     "wait_for_fabric_workers_ready: Device {} Phase 5b: all {} truly-unhealthy "
@@ -3571,7 +3594,7 @@ void Device::wait_for_fabric_workers_ready() {
         } else {
             // Phase 5b: Per-channel ERISC health check.
             // Extracted to Device::phase5b_erisc_health_check() for readability.
-            if (phase5b_erisc_health_check(active_channels, soc_desc_p5, router_sync_addr, expected_ready)) {
+            if (phase5b_erisc_health_check(active_channels, soc_desc_p5, router_sync_addr, expected_ready, builder_ctx.get_fabric_master_router_chan(this->id()))) {
                 return;
             }
             // FIX RZ4 clear point (#42429): Phase 5b completed without detecting unhealthy

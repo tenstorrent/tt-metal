@@ -314,7 +314,8 @@ private:
         const std::set<std::pair<tt::tt_fabric::chan_id_t, tt::tt_fabric::eth_chan_directions>>& active_channels,
         const metal_SocDescriptor& soc_desc_p5,
         uint32_t router_sync_addr,
-        uint32_t expected_ready);
+        uint32_t expected_ready,
+        tt::tt_fabric::chan_id_t master_router_chan);
 
     // TODO: Remove this member in favor of passing in dependencies directly
     MetalContext* context_ = nullptr;  // Runtime state
