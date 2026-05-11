@@ -7,9 +7,9 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/pack.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -21,12 +21,12 @@ void kernel_main() {
     constexpr uint32_t outer_loop = num_tiles / num_single_transfer;
 
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb_in(in_cb_id);
-    experimental::DataflowBuffer dfb_out(out_cb_id);
+    DataflowBuffer dfb_in(in_cb_id);
+    DataflowBuffer dfb_out(out_cb_id);
     unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
 #else
-    experimental::CircularBuffer cb_in(in_cb_id);
-    experimental::CircularBuffer cb_out(out_cb_id);
+    CircularBuffer cb_in(in_cb_id);
+    CircularBuffer cb_out(out_cb_id);
     unary_op_init_common(in_cb_id, out_cb_id);
 #endif
 

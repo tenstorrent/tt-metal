@@ -8,9 +8,9 @@
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #ifndef ARCH_QUASAR
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -36,8 +36,8 @@ void kernel_main() {
 #endif
 
     if constexpr (use_dfbs) {
-        experimental::DataflowBuffer dfb_in(0);
-        experimental::DataflowBuffer dfb_out(1);
+        DataflowBuffer dfb_in(0);
+        DataflowBuffer dfb_out(1);
         for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
             acquire_dst();
 
@@ -52,8 +52,8 @@ void kernel_main() {
         }
     } else {
 #ifndef ARCH_QUASAR
-        experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-        experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+        CircularBuffer cb0(tt::CBIndex::c_0);
+        CircularBuffer cb16(tt::CBIndex::c_16);
         for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
             acquire_dst();
 

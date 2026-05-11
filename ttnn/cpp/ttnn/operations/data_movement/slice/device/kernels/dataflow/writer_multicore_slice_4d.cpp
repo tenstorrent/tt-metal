@@ -42,7 +42,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
@@ -68,8 +68,8 @@ void kernel_main() {
     // Set up TensorAccessor for output data - use row size as page size
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
-    // Create experimental CircularBuffer for Device 2.0 API
-    experimental::CircularBuffer cb_in(cb_id_in);
+    // Create CircularBuffer for Device 2.0 API
+    CircularBuffer cb_in(cb_id_in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position
