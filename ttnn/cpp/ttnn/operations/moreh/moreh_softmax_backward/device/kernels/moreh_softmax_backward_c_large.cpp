@@ -32,11 +32,21 @@ ALWI void moreh_bin_chain() {
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
-        Dst::D0>;
+        Dst::D0,
+        /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
     BinElt elt{};
     elt.a_tile_idx = IdxA;
     elt.b_tile_idx = IdxB;
-    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        1,
+        elt,
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
@@ -58,7 +68,8 @@ ALWI void moreh_copy_chain() {
             Dst::D0,
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
-            PackTileReconfig::Output>{});
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 // Unary SFPU chain: CopyTile(in, FirstTile, WaitAndPop) -> Sfpu(D0) -> PackTile(out).
@@ -67,9 +78,15 @@ ALWI void moreh_unary_chain() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         1,
-        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::Input>{},
         Sfpu{},
-        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 // BinaryFpu(Mul, None) + Negative + PackTile chain.
@@ -88,9 +105,16 @@ ALWI void moreh_mul_neg_chain() {
             PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
             PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
             CbIndexMode::FirstTile,
-            Dst::D0>{},
+            Dst::D0,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
         Negative<Dst::D0>{},
-        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 }  // namespace

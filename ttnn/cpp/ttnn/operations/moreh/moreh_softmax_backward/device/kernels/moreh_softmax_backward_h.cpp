@@ -34,11 +34,21 @@ ALWI void moreh_bin_chain() {
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
-        Dst::D0>;
+        Dst::D0,
+        /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
     BinElt elt{};
     elt.a_tile_idx = IdxA;
     elt.b_tile_idx = IdxB;
-    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        1,
+        elt,
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 // Runtime-index variant for cases where idxA / idxB are loop variables.
@@ -62,21 +72,41 @@ ALWI void moreh_bin_chain_rt(uint32_t idxA, uint32_t idxB) {
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
-        Dst::D0>;
+        Dst::D0,
+        /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
     BinElt elt{};
     elt.a_tile_idx = idxA;
     elt.b_tile_idx = idxB;
-    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        1,
+        elt,
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 // Unary SFPU chain with runtime tile_idx (Pinned, WaitNoPop on input).
 template <typename Sfpu, uint32_t CbIn, uint32_t CbOut>
 ALWI void moreh_unary_chain_rt(uint32_t idx) {
     using namespace compute_kernel_lib;
-    using CopyElt = CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::Pinned>;
+    using CopyElt = CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::Pinned, CopyTileReconfig::Input>;
     CopyElt elt{};
     elt.cb_tile_idx = idx;
-    eltwise_chain(1, elt, Sfpu{}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        1,
+        elt,
+        Sfpu{},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 // BinaryFpu(Mul, None, Pinned) + Negative + PackTile chain (runtime per-side tile_idx).
@@ -93,11 +123,22 @@ ALWI void moreh_mul_neg_chain_rt(uint32_t idxA, uint32_t idxB) {
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
-        Dst::D0>;
+        Dst::D0,
+        /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
     BinElt elt{};
     elt.a_tile_idx = idxA;
     elt.b_tile_idx = idxB;
-    eltwise_chain(1, elt, Negative<Dst::D0>{}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        1,
+        elt,
+        Negative<Dst::D0>{},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
 }
 
 }  // namespace
