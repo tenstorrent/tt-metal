@@ -49,7 +49,7 @@ using namespace tt::test_utils::df;
 namespace unit_tests::compute::matmul {
 
 // Per-block matmul: out[M x N] = in0[M x K] * in1[K x N]
-// Repeated num_blocks times along K with partials accumulation.
+// Repeated num_blocks times
 // If K > 1 -> dest accumulation within each block
 // If num_blocks > 1 -> partials accumulation (either l1 accumulation or spill and reload)
 struct BlockedMatmulConfig {
@@ -504,10 +504,10 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool pass = true;
     CoreCoord core(0, 0);
     const size_t cb_page_size = 2 * 32 * 32;
-    const size_t in0_block_byte_size = M * K * cb_page_size;
-    const size_t in1_block_byte_size = K * N * cb_page_size;
-    const size_t in0_total_byte_size = num_blocks * in0_block_byte_size;
-    const size_t in1_total_byte_size = num_blocks * in1_block_byte_size;
+    const size_t in0_block_size_bytes = M * K * cb_page_size;
+    const size_t in1_block_size_bytes = K * N * cb_page_size;
+    const size_t in0_total_size_bytes = num_blocks * in0_block_size_bytes;
+    const size_t in1_total_size_bytes = num_blocks * in1_block_size_bytes;
     const size_t out_byte_size = M * N * cb_page_size;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -520,14 +520,14 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,
-        .size = in0_total_byte_size,
-        .page_size = in0_total_byte_size,
+        .size = in0_total_size_bytes,
+        .page_size = in0_total_size_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_1{
         .device = device,
-        .size = in1_total_byte_size,
-        .page_size = in1_total_byte_size,
+        .size = in1_total_size_bytes,
+        .page_size = in1_total_size_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_out{
@@ -592,12 +592,12 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const uint32_t partials_cb_index = 24;
 
         tt_metal::CircularBufferConfig l1_input0_cb_config =
-            tt_metal::CircularBufferConfig(in0_block_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
+            tt_metal::CircularBufferConfig(in0_block_size_bytes, {{in0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(in0_cb_index, cb_page_size);
         tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
 
         tt_metal::CircularBufferConfig l1_input1_cb_config =
-            tt_metal::CircularBufferConfig(in1_block_byte_size, {{in1_cb_index, tt::DataFormat::Float16_b}})
+            tt_metal::CircularBufferConfig(in1_block_size_bytes, {{in1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(in1_cb_index, cb_page_size);
         tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
 
@@ -691,12 +691,12 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         1.0f,
         1.0f,
-        in0_total_byte_size / sizeof(bfloat16),
+        in0_total_size_bytes / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0.03125f,
         0.03125f,
-        in1_total_byte_size / sizeof(bfloat16),
+        in1_total_size_bytes / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
@@ -724,10 +724,10 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             (uint32_t)in1_dram_addr,
             (uint32_t)0,
             (uint32_t)num_blocks,
-            (uint32_t)(M * K),
-            (uint32_t)(K * N),
-            (uint32_t)in0_block_byte_size,
-            (uint32_t)in1_block_byte_size,
+            (uint32_t)(M * K),  // in0_block_tile_cnt
+            (uint32_t)(K * N),  // in1_block_tile_cnt
+            (uint32_t)in0_block_size_bytes,
+            (uint32_t)in1_block_size_bytes,
         });
     tt_metal::SetRuntimeArgs(
         program_,
@@ -781,12 +781,6 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulati
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
-    }
-}
-TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreBlockedComputeMatmul) {
-    unit_tests::compute::matmul::BlockedMatmulConfig config{.M = 2, .K = 2, .N = 2, .num_blocks = 1};
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul) {

@@ -90,7 +90,7 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-            pack_tile<true>(tile_index, partials_id, tile_index);
+            pack_tile<true /* out_of_order_output */>(tile_index, partials_id, tile_index);
         }
         if (block_id == 0) {
             pack_reconfig_l1_acc(1);
@@ -98,16 +98,16 @@ void kernel_main() {
         release_dst();
 #else
         const bool is_last = (block_id == last_block_id);
-        auto& cb_acc = is_last ? cb_out : cb_partials;
-        const uint32_t acc_id = is_last ? out_id : partials_id;
+        auto& cb_dst = is_last ? cb_out : cb_partials;
+        const uint32_t cb_dst_id = is_last ? out_id : partials_id;
         if (is_last) {
             PACK((llk_pack_init(out_id)));
         }
-        cb_acc.reserve_back(out_block_num_tiles);
+        cb_dst.reserve_back(out_block_num_tiles);
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-            pack_tile(tile_index, acc_id);
+            pack_tile(tile_index, cb_dst_id);
         }
-        cb_acc.push_back(out_block_num_tiles);
+        cb_dst.push_back(out_block_num_tiles);
         release_dst();
 #endif
     }
