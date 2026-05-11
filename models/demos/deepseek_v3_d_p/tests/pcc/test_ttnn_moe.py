@@ -11,6 +11,7 @@ Gate → Dispatch → Routed Experts → Combine → Split → Add Shared.
 """
 
 import random
+from pathlib import Path
 
 import pytest
 import torch
@@ -50,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
     log_validation_results,
     visualize_expert_dispatch_table,
 )
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -163,6 +165,7 @@ def test_ttnn_moe(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
     n_sp_devices, n_tp_devices = mesh_device.shape
+    layer_idx = 0
 
     logger.debug(f"\n{'='*60}")
     logger.debug("TtMoe PCC Test")
@@ -194,7 +197,7 @@ def test_ttnn_moe(
     )
 
     # ========================================
-    # Step 1: Create weights
+    # Step 1: Create weights (cache-aware)
     # ========================================
     moe_cache_dir = Path(
         f"/tmp/deepseek_v3_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
@@ -215,44 +218,6 @@ def test_ttnn_moe(
             all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
             shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
         else:
-            logger.info("Creating torch weights (cold cache)...")
-            profiler.start("weights_creation")
-            if run_pcc_check:
-                all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
-                shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
-            else:
-                all_routed_weights = None
-                shared_expert_weights = None
-            gate_weights = create_gate_weights(num_routed_experts, emb_dim)
-            profiler.end("weights_creation")
-
-            logger.info(f"Saving torch weights to {torch_weights_cache}")
-            torch.save(
-                {"routed": all_routed_weights, "shared": shared_expert_weights, "gate": gate_weights},
-                torch_weights_cache,
-            )
-
-        # Build TTNN cache if not already complete
-        if not ttnn_cache_complete:
-            logger.info("Building TTNN cache...")
-            profiler.start("ttnn_cache_build")
-            TtMoe.build_ttnn_cache(
-                gate_weights=gate_weights,
-                routed_expert_weights=all_routed_weights,
-                shared_expert_weights=shared_expert_weights,
-                experts_per_chip=experts_per_chip,
-                emb_dim=emb_dim,
-                hidden_dim=hidden_dim,
-                mesh_device=mesh_device,
-                routed_expert_weights_dtype=ttnn.bfloat4_b,
-                shared_expert_weights_dtype=ttnn.bfloat8_b,
-                cache_path=moe_cache_dir,
-                layer_idx=layer_idx,
-            )
-            profiler.end("ttnn_cache_build")
-
-        # For non-PCC runs, free the heavy weights now that TTNN cache is built
-        if not run_pcc_check:
             all_routed_weights = None
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim)
@@ -282,10 +247,10 @@ def test_ttnn_moe(
             all_routed_weights = None
             shared_expert_weights = None
     else:
+        logger.info("TTNN cache complete, skipping torch weight creation")
         all_routed_weights = None
         shared_expert_weights = None
-
-    gate_weights = create_gate_weights(num_routed_experts, emb_dim)
+        gate_weights = None
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -372,6 +337,8 @@ def test_ttnn_moe(
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
+        weight_cache_path=moe_cache_dir,
+        layer_idx=layer_idx,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
