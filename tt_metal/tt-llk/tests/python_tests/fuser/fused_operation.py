@@ -33,7 +33,7 @@ class FusedOperation:
     block_size: Tuple[int, int] = (32, 32)
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
-    pack_l1_acc: L1Accumulation = L1Accumulation.No
+    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):
@@ -82,5 +82,5 @@ class FusedOperation:
             f"  Output: {self.output}\n"
             f"  Block Size: {self.block_size}\n"
             f"  Dest Sync: {self.dest_sync}\n"
-            f"  Pack L1 Acc: {self.pack_l1_acc}\n"
+            f"  Pack L1 Acc: {self.pack_l1_accumulation}\n"
         )

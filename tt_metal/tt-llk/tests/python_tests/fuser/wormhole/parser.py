@@ -438,7 +438,7 @@ class OperationSchema(BaseModel):
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
-    pack_l1_acc: L1Accumulation = L1Accumulation.No
+    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
 
     @field_validator("packer", mode="before")
     @classmethod
@@ -472,7 +472,7 @@ class OperationSchema(BaseModel):
             )
 
         if (
-            self.pack_l1_acc == L1Accumulation.Yes
+            self.pack_l1_accumulation == L1Accumulation.Yes
             and not output.data_format.supports_l1_acc()
         ):
             raise ValueError(f"{output.data_format} does not support L1 accumulation")
@@ -486,8 +486,8 @@ class OperationSchema(BaseModel):
             kwargs["pack_relu"] = self.pack_relu
         if self.relu_threshold:
             kwargs["relu_threshold"] = self.relu_threshold
-        if self.pack_l1_acc:
-            kwargs["pack_l1_acc"] = self.pack_l1_acc
+        if self.pack_l1_accumulation:
+            kwargs["pack_l1_accumulation"] = self.pack_l1_accumulation
 
         return FusedOperation(
             math=ComputePipeline(math_ops, self.packer.to_runtime()),

@@ -32,7 +32,7 @@ class Packer(BasePacker):
         if operation.pack_relu != PackerReluType.NoRelu:
             tensor = self._relu_golden(tensor, operation, config)
 
-        if operation.pack_l1_acc == L1Accumulation.Yes:
+        if operation.pack_l1_accumulation == L1Accumulation.Yes:
             tensor = self._l1_acc_golden(tensor, operation, config)
 
         return tensor

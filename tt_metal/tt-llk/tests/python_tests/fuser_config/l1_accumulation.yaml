@@ -20,4 +20,4 @@ operations:
         math_fidelity: "LoFi"
     packer: "Packer"
     block_size: [64, 64]
-    pack_l1_acc: 1
+    pack_l1_accumulation: 1

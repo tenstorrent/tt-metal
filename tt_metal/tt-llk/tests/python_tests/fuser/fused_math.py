@@ -318,8 +318,10 @@ class ComputePipeline:
         return f"_llk_pack_relu_config_({relu_config});\n"
 
     @staticmethod
-    def _pack_l1_acc_config(config: "GlobalConfig", operation: "FusedOperation") -> str:
-        l1_acc = operation.pack_l1_acc.cpp_enum_value
+    def _pack_l1_accumulation_config(
+        config: "GlobalConfig", operation: "FusedOperation"
+    ) -> str:
+        l1_acc = operation.pack_l1_accumulation.cpp_enum_value
         return f"_llk_pack_reconfig_l1_acc_({l1_acc});\n"
 
     def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
@@ -333,7 +335,7 @@ class ComputePipeline:
         code += self._pack_reduce_mask_config()
         code += self.packer().init(operation, config, None, None)
         code += self._pack_relu_config(config, operation)
-        code += self._pack_l1_acc_config(config, operation)
+        code += self._pack_l1_accumulation_config(config, operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
