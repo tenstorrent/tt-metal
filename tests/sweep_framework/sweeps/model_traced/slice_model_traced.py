@@ -260,7 +260,7 @@ def run(
             )
 
     # Apply topology to starts/ends tensors to match master trace
-    if ("num_devices" in op_kwargs or "slice_dim" in op_kwargs) and is_mesh_device:
+    if is_mesh_device:
         from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
 
         pos_args_raw = extract_positional_args(kwargs)

@@ -120,19 +120,8 @@ def create_mesh_device(
          op's masters all need the same axis.
       3. Default to COL.
     """
-    # 1. Env-var override takes precedence over auto-detect.
+    # 1. Env-var override — but ETH dispatch overrides when 8x8 grid is needed.
     _env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
-    if _env_axis in ("col", "row"):
-        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
-        try:
-            return ttnn.open_mesh_device(
-                mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
-                dispatch_core_config=ttnn.DispatchCoreConfig(axis=_override_axis),
-            )
-        except Exception:
-            # Fall through to auto-detect on error (e.g. axis unsupported on this mesh shape).
-            pass
 
     # Auto-discover master JSON if env var not set
     if not os.environ.get("TTNN_MASTER_JSON_PATH"):
@@ -219,13 +208,25 @@ def create_mesh_device(
     # Default: COL (gives compute grid 7x10) since most lead_models traces use
     # cores in the 7-wide pattern with y up to 9. Switch to ROW only if any of
     # the op's master shard_specs uses x=7 (which COL excludes).
-    # When x=7 is needed, use ETH dispatch so all 8x8 compute cores are available.
+    # When x=7 or 8-8 grid is needed, use ETH dispatch so all 8x8 compute cores are available.
     if needs_row_only:
         try:
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
                 l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+            )
+        except Exception:
+            pass
+
+    # Env-var override for dispatch axis (when ETH not needed)
+    if _env_axis in ("col", "row"):
+        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(axis=_override_axis),
             )
         except Exception:
             pass

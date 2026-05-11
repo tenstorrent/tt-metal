@@ -281,7 +281,16 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+            try:
+                apply_tensor_placement_topology(input_tensor, input_a_tensor_placement, (1, 2))
+            except Exception:
+                pass
+        else:
+            input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     # If master traced arg2 as a Shape object, wrap it back so the tracer
