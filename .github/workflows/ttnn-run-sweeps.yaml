@@ -1253,7 +1253,7 @@ jobs:
       !cancelled() &&
       (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'success')
     container:
-      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
