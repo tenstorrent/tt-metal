@@ -4,6 +4,10 @@
 
 #pragma once
 
+// These wrappers are intended exclusively for LLK tests and are only available
+// when the LLK infrastructure is enabled.
+#ifdef ENABLE_LLK_INFRA
+
 #include <cstdint>
 
 #include "experimental/llk_math_reduce_custom.h"
@@ -98,3 +102,5 @@ inline void _llk_math_reduce_block_max_row_reinit_wrapper_()
 #else
 #error "Unsupported architecture"
 #endif
+
+#endif // ENABLE_LLK_INFRA

@@ -4,6 +4,10 @@
 
 #pragma once
 
+// These wrappers are intended exclusively for LLK tests and are only available
+// when the LLK infrastructure is enabled.
+#ifdef ENABLE_LLK_INFRA
+
 #include <cstdint>
 
 #include "llk_unpack_tilize.h"
@@ -60,7 +64,7 @@ inline void _llk_unpack_tilize_uninit_wrapper_(
     _llk_unpack_tilize_uninit_(unpack_dst_format, face_r_dim);
 }
 
-#elif defined(ARCH_BLACKHOLE) // ARCH_BLACKHOLE version of the wrappers
+#elif defined(ARCH_BLACKHOLE)
 
 inline void _llk_unpack_tilize_init_wrapper_(
     const std::uint32_t unpack_src_format = 0,
@@ -117,3 +121,5 @@ inline void _llk_unpack_tilize_uninit_wrapper_(
 #else
 #error "Unsupported architecture for LLK unpack tilize wrappers"
 #endif
+
+#endif // ENABLE_LLK_INFRA

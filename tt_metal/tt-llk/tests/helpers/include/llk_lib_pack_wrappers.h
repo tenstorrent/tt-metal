@@ -4,6 +4,10 @@
 
 #pragma once
 
+// These wrappers are intended exclusively for LLK tests and are only available
+// when the LLK infrastructure is enabled.
+#ifdef ENABLE_LLK_INFRA
+
 #include <cstdint>
 
 #include "llk_pack.h"
@@ -15,6 +19,8 @@ using ckernel::TILE_C_DIM;
 
 inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
 {
+    // Wormhole does not need the Blackhole-specific tilize workaround, so the
+    // source format does not affect pack configuration in these LLK tests.
     (void)pack_src_format;
     return false;
 }
@@ -136,10 +142,12 @@ inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_form
     _llk_pack_untilize_uninit_(face_r_dim);
 }
 
-#elif defined(ARCH_BLACKHOLE) // ARCH_BLACKHOLE version of the wrappers
+#elif defined(ARCH_BLACKHOLE)
 
 inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
 {
+    // Blackhole requires the tilize workaround for 8-bit source formats to
+    // keep pack behavior aligned with the unpack tilize path used by LLK tests.
     return IS_8BIT_FORMAT(pack_src_format);
 }
 
@@ -265,3 +273,5 @@ inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_form
 #else
 #error "Unsupported architecture"
 #endif
+
+#endif // ENABLE_LLK_INFRA
