@@ -1141,8 +1141,7 @@ public:
         } else {
             TT_FATAL(raw.size() + l1_buf_base <= soc_desc.worker_l1_size, "SD command buffer too large for L1");
             TT_FATAL(
-                dispatch_buffer_size + l1_buf_base <= soc_desc.worker_l1_size,
-                "SD dispatch buffer too large for L1");
+                dispatch_buffer_size + l1_buf_base <= soc_desc.worker_l1_size, "SD dispatch buffer too large for L1");
         }
 
         tt_metal::MetalContext::instance().get_cluster().write_core(
