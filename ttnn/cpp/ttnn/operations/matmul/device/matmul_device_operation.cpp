@@ -31,8 +31,6 @@ void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     }
 }
 
-// Keeps substring required by
-// tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_same_shape_but_invalid
 void validate_matmul_foundational_matrix_dimensions(
     const ttnn::Shape& a_shape,
     const ttnn::Shape& b_shape,
@@ -65,8 +63,6 @@ void validate_matmul_foundational_matrix_dimensions(
         Kt_b);
 }
 
-// Mirrors tests/ttnn/unit_tests/operations/matmul/test_matmul.py::_TINY_TILE_SUPPORTED_COMBOS — keep in sync with
-// Python.
 struct TinyTileCombo {
     bool transpose_tile;
     uint32_t tile_w;
@@ -97,7 +93,6 @@ bool is_tiny_tile_combo_supported(bool transpose_tile, uint32_t tile_w, uint32_t
     return false;
 }
 
-// Matches compute_output_specs: 2D multicast uses fused M for get_M_dim regardless of cfg.fuse_batch flag.
 bool matmul_program_config_fuses_batch_dim_for_m(const operations::matmul::MatmulProgramConfig& program_config) {
     return std::visit(
         [](const auto& cfg) -> bool {
@@ -212,17 +207,14 @@ void validate_matmul_block_and_subblock_configuration(
     std::visit(
         [&attributes](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                return;
-            }
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                return;
-            }
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+            if constexpr (
+                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> ||
+                std::is_same_v<
+                    ProgramConfigType,
+                    operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> ||
+                std::is_same_v<
+                    ProgramConfigType,
+                    operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
                 return;
             }
             if constexpr (
@@ -321,7 +313,6 @@ void validate_matmul_basic_compute_grid_and_per_core_sanity(
         [device_grid, device, sub_device_id](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                // Empty config: grid and blocking live inside MatmulMultiCoreProgramFactory, not in the variant.
                 return;
             }
             if constexpr (
@@ -369,8 +360,6 @@ void validate_matmul_basic_compute_grid_and_per_core_sanity(
         chosen_program_config);
 }
 
-// gather_in0 is skipped: ring workers are A.shard_spec().grid; historical validate omitted
-// program-grid containment for that path (topology validated in gather-specific visit logic).
 void validate_matmul_sharded_operand_grids_within_program_compute_grid(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -956,9 +945,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             if constexpr (
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                // Non-zero in0_block_w / out_subblock / out_block / per_core_*:
-                // validate_matmul_block_and_subblock_configuration and
-                // validate_matmul_basic_compute_grid_and_per_core_sanity
                 if (program_config.fuse_batch) {
                     TT_FATAL(
                         get_batch_size(b_shape_padded) == 1,
@@ -983,7 +969,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             if constexpr (std::is_same_v<
                               ProgramConfigType,
                               operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                // per_core vs out_block / out_block vs subblock: validate_matmul_block_and_subblock_configuration
                 TT_FATAL(
                     !(program_config.mcast_in0 && program_config.gather_in0),
                     "Matmul1D does not support mcast_in0 and gather_in0 at the "
@@ -1037,8 +1022,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     }
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
-                } else {
-                    // Operand shard ⊆ program grid: validate_matmul_sharded_operand_grids_within_program_compute_grid
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -1302,8 +1285,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                // Operand shard ⊆ program grid: validate_matmul_sharded_operand_grids_within_program_compute_grid
-                // out_block / subblock / per_core divisibility: validate_matmul_block_and_subblock_configuration
                 if (input_tensor_a.memory_config().is_sharded()) {
                     TT_FATAL(program_config.fuse_batch, "Batch fusion is required when input A is sharded");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
@@ -1631,8 +1612,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(
                     (a_shape_padded[-1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
                     "Kt must be divisible by in0_block_w");
-                // per_core vs out_subblock divisibility + DEST tile cap:
-                // validate_matmul_block_and_subblock_configuration
             }
         },
         chosen_program_config);

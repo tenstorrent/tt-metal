@@ -304,9 +304,8 @@ void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
     const MatmulMultiCoreReuseProgramConfig& program_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set) {
-    // Mirrors matmul_multicore_reuse_optimized_program_factory.cpp core splitting + factory TT_FATAL.
     const uint32_t B = ttnn::get_batch_size(a_shape_padded);
-    const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, false);
     const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
     const uint32_t per_core_M_u = static_cast<uint32_t>(program_config.per_core_M);
     const uint32_t per_core_N_u = static_cast<uint32_t>(program_config.per_core_N);
