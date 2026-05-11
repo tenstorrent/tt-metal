@@ -706,7 +706,6 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     // triggering a simultaneous-boot race on both sides of the inter-chip ETH
                     // link.  Fix: wait until the ERISC has fully exited the 0x4970xxxx family
                     // (i.e. reached the 0x49706550 base-UMD sentinel or any non-0x4970xxxx value).
-                    constexpr uint32_t kRomPostcode = 0x49705180u;  // kept for log messages
                     constexpr uint32_t kBaseUmdFirmwareSentinel = 0x49706550u;
                     constexpr int kEdmStatusPollMs = 10000;  // FIX AQ: ROM boot to base-UMD sentinel can take >1s after PCIe hard reset; 10s matches FIX AR heartbeat window
                     constexpr auto kEdmStatusPollInterval = std::chrono::milliseconds(5);
