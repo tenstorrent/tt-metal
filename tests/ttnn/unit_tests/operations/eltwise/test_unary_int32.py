@@ -212,3 +212,34 @@ def test_abs_int32(device):
     output_tensor = ttnn.to_torch(result)
 
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+def test_abs_int32_edge_cases(device):
+    # Covers issue #20852: on Blackhole, SFPABS on INT32_MIN overflows. The kernel
+    # saturates the overflowing lane to INT32_MAX, which differs from torch.abs's
+    # wrap-around behavior — so the expected output is built explicitly here.
+    int32_min = -2147483648
+    int32_max = 2147483647
+    inputs = [int32_min, int32_min + 1, -1, 0, 1, int32_max - 1, int32_max]
+    expected = [int32_max, int32_max, 1, 0, 1, int32_max - 1, int32_max]
+
+    tile = 32 * 32
+    repeats = tile // len(inputs) + 1
+    flat_in = (inputs * repeats)[:tile]
+    flat_exp = (expected * repeats)[:tile]
+
+    torch_input_tensor_a = torch.tensor(flat_in, dtype=torch.int32).reshape(1, 1, 32, 32)
+    torch_expected_tensor = torch.tensor(flat_exp, dtype=torch.int32).reshape(1, 1, 32, 32)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    result = ttnn.abs(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(result)
+
+    assert torch.equal(torch_expected_tensor, output_tensor)
