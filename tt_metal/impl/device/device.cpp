@@ -700,6 +700,45 @@ void Device::configure_fabric(
                 }
             }
 
+            // FIX VC2-EXT (#42429): skip write_launch_msg_to_core for external UMD channels.
+            // Channels in external_umd_channels (e.g. ch14/15 on MMIO devices — peer in cluster
+            // but no TRANSLATED coord) must not receive fabric firmware.  FIX VC (ce966d016f8)
+            // correctly routes them to external_umd_channels in terminate_stale_erisc_routers,
+            // and the FIX EXT all_dead_channels merge below should catch them; this guard is an
+            // explicit belt-and-suspenders to ensure write_launch_msg_to_core is never called for
+            // any external channel regardless of all_dead_channels merge state.
+            if (core_type == CoreType::ETH && !external_umd_channels.empty()) {
+                try {
+                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (external_umd_channels.count(eth_chan)) {
+                        log_debug(
+                            tt::LogMetal,
+                            "configure_fabric: Device {} skipping write_launch_msg_to_core for "
+                            "external UMD ETH core ({},{}) channel {} (no TRANSLATED coord — "
+                            "firmware load would cause STARTED/REMOTE_HANDSHAKE_COMPLETE hang) "
+                            "(FIX VC2-EXT #42429)",
+                            this->id_,
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan);
+                        continue;
+                    }
+                } catch (const std::exception& e) {
+                    // Cannot resolve channel — skip conservatively to avoid potential hang.
+                    log_warning(
+                        tt::LogMetal,
+                        "configure_fabric: Device {} cannot resolve ETH channel for logical core "
+                        "({},{}) in external_umd_channels check — skipping write_launch_msg_to_core: {}",
+                        this->id_,
+                        logical_core.x,
+                        logical_core.y,
+                        e.what());
+                    continue;
+                }
+            }
+
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index);
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
             dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
