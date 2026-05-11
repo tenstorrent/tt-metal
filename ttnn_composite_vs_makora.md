@@ -265,8 +265,8 @@ Audit of all 19 Makora kernels' `host()` code shows a narrow operating envelope:
 | Property | What Makora kernels support |
 |---|---|
 | Tensor layout | **TILE_LAYOUT only** (asserted in 18/19; `lgamma` auto-converts from row-major) |
-| Memory layout (input) | Interleaved (assumed; works via `TensorAccessorArgs` but per-core work assignment ignores shard locality) |
-| Memory layout (output) | Always **DRAM interleaved** — outputs go through `ttnn.allocate_tensor_on_device(...)` with default config; the input's memory config is never propagated |
+| Memory layout (input) | **DRAM interleaved assumed.** No kernel asserts or branches on the input's memory config. Inputs are accessed via `TensorAccessor` (constructed from `TensorAccessorArgs(input).get_compile_time_args()`), which transparently resolves both interleaved and sharded layouts — so a sharded input would still run *correctly*. But the per-core work split assigns tiles by global linear tile-id (`core_idx * base_per_core + …`), assuming uniform NoC access cost from every core to every tile — the property of DRAM-interleaved layouts. With an L1-sharded input, each core would read most of its assigned tiles across the NoC from other cores' L1, **defeating sharding's locality benefit**. |
+| Memory layout (output) | **Always DRAM interleaved.** All kernels call `ttnn.allocate_tensor_on_device(shape, dtype, layout, device)` with no `memory_config` argument. The C++ binding (`ttnn/cpp/ttnn-nanobind/operations/core.cpp:298`) defaults to `MemoryConfig{}`, which the constructor at `tt_metal/api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp:38` documents as `// Interleaved DRAM`. The input's memory config is never propagated. |
 | dtype | bf16 only: `atan2`, `nextafter`, `digamma`, `glu`, `reglu` (5). bf16/fp32: `isclose`, `outer`, `lgamma`, `multigammaln`, `polygamma`, `swiglu`, `triu` and all 6 eltwise+reduction (13). Forced fp32: `remainder` (1). |
 | Shape constraints | Op-specific — `glu`/`reglu` need rank=4 dim=-1; `swiglu`/`sigmoid_min_*`/`log_max_square` need rank≥2; `outer` needs rank≤4. All assume tile-aligned shapes. |
 
