@@ -240,38 +240,53 @@ def run(
     if "num_devices" in op_kwargs or "slice_dim" in op_kwargs:
         import torch as _torch_s
 
-        if isinstance(slice_start, list):
-            slice_start = ttnn.from_torch(
-                _torch_s.tensor(slice_start, dtype=_torch_s.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-            )
-        if isinstance(slice_end, list):
-            slice_end = ttnn.from_torch(
-                _torch_s.tensor(slice_end, dtype=_torch_s.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-            )
-
-    # Apply topology to starts/ends tensors to match master trace
-    if is_mesh_device:
-        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
-
         pos_args_raw = extract_positional_args(kwargs)
-        for tensor_ref, arg_idx in [(slice_start, 1), (slice_end, 2)]:
-            if isinstance(tensor_ref, ttnn.Tensor):
-                raw_arg = pos_args_raw.get(arg_idx)
-                if isinstance(raw_arg, dict) and "tensor_placement" in raw_arg:
-                    try:
-                        apply_tensor_placement_topology(tensor_ref, raw_arg["tensor_placement"], (1, 2))
-                    except Exception:
-                        pass
+        if isinstance(slice_start, list):
+            _start_torch = _torch_s.tensor(slice_start, dtype=_torch_s.int32)
+            _start_placement = (
+                pos_args_raw.get(1, {}).get("tensor_placement") if isinstance(pos_args_raw.get(1), dict) else None
+            )
+            if is_mesh_device and _start_placement:
+                slice_start = create_tensor_on_mesh(
+                    _start_torch,
+                    device,
+                    ttnn.int32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                    _start_placement,
+                )
+            else:
+                slice_start = ttnn.from_torch(
+                    _start_torch,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                )
+        if isinstance(slice_end, list):
+            _end_torch = _torch_s.tensor(slice_end, dtype=_torch_s.int32)
+            _end_placement = (
+                pos_args_raw.get(2, {}).get("tensor_placement") if isinstance(pos_args_raw.get(2), dict) else None
+            )
+            if is_mesh_device and _end_placement:
+                slice_end = create_tensor_on_mesh(
+                    _end_torch,
+                    device,
+                    ttnn.int32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                    _end_placement,
+                )
+            else:
+                slice_end = ttnn.from_torch(
+                    _end_torch,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                )
 
     start_time = start_measuring_time()
     if use_named_kwargs:

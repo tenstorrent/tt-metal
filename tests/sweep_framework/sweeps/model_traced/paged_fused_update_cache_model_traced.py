@@ -306,8 +306,7 @@ def run(
     # Build kwargs for paged_fused_update_cache
     op_kwargs = {}
 
-    # update_idxs: vector<uint32_t> — only pass when master trace had it
-    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    # update_idxs: vector<uint32_t> — only pass when non-empty (default is [])
     if (
         update_idxs is not None
         and update_idxs != "__ABSENT__"
@@ -315,8 +314,6 @@ def run(
         and len(update_idxs) > 0
     ):
         op_kwargs["update_idxs"] = update_idxs
-    elif "update_idxs" not in absent_keys:
-        op_kwargs["update_idxs"] = []
 
     # update_idxs_tensor: optional Tensor
     if update_idxs_tensor_ttnn is not None:
@@ -330,8 +327,8 @@ def run(
     if page_table_ttnn is not None:
         op_kwargs["page_table"] = page_table_ttnn
 
-    # batch_offset: uint32_t — only pass when master trace had it
-    if batch_offset is not None and batch_offset != "__ABSENT__" and "batch_offset" not in absent_keys:
+    # batch_offset: uint32_t — only pass when non-zero (default is 0)
+    if batch_offset is not None and batch_offset != "__ABSENT__" and int(batch_offset) != 0:
         op_kwargs["batch_offset"] = int(batch_offset)
 
     ttnn.experimental.paged_fused_update_cache(*input_tensors, **op_kwargs)
