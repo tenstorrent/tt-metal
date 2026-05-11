@@ -37,6 +37,36 @@ GUI
 
 Tracy provides a GUI application for viewing profiling results. You can open saved profiling sessions or connect to a remote machine to view real-time profiling data, as long as network access to the remote system is available.
 
+Web GUI (WASM)
+~~~~~~~~~~~~~~
+
+After a successful ``python -m tracy`` profiling run with the default Tracy capture flow , Metalium automatically starts the **Tracy WASM web viewer** in the background.
+
+When the server starts, the **console logs** print the suggested **HTTP URL** (open in a browser).
+
+By default the HTTP server listens on **8080**. To use a different HTTP port, pass ``--web-app-port <port>``.
+
+In addition to the HTTP port, a **WebSocket** is used for live refresh on port *P*+1 (one above the chosen HTTP port *P*).
+
+Remote host (SSH)
+~~~~~~~~~~~~~~~~~
+
+If the WASM server runs on a **remote** machine (for example after ``python -m tracy`` on a lab host) but you open the viewer in a browser on your **local** machine, you must forward **both** the HTTP port and the WebSocket port. With the defaults **8080** and **8081**, SSH must tunnel local ports to the same ports on the remote loopback interface where the server is listening.
+
+Add matching ``LocalForward`` lines to your ``~/.ssh/config`` (or pass equivalent ``-L`` flags on the command line). Example for default ports:
+
+.. code-block:: text
+
+    Host my-tt-metal-host
+        HostName lab.example.com
+        User you
+
+        # Tracy WASM: HTTP and WebSocket (live refresh)
+        LocalForward 8080 127.0.0.1:8080
+        LocalForward 8081 127.0.0.1:8081
+
+Connect with ``ssh my-tt-metal-host``, then open ``http://127.0.0.1:8080/`` in a local browser. If you change the HTTP port with ``--web-app-port``, forward that port and **P**+1 the same way.
+
 Installing for Mac users
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
