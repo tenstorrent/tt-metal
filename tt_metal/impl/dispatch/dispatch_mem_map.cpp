@@ -18,7 +18,12 @@ namespace tt::tt_metal {
 DispatchMemMap::DispatchMemMap(
     const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster, bool are_cqs_dram_backed) :
     settings(DispatchSettings(
-        num_hw_cqs, core_type, is_galaxy_cluster, are_cqs_dram_backed, hal.get_alignment(HalMemType::L1))),
+        num_hw_cqs,
+        core_type,
+        is_galaxy_cluster,
+        are_cqs_dram_backed,
+        hal.get_alignment(HalMemType::L1),
+        (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u)),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
     noc_overlay_start_addr_(hal.get_noc_overlay_start_addr()),
@@ -117,6 +122,8 @@ DispatchMemMap::DispatchMemMap(
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
+
+uint32_t DispatchMemMap::prefetch_q_entry_size_bytes() const { return settings.prefetch_q_entry_size_bytes_; }
 
 uint32_t DispatchMemMap::prefetch_q_size() const { return settings.prefetch_q_size_; }
 
