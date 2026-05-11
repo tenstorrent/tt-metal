@@ -10,6 +10,7 @@
 #include <cmath>
 #include <string>
 #include <deque>
+#include <limits>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -1243,27 +1244,45 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             if (recent_cols.size() >= grid_size.x) {
                 recent_cols.pop_front();
             }
-            // Pick max-work core in this row, skipping cores in any excluded column.
-            uint32_t best_idx = 0;
-            uint32_t best_q = 0;
+            // Row-wide max work. The injector MUST be a core with this max, because
+            // K is read from DRAM by the injector and mcast to all row sinks. If the
+            // injector had fewer real iters than some sink, its padded iters would
+            // read K with an out-of-bounds nb derived from a wrapped global_q_chunk
+            // (in MLA mode K is broadcast across heads, but `nb = global_q_chunk /
+            // (NH*num_q_chunks)` becomes >0 once linear_index exceeds the head span)
+            // and mcast garbage K bytes to sinks that are still on real iters.
+            uint32_t row_max_q = 0;
             for (uint32_t col = 0; col < grid_size.x; ++col) {
                 const uint32_t ci = row * grid_size.x + col;
-                const uint32_t phys_x = core_work[ci].physical_core.x;
-                if (std::find(recent_cols.begin(), recent_cols.end(), phys_x) != recent_cols.end()) {
-                    continue;
-                }
-                if (core_work[ci].global_q_count > best_q) {
-                    best_q = core_work[ci].global_q_count;
-                    best_idx = ci;
-                }
+                row_max_q = std::max(row_max_q, core_work[ci].global_q_count);
             }
-            if (best_q == 0) {
-                k_mcast_fallback_reason = fmt::format("row {} has no work in any unclaimed column", row);
+            if (row_max_q == 0) {
+                k_mcast_fallback_reason = fmt::format("row {} has no work", row);
                 all_chains_picked = false;
                 break;
             }
+            // Among max-work cores in the row, prefer one in an un-claimed column
+            // (keeps the FIFO column cycling for NoC diversity); if all max-work
+            // cores live in excluded columns, fall back to the first one — correctness
+            // (valid K from a real-iter injector) trumps column diversity.
+            uint32_t best_idx = std::numeric_limits<uint32_t>::max();
+            for (uint32_t col = 0; col < grid_size.x; ++col) {
+                const uint32_t ci = row * grid_size.x + col;
+                if (core_work[ci].global_q_count != row_max_q) {
+                    continue;
+                }
+                const uint32_t phys_x = core_work[ci].physical_core.x;
+                const bool excluded = (std::find(recent_cols.begin(), recent_cols.end(), phys_x) != recent_cols.end());
+                if (!excluded) {
+                    best_idx = ci;
+                    break;
+                }
+                if (best_idx == std::numeric_limits<uint32_t>::max()) {
+                    best_idx = ci;  // first excluded max-work core, kept as fallback
+                }
+            }
             chain_injector_idx[row] = best_idx;
-            chain_max_q[row] = best_q;
+            chain_max_q[row] = row_max_q;
             recent_cols.push_back(core_work[best_idx].physical_core.x);
         }
 
