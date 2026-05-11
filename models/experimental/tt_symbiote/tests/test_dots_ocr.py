@@ -43,6 +43,27 @@ def _resolve_mesh_device_shape():
     return MESH_DEVICE_MAP.get(mesh_device, len(ttnn.get_device_ids()))
 
 
+def _dots_ocr_mesh_num_devices():
+    sh = _resolve_mesh_device_shape()
+    if isinstance(sh, int):
+        return max(1, int(sh))
+    if isinstance(sh, (tuple, list)):
+        if len(sh) >= 2:
+            return int(sh[0]) * int(sh[1])
+        if len(sh) == 1:
+            return int(sh[0])
+    return 1
+
+
+def _dots_ocr_device_params():
+    dp = {"trace_region_size": 300000000, "num_command_queues": 1}
+    if _dots_ocr_mesh_num_devices() > 1:
+        dp["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING
+    else:
+        dp["fabric_config"] = ttnn.FabricConfig.DISABLED
+    return dp
+
+
 DOTS_OCR_MODEL_ID = "rednote-hilab/dots.ocr"
 
 
@@ -64,7 +85,7 @@ DOTS_OCR_LOCAL_PATH = _resolve_model_path()
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 300000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [_dots_ocr_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -126,7 +147,7 @@ def test_dots_ocr_text(mesh_device):
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 300000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [_dots_ocr_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
