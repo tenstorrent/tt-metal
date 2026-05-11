@@ -115,7 +115,8 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
 
     uint32_t reader_cb_single_tile_size = max_tile_size;
     const uint32_t total_num_blocks_in_buffer = 3;
-    uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
+    uint32_t reader_cb_size =
+        max_block_size_per_reader_core * total_num_blocks_in_buffer;  // reader cb is triple buffered
 
     TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
 
@@ -136,7 +137,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     ProgramDescriptor desc;
 
     desc.cbs.push_back(CBDescriptor{
-        .total_size = reader_cb_size,  // reader cb is triple buffered
+        .total_size = reader_cb_size,
         .core_ranges = reader_core_range,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(reader_cb_index),
