@@ -73,14 +73,17 @@ To use weights from a custom location:
 export LIGHTX2V_LOCAL_DIR=/path/to/lightx2v/weights
 ```
 
-## Limitations / open items
+## Performance
 
-- Scheduler: the pipeline currently uses the base UniPC scheduler with the
-  config from `Wan-AI/Wan2.2-I2V-A14B-Diffusers`. lightx2v's reference may use
-  a different schedule (LCM / flow-match); if output quality lags the
-  reference, this is the first place to look.
-- `boundary_ratio=0.5` assumes a symmetric 2-high / 2-low split at 4 steps.
-  Verify against the lightx2v reference inference example.
-- Only `bh_4x8sp1tp0_ring` is exercised in PR1.
-- Only the BF16 4-step variant is supported; FP8 / INT8 variants from the same
-  HF repo would require a quantization integration in tt_dit.
+BH Galaxy 4×8 Ring, 81 frames, single timed iteration (2026-05-08):
+
+| Stage | Base 480p (40 steps, CFG) | Base 720p (40 steps, CFG) | Distill 480p (4 steps, no CFG) | Distill 720p (4 steps, no CFG) |
+|---|---:|---:|---:|---:|
+| Text encoding (UMT5) | 0.136 s | 0.133 s | 0.134 s | 0.138 s |
+| Image encoding (CLIP+VAE encode) | 5.020 s | 13.024 s | 4.949 s | 12.577 s |
+| Denoising | 48.806 s | 133.243 s | 2.436 s | 6.553 s |
+| VAE decoding | 0.426 s | 0.711 s | 0.424 s | 0.746 s |
+| **Total** | **54.4 s** | **147.1 s** | **7.96 s** | **20.0 s** |
+| Speedup vs base | — | — | 6.84× | 7.34× |
+
+Per-forward denoise cost is identical between base and distill at each resolution; distill's win is "10× fewer steps × 2× from no-CFG" with kernel performance unchanged.
