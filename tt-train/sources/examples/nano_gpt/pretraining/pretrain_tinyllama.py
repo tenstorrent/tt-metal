@@ -2191,6 +2191,11 @@ def main():
             if args.track_memory and not is_everything_compiled:
                 MemoryUsageTracker.snapshot(name)
 
+        # Composite SDPA (used by DeepSeek) has no built-in causal masking,
+        # so we must pass an explicit mask. Fused SDPA (GPT-2/Llama) uses
+        # its native causal mode when mask is None.
+        attn_mask = mask if model_config.model_type == "deepseek" else None
+
         # Per-step body shared by the legacy CharTokenizer epoch loop and the
         # new packed-token step-driven loop. Returns True if the outer loop
         # should stop (max_steps reached after a real optimizer step).
@@ -2199,10 +2204,6 @@ def main():
 
             profiler_marker(None, "dataloader_step_done")
 
-            # Composite SDPA (used by DeepSeek) has no built-in causal masking,
-            # so we must pass an explicit mask. Fused SDPA (GPT-2/Llama) uses
-            # its native causal mode when mask is None.
-            attn_mask = mask if model_config.model_type == "deepseek" else None
             loss_float, step_time, should_step = train_step(
                 model,
                 optimizer,
