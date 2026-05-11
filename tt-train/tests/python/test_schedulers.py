@@ -138,6 +138,8 @@ class TestCosineAnnealingStateDict:
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
+        assert "m_T_max" in state
+        assert "m_eta_min" in state
 
     def test_state_dict_step_count(self):
         opt, sched = _make_cosine()  # noqa: F841
@@ -145,6 +147,22 @@ class TestCosineAnnealingStateDict:
         for _ in range(n):
             _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
+
+    def test_state_dict_persists_hyperparameters(self):
+        opt, sched = _make_cosine()  # noqa: F841
+        state = sched.get_state_dict()
+        assert state["m_T_max"] == T_MAX
+        assert state["m_eta_min"] == pytest.approx(ETA_MIN, abs=1e-12)
+
+    def test_set_state_dict_restores_hyperparameters(self):
+        # Construct destination with intentionally different hyperparameters,
+        # then verify they get overwritten by ``set_state_dict``.
+        src_opt, src = _make_cosine(T_max=T_MAX, eta_min=ETA_MIN)  # noqa: F841
+        dst_opt = _make_opt()
+        dst = CosineAnnealingScheduler(dst_opt, T_max=T_MAX * 2, eta_min=ETA_MIN * 10)
+        dst.set_state_dict(src.get_state_dict())
+        assert dst._T_max == T_MAX
+        assert dst._eta_min == pytest.approx(ETA_MIN, abs=1e-12)
 
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_cosine()  # noqa: F841
@@ -218,6 +236,8 @@ class TestStepSchedulerStateDict:
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
+        assert "m_step_size" in state
+        assert "m_gamma" in state
 
     def test_state_dict_step_count(self):
         opt, sched = _make_step()  # noqa: F841
@@ -225,6 +245,20 @@ class TestStepSchedulerStateDict:
         for _ in range(n):
             _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
+
+    def test_state_dict_persists_hyperparameters(self):
+        opt, sched = _make_step()  # noqa: F841
+        state = sched.get_state_dict()
+        assert state["m_step_size"] == STEP_SIZE
+        assert state["m_gamma"] == pytest.approx(GAMMA, abs=1e-12)
+
+    def test_set_state_dict_restores_hyperparameters(self):
+        src_opt, src = _make_step(step_size=STEP_SIZE, gamma=GAMMA)  # noqa: F841
+        dst_opt = _make_opt()
+        dst = StepScheduler(dst_opt, step_size=STEP_SIZE * 3, gamma=GAMMA * 0.5)
+        dst.set_state_dict(src.get_state_dict())
+        assert dst._step_size == STEP_SIZE
+        assert dst._gamma == pytest.approx(GAMMA, abs=1e-12)
 
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_step()  # noqa: F841
@@ -301,6 +335,9 @@ class TestLinearSchedulerStateDict:
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
+        assert "m_start_factor" in state
+        assert "m_end_factor" in state
+        assert "m_total_steps" in state
 
     def test_state_dict_step_count(self):
         opt, sched = _make_linear()  # noqa: F841
@@ -308,6 +345,29 @@ class TestLinearSchedulerStateDict:
         for _ in range(n):
             _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
+
+    def test_state_dict_persists_hyperparameters(self):
+        opt, sched = _make_linear()  # noqa: F841
+        state = sched.get_state_dict()
+        assert state["m_start_factor"] == pytest.approx(START_FACTOR, abs=1e-12)
+        assert state["m_end_factor"] == pytest.approx(END_FACTOR, abs=1e-12)
+        assert state["m_total_steps"] == TOTAL_STEPS
+
+    def test_set_state_dict_restores_hyperparameters(self):
+        src_opt, src = _make_linear(  # noqa: F841
+            start_factor=START_FACTOR, end_factor=END_FACTOR, total_steps=TOTAL_STEPS
+        )
+        dst_opt = _make_opt()
+        dst = LinearScheduler(
+            dst_opt,
+            start_factor=START_FACTOR * 0.25,
+            end_factor=END_FACTOR * 0.5,
+            total_steps=TOTAL_STEPS * 2,
+        )
+        dst.set_state_dict(src.get_state_dict())
+        assert dst._start_factor == pytest.approx(START_FACTOR, abs=1e-12)
+        assert dst._end_factor == pytest.approx(END_FACTOR, abs=1e-12)
+        assert dst._total_steps == TOTAL_STEPS
 
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_linear()  # noqa: F841
@@ -384,6 +444,7 @@ class TestLambdaSchedulerStateDict:
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
+        assert "m_lr_lambda" in state
 
     def test_state_dict_step_count(self):
         opt, sched = _make_lambda()  # noqa: F841
@@ -391,6 +452,120 @@ class TestLambdaSchedulerStateDict:
         for _ in range(n):
             _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
+
+    def test_state_dict_lambda_function_is_none(self):
+        """Plain lambda → ``m_lr_lambda`` is saved as ``None`` (matches PyTorch)."""
+        opt = _make_opt()  # noqa: F841
+        sched = LambdaScheduler(opt, lambda step: 0.95**step)
+        assert sched.get_state_dict()["m_lr_lambda"] is None
+
+    def test_state_dict_def_function_is_none(self):
+        """``def`` function → ``m_lr_lambda`` is saved as ``None`` (matches PyTorch)."""
+
+        def lr_fn(step):
+            return 0.9**step
+
+        opt = _make_opt()  # noqa: F841
+        sched = LambdaScheduler(opt, lr_fn)
+        assert sched.get_state_dict()["m_lr_lambda"] is None
+
+    def test_state_dict_callable_object_saves_dict(self):
+        """Callable object → ``m_lr_lambda`` stores its ``__dict__`` (matches PyTorch)."""
+
+        class _ExpDecay:
+            def __init__(self, decay):
+                self.decay = decay
+                self.calls = 0
+
+            def __call__(self, step):
+                self.calls += 1
+                return self.decay**step
+
+        callable_obj = _ExpDecay(0.9)
+        opt = _make_opt()  # noqa: F841
+        sched = LambdaScheduler(opt, callable_obj)
+        for _ in range(3):
+            _step(opt, sched)
+
+        saved = sched.get_state_dict()["m_lr_lambda"]
+        assert saved == {"decay": 0.9, "calls": 3}
+
+    def test_state_dict_callable_dict_is_a_copy(self):
+        """Mutating the callable after saving must not change the saved state."""
+
+        class _Counter:
+            def __init__(self):
+                self.n = 0
+
+            def __call__(self, step):
+                self.n += 1
+                return 1.0
+
+        counter = _Counter()
+        opt = _make_opt()  # noqa: F841
+        sched = LambdaScheduler(opt, counter)
+        _step(opt, sched)
+        saved = sched.get_state_dict()["m_lr_lambda"]
+        counter.n = 999
+        assert saved == {"n": 1}
+
+    def test_set_state_dict_restores_callable_object_state(self):
+        """Round-trip must restore the callable's instance state."""
+
+        class _Counter:
+            def __init__(self, start=0):
+                self.n = start
+
+            def __call__(self, step):
+                self.n += 1
+                return 0.5
+
+        src_opt = _make_opt()  # noqa: F841
+        src = LambdaScheduler(src_opt, _Counter(start=0))
+        for _ in range(4):
+            _step(src_opt, src)
+        # The source callable has been called 4 times.
+        assert src._lr_lambda.n == 4
+        state = src.get_state_dict()
+
+        dst_opt = _make_opt()
+        dst = LambdaScheduler(dst_opt, _Counter(start=0))
+        dst.set_state_dict(state)
+        # Destination callable's ``n`` must be restored to 4.
+        assert dst._lr_lambda.n == 4
+
+    def test_set_state_dict_with_none_lambda_does_not_touch_callable(self):
+        """If saved ``m_lr_lambda`` is ``None`` the destination callable is left alone."""
+
+        def lr_fn(step):
+            return 0.5
+
+        # Functions have a writable ``__dict__``; pre-populate it so we can
+        # detect any accidental mutation by ``set_state_dict``.
+        lr_fn.tag = "untouched"  # type: ignore[attr-defined]
+
+        src_opt = _make_opt()
+        src = LambdaScheduler(src_opt, lr_fn)
+        for _ in range(3):
+            _step(src_opt, src)
+        state = src.get_state_dict()
+        assert state["m_lr_lambda"] is None
+
+        # Reconstruct on the dst side with the same plain function. This must
+        # not raise even though we cannot serialize the function itself.
+        dst_opt = _make_opt()
+        dst_lr_fn = lr_fn
+        dst = LambdaScheduler(dst_opt, dst_lr_fn)
+        dict_before = dict(dst._lr_lambda.__dict__)
+        dst.set_state_dict(state)
+
+        # Common state still resumed correctly.
+        assert dst._last_step == src._last_step
+        # Same callable object is still installed (no rebind).
+        assert dst._lr_lambda is dst_lr_fn
+        # Its ``__dict__`` was not mutated.
+        assert dst._lr_lambda.__dict__ == dict_before
+        assert dst._lr_lambda.tag == "untouched"  # type: ignore[attr-defined]
 
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_lambda()  # noqa: F841

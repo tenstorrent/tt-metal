@@ -4,6 +4,7 @@
 
 """Learning rate and optimizer parameter schedulers."""
 import math
+import types
 from typing import Optional
 
 from ttml.common.config import SchedulerConfig
@@ -98,6 +99,17 @@ class CosineAnnealingScheduler(_SchedulerBase):
         self._optimizer.set_lr(new_lr)
         self._last_lr = new_lr
 
+    def get_state_dict(self) -> dict:
+        state = super().get_state_dict()
+        state["m_T_max"] = self._T_max
+        state["m_eta_min"] = self._eta_min
+        return state
+
+    def set_state_dict(self, state: dict):
+        super().set_state_dict(state)
+        self._T_max = state["m_T_max"]
+        self._eta_min = state["m_eta_min"]
+
 
 class StepScheduler(_SchedulerBase):
     def __init__(self, optimizer, step_size: int, gamma: float = 0.1):
@@ -115,6 +127,17 @@ class StepScheduler(_SchedulerBase):
         new_lr = self._base_lr * (self._gamma**num_decays)
         self._optimizer.set_lr(new_lr)
         self._last_lr = new_lr
+
+    def get_state_dict(self) -> dict:
+        state = super().get_state_dict()
+        state["m_step_size"] = self._step_size
+        state["m_gamma"] = self._gamma
+        return state
+
+    def set_state_dict(self, state: dict):
+        super().set_state_dict(state)
+        self._step_size = state["m_step_size"]
+        self._gamma = state["m_gamma"]
 
 
 class LinearScheduler(_SchedulerBase):
@@ -134,6 +157,19 @@ class LinearScheduler(_SchedulerBase):
         self._optimizer.set_lr(new_lr)
         self._last_lr = new_lr
 
+    def get_state_dict(self) -> dict:
+        state = super().get_state_dict()
+        state["m_start_factor"] = self._start_factor
+        state["m_end_factor"] = self._end_factor
+        state["m_total_steps"] = self._total_steps
+        return state
+
+    def set_state_dict(self, state: dict):
+        super().set_state_dict(state)
+        self._start_factor = state["m_start_factor"]
+        self._end_factor = state["m_end_factor"]
+        self._total_steps = state["m_total_steps"]
+
 
 class LambdaScheduler(_SchedulerBase):
     def __init__(self, optimizer, lr_lambda):
@@ -145,3 +181,23 @@ class LambdaScheduler(_SchedulerBase):
         new_lr = self._base_lr * self._lr_lambda(self._last_step)
         self._optimizer.set_lr(new_lr)
         self._last_lr = new_lr
+
+    # The ``lr_lambda`` itself is never pickled. If it is a plain function or
+    # ``lambda`` (``types.FunctionType``) the state stores ``None`` and the
+    # caller must reconstruct the scheduler with the same callable before
+    # restoring state. If it is a callable *object* (e.g. an instance of a
+    # class with ``__call__``), its ``__dict__`` is saved so that any per-
+    # instance state is preserved across save/load.
+    def get_state_dict(self) -> dict:
+        state = super().get_state_dict()
+        if isinstance(self._lr_lambda, types.FunctionType):
+            state["m_lr_lambda"] = None
+        else:
+            state["m_lr_lambda"] = self._lr_lambda.__dict__.copy()
+        return state
+
+    def set_state_dict(self, state: dict):
+        super().set_state_dict(state)
+        lr_lambda_state = state.get("m_lr_lambda")
+        if lr_lambda_state is not None:
+            self._lr_lambda.__dict__.update(lr_lambda_state)
