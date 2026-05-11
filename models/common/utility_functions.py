@@ -263,29 +263,13 @@ def pad_by_zero(
     tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
     tt_dtype=ttnn.bfloat16,
 ):
-    """
-    Move a torch tensor to device, zero-padding the last two dims to the tile size.
-
-    CAUTION!!! When either of the last two dims is not already a multiple of the tile
-    size, the zero-padding happens in torch *before* the ttnn tensor is constructed. The
-    resulting tensor's *logical* shape therefore equals the padded shape.
-    Therefore, any subsequent ops will treat the padding as real data.
-    If you need the ttnn tensor to keep the original logical shape with tile padding
-    tracked separately, use torch2tt_tensor instead, which lets ttnn add tile padding implicitly.
-
-    Returns (tt_tensor, initial_shape) where initial_shape is the pre-padded torch shape, so
-    callers can recover the original extent for later unpadding.
-    """
     initial_shape = x.shape
     pad_shape = list(x.shape)
     while len(pad_shape) < 4:
         pad_shape.insert(0, 1)
     if pad_shape[-1] % 32 != 0 or pad_shape[-2] % 32 != 0:
-        # Zero-pad in torch so the constructed ttnn tensor's logical shape equals the padded
-        # shape. This is a vestige from when ttnn.Tensor(...) couldn't tilize non-tile-aligned
-        # input; today the constructor handles any dtype (including BFP8_B) from a non-aligned
-        # torch tensor and preserves the original logical shape with implicit tile padding.
-        # Prefer torch2tt_tensor unless you specifically want the padding to count as real data.
+        # Pad in torch before creating TT tensor.
+        # Certain datatypes like BFP8_B requires inputs to already be a specific size when creating the tensor, so we need to pad first
         x = torch.nn.functional.pad(
             x.reshape(pad_shape),
             (
