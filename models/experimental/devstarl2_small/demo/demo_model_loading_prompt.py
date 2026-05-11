@@ -8,15 +8,18 @@ Demo / smoke test using the **same user prompt** as ``reference/model_loading.py
 - Multimodal message: one image placeholder + text
   ``"Describe what you see in this image."``
 
+``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides
+``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing).
+
 **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
-``--vision-max-edge`` PIL cap as TT before ``processor`` (default 336). Default image
-``reference/sample.jpeg``; ``max_new_tokens=100``.
+``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge 336).
+Default image ``reference/sample.jpeg``; ``max_new_tokens=100``.
 
 **TT path** (``--backend tt``): loads :class:`TtDevstral2SmallModel` (Pixtral vision + projector +
 ``TtMinistral3Model``), runs TT vision/projector, merges features into text embeddings like HF
 ``masked_scatter`` on ``image_token_id``, then ``language_model.forward_prefill_from_embeddings``.
-Same ``--vision-max-edge`` as HF. Pixtral QKV L1 grows with patch count; ``0`` = full sizing (fine on
-HF; may exceed Wormhole L1 on TT).
+Same ``--vision-max-edge`` / ``--vision-square-pixels`` as HF. Pixtral L1 grows with patch count; ``0``
+max-edge = no thumbnail (fine on HF; may exceed device L1 on TT).
 
 Usage (repo root)::
 
@@ -77,6 +80,24 @@ def _resize_image_max_edge(image: Image.Image, max_edge: int) -> Image.Image:
     out = image.copy()
     out.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
     return out
+
+
+def _prepare_vision_image(
+    image: Image.Image,
+    vision_max_edge: int,
+    vision_square_pixels: int | None,
+) -> Image.Image:
+    """
+    PIL preprocessing before ``processor``: optional exact square resize, otherwise max-edge thumbnail.
+
+    If ``vision_square_pixels`` > 0, resize with LANCZOS to ``S×S`` (ignores ``vision-max-edge``).
+    Else apply :func:`_resize_image_max_edge`.
+    """
+    image = image.convert("RGB")
+    if vision_square_pixels is not None and vision_square_pixels > 0:
+        s = vision_square_pixels
+        return image.resize((s, s), Image.Resampling.LANCZOS)
+    return _resize_image_max_edge(image, vision_max_edge)
 
 
 def _sample_image_path() -> Path:
@@ -202,6 +223,7 @@ def run_hf(
     max_new_tokens: int,
     seed: int | None,
     vision_max_edge: int,
+    vision_square_pixels: int | None,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(
@@ -221,13 +243,15 @@ def run_hf(
 
     image = Image.open(image_path).convert("RGB")
     orig_sz = image.size
-    image = _resize_image_max_edge(image, vision_max_edge)
-    if vision_max_edge <= 0:
-        logger.info("HF: vision-max-edge 0 — no PIL resize before processor.")
+    image = _prepare_vision_image(image, vision_max_edge, vision_square_pixels)
+    if vision_square_pixels is not None and vision_square_pixels > 0:
+        logger.info(f"HF: PIL square resize {orig_sz} -> {image.size} (--vision-square-pixels {vision_square_pixels}).")
+    elif vision_max_edge <= 0:
+        logger.info("HF: vision-max-edge 0 — no PIL thumbnail before processor.")
     elif image.size != orig_sz:
         logger.info(f"HF: PIL resize {orig_sz} -> {image.size} (vision-max-edge={vision_max_edge}).")
     else:
-        logger.info(f"HF: image within vision-max-edge={vision_max_edge} ({image.size}), no resize.")
+        logger.info(f"HF: image within vision-max-edge={vision_max_edge} ({image.size}), no thumbnail.")
 
     prompt = processor.apply_chat_template(
         MODEL_LOADING_MESSAGES,
@@ -261,6 +285,7 @@ def run_tt(
     lm_head_cpu: bool,
     lm_head_max_device_cols: int | None,
     vision_max_edge: int,
+    vision_square_pixels: int | None,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
@@ -275,14 +300,20 @@ def run_tt(
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     image = Image.open(image_path).convert("RGB")
     orig_sz = image.size
-    image = _resize_image_max_edge(image, vision_max_edge)
-    if image.size != orig_sz:
+    image = _prepare_vision_image(image, vision_max_edge, vision_square_pixels)
+    if vision_square_pixels is not None and vision_square_pixels > 0:
         logger.info(
-            f"TT vision: resized image {orig_sz} -> {image.size} "
-            f"(max_edge={vision_max_edge}; Pixtral QKV L1 safe). Use --vision-max-edge 0 to skip."
+            f"TT vision: PIL square resize {orig_sz} -> {image.size} "
+            f"(--vision-square-pixels {vision_square_pixels}); many patches may exceed L1 on device."
+        )
+    elif image.size != orig_sz:
+        logger.info(
+            f"TT vision: thumbnail {orig_sz} -> {image.size} "
+            f"(vision-max-edge={vision_max_edge}). "
+            "Use --vision-square-pixels or --vision-max-edge 0 for other sizing."
         )
     elif vision_max_edge > 0:
-        logger.info(f"TT vision: image within max_edge={vision_max_edge} ({image.size}), no resize.")
+        logger.info(f"TT vision: image within vision-max-edge={vision_max_edge} ({image.size}), no thumbnail.")
     prompt = processor.apply_chat_template(
         MODEL_LOADING_MESSAGES,
         add_generation_prompt=True,
@@ -496,10 +527,21 @@ def main() -> None:
         "--vision-max-edge",
         type=int,
         default=336,
-        help="HF and TT: max longest image side (px) before PIL+processor. On TT, 0 can exceed Wormhole L1 "
-        "in Pixtral attention; on HF, 0 is full processor sizing.",
+        help="HF and TT: max longest image side (px) PIL thumbnail before processor (ignored if "
+        "--vision-square-pixels is set). On TT, 0 can exceed Pixtral L1; HF may use 0 safely.",
+    )
+    parser.add_argument(
+        "--vision-square-pixels",
+        type=int,
+        default=None,
+        metavar="S",
+        help="HF and TT: resize image to exactly S×S (LANCZOS) before processor (e.g. 1540 for HF-style "
+        "square vision). Overrides vision-max-edge when set.",
     )
     args = parser.parse_args()
+
+    if args.vision_square_pixels is not None and args.vision_square_pixels <= 0:
+        parser.error("--vision-square-pixels must be a positive integer when set.")
 
     if args.backend == "hf":
         run_hf(
@@ -508,6 +550,7 @@ def main() -> None:
             max_new_tokens=args.max_new_tokens,
             seed=args.seed,
             vision_max_edge=args.vision_max_edge,
+            vision_square_pixels=args.vision_square_pixels,
         )
     else:
         run_tt(
@@ -522,6 +565,7 @@ def main() -> None:
             lm_head_cpu=args.lm_head_cpu,
             lm_head_max_device_cols=args.lm_head_max_device_cols,
             vision_max_edge=args.vision_max_edge,
+            vision_square_pixels=args.vision_square_pixels,
         )
 
 
