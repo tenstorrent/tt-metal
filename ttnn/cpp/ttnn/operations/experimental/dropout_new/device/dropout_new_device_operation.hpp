@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -14,17 +15,27 @@
 
 namespace ttnn::experimental::prim {
 
+struct DropoutNewProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const DropoutNewParams& args, const DropoutNewInputs& tensor_args, Tensor& output);
+};
+
+struct DropoutNewMeshWorkloadFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const DropoutNewParams& args,
+        const DropoutNewInputs& tensor_args,
+        Tensor& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+};
+
 struct DropoutNewDeviceOperation {
     using operation_attributes_t = DropoutNewParams;
     using tensor_args_t = DropoutNewInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<DropoutNewProgramFactory, DropoutNewMeshWorkloadFactory>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& args,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

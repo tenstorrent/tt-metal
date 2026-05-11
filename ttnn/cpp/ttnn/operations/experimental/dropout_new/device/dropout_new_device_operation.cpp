@@ -11,6 +11,14 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
+DropoutNewDeviceOperation::program_factory_t DropoutNewDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    if (args.use_per_device_seed) {
+        return DropoutNewMeshWorkloadFactory{};
+    }
+    return DropoutNewProgramFactory{};
+}
+
 void DropoutNewDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

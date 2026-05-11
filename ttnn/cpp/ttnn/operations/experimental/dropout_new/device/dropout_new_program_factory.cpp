@@ -32,10 +32,6 @@ DropoutNewParams override_per_device_seed(
     const DropoutNewParams& args,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
     const ttnn::Tensor& input_tensor) {
-    if (!args.use_per_device_seed) {
-        return args;
-    }
-
     DropoutNewParams args_with_per_device_seed = args;
     if (mesh_dispatch_coordinate.has_value()) {
         args_with_per_device_seed.seed += input_tensor.device()->get_device(*mesh_dispatch_coordinate)->id();
@@ -200,11 +196,8 @@ inline void assign_per_core_runtime_args(
     }
 }
 
-tt::tt_metal::ProgramDescriptor DropoutNewDeviceOperation::create_descriptor(
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+tt::tt_metal::ProgramDescriptor DropoutNewProgramFactory::create_descriptor(
+    const DropoutNewParams& args, const DropoutNewInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -212,7 +205,6 @@ tt::tt_metal::ProgramDescriptor DropoutNewDeviceOperation::create_descriptor(
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
-    const auto effective_args = override_per_device_seed(args, mesh_dispatch_coordinate, input);
     auto* device = input.device();
 
     ProgramDescriptor descriptor{};
@@ -257,10 +249,10 @@ tt::tt_metal::ProgramDescriptor DropoutNewDeviceOperation::create_descriptor(
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for dropout
     // -------------------------------------------------------------------------
-    uint32_t uscale = std::bit_cast<uint32_t>(effective_args.scale);
+    uint32_t uscale = std::bit_cast<uint32_t>(args.scale);
 
     // Convert probability (args.prob) to integer representation
-    uint32_t prob_int = static_cast<uint32_t>(static_cast<double>(INT_MAX) * effective_args.prob);
+    uint32_t prob_int = static_cast<uint32_t>(static_cast<double>(INT_MAX) * args.prob);
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
@@ -301,7 +293,7 @@ tt::tt_metal::ProgramDescriptor DropoutNewDeviceOperation::create_descriptor(
         num_tiles_per_core_group_2,
         core_group_1,
         core_group_2,
-        effective_args.seed);
+        args.seed);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured descriptor
@@ -314,6 +306,15 @@ tt::tt_metal::ProgramDescriptor DropoutNewDeviceOperation::create_descriptor(
     }
 
     return descriptor;
+}
+
+tt::tt_metal::ProgramDescriptor DropoutNewMeshWorkloadFactory::create_descriptor(
+    const DropoutNewParams& args,
+    const DropoutNewInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto effective_args = override_per_device_seed(args, mesh_dispatch_coordinate, tensor_args.input);
+    return DropoutNewProgramFactory::create_descriptor(effective_args, tensor_args, output);
 }
 
 }  // namespace ttnn::experimental::prim
