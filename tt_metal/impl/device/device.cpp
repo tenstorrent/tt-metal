@@ -2643,13 +2643,21 @@ bool Device::phase5b_erisc_health_check(
     // the clean path), the ETH handshake after quiesce restart takes longer because the
     // channels need to complete the REMOTE_HANDSHAKE_COMPLETE → READY_FOR_TRAFFIC transition
     // after booting from the launch_msg.  Extend by 12x to match FIX TH3 / FIX BO.
-    const uint32_t kHealthCheckTimeoutMs = this->is_fabric_stale_base_umd_channels() ? 24000u : 2000u;
-    if (this->is_fabric_stale_base_umd_channels()) {
+    // FIX FX-2 (#42429): Also check fabric_base_umd_fixm_init_ because FIX RZ2 clears
+    // fabric_stale_base_umd_channels_ after ring-sync — the persistent companion flag is needed
+    // for subsequent AllGather pre-quiesce Phase 5b calls.
+    const bool stale_umd =
+        this->is_fabric_stale_base_umd_channels() || this->is_fabric_base_umd_fixm_init();
+    const uint32_t kHealthCheckTimeoutMs = stale_umd ? 24000u : 2000u;
+    if (stale_umd) {
         log_info(
             tt::LogMetal,
-            "phase5b_erisc_health_check: Device {} FIX QH-2 — stale base-UMD channels detected, "
-            "extending Phase 5b timeout from 2000ms to 24000ms. (#42429)",
-            this->id());
+            "phase5b_erisc_health_check: Device {} FIX QH-2/FX-2 — stale base-UMD channels "
+            "detected (stale_base_umd={} fixm_init={}), extending Phase 5b timeout from "
+            "2000ms to 24000ms. (#42429)",
+            this->id(),
+            this->is_fabric_stale_base_umd_channels(),
+            this->is_fabric_base_umd_fixm_init());
     }
     // Log unhealthy channels every 200ms for observability.
     constexpr uint32_t kHCIntermediateLogMs = 200;
@@ -3364,13 +3372,20 @@ void Device::wait_for_fabric_workers_ready() {
         // non-MMIO device has fabric_stale_base_umd_channels_=true), the ring handshake takes
         // longer than 10s — matching the initial startup case that FIX TH3 addresses.
         // Extend to 120s (12x) to match FIX TH3's get_fabric_router_sync_timeout_ms() multiplier.
-        const uint32_t kSyncTimeoutMs = this->is_fabric_stale_base_umd_channels() ? 120000 : 10000;
-        if (this->is_fabric_stale_base_umd_channels()) {
+        // FIX FX-2 (#42429): Also check fabric_base_umd_fixm_init_ because FIX RZ2 clears
+        // fabric_stale_base_umd_channels_ after ring-sync — the persistent companion flag is
+        // needed for subsequent AllGather pre-quiesce Phase 5 kSyncTimeoutMs extension.
+        const uint32_t kSyncTimeoutMs =
+            (this->is_fabric_stale_base_umd_channels() || this->is_fabric_base_umd_fixm_init()) ? 120000 : 10000;
+        if (this->is_fabric_stale_base_umd_channels() || this->is_fabric_base_umd_fixm_init()) {
             log_info(
                 tt::LogMetal,
-                "wait_for_fabric_workers_ready: Device {} FIX BO — stale base-UMD channels "
-                "detected, extending Phase 5 kSyncTimeoutMs from 10000ms to 120000ms. (#42429)",
-                this->id());
+                "wait_for_fabric_workers_ready: Device {} FIX BO/FX-2 — stale base-UMD channels "
+                "detected (stale_base_umd={} fixm_init={}), extending Phase 5 kSyncTimeoutMs from "
+                "10000ms to 120000ms. (#42429)",
+                this->id(),
+                this->is_fabric_stale_base_umd_channels(),
+                this->is_fabric_base_umd_fixm_init());
         }
         // FIX AL (#42429): When the ERISC is running (status=STARTED, not 0x0) but has not
         // completed the ETH handshake after kStartedTimeoutMs, the master channel's peer is

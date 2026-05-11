@@ -1560,17 +1560,32 @@ void MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() {
     // Match init-time tunnel ordering (farthest-to-closest, then MMIO) because this phase
     // publishes READY_FOR_TRAFFIC and can unblock peer ERISCs. Submesh order and row-major
     // order are not equivalent to the startup sequence on T3K.
-    // FIX BO (#42429): When any non-MMIO device has stale base-UMD channels, the ring
-    // handshake (LOCAL_HANDSHAKE_COMPLETE) takes longer than the default 10s kSyncTimeoutMs
+    // FIX BO (#42429): When any non-MMIO device had base-UMD relay channels transitioned via
+    // launch_msg (FIX M), the ring handshake takes longer than the default 10s kSyncTimeoutMs
     // in wait_for_fabric_workers_ready() — exactly as it does at initial startup (FIX TH3).
     // Propagate fabric_stale_base_umd_channels_ to ALL devices (including MMIO) so their
-    // Phase 5 poll can extend kSyncTimeoutMs to 120s (matching FIX TH3's 12x multiplier).
-    // MMIO devices 0 and 2 also time out in Phase 5 because the ring handshake stalls until
-    // non-MMIO base-UMD channels (devices 4-7) complete their quiesce + re-handshake.
+    // Phase 5 poll and Phase 5b health check can extend their timeouts to 120s and 24s
+    // respectively (matching FIX TH3 / FIX QH-2).
+    //
+    // FIX FX-1 (#42429): Use is_fabric_base_umd_fixm_init() instead of
+    // is_fabric_stale_base_umd_channels() because FIX RZ2 clears fabric_stale_base_umd_channels_
+    // after ring-sync completes, so by the time the AllGather pre-quiesce reaches this point
+    // the flag is already cleared.  fabric_base_umd_fixm_init_ is the persistent companion that
+    // is NOT cleared by FIX RZ2 — it survives through the entire session.
     auto all_devices = get_devices();
     const bool any_stale_base_umd = std::any_of(
-        all_devices.begin(), all_devices.end(), [](IDevice* d) { return d->is_fabric_stale_base_umd_channels(); });
+        all_devices.begin(), all_devices.end(), [](IDevice* d) { return d->is_fabric_base_umd_fixm_init(); });
     if (any_stale_base_umd) {
+        log_info(
+            tt::LogMesh,
+            "wait_for_fabric_workers_ready_for_quiesce: FIX FX-1 (#42429) — {} device(s) have "
+            "fabric_base_umd_fixm_init set; propagating fabric_stale_base_umd_channels to all "
+            "{} devices to enable extended Phase 5 (120s) and Phase 5b (24s) timeouts.",
+            std::count_if(
+                all_devices.begin(),
+                all_devices.end(),
+                [](IDevice* d) { return d->is_fabric_base_umd_fixm_init(); }),
+            all_devices.size());
         for (auto* idev : all_devices) {
             idev->set_fabric_stale_base_umd_channels();
         }
