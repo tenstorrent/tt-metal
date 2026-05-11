@@ -405,7 +405,7 @@
   model: falcon-7b
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 6
       tier: 3
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
