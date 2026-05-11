@@ -13,8 +13,8 @@
 #   - e2e tests:       batch-1 / batch-32 single-DP performance
 #   - data-parallel:   --data_parallel >= 2 performance
 #   - device-perf:     test_device_perf.py prefill + decode
-# Stress tests are intentionally absent — see the commented-out block at
-# the bottom of this file. Stress is moving to a separate pipeline.
+# Stress tests live in tests/pipeline_reorg/blackhole_stress_tests.yaml and
+# are driven by the (Blackhole) Stress pipeline.
 
 # All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
 # (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):
@@ -519,79 +519,7 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
-# ─── Stress tests (DISABLED) ────────────────────────────────────────────────
-#
-# Stress tests are moving to a separate pipeline. The original entries are
-# preserved here, commented out, so they can be migrated wholesale once the
-# new pipeline is ready. Uncomment to revert temporarily.
-#
-# - name: llama3.1-8b 1-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --timeout=1800
-#   skus:
-#     bh_p150:
-#       timeout: 30
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 2-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 2 --max_generated_tokens 22000
-#   skus:
-#     bh_deskbox:
-#       timeout: 30
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 2-device stress (LFC)
-#   cmd: |
-#     set -e
-#     export HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 2 --max_generated_tokens 22000
-#   skus:
-#     bh_p300:
-#       timeout: 30
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 4-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 4 --max_generated_tokens 22000
-#   skus:
-#     bh_llmbox:
-#       timeout: 40
-#     bh_quietbox_2:
-#       timeout: 40
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 8-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 8 --max_generated_tokens 22000
-#   skus:
-#     bh_loudbox:
-#       timeout: 70
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
+
+# Llama3.1-8B N-device stress entries that used to live here have been moved
+# into tests/pipeline_reorg/blackhole_stress_tests.yaml and run from the
+# new (Blackhole) Stress pipeline (.github/workflows/blackhole-stress-tests.yaml).

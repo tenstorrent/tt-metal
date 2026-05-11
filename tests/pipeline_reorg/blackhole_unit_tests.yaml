@@ -1,0 +1,47 @@
+# This file defines the test matrix for the Blackhole unit tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   id: Stable slug for workflow_dispatch / jq filtering.
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+#
+# NOTE: Post-commit-cadence fast unit tests (fabric fast, ttnn ops fast, Host IO viommu)
+#       live in the Sanity pipeline; see tests/pipeline_reorg/blackhole_sanity_tests.yaml
+#       and .github/workflows/blackhole-sanity-tests.yaml.
+
+# Blackhole multi-card fabric + ttnn UDM unit tests (slow cadence)
+- id: bh-fabric-ttnn-udm-unit
+  name: fabric and ttnn UDM unit tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*:*ChannelTrimming*"
+    ./build/test/ttnn/unit_tests_ttnn_udm
+  skus:
+    bh_deskbox:
+      timeout: 20
+    bh_llmbox:
+      timeout: 20
+    bh_loudbox:
+      timeout: 20
+    bh_p300:
+      timeout: 20
+    bh_quietbox_2:
+      timeout: 20
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+# Blackhole grid-override unit tests (1xP150b CIv2)
+- id: bh-grid-20-cores-ttnn-sharding
+  name: ttnn sharding on 20 cores
+  cmd: pytest tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U08ARDXARPF # Ilija Anastasijevic
+  team: ttnn

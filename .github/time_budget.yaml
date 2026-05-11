@@ -71,9 +71,22 @@ ttnn:
     wh_n300_civ2: 545
     bh_p100: 545
     bh_p150b_civ2: 545
+    # tt-cnn pipeline + builder = 2 × 10 min on viommu single-card SKUs.
+    bh_p150b_civ2_viommu: 20
+    bh_p100a_civ2_viommu: 20
+    # ttnn ops fast unit tests on multi-card systems.
+    bh_llmbox: 15
+    bh_loudbox: 15
+    bh_p300: 15
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
+    bh_deskbox: 15
+    bh_llmbox: 15
+    bh_loudbox: 15
+    bh_p300: 15
+    bh_quietbox_2: 15
+    bh_p150b_civ2: 10
   e2e:
     wh_llmbox: 90
     wh_galaxy: 70
@@ -81,6 +94,20 @@ ttnn:
   integration:
     wh_llmbox: 30
     wh_galaxy: 350
+    bh_deskbox: 120
+    bh_llmbox: 120
+    bh_loudbox: 120
+    bh_p300: 120
+    bh_quietbox_2: 120
+  perf:
+    bh_deskbox: 10
+    bh_llmbox: 10
+    bh_loudbox: 10
+    bh_p300: 10
+    bh_quietbox_2: 10
+  stress:
+    bh_llmbox: 45
+    bh_p150b_civ2: 45
 
 shield:
   e2e:
@@ -91,21 +118,46 @@ scaleout:
   unit:
     wh_llmbox: 60
     wh_galaxy: 25
+    bh_deskbox: 35
+    bh_llmbox: 35
+    bh_loudbox: 35
+    bh_p300: 35
+    bh_quietbox_2: 35
   stress:
     wh_galaxy_perf: 120
+    bh_deskbox: 15
+    bh_llmbox: 15
+    bh_loudbox: 15
+    bh_p300: 15
+    bh_quietbox_2: 15
   integration:
     wh_llmbox: 40
+    bh_deskbox: 15
+    bh_llmbox: 15
+    bh_loudbox: 15
+    bh_p300: 15
+    bh_quietbox_2: 15
   health:
     wh_galaxy: 15
     bh_galaxy: 10
   sanity:
     wh_galaxy: 20
+    # Blackhole fabric fast unit tests (multi-card systems, post-commit cadence).
+    bh_llmbox: 15
+    bh_loudbox: 15
+    bh_p300: 15
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
     bh_sp1: 90
     bh_sp4: 150
+  perf:
+    bh_deskbox: 15
+    bh_llmbox: 15
+    bh_loudbox: 15
+    bh_p300: 15
+    bh_quietbox_2: 15
 
 runtime:
   sanity:
@@ -113,6 +165,11 @@ runtime:
     bh_p150b_civ2: 13
     bh_quietbox: 5
     bh_loudbox: 5
+    # Profiler regression (post-commit subset) on viommu single-card SKUs.
+    bh_p150b_civ2_viommu: 37
+    bh_p100a_civ2_viommu: 37
+    # Host IO fast unit test on multi-card viommu (P300-viommu).
+    bh_p300: 10
   unit:
     wh_n150_civ2: 217
     wh_n300_civ2: 74
@@ -121,6 +178,7 @@ runtime:
     bh_p100a_civ2_viommu: 74
     bh_quietbox: 20
     wh_galaxy: 35
+    bh_p300: 10
   integration:
     wh_n150_civ2: 360
     bh_p150b_civ2: 360
@@ -146,14 +204,31 @@ llk:
 models:
   sanity:
     wh_galaxy_perf: 10
+    # Blackhole models python unit tests on non-viommu single-card SKUs.
+    bh_p150: 20
+    bh_p100: 20
+    # DeepSeek-v3-b1 op tests (blitz + per-core, slow/fast dispatch) = 4 × tests:
+    # 20 (blitz-slow) + 20 (blitz-fast) + 10 (per-core-slow) + 10 (per-core-fast) = 60.
+    bh_p150b_civ2_viommu: 60
+    bh_p100a_civ2_viommu: 60
   stress:
     wh_galaxy_perf: 500
+    bh_p150: 30
+    bh_deskbox: 30
+    bh_llmbox: 40
+    bh_loudbox: 70
+    bh_p300: 30
+    bh_quietbox_2: 40
   e2e:
     wh_llmbox: 198
     wh_llmbox_perf: 312
     wh_n150: 100
     wh_n300: 15
     wh_galaxy_perf: 120
+    bh_p150b_civ2: 30
+  deepseek_prefill:
+    bh_loudbox: 68
+    bh_quietbox_2: 40
   unit:
     wh_llmbox: 175
     wh_llmbox_perf: 230
@@ -162,6 +237,7 @@ models:
     wh_galaxy_perf: 45
   integration:
     wh_llmbox: 422
+    bh_p150b_civ2: 25
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
@@ -204,3 +280,7 @@ models:
 umd:
   unit:
     wh_galaxy_perf_uf: 35
+  sanity:
+    # UMD blackhole + api unit tests on viommu single-card SKUs.
+    bh_p150b_civ2_viommu: 15
+    bh_p100a_civ2_viommu: 15

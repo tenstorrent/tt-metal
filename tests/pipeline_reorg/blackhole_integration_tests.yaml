@@ -1,0 +1,88 @@
+# This file defines the test matrix for the Blackhole integration tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   id: Stable slug for workflow_dispatch / jq filtering.
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# Blackhole multi-card fabric integration tests
+- id: bh-fabric-infra-integration
+  name: fabric infra unit tests
+  cmd: |
+    TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+    TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
+    TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+# Blackhole multi-card ttnn integration tests (nightly)
+- id: bh-ccl-nightly-integration
+  name: ccl nightly tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
+  skus:
+    bh_deskbox:
+      timeout: 60
+    bh_llmbox:
+      timeout: 60
+    bh_loudbox:
+      timeout: 60
+    bh_p300:
+      timeout: 60
+    bh_quietbox_2:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- id: bh-sdpa-nightly-integration
+  name: sdpa nightly tests
+  cmd: pytest tests/nightly/blackhole/sdpa/ -svv
+  skus:
+    bh_deskbox:
+      timeout: 60
+    bh_llmbox:
+      timeout: 60
+    bh_loudbox:
+      timeout: 60
+    bh_p300:
+      timeout: 60
+    bh_quietbox_2:
+      timeout: 60
+  owner_id: U07RD9YRFT9 # Slavko Krstic
+  team: ttnn
+
+# Blackhole grid-override integration tests (1xP150b CIv2)
+- id: bh-grid-110-cores-panoptic-deeplab
+  name: 110 cores panoptic-deeplab
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: models
+
+- id: bh-grid-110-cores-bevformer
+  name: 110 cores bevformer
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models

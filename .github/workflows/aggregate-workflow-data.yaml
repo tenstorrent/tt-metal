@@ -61,8 +61,13 @@ jobs:
           workflow_ids: |
             [
               ".github/workflows/sanity-tests.yaml",
-              ".github/workflows/blackhole-post-commit.yaml",
+              ".github/workflows/blackhole-sanity-tests.yaml",
               ".github/workflows/blackhole-e2e-tests.yaml",
+              ".github/workflows/blackhole-unit-tests.yaml",
+              ".github/workflows/blackhole-integration-tests.yaml",
+              ".github/workflows/blackhole-perf-tests.yaml",
+              ".github/workflows/blackhole-stress-tests.yaml",
+              ".github/workflows/blackhole-deepseek-prefill-tests.yaml",
               ".github/workflows/blackhole-demo-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
               ".github/workflows/galaxy-multi-user-isolation-tests.yaml",

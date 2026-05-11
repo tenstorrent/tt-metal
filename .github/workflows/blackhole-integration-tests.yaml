@@ -1,4 +1,4 @@
-name: "(Blackhole) e2e tests"
+name: "(Blackhole) integration tests"
 
 on:
   workflow_dispatch:
@@ -11,6 +11,11 @@ on:
         options:
           - all
           - P150 CIv2 (1xP150)
+          - Quietbox (4xP150)
+          - DeskBox (2xP150)
+          - LoudBox (8xP150)
+          - P300 (1xP300)
+          - QuietBox 2 (2xP300)
       platform:
         required: false
         type: choice
@@ -58,7 +63,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
+    - cron: "0 6 * * *"  # Every day at 6:00 UTC
 
 jobs:
   generate-card-matrix:
@@ -70,7 +75,12 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "P150 CIv2 (1xP150)", "sku": "bh_p150b_civ2"}
+            {"name": "P150 CIv2 (1xP150)", "sku": "bh_p150b_civ2"},
+            {"name": "Quietbox (4xP150)", "sku": "bh_llmbox"},
+            {"name": "DeskBox (2xP150)", "sku": "bh_deskbox"},
+            {"name": "LoudBox (8xP150)", "sku": "bh_loudbox"},
+            {"name": "P300 (1xP300)", "sku": "bh_p300"},
+            {"name": "QuietBox 2 (2xP300)", "sku": "bh_quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
           selected_system_type="${{ inputs.system-type || 'all' }}"
@@ -98,10 +108,10 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  blackhole-e2e-tests:
+  blackhole-integration-tests:
     needs: [build-artifact, generate-card-matrix]
     secrets: inherit
-    uses: ./.github/workflows/blackhole-e2e-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-integration-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}

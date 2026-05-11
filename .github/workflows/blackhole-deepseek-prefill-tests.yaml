@@ -1,4 +1,4 @@
-name: "(Blackhole) e2e tests"
+name: "(Blackhole) DeepSeek Prefill tests"
 
 on:
   workflow_dispatch:
@@ -10,7 +10,16 @@ on:
         type: choice
         options:
           - all
-          - P150 CIv2 (1xP150)
+          - LoudBox (8xP150)
+          - QuietBox 2 (2xP300)
+      test-type:
+        description: 'Select which tests to run'
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - module
       platform:
         required: false
         type: choice
@@ -42,6 +51,10 @@ on:
         required: false
         default: "all"
         type: string
+      test-type:
+        required: false
+        type: string
+        default: "all"
       platform:
         required: false
         type: string
@@ -58,7 +71,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
+    - cron: "0 5 * * *"  # Daily at 5:00 UTC (between unit 4am and integration 6am)
 
 jobs:
   generate-card-matrix:
@@ -70,7 +83,8 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "P150 CIv2 (1xP150)", "sku": "bh_p150b_civ2"}
+            {"name": "LoudBox (8xP150)", "sku": "bh_loudbox"},
+            {"name": "QuietBox 2 (2xP300)", "sku": "bh_quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
           selected_system_type="${{ inputs.system-type || 'all' }}"
@@ -98,10 +112,10 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  blackhole-e2e-tests:
+  blackhole-deepseek-prefill-tests:
     needs: [build-artifact, generate-card-matrix]
     secrets: inherit
-    uses: ./.github/workflows/blackhole-e2e-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-deepseek-prefill-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
@@ -110,3 +124,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ matrix.test-group.sku }}
+      test-type: ${{ inputs.test-type || 'all' }}
