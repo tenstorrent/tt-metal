@@ -2,16 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PCC test: TTNN ``SourceModuleHnNSF`` vs PyTorch (deterministic path, zeros for all RNG).
-
-``SourceModuleHnNSF`` always uses device ``KokoroTtnnSineGen`` — no CPU SineGen fallback.
-
-Setup:
-    cd <tt-metal-root>
-    export TT_METAL_HOME=$(pwd) && export PYTHONPATH=$(pwd) && source python_env/bin/activate
+PCC test: ``KokoroTtnnSineGen`` vs PyTorch ``SineGen`` (deterministic RNG zeros).
 
 Usage:
-    pytest models/experimental/kokoro/tests/test_source_module_hn_nsf_pcc.py --confcutdir=models/experimental/kokoro -v
+    pytest models/experimental/kokoro/tests/test_ttnn_sinegen_pcc.py --confcutdir=models/experimental/kokoro -v
 """
 
 import sys
@@ -30,7 +24,7 @@ from models.experimental.kokoro.reference.kokoro_istftnet import load_decoder_fr
 from models.experimental.kokoro.reference.kokoro_source_module_preprocess import (
     preprocess_source_module_hn_nsf_parameters,
 )
-from models.experimental.kokoro.tt import SourceModuleHnNSF
+from models.experimental.kokoro.tt.ttnn_sinegen import KokoroTtnnSineGen
 
 
 @pytest.fixture
@@ -45,14 +39,12 @@ def kokoro_decoder_cpu():
     return load_decoder_from_huggingface(device="cpu")
 
 
-def test_source_module_hn_nsf_deterministic_pcc(ttnn_device, kokoro_decoder_cpu):
-    """Device ``KokoroTtnnSineGen`` + TTNN linear + tanh vs PyTorch (deterministic zeros)."""
-    m = kokoro_decoder_cpu.decoder.generator.m_source
-    ups = int(m.l_sin_gen.upsample_scale)
+def test_ttnn_sinegen_deterministic_pcc(ttnn_device, kokoro_decoder_cpu):
+    sg = kokoro_decoder_cpu.decoder.generator.m_source.l_sin_gen
+    ups = int(sg.upsample_scale)
     time_len = ups * 2
     batch = 2
-
-    torch.manual_seed(23)
+    torch.manual_seed(0)
     f0 = torch.rand(batch, time_len, 1, dtype=torch.float32) * 400.0 + 80.0
 
     def zeros_rand(*args, **kwargs):
@@ -72,10 +64,11 @@ def test_source_module_hn_nsf_deterministic_pcc(ttnn_device, kokoro_decoder_cpu)
         mock.patch("torch.randn_like", side_effect=zeros_randn_like),
     ):
         with torch.no_grad():
-            har_ref, noise_ref, uv_ref = m(f0)
+            sw_ref, uv_ref, noise_ref = sg(f0)
 
+    m = kokoro_decoder_cpu.decoder.generator.m_source
     params = preprocess_source_module_hn_nsf_parameters(m, ttnn_device, time_len)
-    tt_mod = SourceModuleHnNSF(ttnn_device, params)
+    tt_sg = KokoroTtnnSineGen(ttnn_device, params)
     f0_tt = ttnn.from_torch(
         f0,
         dtype=ttnn.float32,
@@ -83,20 +76,18 @@ def test_source_module_hn_nsf_deterministic_pcc(ttnn_device, kokoro_decoder_cpu)
         device=ttnn_device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    har_tt, noise_tt, uv_tt = tt_mod(f0_tt, deterministic=True)
+    sw_tt, uv_tt, noise_tt = tt_sg(f0_tt, deterministic=True)
 
-    har_hat = ttnn.to_torch(har_tt).reshape(har_ref.shape)
-    noise_hat = ttnn.to_torch(noise_tt).reshape(noise_ref.shape)
+    sw_hat = ttnn.to_torch(sw_tt).reshape(sw_ref.shape)
     uv_hat = ttnn.to_torch(uv_tt).reshape(uv_ref.shape)
+    noise_hat = ttnn.to_torch(noise_tt).reshape(noise_ref.shape)
 
-    # Device SineGen + TTNN linear + tanh: ~0.974 vs full PyTorch on WH B0.
-    min_pcc = {"har_source": 0.974, "noise_merge": 0.99, "uv": 0.99}
+    min_pcc = {"sine_waves": 0.97, "uv": 0.99, "noise": 0.99}
     for name, ref, hat in (
-        ("har_source", har_ref, har_hat),
-        ("noise_merge", noise_ref, noise_hat),
+        ("sine_waves", sw_ref, sw_hat),
         ("uv", uv_ref, uv_hat),
+        ("noise", noise_ref, noise_hat),
     ):
-        pcc = min_pcc[name]
-        ok, p = comp_pcc(ref, hat, pcc=pcc)
-        print(f"{name} PCC={p:.6f} pass={ok} (min {pcc})")
-        assert ok, f"{name} PCC {p} expected >= {pcc}"
+        ok, p = comp_pcc(ref, hat, pcc=min_pcc[name])
+        print(f"{name} PCC={p:.6f} pass={ok} (min {min_pcc[name]})")
+        assert ok, f"{name} PCC {p} expected >= {min_pcc[name]}"
