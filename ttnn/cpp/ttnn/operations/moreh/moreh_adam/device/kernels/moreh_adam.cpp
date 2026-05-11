@@ -268,6 +268,7 @@ void kernel_main() {
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_tmp1 = pow(beta2, step);  (T1.32)
+        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp1));  // H2 workaround
         {
             using namespace compute_kernel_lib;
             auto copy_elt = CopyTile<
@@ -376,6 +377,7 @@ void kernel_main() {
 
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_tmp2 = pow(beta1, step);  (T1.33)
+        WITH_FP32_DEST_ACC(pack_reconfig_data_format(cb_tmp2));  // H2 workaround
         {
             using namespace compute_kernel_lib;
             auto copy_elt = CopyTile<
