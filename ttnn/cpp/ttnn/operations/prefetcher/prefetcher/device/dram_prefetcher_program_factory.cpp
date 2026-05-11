@@ -202,6 +202,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     };
     reader_ct_args.push_back(static_cast<uint32_t>(enable_performance_mode));
 
+    // Writer kernel
     std::vector<uint32_t> writer_ct_args = {
         num_layers,
         num_tensors,
@@ -261,9 +262,11 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
     };
 
-    for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); core_index++) {
+    // Runtime args for the reader cores
+    for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); ++core_index) {
         const auto& core = reader_cores[core_index];
 
+        /* reader kernel */
         uint32_t bank_id = core_index;
         uint32_t vc = (bank_id & 0x1) + 2;
         bank_ids.push_back(bank_id);
@@ -283,12 +286,13 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
 
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
+        /* writer kernel */
         std::vector<uint32_t> writer_rt_args;
         writer_rt_args.insert(writer_rt_args.end(), coalesced_page_sizes.begin(), coalesced_page_sizes.end());
         writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_tile_sizes.begin(), tensor_tile_sizes.end());
-        for (auto tensor_shape : tensor_shapes) {
+        for (auto tensor_shape : tensor_shapes) {  // block_height_in_itles
             writer_rt_args.push_back(tensor_shape[0] / num_blocks);
         }
 
