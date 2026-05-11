@@ -811,11 +811,11 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy (32 Wormhole devices)
+            return _cap_mesh_shape((4, 8))  # Galaxy
         elif num_devices >= 8:
-            return (1, 8)  # T3000 (8 devices)
+            return _cap_mesh_shape((1, 8))  # T3000
         elif num_devices >= 2:
-            return (1, num_devices)
+            return _cap_mesh_shape((1, num_devices))
     except Exception:
         # ttnn may not be initialized yet (env var path is preferred).
         # Fall through to None so the caller can pick a default.
@@ -871,29 +871,43 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, str):
                             _ms_val = _ast_ms.literal_eval(_ms_val)
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
-                            return tuple(_ms_val)
+                            return _cap_mesh_shape(tuple(_ms_val))
     except Exception:
         pass
     # Env var override (used when master JSON is not available)
     shape = get_mesh_shape()
     if shape:
-        return shape
+        return _cap_mesh_shape(shape)
     # Auto-detect mesh shape from available hardware when env var not set.
     # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
     # mesh matching the topology used during model tracing.
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy (32 Wormhole devices)
+            return _cap_mesh_shape((4, 8))  # Galaxy
         elif num_devices >= 8:
-            return (1, 8)  # T3000 (8 devices)
+            return _cap_mesh_shape((1, 8))  # T3000
         elif num_devices >= 2:
-            return (1, num_devices)
+            return _cap_mesh_shape((1, num_devices))
     except Exception:
         # ttnn may not be initialized yet (env var path is preferred).
         # Fall through to a 1x1 default for non-mesh runs.
         pass
     return (1, 1)
+
+
+def _cap_mesh_shape(shape):
+    """Cap mesh shape by actual device count — never request more devices than available."""
+    try:
+        num_devices = ttnn.get_num_devices()
+        requested = shape[0] * shape[1]
+        if requested > num_devices:
+            if num_devices == 1:
+                return (1, 1)
+            return _cap_mesh_shape((1, num_devices))
+    except Exception:
+        pass
+    return shape
 
 
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
