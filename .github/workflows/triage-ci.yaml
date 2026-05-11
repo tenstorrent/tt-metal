@@ -82,6 +82,14 @@ on:
         description: "Detection mode: hard cap on workflows processed per run (B7 safety limit)"
         type: string
         default: "999"
+      max-candidates:
+        description: "Detection mode: max confirmed failures before Phase 2 stops (keeps runs short)"
+        type: string
+        default: "999"
+      max-log-bytes:
+        description: "Detection mode: per-run log truncation in bytes"
+        type: string
+        default: "100000"
 
 permissions:
   contents: write
@@ -103,6 +111,8 @@ jobs:
       mock-verify: ${{ inputs.mock-verify }}
       workflow-batch: ${{ inputs.workflow-batch }}
       max-workflows-per-run: ${{ inputs.max-workflows-per-run }}
+      max-candidates: ${{ inputs.max-candidates }}
+      max-log-bytes: ${{ inputs.max-log-bytes }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
