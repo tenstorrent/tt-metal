@@ -22,6 +22,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -785,14 +786,14 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumula
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 2, .K = 2, .N = 2, .num_blocks = 2, .packer_l1_acc = false};
+        .M = 2, .K = 2, .N = 2, .num_blocks = 7, .packer_l1_acc = false};
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 2, .K = 2, .N = 2, .num_blocks = 2, .packer_l1_acc = true};
+        .M = 2, .K = 2, .N = 2, .num_blocks = 7, .packer_l1_acc = true};
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
