@@ -1549,15 +1549,52 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                         }
                     }
                     if (peer_in_cluster) {
-                        base_umd_channels.insert(eth_chan_id);
-                        log_info(
-                            tt::LogMetal,
-                            "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
-                            "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
-                            "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
-                            dev->id(),
-                            eth_chan_id,
-                            status_buf[0]);
+                        // FIX VC (#42429): Before adding to base_umd_channels, verify the channel
+                        // has a valid TRANSLATED coordinate.  Channels 14/15 on MMIO devices in the
+                        // T3K T3000 topology have a LOGICAL coordinate but no TRANSLATED mapping in
+                        // UMD (the TRANSLATED coordinate table doesn't cover those ETH channels).
+                        // If we include them in base_umd_channels, FIX M will send them a
+                        // fabric launch_msg; they transition to fabric firmware (edm_status goes
+                        // 0x49706550 → 0xa3b3c3d3 → 0xa4b4c4d4).  Subsequently:
+                        //   • fabric_eth_health reads fail with "No core type found for system
+                        //     TRANSLATED" (can't health-check them)
+                        //   • Phase 5b ReadFromDeviceL1 calls fail the same way, causing a
+                        //     2-second deadline timeout per-channel, setting
+                        //     fabric_channels_not_ready_for_traffic_ and ultimately triggering a
+                        //     5-second AllGather operation timeout → GTEST_SKIP.
+                        // Route inaccessible-coordinate channels to external_umd_channels instead:
+                        // same treatment as external peers (skip soft-reset, skip firmware load).
+                        bool has_translated_coord = true;
+                        try {
+                            cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
+                                eth_chan_id, CoordSystem::TRANSLATED);
+                        } catch (const std::exception&) {
+                            has_translated_coord = false;
+                        }
+                        if (has_translated_coord) {
+                            base_umd_channels.insert(eth_chan_id);
+                            log_info(
+                                tt::LogMetal,
+                                "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                                "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
+                                "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
+                                dev->id(),
+                                eth_chan_id,
+                                status_buf[0]);
+                        } else {
+                            external_umd_channels.insert(eth_chan_id);
+                            log_info(
+                                tt::LogMetal,
+                                "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                                "(base-UMD-firmware sentinel) — peer IS in cluster but no TRANSLATED "
+                                "coordinate mapping exists (ETH channel inaccessible via UMD). "
+                                "Added to external_umd_channels; soft-reset and firmware load both "
+                                "skipped to prevent coord-translation failures in health checks. "
+                                "(FIX VC #42429)",
+                                dev->id(),
+                                eth_chan_id,
+                                status_buf[0]);
+                        }
                     } else {
                         external_umd_channels.insert(eth_chan_id);
                         log_info(

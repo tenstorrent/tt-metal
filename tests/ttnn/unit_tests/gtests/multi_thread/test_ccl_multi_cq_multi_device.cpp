@@ -264,13 +264,37 @@ protected:
                         cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
                     status_word = status.empty() ? 0u : status[0];
                 } catch (const std::exception& e) {
-                    log_info(
-                        tt::LogMetal,
-                        "[fabric_eth_health:{}] Device {} chan {} read FAILED: {}",
-                        label,
-                        chip_id,
-                        chan_id,
-                        e.what());
+                    // FIX VC4 (#42429): Distinguish coordinate translation failures from real
+                    // read failures.  Channels 14/15 on MMIO devices in T3K T3000 have a LOGICAL
+                    // coordinate (get_eth_core_for_channel with LOGICAL succeeds above) but no
+                    // TRANSLATED mapping in UMD.  read_core internally translates to TRANSLATED
+                    // and throws "No core type found for system TRANSLATED".  This is not a
+                    // hardware fault — the channel is simply out-of-scope for this topology.
+                    // With FIX VC (terminate_stale_erisc_routers) these channels are now routed
+                    // to external_umd_channels and firmware is NOT loaded, so this path should
+                    // rarely trigger.  Log at debug rather than info and continue (skip channel).
+                    const std::string_view what_sv = e.what();
+                    const bool is_coord_failure =
+                        what_sv.find("No core type found") != std::string_view::npos ||
+                        what_sv.find("No core coordinate found") != std::string_view::npos;
+                    if (is_coord_failure) {
+                        log_debug(
+                            tt::LogMetal,
+                            "[fabric_eth_health:{}] Device {} chan {} skipped: coordinate "
+                            "translation failure (out-of-scope for topology, not a hardware fault) "
+                            "(FIX VC4 #42429)",
+                            label,
+                            chip_id,
+                            chan_id);
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "[fabric_eth_health:{}] Device {} chan {} read FAILED: {}",
+                            label,
+                            chip_id,
+                            chan_id,
+                            e.what());
+                    }
                     continue;
                 }
                 const bool ready = (status_word == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC));

@@ -2510,7 +2510,29 @@ bool Device::phase5b_erisc_health_check(
                 eth_chan_id);
             continue;
         }
-        const auto eth_logical_core = soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+        // FIX VC2 (#42429): Channels 14/15 on MMIO devices in the T3K T3000 topology have a
+        // LOGICAL coordinate but no TRANSLATED mapping in UMD.  get_eth_core_for_channel with
+        // LOGICAL succeeds, but the subsequent ReadFromDeviceL1 internally translates to
+        // TRANSLATED and throws "No core type found for system TRANSLATED".  With FIX VC in
+        // terminate_stale_erisc_routers, such channels are now routed to external_umd_channels
+        // (caught by the FIX EXT guard above) and will not reach this point.  This try/catch
+        // is a defensive belt-and-suspenders guard: if a channel somehow slips through without
+        // a valid TRANSLATED coordinate, skip it here rather than letting ReadFromDeviceL1
+        // throw in the polling loop where it is misclassified as a relay timeout.
+        CoreCoord eth_logical_core;
+        try {
+            eth_logical_core = soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+        } catch (const std::exception& e) {
+            log_debug(
+                tt::LogMetal,
+                "phase5b_erisc_health_check: Device {} chan={} skipped — no LOGICAL coordinate "
+                "(coordinate translation failure, channel out-of-scope for this topology): {} "
+                "(FIX VC2 #42429)",
+                this->id(),
+                eth_chan_id,
+                e.what());
+            continue;
+        }
         chans.push_back({eth_chan_id, eth_logical_core});
     }
 
@@ -2574,6 +2596,32 @@ bool Device::phase5b_erisc_health_check(
             try {
                 detail::ReadFromDeviceL1(this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
             } catch (const std::exception& e) {
+                // FIX VC3 (#42429): Distinguish coordinate translation failures from relay
+                // timeouts.  Channels 14/15 on MMIO devices in the T3K T3000 topology have a
+                // LOGICAL coordinate but no TRANSLATED mapping in UMD — ReadFromDeviceL1
+                // internally translates to TRANSLATED and throws "No core type found for system
+                // TRANSLATED".  With FIX VC (terminate_stale_erisc_routers) these channels are
+                // now routed to external_umd_channels and filtered by the FIX VC2 guard during
+                // chans[] construction above, so they should not reach this catch block.  This
+                // guard is a defensive layer: if the exception message indicates a coordinate
+                // translation failure, skip this channel (count as healthy / out-of-scope) rather
+                // than treating it as an unhealthy relay timeout.
+                const std::string_view what_sv = e.what();
+                const bool is_coord_translation_failure =
+                    what_sv.find("No core type found") != std::string_view::npos ||
+                    what_sv.find("No core coordinate found") != std::string_view::npos;
+                if (is_coord_translation_failure) {
+                    log_debug(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5b: chan {} skipped — "
+                        "coordinate translation failure (channel out-of-scope for topology): {} "
+                        "(FIX VC3 #42429)",
+                        this->id(),
+                        ch.eth_chan_id,
+                        e.what());
+                    // Do NOT add to still_pending — treat as out-of-scope, not unhealthy.
+                    continue;
+                }
                 // Non-MMIO relay read timed out — treat this channel as not-ready.
                 // Without this catch, the exception propagates uncaught through
                 // quiesce_devices(), causing GTest TearDown to call quiesce again on
@@ -2643,6 +2691,23 @@ bool Device::phase5b_erisc_health_check(
                         detail::ReadFromDeviceL1(
                             this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
                     } catch (const std::exception& e) {
+                        // FIX VC3b (#42429): same coord-translation guard as the main poll loop.
+                        // Inaccessible channels are filtered during chans[] construction (FIX VC2)
+                        // so this path is defensive-only.
+                        const std::string_view what_sv = e.what();
+                        const bool is_coord_failure =
+                            what_sv.find("No core type found") != std::string_view::npos ||
+                            what_sv.find("No core coordinate found") != std::string_view::npos;
+                        if (is_coord_failure) {
+                            log_debug(
+                                tt::LogMetal,
+                                "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
+                                "diagnostic chan {} skipped — coordinate translation failure "
+                                "(out-of-scope for topology) (FIX VC3b #42429)",
+                                this->id(),
+                                ch.eth_chan_id);
+                            continue;  // do NOT add to unhealthy
+                        }
                         log_warning(
                             tt::LogMetal,
                             "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
