@@ -148,7 +148,8 @@ class Experts(AbstractModule):
         shared_expert_ids_to_device = cls.quad_ring_shared_expert_to_device_map(
             num_routed_experts, num_shared_experts, num_devices
         )
-        num_shared_experts_per_device = get_shared_experts_per_device(shared_expert_ids_to_device, num_devices)
+        num_total_experts = num_routed_experts + num_shared_experts
+        num_shared_experts_per_device = get_shared_experts_per_device(shared_expert_ids_to_device, num_devices)[0]
         num_total_experts_per_device = num_shared_experts_per_device + num_routed_experts_per_device
 
         if loaded_prepared_weights is not None:
@@ -194,22 +195,45 @@ class Experts(AbstractModule):
             )
             matmul_N = w0.shape[-1]
 
+            # HF stores the shared MLP as a single unindexed module (`shared_experts.{proj}.weight`).
+            # quad_ring_shared_expert_to_device_map currently emits one entry, so we load one tensor per projection.
+            assert num_shared_experts == 1 and len(shared_expert_ids_to_device) == 1, (
+                f"Only n_shared_experts=1 is supported here (got {num_shared_experts}); "
+                "the fat shared-MLP -> per-expert split is not implemented."
+            )
+            (shared_expert_id,) = shared_expert_ids_to_device.keys()
+
+            def _load_shared_expert_weight(hf_name: str) -> dict[int, torch.Tensor]:
+                weight = get_dequantized_tensor(
+                    state_dict, f"shared_experts.{hf_name}.weight", dtype=cls.WEIGHT_TORCH_DTYPE
+                )
+                # (out, in) -> (layers=1, experts=1, in, out) matching the routed-expert layout.
+                return {shared_expert_id: weight.unsqueeze(0).unsqueeze(0).transpose(-1, -2)}
+
+            shared_w0 = _load_shared_expert_weight("gate_proj")
+            shared_w1 = _load_shared_expert_weight("up_proj")
+            shared_w2 = _load_shared_expert_weight("down_proj")
+
+            w0, w1, w2 = add_shared_expert_weights(
+                w0, w1, w2, shared_w0, shared_w1, shared_w2, shared_expert_ids_to_device, num_devices
+            )
+
             prepared_w0_w1 = []
             prepared_w2 = []
-            for i in range(0, num_routed_experts, num_routed_experts_per_device):
+            for i in range(0, num_total_experts, num_total_experts_per_device):
                 prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
-                    w0[:, i : i + num_routed_experts_per_device, :, :],
-                    w1[:, i : i + num_routed_experts_per_device, :, :],
+                    w0[:, i : i + num_total_experts_per_device, :, :],
+                    w1[:, i : i + num_total_experts_per_device, :, :],
                     num_layers,
-                    num_routed_experts_per_device,
+                    num_total_experts_per_device,
                     hidden_size,
                     matmul_N,
                     ring2cores,
                 )
                 prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
-                    w2[:, i : i + num_routed_experts_per_device, :, :],
+                    w2[:, i : i + num_total_experts_per_device, :, :],
                     num_layers,
-                    num_routed_experts_per_device,
+                    num_total_experts_per_device,
                     matmul_N,
                     hidden_size,
                     ring2cores,
@@ -220,29 +244,6 @@ class Experts(AbstractModule):
 
             prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
             prepared_w2 = torch.cat(prepared_w2, dim=2)
-
-            # Load shared-expert weights and fold them into w0/w1/w2. NOTE: the routed-only
-            # prepared_w0_w1 / prepared_w2 tensors above are returned as-is — wiring the shared
-            # contributions into the packed layout is the job of the subsequent fix commits.
-            shared_w0 = (
-                cls._load_expert_weight(state_dict, "gate_proj", "shared_experts", num_shared_experts)
-                .unsqueeze(0)
-                .transpose(-1, -2)
-            )
-            shared_w1 = (
-                cls._load_expert_weight(state_dict, "up_proj", "shared_experts", num_shared_experts)
-                .unsqueeze(0)
-                .transpose(-1, -2)
-            )
-            shared_w2 = (
-                cls._load_expert_weight(state_dict, "down_proj", "shared_experts", num_shared_experts)
-                .unsqueeze(0)
-                .transpose(-1, -2)
-            )
-
-            w0, w1, w2 = add_shared_expert_weights(
-                w0, w1, w2, shared_w0, shared_w1, shared_w2, shared_expert_ids_to_device, num_devices
-            )
 
         w0_w1_memory_config = get_w0_w1_memory_config(
             num_layers, num_total_experts_per_device, hidden_size, compute_matmul_dram_core_range_set

@@ -272,6 +272,9 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
 
         # TODO: #41009
         config["quad_ring_all_to_all_dispatch_metadata"] = AllToAllDispatchMetadataConfig(
+            shared_expert_ids=MoEExperts.quad_ring_shared_expert_to_device_map(
+                hf_config.n_routed_experts, hf_config.n_shared_experts, mesh_device.get_num_devices()
+            ),
             worker_mode=ttnn.WorkerMode.DIRECT,
             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
             drain_sync_tilizer_core=(6, 9),
@@ -597,6 +600,12 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         topk_experts_weights_for_scaling = ttnn.permute(
             topk_experts_weights_rm, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG
         )
+
+        # this is a kludge
+        num_shared_experts = len(cfg["quad_ring_all_to_all_dispatch_metadata"].shared_expert_ids)
+        padding = [(0, num_shared_experts)] + [(0, 0)] * 3
+        topk_experts_weights_for_scaling = ttnn.pad(topk_experts_weights_for_scaling, padding, 1.0)
+
         topk_experts_weights_for_scaling = ttnn.to_layout(
             topk_experts_weights_for_scaling, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )

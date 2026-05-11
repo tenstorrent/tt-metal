@@ -477,6 +477,7 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
             ),
         )
 
+    shared_expert_ids: list[int] | None = None
     worker_mode: ttnn.WorkerMode
     dispatch_algorithm: ttnn.DispatchAlgorithm
     drain_sync_tilizer_core: tuple[int, int] | None = None
