@@ -979,21 +979,37 @@ def fast_device_to_host_yuv(
 
         inter_dim = concat_dims[inter_host_axis]
         if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
+            # Move the gather dim out of the tile dims (last two) to position 2
+            # (dim=-3). This avoids the composite_all_gather path's tile-padded
+            # check and makes any concat fallback a cheap outer-dim memcpy.
+            # BCTHW dims: B=0 C=1 T=2 H=3 W=4. inter_dim is 3 (H) or 4 (W).
+            if inter_dim == 4:
+                pre_dims = (0, 1, 4, 2, 3)  # BCTHW -> BCWTH
+                post_dims = (0, 1, 3, 4, 2)  # BCWTH -> BCTHW
+            else:  # inter_dim == 3
+                pre_dims = (0, 1, 3, 2, 4)  # BCTHW -> BCHTW
+                post_dims = (0, 1, 3, 2, 4)  # BCHTW -> BCTHW (same swap)
+            ag_dim = 2
+
+            tt_video_BCTHW = ttnn.permute(tt_video_BCTHW, pre_dims)
             tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
             tt_video_BCTHW = ccl_manager.all_gather(
                 tt_video_BCTHW,
-                dim=inter_dim,
+                dim=ag_dim,
                 mesh_axis=inter_host_axis,
                 use_hyperparams=True,
                 use_persistent_buffer=True,
             )
+            # Drop back to ROW_MAJOR before repeat/mesh_partition so ttnn.repeat
+            # doesn't wrap itself in an Untilize → Repeat → Tilize roundtrip.
+            tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
                 repeat_dims = [1] * len(tt_video_BCTHW.shape)
-                repeat_dims[inter_dim] = n_hosts
+                repeat_dims[ag_dim] = n_hosts
                 tt_video_BCTHW = ttnn.repeat(tt_video_BCTHW, repeat_dims)
-                tt_video_BCTHW = ttnn.mesh_partition(tt_video_BCTHW, dim=inter_dim, cluster_axis=inter_host_axis)
-            tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
+                tt_video_BCTHW = ttnn.mesh_partition(tt_video_BCTHW, dim=ag_dim, cluster_axis=inter_host_axis)
+            tt_video_BCTHW = ttnn.permute(tt_video_BCTHW, post_dims)
 
         # Recompute per-shard dims after gather — they may have grown.
         B, C, T, h_per, w_per = tt_video_BCTHW.shape
