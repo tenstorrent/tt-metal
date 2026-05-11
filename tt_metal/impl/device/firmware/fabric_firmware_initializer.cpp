@@ -283,6 +283,89 @@ void FabricFirmwareInitializer::configure() {
             }
         }
     }
+
+    // FIX FQ-2 (#42429): Post-init verification — read the firmware state (router_sync_address)
+    // of all active ETH cores that were expected to receive dispatch/fabric firmware.  If any
+    // core is still at the base firmware sentinel (ROM postcode 0x4970xxxx range but not the
+    // expected READY_FOR_TRAFFIC / LOCAL_HANDSHAKE_COMPLETE values), log an error.
+    //
+    // This catches the "ERISC in base firmware" condition that leads to the prefetcher hang:
+    // the prefetcher issues relay ringbuffer commands targeting these cores, but the core
+    // never processes them because it is running base ERISC firmware, not dispatch/fabric FW.
+    //
+    // NOTE: Only check MMIO devices (non-MMIO reads go through the ETH relay which may be
+    // broken, causing a blocking read).  Skipped when dead_relay_devices_ is non-empty since
+    // the fabric is already known-degraded.
+    if (dead_relay_devices_.empty()) {
+        try {
+            const auto& fabric_context = control_plane_.get_fabric_context();
+            const auto& builder_ctx = fabric_context.get_builder_context();
+            const auto router_sync_address = builder_ctx.get_fabric_router_sync_address_and_status().first;
+            constexpr uint32_t kRomPostcodeBase = 0x49700000u;
+            constexpr uint32_t kRomPostcodeMask = 0xFFFF0000u;
+            // Expected post-init values: READY_FOR_TRAFFIC (0x49706550 is base-UMD, skip those)
+            constexpr uint32_t kBaseUmdSentinel = 0x49706550u;
+
+            for (auto* dev : devices_) {
+                if (!dev) {
+                    continue;
+                }
+                // Only read MMIO devices to avoid relay reads.
+                if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
+                    continue;
+                }
+                const auto fabric_node_id_opt = [&]() -> std::optional<tt_fabric::FabricNodeId> {
+                    try {
+                        return control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                    } catch (...) {
+                        return std::nullopt;
+                    }
+                }();
+                if (!fabric_node_id_opt) {
+                    continue;
+                }
+                const auto& active_channels = control_plane_.get_active_fabric_eth_channels(*fabric_node_id_opt);
+                for (const auto& [eth_chan_id, direction] : active_channels) {
+                    std::vector<uint32_t> status_buf(1, 0);
+                    const auto eth_logical_core =
+                        cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FIX FQ-2: Device {} chan={} post-init status read failed: {}",
+                            dev->id(),
+                            eth_chan_id,
+                            e.what());
+                        continue;
+                    }
+                    const uint32_t status = status_buf[0];
+                    // Check for ROM postcode range (0x4970xxxx) excluding base-UMD sentinel
+                    if ((status & kRomPostcodeMask) == kRomPostcodeBase && status != kBaseUmdSentinel) {
+                        log_error(
+                            tt::LogMetal,
+                            "FIX FQ-2 (#42429): Device {} ETH chan={} core=({},{}) is at ROM "
+                            "postcode 0x{:08x} after fabric init — ERISC appears to be in base "
+                            "firmware, not dispatch/fabric FW. Relay commands targeting this core "
+                            "will hang the prefetcher.",
+                            dev->id(),
+                            eth_chan_id,
+                            eth_logical_core.x,
+                            eth_logical_core.y,
+                            status);
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "FIX FQ-2: Post-init ETH firmware verification failed: {} — proceeding anyway.",
+                e.what());
+        }
+    }
+
     initialized_.test_and_set();
 }
 
@@ -2225,6 +2308,58 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
+
+    // FIX FQ-5 (#42429): Log exactly which ETH cores received fabric/dispatch firmware and
+    // which were skipped (probe-dead, base-UMD, external, or dead-relay).  This makes the
+    // "ERISC in base firmware" condition immediately diagnosable when a relay command targets
+    // a core that was never initialized for this session.  At relay-command-assembly time
+    // (Remediation 1 / FIX FQ-1), this log is the cross-reference.
+    for (auto* dev : compiled_devices) {
+        if (!dev) {
+            continue;
+        }
+        const auto fabric_node_id_opt = [&]() -> std::optional<tt_fabric::FabricNodeId> {
+            try {
+                return control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+            } catch (...) {
+                return std::nullopt;
+            }
+        }();
+        if (!fabric_node_id_opt) {
+            continue;
+        }
+        const auto& active_channels = control_plane_.get_active_fabric_eth_channels(*fabric_node_id_opt);
+        const auto& dead_chans = probe_dead_channels_map.count(dev->id()) ? probe_dead_channels_map.at(dev->id())
+                                                                           : std::unordered_set<uint32_t>{};
+        const auto& base_umd = base_umd_channels_map.count(dev->id()) ? base_umd_channels_map.at(dev->id())
+                                                                       : std::unordered_set<uint32_t>{};
+        const auto& ext_umd = external_umd_channels_map_.count(dev->id()) ? external_umd_channels_map_.at(dev->id())
+                                                                           : std::unordered_set<uint32_t>{};
+        const bool is_dead_relay = dead_relay_devices_.count(dev->id()) > 0;
+
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const char* status = "FIRMWARE_LOADED";
+            if (is_dead_relay) {
+                status = "SKIPPED_DEAD_RELAY";
+            } else if (dead_chans.count(eth_chan_id)) {
+                status = "SKIPPED_PROBE_DEAD";
+            } else if (ext_umd.count(eth_chan_id)) {
+                status = "SKIPPED_EXTERNAL_UMD";
+            } else if (base_umd.count(eth_chan_id)) {
+                status = "BASE_UMD_LAUNCH_MSG";  // firmware via launch_msg, not soft-reset
+            }
+            const auto eth_logical_core =
+                cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+            log_info(
+                tt::LogMetal,
+                "FIX FQ-5: Device {} ETH chan={} core=({},{}) — {}",
+                dev->id(),
+                eth_chan_id,
+                eth_logical_core.x,
+                eth_logical_core.y,
+                status);
+        }
+    }
 
     // FIX SB2 (#42429): When FIX M fires on any MMIO relay channel, that channel transitions
     // from UMD relay firmware to fabric EDM firmware via launch_msg without soft-reset.

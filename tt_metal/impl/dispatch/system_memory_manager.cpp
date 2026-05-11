@@ -681,6 +681,31 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         return;
     }
 
+    // FIX FQ-1 (#42429): Validate relay targets before issuing relay commands.
+    // If the device's fabric relay path is broken (ETH cores in base firmware instead of
+    // dispatch/fabric FW), any relay-dependent prefetch command will hang the prefetcher
+    // in careful_copy_from_l1_to_local_cache, filling the fetch queue to 128/128 and
+    // triggering the timeout below.  Log a warning so the root cause is immediately
+    // visible rather than requiring tt-triage to discover ERISC in base firmware.
+    // This is a one-shot check per queue: only warn once to avoid log spam.
+    if (!this->fq1_relay_warned_[cq_id]) {
+        auto& fq1_ctx = tt::tt_metal::MetalContext::instance(context_id);
+        if (fq1_ctx.is_device_manager_initialized()) {
+            const IDevice* dev = fq1_ctx.device_manager()->get_active_device(this->device_id);
+            if (dev && dev->is_fabric_relay_path_broken()) {
+                log_warning(
+                    tt::LogDispatch,
+                    "FIX FQ-1 (#42429): fetch_queue_reserve_back cq_id={} on Device {} — "
+                    "fabric relay path is broken (ETH cores likely in base firmware). "
+                    "Relay-dependent prefetch commands may hang the prefetcher. "
+                    "See FIX FQ-5 init log for which ETH cores received firmware.",
+                    (int)cq_id,
+                    this->device_id);
+                this->fq1_relay_warned_[cq_id] = true;
+            }
+        }
+    }
+
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     const uint32_t prefetch_q_rd_ptr =
         ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
@@ -818,6 +843,14 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
                     prefetch_q_base,
                     prefetch_q_limit,
                     prefetch_q_entries);
+
+                // FIX FQ-4 (#42429): Dump fabric ERISC state at fetch_queue timeout.
+                // This makes the "ERISC in base firmware" condition immediately visible in
+                // logs without needing a separate tt-triage analysis.  The existing
+                // dump_fabric_erisc_state() reads heartbeat + packet counters from all active
+                // ETH channels on MMIO-capable devices.
+                dump_fabric_erisc_state();
+
                 tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
                 TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
             };

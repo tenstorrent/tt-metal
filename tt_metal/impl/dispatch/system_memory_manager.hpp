@@ -142,6 +142,10 @@ private:
     uint32_t bypass_buffer_write_offset = 0;
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
+
+    // FIX FQ-1 (#42429): One-shot relay-broken warning per CQ to avoid log spam.
+    // Indexed by cq_id; set to true after the first warning is emitted.
+    bool fq1_relay_warned_[2] = {false, false};
 };
 
 }  // namespace tt::tt_metal
