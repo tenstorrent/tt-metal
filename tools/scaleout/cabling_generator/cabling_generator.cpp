@@ -891,8 +891,15 @@ CablingGenerator build_from_directory(const std::string& dir_path, const Deploym
     return merged;
 }
 
-// Same as above, but slices the pre-parsed deployment per cabling file so each per-file
-// ctor sees only the hosts it can validate against its own templates and host_id space.
+// Same as above, but optionally slices the pre-parsed deployment per cabling file so each
+// per-file ctor sees only the hosts it can validate against its own templates and host_id space.
+//
+// Slicing is gated on every leaf child name in every cabling file matching a deployment hostname
+// (the convention used by heterogeneous-merge inputs). When that doesn't hold - e.g. cabling files
+// use placeholder names like "node1" while the deployment lists real hostnames - we fall back to
+// the pre-PR behaviour of passing the full deployment to each per-file ctor. That path doesn't
+// support disjoint per-file templates against a single deployment, but it preserves the existing
+// positional convention used by single-file ctors in production.
 CablingGenerator build_from_directory(
     const std::string& dir_path,
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
@@ -904,40 +911,74 @@ CablingGenerator build_from_directory(
         log_info(tt::LogDistributed, "  - {}", file);
     }
 
-    auto slice = [&](const std::string& cabling_file) {
-        auto cluster = load_cluster_descriptor(cabling_file);
-        return filter_deployment_for_cabling(cluster, deployment_descriptor, cabling_file);
+    // Parse cabling files once so we can both probe for the naming convention and (when slicing)
+    // reuse the parsed cluster descriptors below.
+    std::vector<cabling_generator::proto::ClusterDescriptor> clusters;
+    clusters.reserve(descriptor_files.size());
+    for (const auto& file : descriptor_files) {
+        clusters.push_back(load_cluster_descriptor(file));
+    }
+
+    std::unordered_set<std::string> deployment_hostnames;
+    deployment_hostnames.reserve(deployment_descriptor.hosts().size());
+    for (const auto& host : deployment_descriptor.hosts()) {
+        deployment_hostnames.insert(host.host());
+    }
+
+    bool can_slice = true;
+    for (const auto& cluster : clusters) {
+        std::map<HostId, std::string> name_map;
+        collect_host_id_to_hostname(cluster.root_instance(), cluster, name_map);
+        for (const auto& [hid, hostname] : name_map) {
+            if (!deployment_hostnames.contains(hostname)) {
+                can_slice = false;
+                break;
+            }
+        }
+        if (!can_slice) {
+            break;
+        }
+    }
+
+    auto per_file_deployment = [&](size_t i) -> tt::scaleout_tools::deployment::proto::DeploymentDescriptor {
+        if (!can_slice) {
+            return deployment_descriptor;
+        }
+        return filter_deployment_for_cabling(clusters[i], deployment_descriptor, descriptor_files[i]);
     };
 
-    auto first_slice = slice(descriptor_files[0]);
-    CablingGenerator merged(descriptor_files[0], first_slice);
+    CablingGenerator merged(descriptor_files[0], per_file_deployment(0));
     std::string merged_source_description = descriptor_files[0];
 
     for (size_t i = 1; i < descriptor_files.size(); ++i) {
-        auto next_slice = slice(descriptor_files[i]);
-        merged.merge(descriptor_files[i], next_slice, merged_source_description);
+        merged.merge(descriptor_files[i], per_file_deployment(i), merged_source_description);
         merged_source_description += ", " + descriptor_files[i];
     }
 
-    // Catch hosts orphaned by per-file slicing (typo / wrong file picked).
-    std::unordered_set<std::string> claimed;
-    claimed.reserve(merged.deployment_hosts_.size());
-    for (const auto& host : merged.deployment_hosts_) {
-        claimed.insert(host.hostname);
-    }
-    std::vector<std::string> orphans;
-    for (const auto& host : deployment_descriptor.hosts()) {
-        if (!claimed.contains(host.host())) {
-            orphans.push_back(host.host());
+    // Orphan detection is only meaningful when we sliced: each cabling file declares a subset of
+    // hosts and a deployment-only host represents a typo or wrong-file mistake. In the
+    // full-deployment fallback every per-file ctor already sees the entire deployment, so this
+    // class of error can't arise here.
+    if (can_slice) {
+        std::unordered_set<std::string> claimed;
+        claimed.reserve(merged.deployment_hosts_.size());
+        for (const auto& host : merged.deployment_hosts_) {
+            claimed.insert(host.hostname);
         }
-    }
-    if (!orphans.empty()) {
-        std::string msg = "Deployment descriptor contains hosts not referenced by any cabling file in '" + dir_path +
-                          "': " + orphans[0];
-        for (size_t i = 1; i < orphans.size(); ++i) {
-            msg += ", " + orphans[i];
+        std::vector<std::string> orphans;
+        for (const auto& host : deployment_descriptor.hosts()) {
+            if (!claimed.contains(host.host())) {
+                orphans.push_back(host.host());
+            }
         }
-        throw std::runtime_error(msg);
+        if (!orphans.empty()) {
+            std::string msg = "Deployment descriptor contains hosts not referenced by any cabling file in '" +
+                              dir_path + "': " + orphans[0];
+            for (size_t i = 1; i < orphans.size(); ++i) {
+                msg += ", " + orphans[i];
+            }
+            throw std::runtime_error(msg);
+        }
     }
 
     return merged;

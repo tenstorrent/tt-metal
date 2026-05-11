@@ -243,8 +243,10 @@ root_instance { template_name: "root"
 
 // ---- Heterogeneous merge tests ----
 //
-// These exercise build_from_directory(dir, DeploymentDescriptor): each cabling file
-// declares its own (disjoint) templates and the deployment is sliced per file.
+// These exercise build_from_directory(dir, DeploymentDescriptor). When every leaf child
+// name in every cabling file maps to a deployment hostname, the deployment is sliced
+// per file (enables disjoint per-file templates). Otherwise we fall back to feeding the
+// full deployment to each per-file ctor (preserves the pre-PR positional convention).
 
 static void write_single_node_cabling(
     const std::string& path, const std::string& node, const std::string& desc, uint32_t hid = 0) {
@@ -314,15 +316,26 @@ root_instance { template_name: "root"
     std::filesystem::remove_all(dir);
 }
 
-// Cabling refers to a hostname (child_name) that is not in the deployment descriptor.
-TEST(HeterogeneousMergeTest, HostnameMissingFromDeployment_Throws) {
-    auto dir = tmp_dir("hetero_missing");
+// Directory mode with placeholder child names + real deployment hostnames (the existing
+// in-repo convention used by 5_wh_galaxy_y_torus_superpod, 16_n300_lb_cluster, etc.). Slicing
+// must auto-disable here so directory mode stays compatible with the single-file ctor.
+TEST(HeterogeneousMergeTest, PlaceholderNamesWithRealHostnames_FallsBackToFullDeployment) {
+    auto dir = tmp_dir("hetero_placeholder");
     std::string cdir = dir + "c/";
     std::filesystem::create_directories(cdir);
-    write_single_node_cabling(cdir + "a.textproto", "node1", "WH_GALAXY");
-    write_deploy(dir + "dep.textproto", {"other"}, "WH_GALAXY");
+    std::filesystem::copy(k5NodeCabling, cdir + "a.textproto");
+    write(dir + "dep.textproto",
+        "hosts{host:\"wh-glx-a03u02\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a03u08\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a03u14\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a04u02\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a04u08\" node_type:\"WH_GALAXY_Y_TORUS\"}\n");
 
-    EXPECT_THROW(CablingGenerator(cdir, dir + "dep.textproto"), std::runtime_error);
+    CablingGenerator gen(cdir, dir + "dep.textproto");
+    const auto hosts = gen.generate_factory_system_descriptor().hosts();
+    ASSERT_EQ(hosts.size(), 5u);
+    EXPECT_EQ(hosts[0].hostname(), "wh-glx-a03u02");
+    EXPECT_EQ(hosts[4].hostname(), "wh-glx-a04u08");
 
     std::filesystem::remove_all(dir);
 }
