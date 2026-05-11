@@ -473,7 +473,7 @@ class OperationSchema(BaseModel):
 
         if (
             self.pack_l1_accumulation == L1Accumulation.Yes
-            and not output.data_format.supports_l1_acc()
+            and not output.data_format.supports_l1_accumulation()
         ):
             raise ValueError(f"{output.data_format} does not support L1 accumulation")
 

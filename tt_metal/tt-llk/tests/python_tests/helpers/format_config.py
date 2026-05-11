@@ -180,7 +180,7 @@ class DataFormat(Enum):
             DataFormat.MxFp8P,
         }
 
-    def supports_l1_acc(self) -> bool:
+    def supports_l1_accumulation(self) -> bool:
         """Checks if the data format supports L1 accumulation"""
         return self in {
             DataFormat.Float32,
