@@ -5,11 +5,11 @@
             "content": [
                 {
                     "type": "video",
-                    "video": "/home/ttuser/ssinghal/PR-fix/tt-metal/models/demos/molmo2/verification/videos/d02d399003cca14e2a5c822d389821e553e6b7942c5640d48c075703e533d1dc.mp4"
+                    "video": "/home/ttuser/ssinghal/PR-fix/tt-metal/models/demos/molmo2/verification/videos/332e8fd62428a2804bdb6c1da9a2267e681debc5e0dc8296ff7f53dd7dd93f3e.mp4"
                 },
                 {
                     "type": "text",
-                    "text": "Track the main subject throughout the video."
+                    "text": "Track the jar on the left throughout the video."
                 }
             ]
         }

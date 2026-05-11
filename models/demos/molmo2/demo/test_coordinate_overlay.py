@@ -309,3 +309,20 @@ def test_save_annotated_outputs_handles_truncated_track_coords(tmp_path):
     )
     mp4s = list(out_dir.glob("*.mp4"))
     assert len(mp4s) >= 1, "Annotated MP4 must be saved even for truncated track output"
+
+
+# ---------------------------------------------------------------------------
+# Dot size
+# ---------------------------------------------------------------------------
+
+
+def test_dot_radius_is_at_least_16px(tmp_path):
+    """The drawn dot covers pixels at least 16px from the centre."""
+    from models.demos.molmo2.demo.demo import annotate_image_with_points
+
+    img = _white_image(400, 400)
+    out = tmp_path / "out.png"
+    annotate_image_with_points(img, "0 500 500", out)  # dot at (200, 200)
+    result = Image.open(out).convert("RGB")
+    # A pixel 16px from centre should be covered by the dot
+    assert result.getpixel((200 + 16, 200)) != (255, 255, 255), "Dot must extend ≥16px from centre"
