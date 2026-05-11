@@ -211,6 +211,10 @@ class L1Accumulation(Enum):
     Yes = 1
     No = 0
 
+    @property
+    def cpp_enum_value(self):
+        return str(self.value)
+
 
 class StochasticRounding(Enum):
     No = "StochRndType::None"

@@ -119,6 +119,12 @@ def _append_registry_entries(entries, path):
                 f.write(f"    pytest_args: '{pytest_args_escaped}'\n")
             else:
                 f.write("    pytest_args: null\n")
+            tt_kmd = entry.get("tt_kmd")
+            tt_smi = entry.get("tt_smi")
+            tt_firmware = entry.get("tt_firmware")
+            f.write(f"    tt_kmd: {json.dumps(tt_kmd) if tt_kmd is not None else 'null'}\n")
+            f.write(f"    tt_smi: {json.dumps(tt_smi) if tt_smi is not None else 'null'}\n")
+            f.write(f"    tt_firmware: {json.dumps(tt_firmware) if tt_firmware is not None else 'null'}\n")
 
 
 DEFAULT_SCHEMA = "ttnn_ops_v6"
@@ -466,8 +472,43 @@ def parse_mesh_from_machine_info(machine_info, arguments=None):
     return mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 
 
+def _normalize_trace_sw_value(value):
+    """Normalize trace software metadata to a storable scalar string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, dict)):
+        return json.dumps(value, sort_keys=True, default=str)
+    return str(value)
+
+
+def _parse_trace_sw_value(value):
+    """Best-effort parse for software metadata read back from DB."""
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return value
+    if stripped[0] in "[{":
+        try:
+            return json.loads(stripped)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
 def get_or_create_trace_run(
-    cur, trace_run_cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=DEFAULT_SCHEMA
+    cur,
+    trace_run_cache,
+    trace_uid,
+    hardware_id,
+    tt_metal_sha=None,
+    pytest_args=None,
+    tt_kmd=None,
+    tt_smi=None,
+    tt_firmware=None,
+    schema=DEFAULT_SCHEMA,
 ):
     """Create and cache a trace_run for a unique trace_uid.
 
@@ -482,12 +523,12 @@ def get_or_create_trace_run(
         cur.execute(
             sql.SQL(
                 """
-            INSERT INTO {} (trace_uid, hardware_id, tt_metal_sha, pytest_args)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO {} (trace_uid, hardware_id, tt_metal_sha, pytest_args, tt_kmd, tt_smi, tt_firmware)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING trace_run_id
             """
             ).format(trace_run_table),
-            (trace_uid, hardware_id, tt_metal_sha, pytest_args),
+            (trace_uid, hardware_id, tt_metal_sha, pytest_args, tt_kmd, tt_smi, tt_firmware),
         )
         trace_run_cache[trace_uid] = cur.fetchone()[0]
 
@@ -729,6 +770,9 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                 # JSONs won't have this field; treat absence as None so
                 # trace_run.pytest_args stays NULL for legacy data.
                 pytest_args = execution.get("pytest_args")
+                tt_kmd = _normalize_trace_sw_value(machine_info.get("tt_kmd"))
+                tt_smi = _normalize_trace_sw_value(machine_info.get("tt_smi"))
+                tt_firmware = _normalize_trace_sw_value(machine_info.get("tt_firmware"))
 
                 # Validate required fields
                 missing = []
@@ -816,14 +860,22 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                 # Link this execution canonically via trace + config + model
                 if model_id is not None:
                     if hardware_id:
+                        trace_run_kwargs = {"pytest_args": pytest_args, "schema": schema}
+                        if tt_kmd is not None or tt_smi is not None or tt_firmware is not None:
+                            trace_run_kwargs.update(
+                                {
+                                    "tt_kmd": tt_kmd,
+                                    "tt_smi": tt_smi,
+                                    "tt_firmware": tt_firmware,
+                                }
+                            )
                         trace_run_id = get_or_create_trace_run(
                             cur,
                             trace_run_cache,
                             trace_uid,
                             hardware_id,
                             tt_metal_sha,
-                            pytest_args=pytest_args,
-                            schema=schema,
+                            **trace_run_kwargs,
                         )
                         trace_run_ids_touched.add(trace_run_id)
                         trace_config_pairs.add((trace_run_id, config_id))
@@ -917,15 +969,15 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         trace_details_map = {}  # trace_run_id -> (hardware_id, sha, trace_uid)
         for trace_run_id in trace_run_cache.values():
             cur.execute(
-                f"SELECT hardware_id, tt_metal_sha, trace_uid, pytest_args"
+                f"SELECT hardware_id, tt_metal_sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware"
                 f" FROM {schema}.trace_run WHERE trace_run_id = %s",
                 (trace_run_id,),
             )
             tr_row = cur.fetchone()
             if not tr_row:
                 continue
-            hardware_id, sha, trace_uid, pytest_args = tr_row
-            trace_details_map[trace_run_id] = (hardware_id, sha, trace_uid, pytest_args)
+            hardware_id, sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware = tr_row
+            trace_details_map[trace_run_id] = (hardware_id, sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware)
             if hardware_id and hardware_id not in hw_map:
                 cur.execute(
                     f"SELECT board_type, device_series, card_count FROM {schema}.ttnn_hardware WHERE ttnn_hardware_id = %s",
@@ -959,7 +1011,7 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         tr_row = trace_details_map.get(trace_run_id)
         if not tr_row:
             continue
-        hardware_id, sha, trace_uid, pytest_args = tr_row
+        hardware_id, sha, trace_uid, pytest_args, tt_kmd, tt_smi, tt_firmware = tr_row
         if trace_uid and trace_uid in existing_trace_uids:
             continue
         if not trace_uid and trace_run_id in existing_ids:
@@ -988,6 +1040,9 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
             "loaded_at": str(date.today()),
             "notes": "",
             "pytest_args": pytest_args,
+            "tt_kmd": tt_kmd,
+            "tt_smi": tt_smi,
+            "tt_firmware": _parse_trace_sw_value(tt_firmware),
         }
         data["registry"].append(entry)
         existing_ids.add(trace_run_id)
@@ -1347,7 +1402,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             tr.trace_run_id,
             h.board_type, h.device_series, h.card_count,
             tr.tt_metal_sha, tr.traced_at, tr.config_count, tr.notes,
-            tr.pytest_args
+            tr.pytest_args, tr.tt_kmd, tr.tt_smi, tr.tt_firmware
         FROM {schema}.trace_run tr
         JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
         WHERE tr.trace_run_id = %s
@@ -1360,7 +1415,20 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
         conn.close()
         return None
 
-    (_, board_type, device_series, card_count, tt_metal_sha, traced_at, _, _, trace_pytest_args) = tr_row
+    (
+        _,
+        board_type,
+        device_series,
+        card_count,
+        tt_metal_sha,
+        traced_at,
+        _,
+        _,
+        trace_pytest_args,
+        trace_tt_kmd,
+        trace_tt_smi,
+        trace_tt_firmware,
+    ) = tr_row
 
     # Fetch all models for this trace; then apply model_names filter if specified.
     cur.execute(
@@ -1460,6 +1528,12 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             exec_machine_info["mesh_device_shape"] = mesh_shape
             if device_count:
                 exec_machine_info["device_count"] = device_count
+        if trace_tt_kmd:
+            exec_machine_info["tt_kmd"] = trace_tt_kmd
+        if trace_tt_smi:
+            exec_machine_info["tt_smi"] = trace_tt_smi
+        if trace_tt_firmware:
+            exec_machine_info["tt_firmware"] = _parse_trace_sw_value(trace_tt_firmware)
 
         source = format_source(source_file, hf_model_identifier)
 
@@ -1502,6 +1576,9 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
         "tt_metal_sha": tt_metal_sha,
         "traced_at": str(traced_at) if traced_at else None,
         "pytest_args": trace_pytest_args,
+        "tt_kmd": trace_tt_kmd,
+        "tt_smi": trace_tt_smi,
+        "tt_firmware": _parse_trace_sw_value(trace_tt_firmware),
     }
 
     print(f"Reconstructed {len(result['operations'])} operations, {total_configs} configurations")
@@ -1545,6 +1622,9 @@ def list_variants(model_pattern, schema=DEFAULT_SCHEMA):
             h.board_type,
             h.device_series,
             h.card_count,
+            tr.tt_kmd,
+            tr.tt_smi,
+            tr.tt_firmware,
             tr.trace_uid,
             tr.trace_run_id,
             tr.traced_at,
@@ -1568,13 +1648,18 @@ def list_variants(model_pattern, schema=DEFAULT_SCHEMA):
     print(f"\nVariants matching {model_pattern!r}:")
     print(f"{'trace_id':>8}  {'hardware':22}  {'configs':>7}  {'traced_at':20}  source_file / pytest_args")
     print("-" * 140)
-    for sf, hf, pa, board, ds, cc, _uid, tr_id, traced_at, cfg_count in rows:
+    for sf, hf, pa, board, ds, cc, tt_kmd, tt_smi, tt_firmware, _uid, tr_id, traced_at, cfg_count in rows:
         hw = f"{ds} ({cc}x)"
         traced = str(traced_at)[:19] if traced_at else "-"
         label = sf if not hf else f"{sf} [HF_MODEL:{hf}]"
         pa_disp = pa if pa else "(no pytest_args recorded)"
         print(f"{tr_id:>8}  {hw:22}  {cfg_count or 0:>7}  {traced:20}  {label}")
         print(f"{'':>8}  {'':22}  {'':>7}  {'':20}    args: {pa_disp}")
+        if tt_kmd or tt_smi or tt_firmware:
+            print(
+                f"{'':>8}  {'':22}  {'':>7}  {'':20}    "
+                f"sw: kmd={tt_kmd or '-'} smi={tt_smi or '-'} fw={tt_firmware or '-'}"
+            )
 
     return rows
 
@@ -1599,6 +1684,9 @@ def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
             tr.traced_at,
             tr.config_count,
             tr.notes,
+            tr.tt_kmd,
+            tr.tt_smi,
+            tr.tt_firmware,
             STRING_AGG(COALESCE(m.model_name, m.source_file), ', '
                        ORDER BY COALESCE(m.model_name, m.source_file)) AS models
         FROM {schema}.trace_run tr
@@ -1622,14 +1710,15 @@ def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
         print("No trace runs found")
         return []
 
-    print(f"\n{'ID':>4}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  Models")
-    print("-" * 120)
+    print(f"\n{'ID':>4}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  {'SW':46}  Models")
+    print("-" * 200)
 
-    for tr_id, device_series, card_count, sha, traced_at, cfg_count, _, models in rows:
+    for tr_id, device_series, card_count, sha, traced_at, cfg_count, _, tt_kmd, tt_smi, tt_firmware, models in rows:
         hw = f"{device_series} ({card_count}x)"
         sha_short = sha[:12] if sha else "-"
         traced = str(traced_at)[:19] if traced_at else "-"
-        print(f"{tr_id:>4}  {hw:20}  {sha_short:12}  {cfg_count or 0:>7}  {traced:20}  {models or ''}")
+        sw_summary = f"kmd={tt_kmd or '-'} smi={tt_smi or '-'} fw={tt_firmware or '-'}"
+        print(f"{tr_id:>4}  {hw:20}  {sha_short:12}  {cfg_count or 0:>7}  {traced:20}  {sw_summary:46}  {models or ''}")
 
     return rows
 

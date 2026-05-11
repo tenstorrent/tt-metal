@@ -310,9 +310,14 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         }
                     } else {
                         if (kernel_complete) {  // write output once all chunks are done
-                            constexpr uint32_t num_faces_in_output_tile = 2;
+                            // Mirror compute_pool_2d.cpp: pack 1 face for "single partial tile
+                            // fits in one face" or "last tile has exactly FACE_WIDTH valid".
+                            constexpr bool single_partial_fits_in_face = last_tile_is_partial && in_c <= FACE_WIDTH;
+                            constexpr uint32_t num_faces_in_output_tile = single_partial_fits_in_face ? 1 : 2;
                             constexpr uint32_t num_faces_in_last_output_tile =
-                                last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+                                last_tile_is_partial && (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face)
+                                    ? 1
+                                    : 2;
                             uint32_t output_faces =
                                 c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
