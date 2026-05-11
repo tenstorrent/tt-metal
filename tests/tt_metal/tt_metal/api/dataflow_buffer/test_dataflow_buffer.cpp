@@ -1810,10 +1810,10 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB_RingPressure_2Sx4S) {
     DFB_SKIP_IF_UNSUPPORTED(2, 4);
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
-        .num_entries = 3,  // tight ring: capacity = num_entries / max(num_p, num_c) = 1
+        .num_entries = 4,  // tight ring: capacity = num_entries / max(num_p, num_c) = 1
         .num_producers = 2,
         .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 3,
+        .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(
