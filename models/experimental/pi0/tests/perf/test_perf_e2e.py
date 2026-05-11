@@ -176,8 +176,7 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
 
     run_model = create_pi0_pipeline_model(model_ttnn, device, inputs)
 
-    # 2CQ with overlapped input (trace disabled - model allocates KV buffers internally)
-    config = PipelineConfig(use_trace=False, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         config,
         run_model,

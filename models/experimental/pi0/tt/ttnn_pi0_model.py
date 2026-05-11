@@ -90,6 +90,7 @@ class PI0ModelTTNN:
         # Initialize components
         self._init_components()
         self._precompute_bs1_timestep_tensors()
+        self._precompute_bs1_time_expanded()
 
     def _precompute_bs1_timestep_tensors(self) -> None:
         """
@@ -110,6 +111,26 @@ class PI0ModelTTNN:
         for i in range(num_steps):
             t_i = ttnn.slice(self._timesteps_row_ttnn, [0, i], [1, i + 1])
             self._timestep_per_step_bs1.append(ttnn.reshape(t_i, (1,)))
+
+    def _precompute_bs1_time_expanded(self) -> None:
+        """
+        Pre-compute the per-step sinusoidal time embedding expanded to action_horizon.
+        Timesteps are deterministic (depend only on num_steps), so the full per-step
+        (1, action_horizon, expert_width) tensor can be computed once at init and
+        reused across every inference call — removing the sinusoidal + reshape +
+        repeat from the per-step host path.
+        """
+        if self.config.pi05:
+            self._time_expanded_per_step_bs1 = None
+            return
+
+        action_horizon = self.config.action_horizon
+        self._time_expanded_per_step_bs1: List[ttnn.Tensor] = []
+        for i in range(self.denoise_config.num_steps):
+            time_emb = self.suffix_embedding.embed_timestep(self._timestep_per_step_bs1[i])
+            time_expanded = ttnn.reshape(time_emb, (1, 1, -1))
+            time_expanded = ttnn.repeat(time_expanded, (1, action_horizon, 1))
+            self._time_expanded_per_step_bs1.append(time_expanded)
 
     def _init_components(self):
         """Initialize all model components."""
@@ -243,20 +264,36 @@ class PI0ModelTTNN:
         # Step 3: Sample initial noise
         x_t_ttnn = self.x_t_ttnn
 
+        # OPTIMIZATION: state is constant across denoise steps — embed once.
+        fast_path = (batch_size == 1) and (not self.config.pi05)
+        state_emb_cached: Optional[ttnn.Tensor] = None
+        if fast_path:
+            state_emb_cached = self.suffix_embedding.embed_state(state_ttnn)
+
+        # Pre-compute slice bounds for action_output extraction (constant per call).
+        # expert output: (batch, 1+action_horizon, expert_width) for PI0.
+        action_slice_end = (1, 1 + self.config.action_horizon, self.config.expert_config.width)
+
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):
             t = timesteps[i]
             t_next = timesteps[i + 1]
             dt = t_next - t
 
-            if batch_size == 1:
-                t_tensor = self._timestep_per_step_bs1[i]
+            if fast_path:
+                suffix_embs, suffix_att = self.suffix_embedding.embed_suffix_fast_bs1(
+                    state_emb_cached,
+                    self._time_expanded_per_step_bs1[i],
+                    x_t_ttnn,
+                )
             else:
-                assert timesteps_ttnn is not None
-                t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
-                t_tensor = ttnn.reshape(t_tensor, (batch_size,))
-
-            suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
+                if batch_size == 1:
+                    t_tensor = self._timestep_per_step_bs1[i]
+                else:
+                    assert timesteps_ttnn is not None
+                    t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
+                    t_tensor = ttnn.reshape(t_tensor, (batch_size,))
+                suffix_embs, _, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
 
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
@@ -264,9 +301,7 @@ class PI0ModelTTNN:
             )
 
             if not self.config.pi05:
-                action_output = ttnn.slice(
-                    expert_output, [0, 1, 0], [expert_output.shape[0], expert_output.shape[1], expert_output.shape[2]]
-                )
+                action_output = ttnn.slice(expert_output, [0, 1, 0], list(action_slice_end))
             else:
                 action_output = expert_output
 

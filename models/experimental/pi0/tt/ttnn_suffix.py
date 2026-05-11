@@ -90,6 +90,10 @@ class SuffixEmbeddingTTNN:
         self._att_mask_pattern = att_mask_ttnn
         self._att_mask_suffix_len = suffix_len
 
+        # OPTIMIZATION: Pre-slice the att mask at the known final suffix_len
+        # (state(1) + action_horizon for PI0). Avoids slicing per denoise step.
+        self._att_mask_bs1 = ttnn.slice(self._att_mask_pattern, [0, 0], [1, suffix_len])
+
         self.indices = ttnn.arange(0, 512, 1, device=device, dtype=ttnn.float32)
 
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:
@@ -279,6 +283,53 @@ class SuffixEmbeddingTTNN:
             )
 
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
+
+    def embed_suffix_fast_bs1(
+        self,
+        state_emb: ttnn.Tensor,
+        time_expanded: ttnn.Tensor,
+        noisy_actions: ttnn.Tensor,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """
+        bs=1, PI0-only fast path used inside the denoise loop.
+
+        Caller precomputes `state_emb` (constant per inference) and
+        `time_expanded` (constant per step). This collapses the per-step host
+        work to: action linear, concat with time, fused-MLP, concat with state.
+        """
+        action_emb = ttnn.linear(
+            noisy_actions,
+            self.weights["action_in_proj.weight"],
+            bias=self.weights["action_in_proj.bias"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
+        )
+
+        concat = ttnn.concat([action_emb, time_expanded], dim=-1)
+        ttnn.deallocate(action_emb)
+
+        x = ttnn.linear(
+            concat,
+            self.weights["action_time_mlp_in.weight"],
+            bias=self.weights["action_time_mlp_in.bias"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
+            activation="silu",
+        )
+        ttnn.deallocate(concat)
+        action_time_emb = ttnn.linear(
+            x,
+            self.weights["action_time_mlp_out.weight"],
+            bias=self.weights["action_time_mlp_out.bias"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
+        )
+        ttnn.deallocate(x)
+
+        suffix_embs = ttnn.concat([state_emb, action_time_emb], dim=1)
+        ttnn.deallocate(action_time_emb)
+
+        return suffix_embs, self._att_mask_bs1
 
     def project_output(self, expert_output: ttnn.Tensor) -> ttnn.Tensor:
         """

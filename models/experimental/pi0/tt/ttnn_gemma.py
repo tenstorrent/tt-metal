@@ -210,6 +210,9 @@ class GemmaAttentionTTNN:
         # Store meta format cos/sin for native TTNN RoPE (split-half pattern)
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
+        # Cache cos/sin slices keyed by seq_len — same module is called with one
+        # of two fixed seq_lens (prefix=544 / suffix=51) so we slice once and reuse.
+        self._rope_slice_cache: Dict[int, Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
         # Compute kernel config for attention (HiFi4 for precision-critical ops)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -296,24 +299,26 @@ class GemmaAttentionTTNN:
         )
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
-        # Slice cos/sin to match actual sequence length
-        cos_sliced = ttnn.slice(
-            self.cos_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
-        sin_sliced = ttnn.slice(
-            self.sin_meta,
-            [0, 0, 0, 0],
-            [1, 1, seq_len, self.head_dim],
-        )
+        # Cache slices by seq_len — module is reused across denoise steps with the same length.
+        cached = self._rope_slice_cache.get(seq_len)
+        if cached is None:
+            cos_sliced = ttnn.slice(
+                self.cos_meta,
+                [0, 0, 0, 0],
+                [1, 1, seq_len, self.head_dim],
+            )
+            sin_sliced = ttnn.slice(
+                self.sin_meta,
+                [0, 0, 0, 0],
+                [1, 1, seq_len, self.head_dim],
+            )
+            self._rope_slice_cache[seq_len] = (cos_sliced, sin_sliced)
+        else:
+            cos_sliced, sin_sliced = cached
 
         # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
         q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
         k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
-
-        ttnn.deallocate(cos_sliced)
-        ttnn.deallocate(sin_sliced)
 
         # rotary_embedding pads output to tile boundary, slice back to original seq_len
         q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
