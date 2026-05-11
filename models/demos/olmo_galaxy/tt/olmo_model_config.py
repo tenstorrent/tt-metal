@@ -1418,6 +1418,12 @@ class TtOlmoModelArgs(TtModelArgs):
         # Padded shape for ring matmul - already properly aligned via RING_TILE_ALIGN above
         lm_head_out_padded = padded_vocab_per_device  # Already multiple of 768
 
+        # sub_core_grids audit (plan 2026-05-11-olmo3-free-col4.md):
+        #   line 1426 (now 1429) — Category (a): allocates first 10 cores via
+        #       num_cores_to_corerangeset_in_subcoregrids — safe under col-4 widening.
+        #   line 1478 (now 1481) — Category (a): allocates first 32 cores via
+        #       num_cores_to_corerangeset_in_subcoregrids — safe under col-4 widening.
+
         # For OLMo: keep the input shard config using sub_core_grids (10 cores × 128)
         # The ring matmul is bypassed for OLMo decode (uses DRAM linear instead)
         lm_head_input_n_cores = 10
