@@ -29,6 +29,7 @@ from the base diffusers repo (~12 GB total).
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 
 from ...utils import cache
 from ...utils.lightx2v_loader import load_lightx2v_state_dict
@@ -68,10 +69,8 @@ class AniSoraPipeline(WanPipelineI2V):
         self._allow_download = allow_download
         self._random_weights = random_weights
 
-        if random_weights:
-            with _patch_torch_transformer_random():
-                super().__init__(*args, **kwargs)
-        else:
+        ctx = _patch_torch_transformer_random() if random_weights else nullcontext()
+        with ctx:
             super().__init__(*args, **kwargs)
 
     def _prepare_transformer(self, idx: int):
