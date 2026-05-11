@@ -17,6 +17,7 @@
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -108,6 +109,8 @@ void py_module(nb::module_& m) {
                 &ttml::ops::operator/),
             nb::arg("a"),
             nb::arg("b"));
+        py_binary.def("min", &ttml::ops::min, nb::arg("a"), nb::arg("b"));
+        py_binary.def("max", &ttml::ops::max, nb::arg("a"), nb::arg("b"));
     }
 
     {
@@ -142,6 +145,12 @@ void py_module(nb::module_& m) {
             nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "vocab_parallel_cross_entropy_loss",
+            &ttml::ops::distributed::vocab_parallel_cross_entropy_loss,
+            nb::arg("logits"),
+            nb::arg("targets"),
+            nb::arg("cluster_axis") = nb::none());
     }
 
     {
@@ -446,6 +455,8 @@ void py_module(nb::module_& m) {
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
+        py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
         py_unary.def(
             "polynorm3",
             &ttml::ops::polynorm3,

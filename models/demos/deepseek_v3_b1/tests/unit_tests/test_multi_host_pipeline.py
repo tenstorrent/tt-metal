@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_passthrough_pipeline_configuration,
     create_single_galaxy_deepseek_pipeline_configuration,
 )
-from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_META_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
     MeshWrapper,
@@ -1331,11 +1331,11 @@ def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
         pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -1347,7 +1347,7 @@ def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
 
         elif pipeline.my_mesh_id == num_procs - 1:
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )

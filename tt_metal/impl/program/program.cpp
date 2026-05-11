@@ -326,6 +326,9 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         std::unordered_map<std::string, uint32_t> named_compile_args(
             kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
+        std::vector<std::filesystem::path> compiler_include_paths(
+            kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
+
         auto config = std::visit(
             tt::stl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -333,14 +336,16 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
                     -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -352,6 +357,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
@@ -367,6 +373,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
             },
@@ -525,6 +532,36 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
     if (metal2_registry_) {
         names.reserve(metal2_registry_->kernel_handles.size());
         for (const auto& [name, handle] : metal2_registry_->kernel_handles) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
+void ProgramImpl::register_tensor_parameter(const std::string& name, const TensorSpec& spec) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(name, spec);
+    TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
+}
+
+const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->tensor_parameter_layouts.size());
+        for (const auto& [name, spec] : metal2_registry_->tensor_parameter_layouts) {
             names.push_back(name);
         }
     }
@@ -1885,7 +1922,6 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
     const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
-    ContextId context_id = extract_context_id(device);
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -1905,8 +1941,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().is_mock_or_emulated();
-    bool remote_enabled = jit_server::JitCompileRpcClient::enabled() && !is_mock;
+    bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
     std::vector<std::shared_future<void>> events;
 
     auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
@@ -1968,17 +2003,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
-
-                        if (!is_mock) {
-                            const std::string binary_root =
-                                ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
-                            kernel->read_binaries(device, binary_root);
-                            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        } else {
-                            // Create empty stub binaries for mock devices
-                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
-                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
-                        }
+                        const std::string binary_root =
+                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                        kernel->read_binaries(device, binary_root);
+                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                     },
                     events);

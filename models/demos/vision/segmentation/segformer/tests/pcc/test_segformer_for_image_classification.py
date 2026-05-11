@@ -44,7 +44,7 @@ def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
                 mesh_mapper=mesh_mapper,
             )
             parameters["classifier"]["bias"] = ttnn.from_torch(
-                model.classifier.bias.reshape(1, 1, 1, model.classifier.bias.shape[-1]),
+                model.classifier.bias.reshape(1, model.classifier.bias.shape[-1]),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
