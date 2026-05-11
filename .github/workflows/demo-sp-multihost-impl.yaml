@@ -107,12 +107,11 @@ jobs:
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
       PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
       PRTE_MCA_prte_fwd_environment: "true"
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_RUNTIME_ROOT: /ci/tt-metal
+      LD_LIBRARY_PATH: /ci/tt-metal/build/lib
       PYTHON_ENV_DIR: /opt/venv
-      PYTHONPATH: /opt/venv/lib/python3.10/site-packages:/home/user/tt-metal
+      PYTHONPATH: /opt/venv/lib/python3.10/site-packages:/ci/tt-metal
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
-      HOME: /home/user
       TT_METAL_CACHE: /home/user/.cache
     steps:
       - name: Checkout repository
@@ -221,20 +220,19 @@ jobs:
       - name: Unpack artifacts & install
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
+          rm -rf /ci/tt-metal
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
-          # Ensure a clean checkout target on workers.
-          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/tt-metal'
-          mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive --force
+          mpirun --pernode git -C /ci/tt-metal submodule update --init --recursive --force
 
           # Unpack artifacts
-          mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
+          mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /ci/tt-metal
           mpirun --pernode bash -lc 'mkdir -p /home/user/.cache/pip'
           mpirun --pernode bash -lc 'HOME=/home/user PIP_CACHE_DIR=/home/user/.cache/pip /opt/venv/bin/python -m pip install --no-input $(find /ci/artifacts -name "*.whl")'
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        working-directory: /home/user/tt-metal
+        working-directory: /ci/tt-metal
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
