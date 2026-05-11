@@ -242,19 +242,29 @@ void run_single_dfb_program(
         constexpr const char* IN_TENSOR = "in_tensor";
         constexpr const char* OUT_TENSOR = "out_tensor";
 
+        // Only DM kernels bind to DRAM tensors; Tensix kernels operate purely on L1 DFB rings
+        // (host pre-fills L1 for Tensix producers; verifies via L1 read for Tensix consumers).
+        // Declaring an unbound TensorParameter triggers ProgramSpec validation failure.
+        const bool need_in_tensor = (producer_type == DFBPorCType::DM);
+        const bool need_out_tensor = (consumer_type == DFBPorCType::DM);
+
         const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries);
-        in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-        out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-        log_info(
-            tt::LogTest,
-            "In Tensor:  [address: {} B, size: {} B]",
-            in_tensor.mesh_buffer().get_reference_buffer()->address(),
-            in_tensor.mesh_buffer().get_reference_buffer()->size());
-        log_info(
-            tt::LogTest,
-            "Out Tensor: [address: {} B, size: {} B]",
-            out_tensor.mesh_buffer().get_reference_buffer()->address(),
-            out_tensor.mesh_buffer().get_reference_buffer()->size());
+        if (need_in_tensor) {
+            in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+            log_info(
+                tt::LogTest,
+                "In Tensor:  [address: {} B, size: {} B]",
+                in_tensor.mesh_buffer().get_reference_buffer()->address(),
+                in_tensor.mesh_buffer().get_reference_buffer()->size());
+        }
+        if (need_out_tensor) {
+            out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+            log_info(
+                tt::LogTest,
+                "Out Tensor: [address: {} B, size: {} B]",
+                out_tensor.mesh_buffer().get_reference_buffer()->address(),
+                out_tensor.mesh_buffer().get_reference_buffer()->size());
+        }
 
         const auto consumer_pattern = is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
                                              : experimental::metal2_host_api::DFBAccessPattern::STRIDED;
@@ -373,15 +383,19 @@ void run_single_dfb_program(
             .target_nodes = core_range_set,
         };
 
+        std::vector<experimental::metal2_host_api::TensorParameter> tensor_parameters;
+        if (need_in_tensor) {
+            tensor_parameters.push_back({.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()});
+        }
+        if (need_out_tensor) {
+            tensor_parameters.push_back({.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()});
+        }
+
         experimental::metal2_host_api::ProgramSpec spec{
             .program_id = "single_dfb",
             .kernels = {producer_spec, consumer_spec},
             .dataflow_buffers = {dfb_spec},
-            .tensor_parameters =
-                {
-                    {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
-                    {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
-                },
+            .tensor_parameters = tensor_parameters,
             .work_units = {wu},
             // Implicit-sync DFBs need DM0/DM1 setup; lift the reservation only when needed.
             // ._unsafe_disable_dm0_dm1_reservation_for_bob = dfb_config.enable_implicit_sync,
@@ -411,10 +425,12 @@ void run_single_dfb_program(
             consumer_params.named_runtime_args = build_dm_named_rtas();
         }
         run_params.kernel_run_params = {producer_params, consumer_params};
-        run_params.tensor_args = {
-            {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-            {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
-        };
+        if (need_in_tensor) {
+            run_params.tensor_args.push_back({.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)});
+        }
+        if (need_out_tensor) {
+            run_params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)});
+        }
         experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
     } else {
         distributed::DeviceLocalBufferConfig local_buffer_config{
@@ -572,8 +588,36 @@ void run_single_dfb_program(
     // consumer does not write to DRAM, so out_buffer verification is skipped there).
     const bool verify_output = (consumer_type == DFBPorCType::DM);
     if (is_quasar) {
-        execute_program_and_verify(
-            mesh_device, program, in_tensor, out_tensor, input, verify_output, tensix_dm_expected);
+        // Tensor parameters are conditionally declared: only DM kernels carry tensor bindings.
+        // Inline the write/read flow here so we can skip operations on unallocated tensors.
+        if (producer_type == DFBPorCType::DM) {
+            detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::vector<uint32_t> rdback_dram;
+            detail::ReadFromBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), rdback_dram);
+            tt_driver_atomics::mfence();
+            EXPECT_EQ(rdback_dram, input);
+        }
+
+        detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+
+        if (verify_output) {
+            std::vector<uint32_t> output;
+            detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+            const std::vector<uint32_t>& expected = tensix_dm_expected ? *tensix_dm_expected : input;
+            if (expected != output) {
+                log_info(tt::LogTest, "Printing expected");
+                for (auto i : expected) {
+                    std::cout << i << " ";
+                }
+                std::cout << std::endl;
+                log_info(tt::LogTest, "Printing output");
+                for (auto i : output) {
+                    std::cout << i << " ";
+                }
+            }
+            EXPECT_EQ(expected, output);
+        }
     } else {
         execute_program_and_verify(
             mesh_device, program, in_buffer, out_buffer, zero_coord, input, verify_output, tensix_dm_expected);
@@ -1711,13 +1755,13 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_1Sx1S) {
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
 }
 
-// 4 strided DM producers, 4 strided DM consumers, num_entries=4 -> capacity=1.
-// Each producer stalls after every push; ring wraps 64x per producer.
-TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_4Sx4S) {
+// 3 strided DM producers, 3 strided DM consumers, num_entries=3 -> capacity=1.
+// Each producer stalls after every push; ring wraps 63x per producer.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_3Sx3S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB ring-pressure test for WH/BH until DFB is backported";
     }
-    DFB_SKIP_IF_UNSUPPORTED(4, 4);
+    DFB_SKIP_IF_UNSUPPORTED(3, 3);
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 3,
@@ -1727,8 +1771,12 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_4Sx4S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(
-        this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM,
-        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
+        this->devices_.at(0),
+        config,
+        DFBPorCType::DM,
+        DFBPorCType::DM,
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))),
+        /*num_entries_in_buffer=*/63);
 }
 
 // 4 DM producers (STRIDED), 4 Tensix consumers (ALL), num_entries=4 -> capacity=1.
@@ -1741,10 +1789,10 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB_RingPressure_4Sx4A) {
     DFB_SKIP_IF_UNSUPPORTED(4, 4);
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
-        .num_entries = 3,  // tight ring: capacity = num_entries / num_producers = 1
-        .num_producers = 3,
+        .num_entries = 4,  // tight ring: capacity = num_entries / num_producers = 1
+        .num_producers = 4,
         .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 3,
+        .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(
