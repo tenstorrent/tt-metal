@@ -1226,6 +1226,9 @@ TEST_F(MeshTensorTest, LargeWriteRoundtrip_HeightShardedDeviceRequiringShardPadd
     // ceil(1024/257)=4, and 4*257=1028 > 1024, so the last shard carries
     // 4 padding rows. This padding may prevent the pinned-memory fast path
     // at the dispatch level.
+    auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+
     const ttnn::Shape shape{1, 1, 1024, 9216};
     constexpr uint32_t kShardHeight = 257;
     constexpr uint32_t kWidth = 9216;
@@ -1246,8 +1249,21 @@ TEST_F(MeshTensorTest, LargeWriteRoundtrip_HeightShardedDeviceRequiringShardPadd
     HostTensor host_tensor(
         std::move(dhb), TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{})), topology);
 
+    const size_t entries_before = cache.num_entries();
+    const size_t shard_count = mesh_device_->shape().mesh_size();
+
     auto& cq = mesh_device_->mesh_command_queue();
     MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_, sharded_mem_cfg);
+
+    // The write path attempts pinning because total data exceeds the 32 MB
+    // threshold.  When the system supports pinning, the cache should grow by
+    // one entry per mesh shard.
+    const bool pinning_supported = pinning_params.can_map_to_noc && pinning_params.max_pins > 0;
+    if (pinning_supported) {
+        EXPECT_EQ(cache.num_entries(), entries_before + shard_count)
+            << "Expected one new cache entry per mesh shard after the pinned write";
+    }
+
     HostTensor result = enqueue_read_tensor(cq, device_tensor);
 
     const size_t logical_volume = shape.volume();
