@@ -693,7 +693,17 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     const auto& builder_ctx = fabric_ctx.get_builder_context();
                     const auto edm_status_addr_aq =
                         builder_ctx.get_fabric_router_sync_address_and_status().first;
-                    constexpr uint32_t kRomPostcode = 0x49705180u;
+                    // FIX AQ-3 (#42429): The ERISC BRISC ROM writes a family of intermediate
+                    // postcodes during boot: 0x49705180 → 0x49705530 → ... → 0x49706550
+                    // (base-UMD sentinel).  The original check (edm_val != kRomPostcode) only
+                    // treated 0x49705180 as "still in ROM boot."  If the MMIO ERISC was at
+                    // 0x49705530 (a later intermediate state), it looked "ready" — causing
+                    // FIX AY to fire write-only resets on non-MMIO channels prematurely,
+                    // triggering a simultaneous-boot race on both sides of the inter-chip ETH
+                    // link.  Fix: wait until the ERISC has fully exited the 0x4970xxxx family
+                    // (i.e. reached the 0x49706550 base-UMD sentinel or any non-0x4970xxxx value).
+                    constexpr uint32_t kRomPostcode = 0x49705180u;  // kept for log messages
+                    constexpr uint32_t kBaseUmdFirmwareSentinel = 0x49706550u;
                     constexpr int kEdmStatusPollMs = 10000;  // FIX AQ: ROM boot to base-UMD sentinel can take >1s after PCIe hard reset; 10s matches FIX AR heartbeat window
                     constexpr auto kEdmStatusPollInterval = std::chrono::milliseconds(5);
                     struct EdmPollState {
@@ -721,7 +731,13 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                                 es.ready = true;  // read failed — treat as clear
                                 continue;
                             }
-                            if (edm_val != kRomPostcode) {
+                            // FIX AQ-3: treat the entire 0x4970xxxx family as "still in ROM
+                            // boot" — only declare ready when the ERISC has written the
+                            // base-UMD sentinel (0x49706550) or any value outside this family.
+                            const bool still_in_rom_boot =
+                                (edm_val & 0xFFFF0000u) == 0x49700000u &&
+                                edm_val != kBaseUmdFirmwareSentinel;
+                            if (!still_in_rom_boot) {
                                 es.ready = true;
                             } else {
                                 all_clear = false;
@@ -742,8 +758,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                             log_warning(
                                 tt::LogAlways,
                                 "teardown: FIX AQ — ETH core {} edm_status_address still 0x{:08x} "
-                                "(ROM postcode 0x49705180) after {}ms; next session may see corrupt L1. "
-                                "(#42429 FIX AQ)",
+                                "(ROM boot postcode 0x4970xxxx family) after {}ms; next session may see corrupt L1. "
+                                "(#42429 FIX AQ-3)",
                                 es.target.str(),
                                 final_val,
                                 kEdmStatusPollMs);

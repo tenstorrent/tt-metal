@@ -1524,8 +1524,19 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                     dev->id(),
                     eth_chan_id,
                     status_buf[0]);
-            } else if (status_buf[0] == kRomPostcode) {
-                // FIX BT (#42429): ROM boot postcode — promote IMMEDIATELY to probe_dead_channels.
+            } else if ((status_buf[0] & 0xFFFF0000u) == 0x49700000u &&
+                       status_buf[0] != kBaseUmdFirmwareSentinel) {
+                // FIX BT extended (#42429): ROM boot postcode — promote IMMEDIATELY to probe_dead_channels.
+                //
+                // The ERISC BRISC ROM writes a family of intermediate postcodes during boot:
+                //   0x49705180 → 0x49705530 → ... → 0x49706550 (base-UMD sentinel)
+                // Original FIX BT only matched 0x49705180 (kRomPostcode).  Any other intermediate
+                // postcode (e.g. 0x49705530) would fall through to the "truly corrupt" branch,
+                // log an error, zero edm_status_address, and add to probe_dead_channels — same
+                // net outcome but with a misleading "L1 appears CORRUPT" error in the logs.
+                //
+                // Fix: treat the entire 0x4970xxxx family (except 0x49706550 sentinel) as a
+                // recognized ROM boot postcode and route here instead.
                 //
                 // Background (FIX RP PARALLEL history):
                 //   Session N teardown fires assert_risc_reset_at_core on non-MMIO channels →
@@ -1533,15 +1544,12 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 //   power-on init postcode → before the ERISC finishes booting to UMD relay
                 //   firmware (which would overwrite with 0x49706550), close_device() is called
                 //   with relay already marked broken → UMD relay never completes the write.
-                //   Session N+1: terminate_stale_erisc_routers reads 0x49705180.
-                //
-                // FIX RP PARALLEL (earlier) collected all ROM-postcode channels into a batch
-                // and polled them against a 5s shared deadline before promoting to
-                // probe_dead_channels.  The intent was to allow ERISCs mid-boot to finish.
+                //   Session N+1: terminate_stale_erisc_routers reads 0x49705180 or later
+                //   intermediate postcode (e.g. 0x49705530).
                 //
                 // FIX BT: the 5s batch poll is ALWAYS wasted — here's why:
-                //   0x49705180 is the BRISC ROM power-on initialization postcode.  An ERISC
-                //   stuck at this postcode is frozen in ROM boot waiting for a PCIe-triggered
+                //   0x4970xxxx intermediate postcodes are written by the BRISC ROM during boot.
+                //   An ERISC stuck in the ROM boot sequence is waiting for a PCIe-triggered
                 //   reset (deassert_risc_reset).  It will NOT write a new value to
                 //   edm_status_address on its own — polling forever produces no transition.
                 //   The PCIe reset is provided by FIX RR in configure_fabric_cores(), which
@@ -1553,7 +1561,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 // channel is confirmed dead and configure_fabric throws (caught as SKIP by
                 // FIX BR in SetUp()).
                 //
-                // Do NOT zero edm_status_address — 0x49705180 is a valid ROM postcode, not
+                // Do NOT zero edm_status_address — 0x4970xxxx is a valid ROM postcode, not
                 // garbage; zeroing it mid-boot could interfere with the ROM init sequence.
                 // Do NOT send TERMINATE — there is no firmware to receive it during ROM boot.
                 const bool is_non_mmio = cluster_.get_associated_mmio_device(dev->id()) != dev->id();
@@ -1561,13 +1569,13 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 corrupt_count++;
                 log_info(
                     tt::LogMetal,
-                    "terminate_stale_erisc_routers: FIX BT Device {} chan={} ROM postcode "
-                    "0x{:08x} — immediately promoted to probe_dead_channels (no 5s poll). "
+                    "terminate_stale_erisc_routers: FIX BT Device {} chan={} ROM boot postcode "
+                    "0x{:08x} (0x4970xxxx family) — immediately promoted to probe_dead_channels (no 5s poll). "
                     "FIX RR in configure_fabric_cores() will attempt PCIe soft-reset. "
                     "(is_non_mmio={})",
                     dev->id(),
                     eth_chan_id,
-                    kRomPostcode,
+                    status_buf[0],
                     is_non_mmio);
             } else {
                 // Truly corrupt / unknown value — no TERMINATE (unknown firmware), but zero
