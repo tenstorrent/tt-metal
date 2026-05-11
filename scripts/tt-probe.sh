@@ -48,6 +48,31 @@ LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/tt-probe-triage-$$.log"
 
+# --- Device-lock contention profiling (see run_safe_pytest.sh for details) ---
+TT_TIMING_ENTRY_MS=$(date +%s%3N)
+TT_TIMING_LOCK_ACQUIRED_MS=0
+TT_TIMING_SOURCE="tt-probe"
+TT_TIMING_TEST_PATH=""
+
+_emit_device_timing() {
+    local ec=$?
+    if [[ -n "${TT_DEVICE_TIMING_LOG:-}" && "$TT_TIMING_LOCK_ACQUIRED_MS" -ne 0 ]]; then
+        local end_ms wait_ms run_ms log_dir esc_path
+        end_ms=$(date +%s%3N)
+        wait_ms=$(( TT_TIMING_LOCK_ACQUIRED_MS - TT_TIMING_ENTRY_MS ))
+        run_ms=$(( end_ms - TT_TIMING_LOCK_ACQUIRED_MS ))
+        log_dir="$(dirname "$TT_DEVICE_TIMING_LOG")"
+        [[ -n "$log_dir" ]] && mkdir -p "$log_dir" 2>/dev/null
+        esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
+        esc_path="${esc_path//\"/\\\"}"
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d}\n' \
+            "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
+            >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
+    fi
+    return $ec
+}
+trap _emit_device_timing EXIT
+
 # --- Parse flags ---
 DEV_MODE=false
 while [[ $# -gt 0 ]]; do
@@ -76,6 +101,7 @@ if [[ $# -eq 0 ]]; then
     exit 3
 fi
 OP_NAME="$1"
+TT_TIMING_TEST_PATH="$OP_NAME"
 
 # --- Read stdin ---
 SCRIPT=$(cat)
@@ -172,6 +198,7 @@ if [[ "$SIM_MODE" == false ]]; then
     exec 9>"$LOCK_FILE"
     echo "TT_PROBE: Waiting for device lock..." >&2
     flock 9
+    TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     echo "TT_PROBE: Device lock acquired" >&2
 
     if [[ -f "$DIRTY_FLAG" ]]; then
