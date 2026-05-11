@@ -25,32 +25,21 @@ public:
         use_route_1{true},
         scatter_header({}, {}) {
         scatter_header.chunk_count = 0;
-        const auto default_scatter_header = [] {
-            if constexpr (pages_per_packet == 2) {
-                return NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)});
-            } else if constexpr (pages_per_packet == 3) {
-                return NocUnicastScatterCommandHeader(
-                    {0, 0, 0}, {static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)});
-            } else {
-                return NocUnicastScatterCommandHeader(
-                    {0, 0, 0, 0},
-                    {static_cast<uint16_t>(page_size),
-                     static_cast<uint16_t>(page_size),
-                     static_cast<uint16_t>(page_size)});
-            }
-        }();
 
         // PacketHeaderPool::allocate_header_n (vs allocate_header) allows sending the same packet along multiple
         // paths in a single API invocation
-        std::array starts = {static_cast<uint8_t>(1)};
-        std::array ranges_1 = {range_hops_1};
+        static_assert(pages_per_packet <= 4, "pages per packet > 4 is unsupported");
+        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
+        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+        uint8_t starts[1] = {1};
+        uint8_t ranges_1[1] = {range_hops_1};
         fabric_multicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             fabric_connection,
             route_id_1,
-            starts.data(),
-            ranges_1.data(),
-            default_scatter_header,
+            starts,
+            ranges_1,
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, pages_per_packet),
             pages_per_packet * page_size);
 
         // Ring topology: create a second route to alternate with for load balancing.
@@ -58,14 +47,14 @@ public:
         //    route_1 = 4 devices forward and 3 devices backward
         //    route_2 = 3 devices forward and 4 devices backward
         if constexpr (load_balance_across_two_routes) {
-            std::array ranges_2 = {range_hops_2};
+            uint8_t ranges_2[1] = {range_hops_2};
             fabric_multicast_noc_scatter_write_set_state<
                 UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
                 fabric_connection,
                 route_id_2,
-                starts.data(),
-                ranges_2.data(),
-                default_scatter_header,
+                starts,
+                ranges_2,
+                NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, pages_per_packet),
                 pages_per_packet * page_size);
         }
     }
