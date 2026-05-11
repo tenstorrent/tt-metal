@@ -67,6 +67,7 @@ class Pi0_5ModelTTNN:
 
         self._init_components()
         self._precompute_bs1_timestep_tensors()
+        self._precompute_bs1_adarms_cond()
 
     def _precompute_bs1_timestep_tensors(self) -> None:
         num_steps = self.denoise_config.num_steps
@@ -82,6 +83,21 @@ class Pi0_5ModelTTNN:
         for i in range(num_steps):
             t_i = ttnn.slice(self._timesteps_row_ttnn, [0, i], [1, i + 1])
             self._timestep_per_step_bs1.append(ttnn.reshape(t_i, (1,)))
+
+    def _precompute_bs1_adarms_cond(self) -> None:
+        """
+        OPTIMIZATION: timesteps are deterministic (linspace 1.0 -> 0.0), so
+        `adarms_cond = time_mlp_out(silu(time_mlp_in(sincos(t))))` is constant
+        per step. Compute once at init and reuse for every inference call —
+        removes sincos + 2 linears + silu from each denoise step.
+
+        Only applicable when batch_size==1 (the dominant inference case).
+        """
+        num_steps = self.denoise_config.num_steps
+        self._adarms_cond_per_step_bs1: List["ttnn.Tensor"] = []
+        for i in range(num_steps):
+            cond = self.suffix_embedding.embed_adarms_cond(self._timestep_per_step_bs1[i])
+            self._adarms_cond_per_step_bs1.append(cond)
 
     def _init_components(self):
         suffix_config = SuffixConfig(
@@ -131,6 +147,12 @@ class Pi0_5ModelTTNN:
         batch_size = lang_tokens.shape[0]
 
         prefix_embs, _, _ = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        # ttnn.embedding (called inside embed_prefix for language tokens) returns
+        # ROW_MAJOR; ttnn.concat with the TILE image embeddings preserves that.
+        # ttnn.rms_norm at the start of every VLM block requires TILE — convert
+        # the concatenated prefix here before the VLM stack runs.
+        if prefix_embs.layout != ttnn.TILE_LAYOUT:
+            prefix_embs = ttnn.to_layout(prefix_embs, ttnn.TILE_LAYOUT)
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
         num_steps = self.denoise_config.num_steps
@@ -147,20 +169,23 @@ class Pi0_5ModelTTNN:
             ttnn.deallocate(vals)
 
         x_t_ttnn = self.x_t_ttnn
+        fast_path = batch_size == 1
 
         for i in range(num_steps):
             t = timesteps[i]
             t_next = timesteps[i + 1]
             dt = t_next - t
 
-            if batch_size == 1:
-                t_tensor = self._timestep_per_step_bs1[i]
+            if fast_path:
+                # OPTIMIZATION: adarms_cond is precomputed at init (deterministic
+                # per step); only the action embedding depends on x_t.
+                suffix_embs = self.suffix_embedding.embed_actions(x_t_ttnn)
+                adarms_cond = self._adarms_cond_per_step_bs1[i]
             else:
                 assert timesteps_ttnn is not None
                 t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
                 t_tensor = ttnn.reshape(t_tensor, (batch_size,))
-
-            suffix_embs, _, _, adarms_cond = self.embed_suffix(state, x_t_ttnn, t_tensor)
+                suffix_embs, _, _, adarms_cond = self.embed_suffix(state, x_t_ttnn, t_tensor)
 
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
