@@ -68,6 +68,173 @@ def _format_response(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Coordinate overlay helpers
+# ---------------------------------------------------------------------------
+
+# Radius of dots drawn on annotated images (pixels)
+_DOT_RADIUS = 8
+_DOT_COLOUR = (255, 60, 60)  # bright red
+
+
+def _draw_dot(draw, cx: int, cy: int, r: int = _DOT_RADIUS, fill=_DOT_COLOUR) -> None:
+    """Draw a filled circle centred at (cx, cy)."""
+    from PIL import ImageDraw  # local import — PIL available at runtime
+
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill, outline=(0, 0, 0))
+
+
+def annotate_image_with_points(
+    image,
+    coords_str: str,
+    output_path,
+) -> None:
+    """Draw point coordinates onto *image* and save to *output_path*.
+
+    Args:
+        image: PIL.Image or path-like.
+        coords_str: space-separated triplets ``image_idx x_norm y_norm ...``
+                    where x_norm, y_norm ∈ [0, 1000].
+        output_path: destination PNG path.
+    """
+    from PIL import Image as _Image
+    from PIL import ImageDraw as _ImageDraw
+
+    if not isinstance(image, _Image.Image):
+        image = _Image.open(image).convert("RGB")
+    else:
+        image = image.copy()
+
+    W, H = image.size
+    draw = _ImageDraw.Draw(image)
+
+    # Molmo coordinate format: image_idx  x_3-4digit  y_3-4digit
+    # x and y are always 3–4 digit numbers (scaled × 1000), e.g. "1 070 576".
+    # Using a regex ensures we skip any spurious 1-2 digit tokens.
+    _POINTS_RE = re.compile(r"[0-9]+\s+([0-9]{3,4})\s+([0-9]{3,4})")
+    for m in _POINTS_RE.finditer(coords_str):
+        try:
+            x_norm = float(m.group(1))
+            y_norm = float(m.group(2))
+            cx = int(x_norm / 1000 * W)
+            cy = int(y_norm / 1000 * H)
+            _draw_dot(draw, cx, cy)
+        except ValueError:
+            pass
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    image.save(str(output_path))
+
+
+def annotate_video_frame_with_points(
+    frame,
+    x_norm: float,
+    y_norm: float,
+    output_path,
+) -> None:
+    """Draw a single point on a video frame and save to *output_path*.
+
+    Args:
+        frame: PIL.Image or path-like.
+        x_norm, y_norm: normalised coordinates in [0, 1000].
+        output_path: destination PNG path.
+    """
+    from PIL import Image as _Image
+    from PIL import ImageDraw as _ImageDraw
+
+    if not isinstance(frame, _Image.Image):
+        frame = _Image.open(frame).convert("RGB")
+    else:
+        frame = frame.copy()
+
+    W, H = frame.size
+    draw = _ImageDraw.Draw(frame)
+    cx = int(x_norm / 1000 * W)
+    cy = int(y_norm / 1000 * H)
+    _draw_dot(draw, cx, cy)
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    frame.save(str(output_path))
+
+
+def save_annotated_outputs(prompts: list, responses: list, output_dir) -> None:
+    """Overlay model coordinates onto source images/video frames and save to *output_dir*.
+
+    For each user whose response contains coordinate tags, extracts the source
+    image(s) or video path from the prompt, draws the predicted points, and
+    writes annotated PNG(s) to output_dir.
+
+    Silently skips text-only prompts (no visual input → nothing to annotate).
+    """
+    import re as _re
+
+    from PIL import Image as _Image
+
+    _COORD_FULL_RE = _re.compile(
+        r"<(?:points?|tracks?)[^>]*\s+coords=\"([0-9\t:;,. ]+)\"[^>]*/?>",
+        _re.IGNORECASE,
+    )
+
+    for u, (conv, response) in enumerate(zip(prompts, responses)):
+        all_coords = _COORD_FULL_RE.findall(response)
+        if not all_coords:
+            continue  # no coordinates — skip
+
+        # Collect images / video paths from the conversation
+        images, video_path = [], None
+        for msg in conv:
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for item in content:
+                    if item.get("type") == "image":
+                        images.append(item.get("image", ""))
+                    elif item.get("type") == "video":
+                        video_path = item.get("video", "")
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        coords_str = " ".join(all_coords)
+
+        if images:
+            for img_idx, img_src in enumerate(images):
+                try:
+                    img = _Image.open(img_src).convert("RGB")
+                    out = output_dir / f"user{u}_image{img_idx}_annotated.png"
+                    annotate_image_with_points(img, coords_str, out)
+                    logger.info(f"  [overlay] saved {out}")
+                except Exception as exc:
+                    logger.warning(f"  [overlay] could not annotate {img_src}: {exc}")
+
+        elif video_path:
+            # Annotate extracted key frames using decord
+            try:
+                import decord
+
+                vr = decord.VideoReader(video_path)
+                fps = vr.get_avg_fps()
+                for coords_block in all_coords:
+                    tokens = coords_block.split()
+                    # video coord triplets: frame_time  x_norm  y_norm
+                    i = 0
+                    while i + 2 < len(tokens):
+                        try:
+                            t = float(tokens[i])
+                            x_norm = float(tokens[i + 1])
+                            y_norm = float(tokens[i + 2])
+                            frame_idx = min(int(t * fps), len(vr) - 1)
+                            frame = vr[frame_idx].asnumpy()
+                            frame_img = _Image.fromarray(frame)
+                            out = output_dir / f"user{u}_t{t:.1f}_annotated.png"
+                            annotate_video_frame_with_points(frame_img, x_norm, y_norm, out)
+                        except (ValueError, IndexError):
+                            pass
+                        i += 3
+                logger.info(f"  [overlay] saved annotated frames to {output_dir}")
+            except Exception as exc:
+                logger.warning(f"  [overlay] could not annotate video {video_path}: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
@@ -381,6 +548,10 @@ def run_demo(
             else next((c["text"] for c in prompts[u][-1]["content"] if c.get("type") == "text"), "")
         )
         logger.info(f"\n=== USER {u} ===\nPROMPT:   {prompt_text[:120]}\nRESPONSE: {_format_response(text).strip()}\n")
+
+    # Overlay coordinates on source images / video frames if any response has coords
+    output_dir = Path(input_prompts_path).parent / "annotated_outputs"
+    save_annotated_outputs(prompts, responses, output_dir)
 
     return responses
 
