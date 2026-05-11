@@ -17,6 +17,7 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketConnectorState;
 
 /**
  * @brief Specifies the data transfer mode for Host-to-Device communication.
@@ -195,6 +196,8 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+    HDSocketConnectorState* connector_state_ = nullptr;
+    uint32_t connector_state_offset_ = 0;
 };
 
 }  // namespace tt::tt_metal::distributed

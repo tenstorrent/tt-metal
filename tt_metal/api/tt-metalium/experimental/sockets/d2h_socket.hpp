@@ -17,6 +17,7 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketConnectorState;
 
 /**
  * @brief A socket for streaming data from a device core to the host.
@@ -318,6 +319,8 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+    HDSocketConnectorState* connector_state_ = nullptr;
+    uint32_t connector_state_offset_ = 0;
 
     bool using_hugepage_ = false;
     uint32_t* hugepage_data_host_ptr_ = nullptr;
