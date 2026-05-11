@@ -94,10 +94,6 @@ TEST_P(MuonCorrectnessTest, DeviceMatchesCPU) {
     using namespace ttml;
     const auto& tc = GetParam();
 
-    if (tc.name == "Square_3_step" && autograd::ctx().get_device().arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Skipped on WORMHOLE_B0 due to https://github.com/tenstorrent/tt-metal/issues/43861";
-    }
-
     xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 42U);
     xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 43U);
 
