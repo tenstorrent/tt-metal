@@ -504,8 +504,8 @@ Tensor fmod(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
@@ -516,15 +516,22 @@ Tensor fmod(
         {},
         {},
         {},
-        std::nullopt);
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
 Tensor fmod(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    auto resolved = sub_core_grids;
+    if (sub_device_id.has_value() && !resolved.has_value()) {
+        resolved = input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+    // unary_fmod does not support sub_core_grids yet
     return ttnn::unary_fmod(input, scalar, output_mem_config);
 }
 
@@ -815,10 +822,20 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     return ttnn::gelu(
-        ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
+        ttnn::add(
+            input_tensor_a,
+            bias,
+            std::nullopt,
+            memory_config,
+            optional_output_tensor,
+            {},
+            {},
+            {},
+            sub_core_grids,
+            sub_device_id),
         true,
         memory_config,
         optional_output_tensor);

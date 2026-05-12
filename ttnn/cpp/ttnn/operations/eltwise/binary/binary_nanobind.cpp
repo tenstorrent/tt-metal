@@ -209,6 +209,7 @@ void bind_binary_inplace_operation(
             input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
             sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
             sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         {6}
 
@@ -668,6 +669,7 @@ void bind_bitwise_binary_ops_operation(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to a subset of cores (e.g. for subdevice use). Defaults to `None`.
             sub_device_id (ttnn.SubDeviceId, optional): sub device ID — the op resolves cores internally. Mutually exclusive with sub_core_grids. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1356,6 +1358,7 @@ void bind_binary_overload_operation(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1428,6 +1431,7 @@ void bind_inplace_operation(
 
         Keyword Args:
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1505,6 +1509,7 @@ void bind_inplace_operation_with_fast_approx(
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
