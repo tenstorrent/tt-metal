@@ -8,6 +8,13 @@ from pathlib import Path
 import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
+from ttnn.experimental.moe_compute_utils import (
+    determine_compute_matmul_cores,
+    get_w0_w1_memory_config,
+    get_w2_memory_config,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+)
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -28,13 +35,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
-)
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
-    determine_compute_matmul_cores,
-    get_w0_w1_memory_config,
-    get_w2_memory_config,
-    prepare_w0_w1_tensor,
-    prepare_w2_tensor,
 )
 
 
@@ -171,6 +171,7 @@ class Experts(AbstractModule):
         num_routed_experts = hf_config.n_routed_experts
         hidden_size = hf_config.hidden_size
         loaded_prepared_weights = cls._load_quad_ring_prepared_weights(state_dict)
+        ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
 
         if loaded_prepared_weights is not None:
             prepared_w0_w1, prepared_w2 = loaded_prepared_weights
@@ -194,12 +195,11 @@ class Experts(AbstractModule):
             w2 = cls._load_expert_weight(state_dict, "down_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
 
             matmul_N = w0.shape[-1]
-            ring2cores, _ = determine_compute_matmul_cores(mesh_device)
 
             prepared_w0_w1 = []
             prepared_w2 = []
             for i in range(0, num_routed_experts, num_experts_per_device):
-                prepared_w0_w1_tensor = prepare_w0_w1_tensor(
+                prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
                     w0[:, i : i + num_experts_per_device, :, :],
                     w1[:, i : i + num_experts_per_device, :, :],
                     num_layers,
@@ -208,7 +208,7 @@ class Experts(AbstractModule):
                     matmul_N,
                     ring2cores,
                 )
-                prepared_w2_tensor = prepare_w2_tensor(
+                prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
                     w2[:, i : i + num_experts_per_device, :, :],
                     num_layers,
                     num_experts_per_device,
@@ -222,8 +222,6 @@ class Experts(AbstractModule):
 
             prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
             prepared_w2 = torch.cat(prepared_w2, dim=2)
-
-        _, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
 
         w0_w1_memory_config = get_w0_w1_memory_config(
             num_layers, num_experts_per_device, hidden_size, compute_matmul_dram_core_range_set
