@@ -49,6 +49,7 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _bf16_reference(torch_input_bf16, op, dim, keepdim=True):
     """Compute a float32 reference from a bf16 input tensor.
 
@@ -85,30 +86,24 @@ def _bf16_reference(torch_input_bf16, op, dim, keepdim=True):
 # [N, C, H, W] with rank-relative indexing: H = -2, W = -1.
 _MEAN_4D_SHAPE = (4, 8, 32, 64)
 _MEAN_4D_DIMS = [
-    [0, 3],        # N + W
-    [0, 1, 3],     # N + C + W
-    [1, 2, 3],     # C + H + W
+    [0, 3],  # N + W
+    [0, 1, 3],  # N + C + W
+    [1, 2, 3],  # C + H + W
     [0, 1, 2, 3],  # full reduction (all dims)
 ]
 
 _MEAN_5D_SHAPE = (2, 4, 8, 32, 64)
 _MEAN_5D_DIMS = [
-    [0, 4],        # batch-0 + W
-    [0, 1, 4],     # batch-0 + batch-1 + W
-    [2, 3, 4],     # C + H + W
+    [0, 4],  # batch-0 + W
+    [0, 1, 4],  # batch-0 + batch-1 + W
+    [2, 3, 4],  # C + H + W
 ]
 
 
 @pytest.mark.parametrize(
     "shape, dims",
-    [
-        pytest.param(_MEAN_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, d))}")
-        for d in _MEAN_4D_DIMS
-    ]
-    + [
-        pytest.param(_MEAN_5D_SHAPE, d, id=f"5D_dim{'_'.join(map(str, d))}")
-        for d in _MEAN_5D_DIMS
-    ],
+    [pytest.param(_MEAN_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, d))}") for d in _MEAN_4D_DIMS]
+    + [pytest.param(_MEAN_5D_SHAPE, d, id=f"5D_dim{'_'.join(map(str, d))}") for d in _MEAN_5D_DIMS],
 )
 def test_mean_two_stage_precision(device, shape, dims):
     """Mean across mixed N/C + H/W dims — probes multi-stage bf16 precision."""
@@ -148,8 +143,8 @@ _MAX_4D_DIMS_SINGLE = [
 # Multi-dim max: ttnn.max supports a tuple of dims (it goes through
 # reduce_nd_loop when dims span both non-HW and HW axes).
 _MAX_4D_DIMS_MULTI = [
-    [0, 3],     # N + W — crosses the N/C vs H/W boundary
-    [1, 3],     # C + W
+    [0, 3],  # N + W — crosses the N/C vs H/W boundary
+    [1, 3],  # C + W
     [0, 2, 3],  # N + H + W
 ]
 
@@ -163,10 +158,7 @@ _MAX_PAD_VALUE = -1e6
         pytest.param(_MAX_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, [d] if isinstance(d, int) else d))}")
         for d in _MAX_4D_DIMS_SINGLE
     ]
-    + [
-        pytest.param(_MAX_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, d))}")
-        for d in _MAX_4D_DIMS_MULTI
-    ],
+    + [pytest.param(_MAX_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, d))}") for d in _MAX_4D_DIMS_MULTI],
 )
 def test_max_two_stage_precision(device, shape, dim):
     """Max across mixed dims — probes multi-stage bf16 precision.
@@ -206,8 +198,8 @@ def test_max_two_stage_precision(device, shape, dim):
 _MIN_4D_SHAPE = (4, 8, 32, 64)
 _MIN_4D_DIMS_SINGLE = [0, 1, 2, 3]
 _MIN_4D_DIMS_MULTI = [
-    [0, 3],     # N + W
-    [1, 3],     # C + W
+    [0, 3],  # N + W
+    [1, 3],  # C + W
     [0, 2, 3],  # N + H + W
 ]
 
@@ -221,10 +213,7 @@ _MIN_PAD_VALUE = 1e6
         pytest.param(_MIN_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, [d] if isinstance(d, int) else d))}")
         for d in _MIN_4D_DIMS_SINGLE
     ]
-    + [
-        pytest.param(_MIN_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, d))}")
-        for d in _MIN_4D_DIMS_MULTI
-    ],
+    + [pytest.param(_MIN_4D_SHAPE, d, id=f"4D_dim{'_'.join(map(str, d))}") for d in _MIN_4D_DIMS_MULTI],
 )
 def test_min_two_stage_precision(device, shape, dim):
     """Min across mixed dims — probes multi-stage bf16 precision.
@@ -275,10 +264,7 @@ _PROD_DIMS = [
 
 @pytest.mark.parametrize(
     "shape, dim",
-    [
-        pytest.param(_PROD_SHAPE, d, id=f"dim{d}")
-        for d in _PROD_DIMS
-    ],
+    [pytest.param(_PROD_SHAPE, d, id=f"dim{d}") for d in _PROD_DIMS],
 )
 def test_prod_two_stage_precision(device, shape, dim):
     """Prod along individual dims — baseline precision check.
