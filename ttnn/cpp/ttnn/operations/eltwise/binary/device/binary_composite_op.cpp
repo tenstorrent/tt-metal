@@ -20,6 +20,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/device.hpp"
 #include <variant>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn {
 
@@ -175,7 +176,8 @@ Tensor div(
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     const bool is_int32 = input.dtype() == DataType::INT32;
 
     if (is_int32) {
@@ -292,7 +294,8 @@ Tensor div(
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     DataType input_dtype = input_a.dtype();
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
 
@@ -455,7 +458,8 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
@@ -479,7 +483,8 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
 }
 
@@ -488,7 +493,8 @@ Tensor fmod(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
@@ -506,7 +512,8 @@ Tensor fmod(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::unary_fmod(input, scalar, output_mem_config);
 }
 
@@ -771,7 +778,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -795,34 +803,13 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::gelu(
         ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
         true,
         memory_config,
         optional_output_tensor);
-}
-
-Tensor bias_gelu(
-    const Tensor& input_tensor_a,
-    float scalar,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
-    return ttnn::detail::invoke_binary_ng(
-        input_tensor_a,
-        scalar,
-        binary::BinaryOpType::BIAS_GELU,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        std::nullopt);
 }
 
 }  // namespace ttnn
