@@ -429,43 +429,67 @@ class TtDPTHead:
 def vit_patch_embeddings(config, pixel_values, parameters, device):
     """Patchify an image and project patches to the embedding dimension.
 
-    Input:  pixel_values  (B, 3, 518, 518)
-    Output: patch_embeddings  (B, seqL_padded-32, 1024)  TILE layout
+    Uses ttnn.conv2d directly (kernel=14, stride=14) to match PyTorch Conv2d.
+    ttnn.conv2d internally works in NHWC and returns (1,1,B*H*W,C) which maps
+    directly to our sequence format (B, H*W, C) = (B, 1369, 1024).
+
+    Input:  pixel_values  (B, 3, 518, 518) in NCHW
+    Output: patch_embeddings  (B, patch_seq_padded, 1024) in TILE layout
     """
     batch_size, img_c, img_h, img_w = pixel_values.shape
     patch_size = 14
     patch_count = img_h // patch_size  # 37
-    patch_count_all = patch_count * patch_count  # 1369
 
-    # ---- 1. Patchify --------------------------------------------------
-    x = ttnn.to_layout(pixel_values, ttnn.ROW_MAJOR_LAYOUT)
-    # (B, C, pH, pW, qH, qW) -- split spatial dims into patches
-    x = ttnn.reshape(x, (batch_size, img_c, patch_count, patch_size, patch_count, patch_size))
-    # (B, pH, qH, pW, qW, C)
-    x = ttnn.permute(x, (0, 2, 4, 3, 5, 1))
-    # (B, pH*qH, pW*qW*C)
-    x = ttnn.reshape(x, (batch_size, patch_count_all, patch_size * patch_size * img_c))
+    # ---- 1. Convert input to NHWC for ttnn.conv2d ----------------------
+    x = ttnn.transpose(pixel_values, -2, -1)   # (B, C, H, W) -> (B, C, W, H)
+    x = ttnn.transpose(x, -3, -1)              # (B, C, W, H) -> (B, H, W, C)
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-    # ---- 2. Pad to tile boundaries and project -------------------------
+    # Weight: (out_ch, in_ch, kH, kW) -- native Conv2d format
+    weight = parameters["projection"]["conv_weight"]
+    if len(weight.shape) == 2:
+        weight = ttnn.reshape(weight, (config["hidden_size"], img_c, patch_size, patch_size))
+
+    # Bias: needs (1, 1, 1, out_ch)
+    bias = parameters["projection"]["bias"]
+    if len(bias.shape) == 1:
+        bias = ttnn.reshape(bias, (1, 1, 1, bias.shape[0]))
+    elif len(bias.shape) == 2:
+        bias = ttnn.reshape(bias, (1, 1, bias.shape[0], bias.shape[1]))
+
+    # ---- 2. Conv2d: native NHWC path ----------------------------------
+    out_tensor, [out_h, out_w] = ttnn.conv2d(
+        input_tensor=x,
+        weight_tensor=weight,
+        bias_tensor=bias,
+        in_channels=img_c,
+        out_channels=config["hidden_size"],  # 1024
+        batch_size=batch_size,
+        input_height=img_h,
+        input_width=img_w,
+        kernel_size=(patch_size, patch_size),
+        stride=(patch_size, patch_size),
+        padding=(0, 0),
+        dilation=(1, 1),
+        groups=1,
+        device=device,
+        return_output_dim=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # out_tensor: (1, 1, B*out_h*out_w, out_ch) = (1, 1, 1369, 1024) -- NHWC flat
+
+    # ---- 3. Reshape to (B, H*W, C) = (B, 1369, 1024) -----------------
+    # The conv output is already in (N, H*W, C) order -- no transpose needed!
+    x = ttnn.reshape(out_tensor, (batch_size, out_h * out_w, config["hidden_size"]))
+
+    # ---- 4. Pad sequence to tile boundary ------------------------------
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-
-    # seq dimension: seqL_padded - 32 CLS tokens = 1536 patch slots
     patch_seq_padded = config.get("seqL_padded", 1568) - 32  # 1536
     pad_seq = patch_seq_padded - x.shape[1]  # 1536 - 1369 = 167
-    # feature dimension: patch_size*patch_size*C = 588; padded to 608 (19 tiles)
-    pad_feat = 608 - x.shape[2]  # 608 - 588 = 20
+    if pad_seq > 0:
+        x = ttnn.pad(x, padding=((0, 0), (0, pad_seq), (0, 0)), value=0)
 
-    x = ttnn.pad(x, padding=((0, 0), (0, pad_seq), (0, pad_feat)), value=0)
-
-    x = ttnn.linear(
-        x,
-        parameters["projection"]["weight"],
-        bias=parameters["projection"]["bias"],
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-    )
-
-    return x  # (B, 1376, 1024)
+    return x  # (B, 1536, 1024)
 
 
 def vit_embeddings(config, pixel_values, parameters, device):
@@ -551,7 +575,7 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         parameters["attention"]["qkv"]["weight"],
         bias=parameters["attention"]["qkv"]["bias"],
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         program_config=pconfigs["qkv_matmul_program_config"],
     )
     ttnn.deallocate(ln1)
@@ -579,6 +603,8 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         value,
         is_causal=False,
         scale=1.0 / (head_size ** 0.5),
+        attn_mask=attention_mask,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=pconfigs["compute_kernel_config"],
     )
     ttnn.deallocate(query)
@@ -588,7 +614,7 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
     # ---- Merge heads & output projection --------------------------------
     context_layer = ttnn.transformer.concatenate_heads(
         context_layer,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Reshard back to full grid for output dense matmul
@@ -605,16 +631,17 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         parameters["attention"]["output"]["dense"]["weight"],
         bias=parameters["attention"]["output"]["dense"]["bias"],
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         program_config=pconfigs["output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
 
     # ---- Residual 1 ----------------------------------------------------
+    # DINOv2 LayerScale is fused into output_dense weight/bias at preprocessing.
     hidden_states = ttnn.add(
         attn_out, hidden_states,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     ttnn.deallocate(attn_out)
 
@@ -628,31 +655,47 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         compute_kernel_config=pconfigs["compute_kernel_config"],
     )
 
-    # ---- MLP: FC1 (fused GELU) -> FC2 ----------------------------------
+    # ---- MLP: FC1 -> GELU -> FC2 ----------------------------------------
+    # DINOv2 MLP applies GELUActivation() after FC1.
+    # NOTE: fused_activation=(GELU, False) in the program config was found
+    # to produce numerically incorrect GELU (PCC≈0.40 vs PyTorch).  We use
+    # an explicit ttnn.gelu() instead, which matches PyTorch exactly.
     mlp_out = ttnn.linear(
         ln2,
         parameters["intermediate"]["dense"]["weight"],
         bias=parameters["intermediate"]["dense"]["bias"],
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         program_config=pconfigs["ff1_matmul_program_config"],
     )
     ttnn.deallocate(ln2)
+
+    # Explicit GELU activation (move to DRAM, apply, reshard)
+    mlp_out = ttnn.to_memory_config(mlp_out, ttnn.DRAM_MEMORY_CONFIG)
+    mlp_out = ttnn.gelu(mlp_out)
+    mlp_gelu_shard = ttnn.create_sharded_memory_config(
+        mlp_out.padded_shape,
+        core_grid=config["core_grid"],
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mlp_out = ttnn.to_memory_config(mlp_out, mlp_gelu_shard)
 
     mlp_out = ttnn.linear(
         mlp_out,
         parameters["output"]["dense"]["weight"],
         bias=parameters["output"]["dense"]["bias"],
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         program_config=pconfigs["ff2_matmul_program_config"],
     )
 
     # ---- Residual 2 ----------------------------------------------------
+    # DINOv2 LayerScale is fused into FC2 weight/bias at preprocessing.
     hidden_states = ttnn.add(
         mlp_out, hidden_states,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     ttnn.deallocate(mlp_out)
 
@@ -757,9 +800,9 @@ class TtDepthAnythingV2:
         # Real tokens: position 0 (CLS), positions 32-1400 (patches)
         # Padding tokens: positions 1-31, 1401-1567  -> set to -inf
         import torch
-        mask_np = torch.zeros(1, 1, 1, seqL)
-        mask_np[0, 0, 0, 1:32] = float("-inf")         # CLS padding
-        mask_np[0, 0, 0, 1401:seqL] = float("-inf")    # patch padding
+        mask_np = torch.zeros(1, 1, seqL, seqL)
+        mask_np[:, :, :, 1:32] = float("-inf")         # CLS padding keys
+        mask_np[:, :, :, 1401:seqL] = float("-inf")    # patch padding keys
         attention_mask = ttnn.from_torch(mask_np, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         # ---- 2. ViT-Large encoder (24 layers) --------------------------
@@ -835,8 +878,7 @@ def get_model_config(batch_size, device):
     dim_t = 1024 // TILE_HEIGHT                  # 32 tiles
     dim_t__x = dim_t // grid_x                   # 4 tiles per core (width)
     seqL_t__y = seqL_t // grid_y                 # 7 tiles per core (height)
-    head_num = 16
-    head_size_t = dim_t // head_num              # 2 tiles per head (unused by SDPA, kept for reference)
+    # head_num = 16, head_size = dim_t // head_num = 2 tiles per head (used by SDPA internally)
 
     # MLP intermediate dimension: 4096
     mlp_dim_t__x = (4096 // TILE_HEIGHT) // grid_x  # 16 tiles per core
@@ -891,12 +933,13 @@ def get_model_config(batch_size, device):
             per_core_M=seqL_t__y,           # 7
             per_core_N=mlp_dim_t__x,        # 16
             transpose_mcast=False,
-            fused_activation=(ttnn.UnaryOpType.GELU, True),
+            fused_activation=None,  # GELU applied explicitly after FC1 for numerical accuracy
         ),
         # MLP FC2: (seqL, 4096) × (4096, 1024)
+        # in0_block_w=4 (not 16) to fit in L1 with bfloat16 weights
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=mlp_dim_t__x,      # 16
+            in0_block_w=dim_t__x,              # 4 (reduced from 16 to fit L1)
             out_subblock_h=1,
             out_subblock_w=dim_t__x,        # 4
             per_core_M=seqL_t__y,           # 7
@@ -905,10 +948,13 @@ def get_model_config(batch_size, device):
             fused_activation=None,
         ),
         # Compute kernel config for all matmuls and layernorms
+        # HiFi4 + fp32 accumulation: required for ≥0.995 PCC across 24 layers.
+        # HiFi2/bf16-acc introduced ~0.2% error per layer that compounded
+        # through residual connections, causing L17-L19 PCC dip to 0.89-0.95.
         "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
     }
@@ -967,20 +1013,16 @@ def custom_preprocessor(torch_model, name):
     # 1. Backbone
     # =========================================================
 
-    # Patch projection weight: (out=1024, in=3, kH=14, kW=14)
-    #   Input patches are laid out as (kH, kW, C_in) after permute in vit_patch_embeddings.
-    #   -> permute to (kH, kW, C_in, C_out) = (14, 14, 3, 1024)
-    #   -> reshape  to (14*14*3, 1024)  = (588, 1024)
-    #   -> pad rows to 608 (nearest 32-multiple >= 588)
-    pw = torch_model.backbone.embeddings.patch_embeddings.projection.weight
-    pw = pw.permute(2, 3, 1, 0).reshape(-1, 1024)
-    pw = torch.nn.functional.pad(pw, (0, 0, 0, 608 - pw.shape[0]))
+    # Patch projection weight: keep original Conv2d format (out=1024, in=3, kH=14, kW=14)
+    # for ttnn.conv2d.  Conv weights must be ROW_MAJOR, not TILE.
+    pw = torch_model.backbone.embeddings.patch_embeddings.projection.weight.float()
+    # pw shape: (1024, 3, 14, 14) — native Conv2d format
 
     parameters["backbone"] = {
         "embeddings": {
             "patch_embeddings": {
                 "projection": {
-                    "weight": _tile(pw, dtype=ttnn.bfloat16),
+                    "conv_weight": _rm(pw),
                     "bias": _rm(torch_model.backbone.embeddings.patch_embeddings.projection.bias),
                 }
             },
@@ -1038,6 +1080,21 @@ def custom_preprocessor(torch_model, name):
             0
         )  # (1, 3072)
 
+        # ---- DINOv2 LayerScale: fuse into weights at preprocessing time ----
+        # layer_scale1 (1024,) scales attention output before residual 1.
+        # layer_scale2 (1024,) scales MLP output before residual 2.
+        # Math: x + λ*(H@W+b) = x + H@(W*λ) + b*λ
+        # So we pre-multiply output_dense weight/bias by λ1, and FC2 by λ2.
+        # This avoids any runtime mul (zero L1 overhead, zero perf cost).
+        ls1 = layer.layer_scale1.lambda1.detach()  # (1024,)
+        ls2 = layer.layer_scale2.lambda1.detach()  # (1024,)
+
+        # Fuse layer_scale1 into output_dense: W_out is (in=1024, out=1024)
+        # Multiply each output column j by ls1[j]
+        out_w = layer.attention.output.dense.weight.transpose(0, 1)  # (in, out)
+        out_w_fused = out_w * ls1.unsqueeze(0)  # broadcast ls1 across rows
+        out_b_fused = layer.attention.output.dense.bias * ls1
+
         lp = {
             "layernorm_before": {
                 "weight": _tile(layer.norm1.weight.unsqueeze(0)),
@@ -1045,16 +1102,13 @@ def custom_preprocessor(torch_model, name):
             },
             "attention": {
                 "qkv": {
-                    "weight": _tile(qkv_w, dtype=ttnn.bfloat8_b),
+                    "weight": _tile(qkv_w, dtype=ttnn.bfloat16),
                     "bias": _tile(qkv_b),
                 },
                 "output": {
                     "dense": {
-                        "weight": _tile(
-                            layer.attention.output.dense.weight.transpose(0, 1),
-                            dtype=ttnn.bfloat8_b,
-                        ),
-                        "bias": _rm(layer.attention.output.dense.bias),
+                        "weight": _tile(out_w_fused, dtype=ttnn.bfloat16),
+                        "bias": _rm(out_b_fused),
                     }
                 },
             },
@@ -1064,17 +1118,22 @@ def custom_preprocessor(torch_model, name):
             },
             "intermediate": {
                 "dense": {
-                    "weight": _tile(layer.mlp.fc1.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
+                    "weight": _tile(layer.mlp.fc1.weight.transpose(0, 1), dtype=ttnn.bfloat16),
                     "bias": _rm(layer.mlp.fc1.bias),
                 }
             },
             "output": {
                 "dense": {
-                    "weight": _tile(layer.mlp.fc2.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
-                    "bias": _rm(layer.mlp.fc2.bias),
+                    # Fuse layer_scale2 into FC2: W_fc2 is (in=4096, out=1024)
+                    "weight": _tile(
+                        layer.mlp.fc2.weight.transpose(0, 1) * ls2.unsqueeze(0),
+                        dtype=ttnn.bfloat16,
+                    ),
+                    "bias": _rm(layer.mlp.fc2.bias * ls2),
                 }
             },
         }
+
         parameters["backbone"]["encoder"]["layer"].append(lp)
 
     # =========================================================
