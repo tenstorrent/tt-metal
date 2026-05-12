@@ -139,7 +139,7 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             operation_attributes.program_config);
         return SoftmaxProgramFactoryAttentionOptimized{};
     }
-    if (operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
+    if (operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == static_cast<int8_t>(rank - 1) &&
         rank == 4) {
         return std::visit(
             [&](const auto& program_config) -> program_factory_t {
@@ -153,14 +153,14 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             operation_attributes.program_config);
         return SoftmaxProgramFactoryAttentionOptimized{};
     }
-    if (rank - 1 == operation_attributes.dim) {
+    if (static_cast<int8_t>(rank - 1) == operation_attributes.dim) {
         if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_w_small_available(
                 tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
             return SoftmaxProgramFactoryGeneralWSmall{};
         }
         return SoftmaxProgramFactoryGeneralWLarge{};
     }
-    if (rank - 2 == operation_attributes.dim) {
+    if (static_cast<int8_t>(rank - 2) == operation_attributes.dim) {
         if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_h_small_available(
                 tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
             return SoftmaxProgramFactoryGeneralHSmall{};
@@ -603,7 +603,7 @@ Tensor softmax_in_place(
 
     // Operation specific checks
     TT_FATAL(
-        dim == input_tensor.logical_shape().size() - 1,
+        dim == static_cast<int8_t>(input_tensor.logical_shape().size() - 1),
         "Invalid dimension: {}. Currently softmax inplace supports dim -1.",
         dim);
     TT_FATAL(
