@@ -88,7 +88,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
     env:
-      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+      OMPI_MCA_btl_tcp_if_include: ens5f0np0
       PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
       PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
