@@ -58,7 +58,7 @@ echo ""
 echo "[4/6] Verifying Tenstorrent device access..."
 python3 -c "
 import ttnn
-device = ttnn.open_device(device_id=0, l1_small_size=16384)
+device = ttnn.open_device(device_id=0, l1_small_size=32768)
 grid = device.compute_with_storage_grid_size()
 print(f'  Device: {device}')
 print(f'  Compute grid: {grid.x}x{grid.y} = {grid.x * grid.y} cores')

@@ -94,7 +94,7 @@ def main():
     print("PyTorch model loaded.")
 
     # 2. Open device
-    device = ttnn.open_device(device_id=0, l1_small_size=16384)
+    device = ttnn.open_device(device_id=0, l1_small_size=32768)
     print("Device opened.")
 
     # 3. Convert weights & init TT model
@@ -229,7 +229,7 @@ def main():
     valid_pccs = [r["pcc"] for r in pcc_results if r["pcc"] > 0]
     if valid_pccs:
         mean_pcc = np.mean(valid_pccs)
-        print(f"  Mean PCC: {mean_pcc:.6f} (target > 0.99)")
+        print(f"  Mean PCC: {mean_pcc:.6f} (target > 0.995)")
         print(f"  Min PCC:  {min(valid_pccs):.6f}")
         print(f"  Max PCC:  {max(valid_pccs):.6f}")
     else:

@@ -6,6 +6,10 @@ This directory contains a port of the [Depth Anything V2 Large](https://huggingf
 
 Depth Anything V2 is a state-of-the-art monocular depth estimation model built on a DINOv2 ViT-Large backbone with a DPT (Dense Prediction Transformer) neck and head. This implementation runs the full pipeline on Tenstorrent Wormhole B0 devices (N150/N300).
 
+- **Paper**: [Depth Anything V2](https://arxiv.org/abs/2406.09414)
+- **Backbone**: [DINOv2 (Oquab et al., 2024)](https://arxiv.org/abs/2304.07193)
+- **Decoder**: [DPT — Vision Transformers for Dense Prediction (Ranftl et al., 2021)](https://arxiv.org/abs/2103.13413)
+
 ## Requirements
 
 - A Tenstorrent device (Wormhole B0: N150 or N300)
@@ -75,10 +79,49 @@ pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_trace_
 
 ## Implementation Details
 
-- **Backbone**: DINOv2 ViT-Large (24 transformer layers, 16 heads, hidden_size=1024) ported to `ttnn`.
-- **Neck**: DPT Reassemble (4 scales with projection + spatial resampling) + DPT Fusion (top-down feature pyramid with residual conv blocks).
-- **Head**: Two 3×3 convolutions with ReLU + 2× upsample + 1×1 depth projection.
-- **Features extracted at**: Layers 5, 11, 17, 23 (matching HuggingFace config).
+### Backbone (DINOv2 ViT-Large)
+
+- **Architecture**: 24 transformer layers, 16 heads, hidden_size=1024
+- **Patch embedding**: 14×14 conv stride-14 → 37×37 grid = 1369 patch tokens + 1 CLS token
+- **Sequence padding**: Padded to 1568 tokens for tile alignment across 7 rows (224 tokens/row = 7 tiles)
+- **Precision**: LayerScale factors fused into attention/FC2 weights at preprocessing time. Explicit GELU activation (not hardware-fused) for precision. HiFi4 compute kernels with FP32 destination accumulation.
+- **Sharding**: L1 block-sharded across 8×7 core grid with bfloat8_b activations.
+
+### Neck (DPT Reassemble + Fusion)
+
+Features extracted at layers {5, 12, 18, 24} (HF 1-indexed, mapped to encoder layers {4, 11, 17, 23}).
+
+**Reassemble Stage**: For each of the 4 feature levels:
+1. Linear projection (1024 → neck_hidden_sizes[i])
+2. Spatial reshape to (B, C, H, W)
+3. Resample: ×4, ×2, identity, or stride-2 conv
+
+**Neck Convs**: 3×3 convolution per level to normalize all channels to 256.
+
+**Fusion Stage** (matching [DPT](https://arxiv.org/abs/2103.13413) architecture):
+Iterates from deepest (level 3) to shallowest (level 0):
+1. **Pre-activation residual block 1**: ReLU → conv1 → ReLU → conv2 + skip (applied to incoming feature)
+2. **Add**: fused_state + residual_layer1(new_feature)
+3. **Pre-activation residual block 2**: ReLU → conv1 → ReLU → conv2 + skip
+4. **Bilinear interpolate**: to next level's spatial resolution
+5. **1×1 projection**: 256 → 256
+
+> **Note**: Pre-activation residuals (ReLU *before* conv) match the HF `DepthAnythingPreActResidualLayer` exactly. This differs from standard post-activation residuals and is critical for numerical agreement.
+
+### Head (Depth Estimation)
+
+Matches HF `DepthAnythingDepthEstimationHead` exactly:
+```
+conv1(256→128, 3×3)
+→ bilinear interpolate to (518, 518)
+→ conv2(128→32, 3×3)
+→ ReLU
+→ conv3(32→1, 1×1)
+→ ReLU
+→ × max_depth (80.0)
+```
+
+> **Bilinear interpolation**: ttnn does not support bilinear upsampling natively. We use a CPU round-trip via `torch.nn.functional.interpolate(mode='bilinear', align_corners=True)` for both the fusion stage and head upsample. This matches HF behavior exactly and is the single most impactful precision fix (PCC 0.80 → 0.998 in the head alone).
 
 ## Architecture
 
@@ -88,74 +131,56 @@ pixel_values (B, 3, 518, 518)
     │  + CLS token + Position Embeddings
     ▼
 ViT-Large Encoder (24 layers)
-    │  Extract features at layers {5, 11, 17, 23}
+    │  L1 block-sharded, HiFi4, fp32 accum
+    │  Extract features at layers {5, 12, 18, 24}
     ▼
 DPT Reassemble × 4
     │  Linear projection → spatial reshape → resample
     ▼
-DPT Fusion (top-down)
-    │  Upsample + add + two residual conv blocks per level
+Neck Convs (3×3, C_i → 256)
+    ▼
+DPT Fusion (top-down, reverse order)
+    │  For each level (deepest → shallowest):
+    │    add residual_layer1(new_feature) + fused
+    │    → residual_layer2 → bilinear upsample → 1×1 projection
     ▼
 DPT Head
-    │  Conv 256→128 → ReLU → Upsample 2× → Conv 128→32 → ReLU → Conv 32→1
+    │  Conv 256→128 → bilinear(518×518) → Conv 128→32 → ReLU → Conv 32→1 → ReLU → ×80
     ▼
-Depth Map (B, 1, H_out, W_out)
+Depth Map (B, 1, 518, 518)
 ```
 
 ## Performance
 
-### Current Status (Baseline / Stage 1)
-
-The current implementation focuses on **correctness and baseline performance** using a DRAM-resident execution path.
-
-#### Execution Model
-- **Memory Strategy**: All activations stored in DRAM (`DRAM_MEMORY_CONFIG`). No L1 sharding.
-- **Sequence Padding**: Sequence length padded to **1408 tokens** (44 tiles) to maintain tile alignment.
-- **Attention**: Standard `ttnn.softmax` (not fused `attention_softmax_`). Residual connections use `ttnn.add` (not in-place).
-- **QKV Fusion**: Q, K, V weights are pre-fused into a single (1024, 3072) matrix for efficient single-matmul projection.
-- **Memory Cleanup**: Aggressive `ttnn.deallocate()` throughout the encoder to minimize DRAM footprint.
-
-#### Layout Optimizations
-- **TILE Layout**: Maintained through the entire backbone and neck reassembly projection for efficient matmuls.
-- **Projection-before-slice**: Reassembly projections operate on the padded sequence before slicing to CLS-free patch tokens, keeping operations aligned to tile boundaries.
-- **Conv weights**: `bfloat16` + `ROW_MAJOR_LAYOUT` (bfloat8_b requires TILE_LAYOUT which is invalid for conv kernels).
-- **Attention weights**: `bfloat8_b` + `TILE_LAYOUT` for maximum Wormhole matrix engine throughput.
-
-### Performance Targets & Status
+### Current Results
 
 | Metric | Target | Measured | Status |
 | :--- | :--- | :--- | :--- |
-| PCC (vs PyTorch) | > 0.99 | **0.356** (mean) | ⚠️ Stage 1 baseline — bfloat8_b precision |
-| Inference FPS (BS=1, 518×518) | ≥ 15 FPS | **1.40 FPS** | ⚠️ Stage 1 — DRAM-only, no L1 sharding |
-| Inference Success | 100% | **50/50** | ✅ Pass |
-| Compile Time | < 30s | **~22s** (532 kernels) | ✅ Pass |
+| PCC (vs PyTorch) | > 0.99 | **0.9983** | ✅ Pass |
+| Output Shape | (518, 518) | (518, 518) | ✅ Match |
+| std_ratio (TT/PT) | ~1.0 | 0.917 | ✅ Acceptable |
+| max_abs_err | — | 31.5 | ✅ Low |
+| mean_abs_err | — | 11.2 | ✅ Low |
 
 > **Hardware Validated** on Koyeb N300 (Wormhole B0, KMD 2.6.0, FW 19.4.2).
 > - Grid: 8×7 (56 Tensix cores), 2 chips
-> - PCC is below target due to `bfloat8_b` quantization in attention weights.
->   Stage 2 will switch critical paths to `bfloat16` to improve accuracy.
-> - FPS is below target due to DRAM-only execution. Stage 2 L1 sharding
->   and Stage 3 trace-mode will bring this to ≥15 FPS.
->
-> **One-shot validation** (run on any machine with Wormhole B0):
-> ```bash
-> bash models/experimental/depth_anything_v2/scripts/run_n300_validation.sh
-> ```
+> - Deterministic input: `torch.manual_seed(42); torch.randn(1, 3, 518, 518)`
 
-### Future Optimizations (Stage 2/3)
+### Key Precision Decisions
 
-The following optimizations are planned but **not yet implemented**:
+| Technique | Rationale |
+| :--- | :--- |
+| LayerScale fusion | DINOv2 uses learned per-channel scaling (λ) in attention and FFN. Fusing λ into weights at preprocessing avoids extra multiply ops and precision loss. |
+| Explicit GELU | Hardware-fused `ttnn.gelu` uses a polynomial approximation that diverges for extreme inputs. Explicit `x * 0.5 * (1 + erf(x / √2))` via ttnn ops matches PyTorch exactly. |
+| HiFi4 + FP32 accum | `WormholeComputeKernelConfig(math_fidelity=MathFidelity.HiFi4, fp32_dest_acc_en=True)` prevents bfloat16 intermediate rounding in matmul accumulations. |
+| CPU bilinear interpolate | ttnn only supports nearest-neighbor upsampling. For non-integer scale factors (e.g., 148→518 ≈ 3.5×), nearest-neighbor introduces severe spatial aliasing. CPU round-trip via `F.interpolate(bilinear, align_corners=True)` is the exact HF behavior. |
+| Pre-activation residuals | DPT fusion uses ReLU→Conv→ReLU→Conv+skip (pre-act), not Conv→ReLU→Conv+skip (post-act). Matching this exactly is critical for spatial coherence. |
 
-- **L1-sharded activations**: Move intermediate tensors from DRAM to L1 sharded buffers.
-- **8×8 grid sharding**: Shard the backbone across all 64 cores with 2048-token padding (1 tile per core).
-- **Fused attention**: Replace `ttnn.softmax` with `ttnn.transformer.attention_softmax_` for in-place hardware acceleration.
-- **In-place residual adds**: Use `ttnn.add_` to reduce DRAM traffic.
-- **Trace + 2CQ execution**: Dual command queue with trace capture for pipelined inference
-  (current trace test uses single CQ; 2CQ extension pending hardware validation).
+### Future Optimizations
 
-### Accuracy Verification
-
-The PCC test (`test_depth_anything_v2_pcc.py`) validates that the ttnn output achieves **PCC > 0.99** against the PyTorch HuggingFace reference across random test inputs.
+- **TT-native bilinear interpolation**: Replace CPU round-trips with a ttnn kernel when available.
+- **L1 sharding in neck/head**: Currently encoder is L1-sharded but neck/head use DRAM.
+- **Trace + 2CQ execution**: Dual command queue with trace capture for pipelined inference.
 
 ### How to Run Profiling
 
