@@ -330,7 +330,9 @@ static bool single_core_binary_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema = {.num_runtime_varargs = 7},
+        .runtime_arguments_schema =
+            {.named_runtime_args =
+                 {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -348,7 +350,7 @@ static bool single_core_binary_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.num_runtime_varargs = 3},
+        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -386,7 +388,7 @@ static bool single_core_binary_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema = {.num_runtime_varargs = 3},
+        .runtime_arguments_schema = {.named_runtime_args = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
@@ -408,28 +410,33 @@ static bool single_core_binary_quasar(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
+    const uint32_t num_tiles_u = static_cast<uint32_t>(test_config.num_tiles);
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .runtime_varargs =
-                {{node,
-                  {input0_dram_buffer->address(),
-                   0u,
-                   input1_dram_buffer->address(),
-                   0u,
-                   static_cast<uint32_t>(test_config.num_tiles),
-                   input2_dram_buffer->address(),
-                   0u}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"src0_addr", input0_dram_buffer->address()},
+                       {"src0_bank_id", 0u},
+                       {"src1_addr", input1_dram_buffer->address()},
+                       {"src1_bank_id", 0u},
+                       {"num_tiles", num_tiles_u},
+                       {"src2_addr", input2_dram_buffer->address()},
+                       {"src2_bank_id", 0u}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .runtime_varargs =
-                {{node, {output_dram_buffer->address(), 0u, static_cast<uint32_t>(test_config.num_tiles)}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args = {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
-            .runtime_varargs = {{node, {static_cast<uint32_t>(test_config.num_tiles), 1u, 0u}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args = {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
         },
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);

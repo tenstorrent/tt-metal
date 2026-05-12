@@ -30,10 +30,10 @@ void kernel_main() {
     // pointer by this stride while the DFB/CB still streams native-size
     // tiles into L1.
 #ifdef ARCH_QUASAR
-    uint32_t src_addr = get_vararg(0);     // global base address
-    uint32_t src_bank_id = get_vararg(1);  // data is in one bank
-    uint32_t num_tiles = get_vararg(2);
-    uint32_t dram_page_stride = get_vararg(3);
+    uint32_t src_addr = get_arg(args::src_addr);        // global base address
+    uint32_t src_bank_id = get_arg(args::src_bank_id);  // data is in one bank
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t dram_page_stride = get_arg(args::dram_page_stride);
 #else
     uint32_t src_addr = get_arg_val<uint32_t>(0);     // global base address
     uint32_t src_bank_id = get_arg_val<uint32_t>(1);  // data is in one bank

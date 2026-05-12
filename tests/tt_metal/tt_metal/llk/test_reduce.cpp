@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -469,17 +470,17 @@ void run_single_core_reduce_program_quasar(
     std::string reader_kernel_path;
     experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings reader_cta_bindings;
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines reader_defines;
-    size_t reader_num_runtime_varargs = 0;
+    std::vector<std::string> reader_named_runtime_args;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp";
         bfloat16 bfloat_scaler_value = bfloat16(scaler);
         uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
         reader_cta_bindings = {{"scaler", packed_scaler_value}};
         reader_defines.emplace_back("REDUCE_SCALER", "1");
-        reader_num_runtime_varargs = 5;
+        reader_named_runtime_args = {"src_addr", "N", "Ht", "Wt", "HtWt"};
     } else {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp";
-        reader_num_runtime_varargs = 9;
+        reader_named_runtime_args = {"src_addr", "num_tiles", "scaler"};
     }
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -501,7 +502,7 @@ void run_single_core_reduce_program_quasar(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_arg_bindings = reader_cta_bindings,
-        .runtime_arguments_schema = {.num_runtime_varargs = reader_num_runtime_varargs},
+        .runtime_arguments_schema = {.named_runtime_args = reader_named_runtime_args},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -520,7 +521,7 @@ void run_single_core_reduce_program_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.num_runtime_varargs = 3},
+        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -576,23 +577,22 @@ void run_single_core_reduce_program_quasar(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
-    // Reader RTAs depend on reduce_dim
-    std::vector<uint32_t> reader_rtas;
+    // Reader/writer RTAs depend on reduce_dim
+    std::unordered_map<std::string, uint32_t> reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_rtas = {src_dram_buffer->address(), dims.N, dims.Ht, dims.Wt, dims.Ht * dims.Wt};
+        reader_named_rtas = {
+            {"src_addr", src_dram_buffer->address()},
+            {"N", dims.N},
+            {"Ht", dims.Ht},
+            {"Wt", dims.Wt},
+            {"HtWt", dims.Ht * dims.Wt}};
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_rtas = {
-            src_dram_buffer->address(),
-            0u,
-            0u,
-            dims.num_tensor_tiles,
-            dims.NC,
-            dims.Ht,
-            dims.Wt,
-            dims.Ht * dims.Wt,
-            *reinterpret_cast<uint32_t*>(&scaler)};
+        reader_named_rtas = {
+            {"src_addr", src_dram_buffer->address()},
+            {"num_tiles", dims.num_tensor_tiles},
+            {"scaler", *reinterpret_cast<uint32_t*>(&scaler)}};
         writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
@@ -601,11 +601,12 @@ void run_single_core_reduce_program_quasar(
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .runtime_varargs = {{node, reader_rtas}},
+            .named_runtime_args = {{.node = node, .args = reader_named_rtas}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .runtime_varargs = {{node, {dst_dram_buffer->address(), 0u, writer_num_tiles}}},
+            .named_runtime_args =
+                {{.node = node, .args = {{"dst_addr", dst_dram_buffer->address()}, {"num_tiles", writer_num_tiles}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,

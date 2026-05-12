@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
@@ -16,8 +17,8 @@
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t dst_addr = get_vararg(0);
-    uint32_t num_tiles = get_vararg(2);  // Index 2 to match with regular writer_unary
+    uint32_t dst_addr = get_arg(args::dst_addr);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 #else
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(2); // Index 2 to match with regular writer_unary

@@ -199,7 +199,7 @@ void run_single_core_transpose_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.num_runtime_varargs = 9},
+        .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "N", "Ht", "Wt", "HtWt"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -218,7 +218,7 @@ void run_single_core_transpose_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.num_runtime_varargs = 3},
+        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -273,11 +273,14 @@ void run_single_core_transpose_quasar(
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .runtime_varargs = {{node, {dram_buffer_src_addr, 0u, 0u, num_tensor_tiles, NC, Ht, Wt, Ht * Wt, 0u}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args = {{"src_addr", dram_buffer_src_addr}, {"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .runtime_varargs = {{node, {dram_buffer_dst_addr, 0u, num_tensor_tiles}}},
+            .named_runtime_args =
+                {{.node = node, .args = {{"dst_addr", dram_buffer_dst_addr}, {"num_tiles", num_tensor_tiles}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,

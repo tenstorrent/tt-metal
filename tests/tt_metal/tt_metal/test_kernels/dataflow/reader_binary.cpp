@@ -8,17 +8,18 @@
 
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t src0_addr = get_vararg(0);
-    uint32_t src0_bank_id = get_vararg(1);
-    uint32_t src1_addr = get_vararg(2);
-    uint32_t src1_bank_id = get_vararg(3);
-    uint32_t num_tiles = get_vararg(4);
+    uint32_t src0_addr = get_arg(args::src0_addr);
+    uint32_t src0_bank_id = get_arg(args::src0_bank_id);
+    uint32_t src1_addr = get_arg(args::src1_addr);
+    uint32_t src1_bank_id = get_arg(args::src1_bank_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 #else
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src0_bank_id = get_arg_val<uint32_t>(1);
@@ -77,8 +78,8 @@ void kernel_main() {
     // and eltwise binary with dest accumulation
 #if defined(DST_ACCUM_MODE) || defined(LOAD_BUF2_DATA) || defined(ELTWISE_DEST_REUSE_TYPE)
 #ifdef ARCH_QUASAR
-    uint32_t src2_addr = get_vararg(5);
-    uint32_t src2_bank_id = get_vararg(6);
+    uint32_t src2_addr = get_arg(args::src2_addr);
+    uint32_t src2_bank_id = get_arg(args::src2_bank_id);
 #else
     uint32_t src2_addr = get_arg_val<uint32_t>(5);
     uint32_t src2_bank_id = get_arg_val<uint32_t>(6);

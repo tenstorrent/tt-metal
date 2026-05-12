@@ -7,6 +7,7 @@
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #endif
 
 // #include "api/debug/dprint.h"
@@ -14,7 +15,7 @@
 void generate_bcast_scaler() {
 #ifdef ARCH_QUASAR
     DataflowBuffer dfb1(dfb::out_scaler);
-    uint32_t scaler = get_vararg(8);
+    uint32_t scaler = get_arg(args::scaler);
 #else
     constexpr uint32_t cb_in_2 = 2;
     uint32_t scaler = get_arg_val<uint32_t>(8);
@@ -52,8 +53,8 @@ void generate_bcast_scaler() {
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t src_addr = get_vararg(0);
-    uint32_t num_tiles = get_vararg(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
+    uint32_t src_addr = get_arg(args::src_addr);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 #else
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles =

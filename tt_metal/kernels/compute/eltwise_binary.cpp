@@ -11,15 +11,16 @@
 
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t per_core_block_cnt = get_vararg(0);
-    uint32_t per_core_block_size = get_vararg(1);
-    uint32_t acc_to_dst = get_vararg(2);
+    uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    uint32_t per_core_block_size = get_arg(args::per_core_block_size);
+    uint32_t acc_to_dst = get_arg(args::acc_to_dst);
 #else
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);

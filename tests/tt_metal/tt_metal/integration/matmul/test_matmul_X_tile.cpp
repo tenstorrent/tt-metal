@@ -273,8 +273,18 @@ static void matmul_tile_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        // reader_matmul_with_bias_blocked.cpp consumes 10 varargs (with the 10th being with_bias).
-        .runtime_arguments_schema = {.num_runtime_varargs = 10},
+        .runtime_arguments_schema =
+            {.named_runtime_args =
+                 {"src0_addr",
+                  "src0_dram_bank_id",
+                  "src1_addr",
+                  "src1_dram_bank_id",
+                  "num_blocks",
+                  "in0_block_tile_cnt",
+                  "in1_block_tile_cnt",
+                  "in0_block_size_bytes",
+                  "in1_block_size_bytes",
+                  "with_bias"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -292,7 +302,7 @@ static void matmul_tile_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.num_runtime_varargs = 3},
+        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -375,34 +385,41 @@ static void matmul_tile_quasar(
     fixture->WriteBuffer(mesh_device, ctx.src0_dram_buffer, activations);
     fixture->WriteBuffer(mesh_device, ctx.src1_dram_buffer, weights);
 
-    // Build reader runtime args (matches reader_matmul_with_bias_blocked.cpp Quasar varargs ordering).
+    // Build reader runtime args (matches reader_matmul_with_bias_blocked.cpp Quasar named args).
     bool single_tile = !(ctx.M > 1 || ctx.N > 1 || ctx.K > 1);
-    std::vector<uint32_t> reader_args =
-        single_tile
-            ? std::vector<
-                  uint32_t>{ctx.src0_dram_buffer->address(), 0u, ctx.src1_dram_buffer->address(), 0u, 1u, 1u, 1u, static_cast<uint32_t>(1 * ctx.single_tile_size_bfp16b), static_cast<uint32_t>(1 * ctx.single_tile_size_bfp16b), 0u}
-            : std::vector<uint32_t>{
-                  ctx.src0_dram_buffer->address(),
-                  0u,
-                  ctx.src1_dram_buffer->address(),
-                  0u,
-                  ctx.K,
-                  ctx.M,
-                  ctx.N,
-                  static_cast<uint32_t>(ctx.M * ctx.single_tile_size_bfp16b),
-                  static_cast<uint32_t>(ctx.N * ctx.single_tile_size_bfp16b),
-                  static_cast<uint32_t>(cfg.with_bias),
-              };
+    const uint32_t num_blocks = single_tile ? 1u : ctx.K;
+    const uint32_t in0_block_tile_cnt = single_tile ? 1u : ctx.M;
+    const uint32_t in1_block_tile_cnt = single_tile ? 1u : ctx.N;
+    const uint32_t in0_block_size_bytes =
+        static_cast<uint32_t>((single_tile ? 1u : ctx.M) * ctx.single_tile_size_bfp16b);
+    const uint32_t in1_block_size_bytes =
+        static_cast<uint32_t>((single_tile ? 1u : ctx.N) * ctx.single_tile_size_bfp16b);
+    const uint32_t with_bias_arg = single_tile ? 0u : static_cast<uint32_t>(cfg.with_bias);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .runtime_varargs = {{node, reader_args}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"src0_addr", ctx.src0_dram_buffer->address()},
+                       {"src0_dram_bank_id", 0u},
+                       {"src1_addr", ctx.src1_dram_buffer->address()},
+                       {"src1_dram_bank_id", 0u},
+                       {"num_blocks", num_blocks},
+                       {"in0_block_tile_cnt", in0_block_tile_cnt},
+                       {"in1_block_tile_cnt", in1_block_tile_cnt},
+                       {"in0_block_size_bytes", in0_block_size_bytes},
+                       {"in1_block_size_bytes", in1_block_size_bytes},
+                       {"with_bias", with_bias_arg}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .runtime_varargs = {{node, {ctx.dst_dram_buffer->address(), 0u, ctx.num_tiles}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,

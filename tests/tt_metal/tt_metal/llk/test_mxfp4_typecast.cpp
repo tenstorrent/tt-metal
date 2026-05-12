@@ -93,7 +93,8 @@ static vector<uint32_t> run_mxfp4_typecast(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1}},
-        .runtime_arguments_schema = {.num_runtime_varargs = 4},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -113,7 +114,8 @@ static vector<uint32_t> run_mxfp4_typecast(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1}},
-        .runtime_arguments_schema = {.num_runtime_varargs = 4},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -172,11 +174,23 @@ static vector<uint32_t> run_mxfp4_typecast(
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .runtime_varargs = {{node, {src_buffer->address(), 0u, num_tiles, src_dram_stride}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"src_addr", src_buffer->address()},
+                       {"src_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"dram_page_stride", src_dram_stride}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .runtime_varargs = {{node, {dst_buffer->address(), 0u, num_tiles, dst_dram_stride}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"dst_addr", dst_buffer->address()},
+                       {"dst_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"dram_page_stride", dst_dram_stride}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,

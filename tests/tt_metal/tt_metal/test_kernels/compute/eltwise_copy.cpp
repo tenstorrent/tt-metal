@@ -34,7 +34,7 @@ void kernel_main() {
 
 #ifdef PACK_RELU
 #ifdef ARCH_QUASAR
-    pack_relu_config(ReluConfig::from_packed(get_vararg(0)));
+    pack_relu_config(ReluConfig::from_packed(get_arg(args::relu_config)));
 #else
     pack_relu_config(get_arg_val<uint32_t>(0));
 #endif

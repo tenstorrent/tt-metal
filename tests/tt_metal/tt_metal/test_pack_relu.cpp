@@ -92,7 +92,8 @@ static void run_pack_relu_test(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
-        .runtime_arguments_schema = {.num_runtime_varargs = 4},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -112,7 +113,8 @@ static void run_pack_relu_test(
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
-        .runtime_arguments_schema = {.num_runtime_varargs = 4},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -140,7 +142,7 @@ static void run_pack_relu_test(
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
         .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1u}},
-        .runtime_arguments_schema = {.num_runtime_varargs = 1},
+        .runtime_arguments_schema = {.named_runtime_args = {"relu_config"}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
 
@@ -170,15 +172,27 @@ static void run_pack_relu_test(
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .runtime_varargs = {{node, {dram_buffer_src_addr, 0u, num_tiles, src_aligned_page_size}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"src_addr", dram_buffer_src_addr},
+                       {"src_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"dram_page_stride", src_aligned_page_size}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .runtime_varargs = {{node, {dram_buffer_dst_addr, 0u, num_tiles, dst_aligned_page_size}}},
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"dst_addr", dram_buffer_dst_addr},
+                       {"dst_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"dram_page_stride", dst_aligned_page_size}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
-            .runtime_varargs = {{node, {relu_config}}},
+            .named_runtime_args = {{.node = node, .args = {{"relu_config", relu_config}}}},
         },
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);

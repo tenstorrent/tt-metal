@@ -8,22 +8,23 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #endif
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t src0_addr = get_vararg(0);
-    uint32_t src0_dram_bank_id = get_vararg(1);
-    uint32_t src1_addr = get_vararg(2);
-    uint32_t src1_dram_bank_id = get_vararg(3);
-    uint32_t num_blocks = get_vararg(4);
+    uint32_t src0_addr = get_arg(args::src0_addr);
+    uint32_t src0_dram_bank_id = get_arg(args::src0_dram_bank_id);
+    uint32_t src1_addr = get_arg(args::src1_addr);
+    uint32_t src1_dram_bank_id = get_arg(args::src1_dram_bank_id);
+    uint32_t num_blocks = get_arg(args::num_blocks);
 
-    uint32_t in0_block_tile_cnt = get_vararg(5);
-    uint32_t in1_block_tile_cnt = get_vararg(6);
-    uint32_t in0_block_size_bytes = get_vararg(7);
-    uint32_t in1_block_size_bytes = get_vararg(8);
+    uint32_t in0_block_tile_cnt = get_arg(args::in0_block_tile_cnt);
+    uint32_t in1_block_tile_cnt = get_arg(args::in1_block_tile_cnt);
+    uint32_t in0_block_size_bytes = get_arg(args::in0_block_size_bytes);
+    uint32_t in1_block_size_bytes = get_arg(args::in1_block_size_bytes);
 
-    uint32_t with_bias = get_vararg(9);
+    uint32_t with_bias = get_arg(args::with_bias);
 #else
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src0_dram_bank_id = get_arg_val<uint32_t>(1);

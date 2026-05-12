@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
@@ -15,14 +16,14 @@
 // #include "api/debug/dprint.h"
 
 void kernel_main() {
-    // skip args 1,2,3 for compat with reader_unary, reader_unary_8bank
 #ifdef ARCH_QUASAR
-    uint32_t src_addr = get_vararg(0);
-    uint32_t N = get_vararg(4);  // args match the order of reader_unary
-    uint32_t Ht = get_vararg(5);
-    uint32_t Wt = get_vararg(6);
-    uint32_t HtWt = get_vararg(7);
+    uint32_t src_addr = get_arg(args::src_addr);
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t HtWt = get_arg(args::HtWt);
 #else
+    // skip args 1,2,3 for compat with reader_unary, reader_unary_8bank
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t N = get_arg_val<uint32_t>(4);  // args match the order of reader_unary
     uint32_t Ht = get_arg_val<uint32_t>(5);

@@ -242,7 +242,7 @@ bool run_sfpu_all_same_buffer(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
-            .runtime_arguments_schema = {.num_runtime_varargs = 3},
+            .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "bank_id", "num_tiles"}},
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
@@ -260,7 +260,7 @@ bool run_sfpu_all_same_buffer(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
-            .runtime_arguments_schema = {.num_runtime_varargs = 3},
+            .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
@@ -318,13 +318,21 @@ bool run_sfpu_all_same_buffer(
         params.kernel_run_params = {
             experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = READER,
-                .runtime_varargs =
-                    {{node, {input_dram_buffer->address(), 0u, static_cast<uint32_t>(test_config.num_tiles)}}},
+                .named_runtime_args =
+                    {{.node = node,
+                      .args =
+                          {{"src_addr", input_dram_buffer->address()},
+                           {"bank_id", 0u},
+                           {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
             },
             experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = WRITER,
-                .runtime_varargs =
-                    {{node, {output_dram_buffer->address(), 0u, static_cast<uint32_t>(test_config.num_tiles)}}},
+                .named_runtime_args =
+                    {{.node = node,
+                      .args =
+                          {{"dst_addr", output_dram_buffer->address()},
+                           {"bank_id", 0u},
+                           {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
             },
             experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = COMPUTE,
