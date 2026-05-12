@@ -1,5 +1,5 @@
 name: "Prewarm Images"
-description: "Pull images through Harbor to warm the cache, with fallback to direct GHCR"
+description: "Pull images through Harbor to warm the cache. Fails if Harbor pull fails — no fallback."
 
 inputs:
   harbor-prefix:
@@ -80,14 +80,10 @@ runs:
 
           echo "Pulling $harbor_tag (to warm Harbor cache)..."
 
-          if docker pull "$harbor_tag" 2>/dev/null; then
+          if docker pull "$harbor_tag"; then
             echo "  Successfully pulled through Harbor"
           else
-            echo "::warning::Harbor pull failed for $harbor_tag — falling back to direct GHCR"
-            if docker pull "$ghcr_tag" 2>/dev/null; then
-              echo "  Successfully pulled from GHCR"
-            else
-              echo "  Failed to pull (may not exist yet)"
-            fi
+            echo "::error::Harbor pull failed for $harbor_tag — the image must be accessible through Harbor. No fallback."
+            exit 1
           fi
         done
