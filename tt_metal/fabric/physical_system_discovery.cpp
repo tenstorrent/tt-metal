@@ -679,7 +679,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
 
     PhysicalSystemDescriptor psd = dispatch_live ?
         discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique) :
-        discovery_impl::run_local_discovery(cluster_desc, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
+        discovery_impl::run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
