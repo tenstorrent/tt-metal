@@ -531,8 +531,18 @@ def create_text_to_unit_parameters(encoder, *, device: ttnn.Device) -> dict:
     Expects ``encoder.layers`` as [`SeamlessM4Tv2EncoderLayer`] (self-attention + FFN only).
     Weights cover the transformer stack only (``inputs_embeds`` path; no token or position
     embeddings on this submodule).
+
+    Stage 1.3: store FFN ``fc1``/``fc2`` weights as ``bfloat8_b`` (block-float8).
+    Halves DRAM bandwidth on the two largest matmuls per layer; the multiplier still
+    runs at bf16 fidelity (``HiFi2`` + ``fp32_dest_acc_en``), so PCC is preserved.
+    Attention projections stay at ``bfloat16`` -- their activations are less
+    consistently scaled and the bf8 saving there is marginal.
     """
-    layers = _m4t_encoder_self_attn_ffn_layers(encoder, device=device)
+    layers = _m4t_encoder_self_attn_ffn_layers(
+        encoder,
+        device=device,
+        ffn_weight_dtype=ttnn.bfloat8_b,
+    )
     out = {
         "layers": layers,
         "layer_norm": make_parameter_dict(
@@ -602,11 +612,16 @@ def _t2u_decoder_parameters(decoder: torch.nn.Module, *, device: ttnn.Device) ->
     """[`SeamlessM4Tv2TextToUnitDecoder`] weights (character + duration + conv decoder stack)."""
     cfg = decoder.config
     scale = embed_scale_for_config(cfg)
+    # Stage 1.2: upload embedding tables ROW-MAJOR (matches text encoder recipe).
+    # ``ttnn.embedding`` produces a TILE_LAYOUT output regardless of how its weight is
+    # stored; uploading the weight in ROW_MAJOR_LAYOUT avoids the trailing
+    # ``UntilizeWithUnpaddingDeviceOperation`` that the embedding kernel emits when the
+    # weight is already tile-padded.  Numerically identical, ~3 ops cheaper per forward.
     scaled_char = (decoder.embed_char.weight.detach() * scale).contiguous()
     embed_char_weight = ttnn.from_torch(
         scaled_char,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -616,7 +631,7 @@ def _t2u_decoder_parameters(decoder: torch.nn.Module, *, device: ttnn.Device) ->
     embed_char_positions_weight = ttnn.from_torch(
         char_pos_w,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -626,7 +641,7 @@ def _t2u_decoder_parameters(decoder: torch.nn.Module, *, device: ttnn.Device) ->
     embed_positions_weight = ttnn.from_torch(
         pos_w,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
