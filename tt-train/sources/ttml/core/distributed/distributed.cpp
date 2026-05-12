@@ -41,8 +41,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
 namespace {
 
 // Returns true if the parameter's current placement on the given mesh axis is a
-// Shard{...} rather than Replicate. Used to skip all-reduce for FSDP-sharded
-// params (whose grads are already reduce-scattered by the FSDP backward hook).
+// Shard{...} rather than Replicate.
 bool is_sharded_on_axis(const tt::tt_metal::Tensor& value, uint32_t axis) {
     const auto& topology = value.tensor_topology();
     const auto& placements = topology.placements();
@@ -72,9 +71,7 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
         }
         // Build per-param axes, dropping any axis on which this parameter is
         // sharded: FSDP already reduce-scattered the grad over the DDP axis in
-        // its backward-post hook, so doing an additional all-reduce here would
-        // double-count (and is shape-incompatible anyway once the grad is back
-        // at shard shape).
+        // its backward-post hook.
         ttsl::SmallVector<uint32_t> axes_for_param;
         for (uint32_t axis : cluster_axes) {
             if (!is_sharded_on_axis(tensor->get_value(), axis)) {

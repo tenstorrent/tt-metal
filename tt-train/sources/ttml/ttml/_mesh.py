@@ -203,10 +203,7 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
 
     FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
-    backward hook already reduce-scattered the grad into shard shape, and a
-    further all-reduce would both double-count and fail the shape check. In
-    the common FSDP-only configuration, the mesh has no ``"dp"`` axis at all
-    and this function is a complete no-op.
+    backward hook already reduce-scattered the grad into shard shape.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
@@ -225,11 +222,7 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
             continue
 
         # Drop axes on which this particular parameter is FSDP-sharded — the
-        # FSDP backward-post hook has already reduce-scattered that axis into
-        # shard shape. Doing so per-param (rather than once outside the loop)
-        # is what makes hybrid FSDP+DDP configurations correct: an FSDP-managed
-        # weight on the "fsdp" axis still gets all-reduced on the "dp" axis.
-        axes_for_param = tuple(a for a in axes if not _param_sharded_on_axis(param, a))
+        axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
         if not axes_for_param:
             continue
 
@@ -238,11 +231,6 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
             continue
         inv_scaler = 1.0 / float(scaler)
 
-        # Raw ttnn.all_reduce, NOT ttml.ops.distributed.all_reduce: this runs
-        # after loss.backward() so we don't differentiate through it. The
-        # autograd-tracking variant would register one graph node per axis per
-        # parameter and pin grad tensors alive via closures until the graph is
-        # reset, which OOMs at large DP sizes (e.g. DDP=32 TinyLlama).
         grad = param.get_grad()
         for axis in axes_for_param:
             grad = ttnn.all_reduce(grad, cluster_axis=axis)
@@ -250,20 +238,8 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
         param.set_grad(grad)
 
 
-def _param_sharded_on_axis(param, axis_index: int) -> bool:
-    """True if ``param`` is sharded on the given mesh axis.
-
-    Detection order:
-      1. FSDP marker (``_fsdp_managed`` / ``_fsdp_axis``) — set by
-         ``ttml.fsdp.fully_shard``. This is the primary signal because our
-         current shard-creation path uses ``ttnn_reduce_scatter`` which does
-         not update tensor topology metadata; once that lands, the marker
-         becomes redundant.
-      2. Best-effort ``tensor_topology().placements()`` read — works for
-         params that were initialized directly with a sharded mapper (e.g. TP
-         weights), and acts as a fallback for any future shard op that does
-         update topology correctly.
-    """
+def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
+    """True if ``param`` is FSDP-sharded on the given mesh axis."""
     if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
         return True
     return False

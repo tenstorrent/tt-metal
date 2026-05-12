@@ -46,5 +46,4 @@ sys.modules[f"{__name__}.optimizers"] = optimizers
 
 from ._mesh import Mesh, open_device_mesh, maybe_mesh, mesh, sync_gradients
 
-# FSDP lives at the top level so users can call ``ttml.fsdp.fully_shard(...)``.
 from . import fsdp

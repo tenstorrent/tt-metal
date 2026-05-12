@@ -374,7 +374,7 @@ roughly the order I'd tackle them:
   sqrt, then scale per-rank shards by `min(1, max_norm / global_norm)`.
 
 - [ ] **Lazy init.** The
-  current host-roundtrip path is correct but spends ~`4 × total_params`
+  current host-roundtrip path is correct but spends ~`num_devices * total_params`
   bytes of host RAM transiently at `fully_shard` time. Plus it doesn't allow for a model with
   weights not fitting in a single chip memory. Need lazy init infra to enable training of a model
   like Qwen-32B or Llama-70B on a single galaxy.

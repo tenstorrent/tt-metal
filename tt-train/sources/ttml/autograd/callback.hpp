@@ -19,13 +19,7 @@ namespace ttml::autograd {
  * consumers.
  *
  * Backward: the graph node invokes @p callback first, then forwards the out-grad to the input
- * via add_grad. Because callbacks on a module's output fire *before* the module's internal
- * backward closures in the reversed topological order, and callbacks on a module's input fire
- * *after* them, this primitive enables module-level backward-pre / backward-post hooks
- * (e.g. FSDP unshard/reshard + reduce_scatter) to run at the correct moment.
- *
- * Memory: one autograd::Tensor wrapper + one GraphNode. The ttnn tensor handle is ref-counted,
- * so no device buffer is allocated by this op.
+ * via add_grad.
  *
  * @param input    Tensor to pass through. Must have an associated autograd node for the
  *                 callback to ever fire (otherwise the graph has nothing to traverse

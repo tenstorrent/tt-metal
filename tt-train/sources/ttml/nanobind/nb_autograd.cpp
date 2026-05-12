@@ -42,8 +42,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<GraphNode>(m, "GraphNode");
     nb::class_<NodeId>(m, "NodeId");
     // dynamic_attr() lets Python code attach arbitrary markers (e.g.
-    // `_fsdp_managed`, `_fsdp_shard_dim`, `_fsdp_axis`) to a Tensor so
-    // downstream infra (FSDP grad sync, Muon guard) can detect sharded params.
+    // `_fsdp_managed`, `_fsdp_shard_dim`, `_fsdp_axis`) to a Tensor.
     nb::class_<Tensor>(m, "Tensor", nb::dynamic_attr());
     nb::class_<ParallelismContext>(m, "ParallelismContext");
     nb::class_<DistributedConfig>(m, "DistributedConfig");
@@ -363,8 +362,6 @@ void py_module(nb::module_& m) {
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
 
     // Identity-forward autograd node that fires a Python callback during backward.
-    // Used to implement module-level backward-pre / backward-post hooks (e.g. FSDP).
-    // See autograd/callback.hpp for the placement semantics.
     m.def(
         "callback",
         [](const TensorPtr& input, std::function<void()> fn) -> TensorPtr {
@@ -372,10 +369,8 @@ void py_module(nb::module_& m) {
         },
         nb::arg("tensor"),
         nb::arg("fn"),
-        "Identity autograd op that invokes `fn()` during backward at this node's position. "
-        "Wrapping a module's forward output triggers `fn` just before the module's internal "
-        "backward closures run (backward-pre); wrapping its forward input triggers `fn` just "
-        "after they have all finished (backward-post).");
+        "Identity autograd op that invokes `fn()` during backward before calling backward of the input's node. "
+        "This is used to implement module-level backward-pre / backward-post hooks (e.g. FSDP).");
 
     // Close the AutoContext device at Python shutdown so MeshDevice (and its
     // D2HSocket / NamedShm resources) are torn down before ShmResourceTracker's

@@ -326,7 +326,7 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     else:
         if len(enabled_names) != n:
             raise ValueError(
-                f"{n}D mesh {shape} requires {n} parallelisms enabled "
+                f"Mesh {shape} requires {n} parallelisms enabled "
                 f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
             )
         for i, name in enumerate(enabled_names):
@@ -530,13 +530,6 @@ def train_step(
     if memory_snapshot_fn:
         memory_snapshot_fn("BACKWARD_PASS")
 
-    # NOTE: gradient synchronization runs below inside the `if should_step:`
-    # branch (mirroring main.cpp:817-823). For FSDP-sharded weights it's a
-    # no-op there too, since the per-param filter in ttml.sync_gradients
-    # detects FSDP shards on the "fsdp" axis and skips them; their grads were
-    # already reduce-scattered by the FSDP backward-post hook fired during
-    # loss.backward().
-
     # Reset computation graph after backward
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -558,9 +551,8 @@ def train_step(
 
         # Gradient clipping. clip_grad_norm is incorrect under TP/FSDP because
         # parameters are sharded across the "tp"/"fsdp" axis and the per-rank
-        # norm is not the global norm; mirror main.cpp:826-828 with a hard
-        # error. (TODO: implement a sharding-aware clip that all_reduces the
-        # squared norm across sharding axes before clipping.)
+        # norm is not the global norm;
+        # TODO: Implement this (44021)
         if use_clip_grad_norm:
             mesh = ttml.mesh()
             if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
