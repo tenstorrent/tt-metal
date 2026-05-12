@@ -26,6 +26,10 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 //   - in0_k_offset_tiles: tile offset on the in0 matmul-K axis. The K count comes from
 //     the weight (no effective_K argument); in0 is read as if it had a larger K extent
 //     and we slice [k_offset, k_offset + K) tiles.
+//   - in1_k_offset_tiles: tile offset on the in1 matmul-K axis. The matmul-K count comes
+//     from in0 (when in1_k_offset > 0, in0's K determines matmul-K). The weight is read
+//     as if it had a larger K extent and we slice [k_offset, k_offset + K) tiles.
+//     Cannot be combined with in0_k_offset_tiles > 0.
 // All defaults preserve "use the whole input" behavior. These are runtime args —
 // different offset/length values reuse the same cached program.
 //
@@ -39,6 +43,7 @@ ttnn::Tensor variable_matmul(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t in0_row_offset_tiles = 0,
     uint32_t effective_M_tiles = 0,
-    uint32_t in0_k_offset_tiles = 0);
+    uint32_t in0_k_offset_tiles = 0,
+    uint32_t in1_k_offset_tiles = 0);
 
 }  // namespace ttml::metal

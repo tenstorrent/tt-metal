@@ -51,11 +51,21 @@ struct VariableMatmulParams {
     //   input's stored col axis (matmul-K). For transpose_a, it offsets along the input's
     //   stored row axis (matmul-K).
     //
+    // in1_k_offset_tiles:
+    //   K-axis offset on the weight (in1), analogous to in0_k_offset_tiles. The weight
+    //   is treated as a parent buffer with K extent K_in1 >= matmul-K; we slice
+    //   [k_offset, k_offset + K) on the weight's K axis (= storage row axis when not
+    //   transpose_b, storage col axis when transpose_b). The matmul-K count must match
+    //   the in0 side (either K_in0 == K_in1 == K_matmul, or both come from a common
+    //   parent slice). When in1_k_offset > 0, the weight's K_in extent dictates the
+    //   matmul-K count (the caller must size things so the in0 K matches the slice).
+    //
     // Defaults preserve "use the whole input" behavior. All offsets are RUNTIME args
     // (excluded from program hash) so different offset values hit the same cached program.
     uint32_t in0_row_offset_tiles = 0;
     uint32_t effective_M_tiles = 0;
     uint32_t in0_k_offset_tiles = 0;
+    uint32_t in1_k_offset_tiles = 0;
 };
 
 struct VariableMatmulInputs {

@@ -22,14 +22,6 @@ namespace ttml::ops {
 
 namespace {
 
-// Slice rows [row_lo, row_hi) of a [1, 1, T_cap, inner_dim] tensor.
-ttnn::Tensor slice_rows(const ttnn::Tensor& tensor, uint32_t row_lo, uint32_t row_hi, uint32_t inner_dim) {
-    static const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
-    const ttsl::SmallVector<uint32_t> start = {0U, 0U, row_lo, 0U};
-    const ttsl::SmallVector<uint32_t> end = {1U, 1U, row_hi, inner_dim};
-    return ttnn::slice(tensor, start, end, step);
-}
-
 const ttml::metal::VariableMatmulConfig kVarMmConfig{
     .M_block_size = 4,
     .K_block_size = 8,
@@ -163,8 +155,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    offsets_host = std::move(offsets_host),
                                    gate_proj_parts = std::move(gate_proj_parts),
                                    up_proj_parts = std::move(up_proj_parts),
-                                   num_experts,
-                                   hidden_dim]() mutable {
+                                   num_experts]() mutable {
         auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
 
@@ -181,9 +172,10 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 continue;
             }
 
-            auto dY_e = slice_rows(dY, row_lo, row_hi, hidden_dim);
-            // X_e elided: dW_gate/dW_up use K-axis offset on grouped_value directly.
+            // X_e and dY_e slices elided: dW_gate/dW_up use K-axis offset on grouped_value;
+            // d_activated_e uses M-offset on dY; dW_down_e uses K-axis offset on dY (in1 side).
             const uint32_t row_lo_tiles = row_lo / 32U;
+            const uint32_t M_e_tiles = (row_hi - row_lo) / 32U;
             const auto& w_gate_e = w_gate[e]->get_value();
             const auto& w_up_e = w_up[e]->get_value();
             const auto& w_down_e = w_down[e]->get_value();
@@ -208,11 +200,25 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*input_a_activations=*/silu_lhs);
 
             // Down branch:  d_activated_e = dY_e @ w_down_e^T,  dW_down_e = activated_e^T @ dY_e
-            auto d_activated_e = ttml::metal::variable_matmul(dY_e, w_down_e, kVarMmConfigTransposeB);
-            auto dW_down_e = ttml::metal::variable_matmul(activated_e, dY_e, kVarMmConfigTransposeA);
+            // Read dY's [row_lo, row_hi) rows directly: M-offset for in0 path, K-offset for in1 path.
+            auto d_activated_e = ttml::metal::variable_matmul(
+                dY,
+                w_down_e,
+                kVarMmConfigTransposeB,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/row_lo_tiles,
+                /*effective_M_tiles=*/M_e_tiles);
+            auto dW_down_e = ttml::metal::variable_matmul(
+                activated_e,
+                dY,
+                kVarMmConfigTransposeA,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/0U,
+                /*in1_k_offset_tiles=*/row_lo_tiles);
             w_down[e]->add_grad(dW_down_e);
             activated_e.deallocate();
-            dY_e.deallocate();
 
             auto [d_gate_proj_e, d_up_proj_e] =
                 ttml::metal::swiglu_elemwise_bw(gate_proj_e, up_proj_e, d_activated_e, gate_proj_e);

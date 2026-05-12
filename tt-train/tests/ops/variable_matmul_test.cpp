@@ -504,6 +504,120 @@ TEST_F(VariableMatmulTest, KOffsetRead_TransposeA_WithMOffset) {
     EXPECT_LT(err, 2.0F) << "k+m offset transpose_a max_abs_error: " << err;
 }
 
+// in1 K-axis offset: weight is the parent buffer; we slice its K rows.
+TEST_F(VariableMatmulTest, In1KOffsetRead_NoTranspose) {
+    const uint32_t M = 128, K_w_parent = 512, K_matmul = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K_matmul, device);
+    auto weight_parent = create_random_device_tensor(K_w_parent, N, device);
+
+    constexpr uint32_t k_lo = 128;
+    constexpr uint32_t k_hi = 256;
+    constexpr uint32_t k_offset_tiles = k_lo / 32;
+
+    auto result = ttml::metal::variable_matmul(
+        input,
+        weight_parent,
+        kConfig,
+        std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/k_offset_tiles);
+
+    auto sliced = ttnn::slice(
+        weight_parent,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_hi, N},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = ttnn::matmul(input, sliced, false, false);
+
+    float err = max_abs_error(result, ref);
+    EXPECT_LT(err, 2.0F) << "in1 k-offset no-transpose max_abs_error: " << err;
+}
+
+TEST_F(VariableMatmulTest, In1KOffsetRead_MultipleOffsets_SameParent) {
+    const uint32_t M = 128, K_w_parent = 512, K_matmul = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K_matmul, device);
+    auto weight_parent = create_random_device_tensor(K_w_parent, N, device);
+
+    const std::vector<uint32_t> k_los = {0, 128, 256, 384};
+    for (uint32_t k_lo : k_los) {
+        const uint32_t k_hi = k_lo + K_matmul;
+        const uint32_t k_offset_tiles = k_lo / 32;
+
+        auto result =
+            ttml::metal::variable_matmul(input, weight_parent, kConfig, std::nullopt, 0, 0, 0, k_offset_tiles);
+        auto sliced = ttnn::slice(
+            weight_parent,
+            ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+            ttsl::SmallVector<uint32_t>{1, 1, k_hi, N},
+            ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+        auto ref = ttnn::matmul(input, sliced, false, false);
+        float err = max_abs_error(result, ref);
+        EXPECT_LT(err, 2.0F) << "in1 k-offset K=[" << k_lo << "," << k_hi << ") err: " << err;
+    }
+}
+
+// in1 K-offset with transpose_b: weight stored as [N, K_parent]; slice on K axis.
+TEST_F(VariableMatmulTest, In1KOffsetRead_TransposeB) {
+    const uint32_t M = 128, K_w_parent = 512, K_matmul = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K_matmul, device);
+    auto weight_nk = create_random_device_tensor(N, K_w_parent, device);  // stored [N, K_parent]
+
+    constexpr uint32_t k_lo = 128;
+    constexpr uint32_t k_hi = 256;
+    constexpr uint32_t k_offset_tiles = k_lo / 32;
+
+    auto cfg = kConfig;
+    cfg.transpose_b = true;
+    auto result = ttml::metal::variable_matmul(input, weight_nk, cfg, std::nullopt, 0, 0, 0, k_offset_tiles);
+
+    auto sliced = ttnn::slice(
+        weight_nk,
+        ttsl::SmallVector<uint32_t>{0, 0, 0, k_lo},
+        ttsl::SmallVector<uint32_t>{1, 1, N, k_hi},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = ttnn::matmul(input, sliced, /*transpose_a=*/false, /*transpose_b=*/true);
+
+    float err = max_abs_error(result, ref);
+    EXPECT_LT(err, 2.0F) << "in1 k-offset transpose_b max_abs_error: " << err;
+}
+
+// in1 K-offset paired with transpose_a on in0 (moe_ffn dW_down pattern).
+// activated_e^T @ dY_e where dY is the parent (K-axis sliced).
+TEST_F(VariableMatmulTest, In1KOffsetRead_TransposeA_DWDownPattern) {
+    const uint32_t I = 256, M_e = 128, T_parent = 512, H = 128;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // activated_e stored [M_e, I] used with transpose_a → matmul-K = M_e, matmul-M = I.
+    auto activated = create_random_device_tensor(M_e, I, device);
+    auto dY_parent = create_random_device_tensor(T_parent, H, device);  // parent: [T, H]
+
+    constexpr uint32_t row_lo = 128;
+    constexpr uint32_t row_hi = row_lo + 128;  // = M_e
+    constexpr uint32_t k_offset_tiles = row_lo / 32;
+
+    auto cfg = kConfig;
+    cfg.transpose_a = true;
+    auto result = ttml::metal::variable_matmul(activated, dY_parent, cfg, std::nullopt, 0, 0, 0, k_offset_tiles);
+
+    auto dY_sliced = ttnn::slice(
+        dY_parent,
+        ttsl::SmallVector<uint32_t>{0, 0, row_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, row_hi, H},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = ttnn::matmul(activated, dY_sliced, /*transpose_a=*/true, /*transpose_b=*/false);
+
+    float err = max_abs_error(result, ref);
+    EXPECT_LT(err, 4.0F) << "in1 k-offset dW_down pattern max_abs_error: " << err;
+}
+
 // Both transposes simultaneously.
 TEST_F(VariableMatmulTest, TransposeBoth_Correctness_128x128x512) {
     const uint32_t M = 128, K = 128, N = 512;
