@@ -819,6 +819,14 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
+    auto resolved_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        auto* device = input_tensor_a.device();
+        resolved_sub_core_grids =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
     return ttnn::gelu(
         ttnn::add(
             input_tensor_a,
@@ -829,11 +837,11 @@ Tensor bias_gelu(
             {},
             {},
             {},
-            sub_core_grids,
-            sub_device_id),
+            resolved_sub_core_grids),
         true,
         memory_config,
-        optional_output_tensor);
+        optional_output_tensor,
+        resolved_sub_core_grids);
 }
 
 }  // namespace ttnn
