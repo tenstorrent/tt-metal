@@ -303,7 +303,10 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
         apply_quant_config(state.model, config)
 
     # Patch _prepare_transformer to re-apply weight typecast after each reload.
-    original_prepare = pipeline._prepare_transformer
+    # Stash the original so repeated calls don't stack wrappers.
+    if not hasattr(pipeline, "_orig_prepare_transformer"):
+        pipeline._orig_prepare_transformer = pipeline._prepare_transformer
+    original_prepare = pipeline._orig_prepare_transformer
 
     def _prepare_with_quant(idx: int):
         was_loaded = pipeline.transformer_states[idx].model.is_loaded()
