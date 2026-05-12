@@ -18,8 +18,10 @@ namespace ttml::ops {
 //
 // `offsets` carries no gradient and stays a raw ttnn::Tensor.
 // Per-expert weights are passed as parallel lists of TensorPtr — one entry
-// per local expert. Each weight tensor is consumed directly by `ttnn::matmul`
-// (no slicing or stacking inside this op).
+// per local expert. Each weight is consumed directly by `metal::variable_matmul`;
+// the per-expert input slice is read via row/K offset rather than materialized,
+// and per-expert output rows are written into the pre-allocated output via
+// write-at-offset (no slice/concat inside this op).
 //
 // Shapes:
 //   grouped       : [1, 1, T_cap, hidden_dim]            bf16 TILE DRAM

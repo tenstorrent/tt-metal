@@ -206,8 +206,11 @@ VariableMatmulDeviceOperation::tensor_return_value_t VariableMatmulDeviceOperati
 
 ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Two-program caching: transpose_core_grid is determined by actual_M vs N.
-    // This gives at most 2 cached programs: one for actual_M <= N, one for actual_M > N.
+    // Program hash. M and matmul-K are runtime args (no recompilation for different
+    // M or K within a transpose/offset variant). The hash keys on N, the transpose
+    // flags, use_offset / use_offset_in1 / has-output-tensor CTAs, and grid+block
+    // sizing. transpose_core_grid (parent_M vs N) is included so the M-vs-N grid
+    // orientation is stable across offset-read calls on the same parent.
     const auto& w = tensor_args.weight_tensor;
     const auto& a = tensor_args.input_tensor;
     const bool transpose_a = operation_attributes.config.transpose_a;
