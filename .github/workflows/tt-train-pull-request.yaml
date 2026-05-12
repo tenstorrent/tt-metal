@@ -3,7 +3,7 @@ name: "[tt-train] Pull Request Validation"
 on:
   pull_request:
     paths:
-      - "tt-train/**"
+      - 'tt-train/**'
 
 jobs:
   validate-pr:

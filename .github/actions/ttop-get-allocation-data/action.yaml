@@ -1,24 +1,24 @@
 # Get allocation rank data by reading Node labels assigned by Allocation Controller
 # Return JSON with hostname - rank mapping
 
-name: "Get Allocation rank data"
-description: "Get allocation rank data from Allocation resource status"
+name: 'Get Allocation rank data'
+description: 'Get allocation rank data from Allocation resource status'
 
 inputs:
   allocationName:
-    description: "Allocation name"
+    description: 'Allocation name'
     required: true
   namespace:
-    description: "Namespace where the allocation exists"
+    description: 'Namespace where the allocation exists'
     required: false
-    default: "ttop-ci"
+    default: 'ttop-ci'
 outputs:
   ranksData:
-    description: "JSON dictionary with node names as keys and allocation ranks as values"
+    description: 'JSON dictionary with node names as keys and allocation ranks as values'
     value: ${{ steps.get-ranks.outputs.ranksData }}
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
     - name: Get ranks
       shell: bash

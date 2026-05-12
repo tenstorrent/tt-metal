@@ -1,17 +1,17 @@
-name: "Delete Environment"
-description: "A composable action to delete an environment"
+name: 'Delete Environment'
+description: 'A composable action to delete an environment'
 
 inputs:
   environmentName:
-    description: "Environment name"
+    description: 'Environment name'
     required: true
   namespace:
-    description: "Kubernetes namespace for the environment"
+    description: 'Kubernetes namespace for the environment'
     required: false
-    default: "ttop-ci"
+    default: 'ttop-ci'
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
     - name: Delete Environment
       shell: bash

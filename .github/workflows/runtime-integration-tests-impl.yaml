@@ -12,7 +12,7 @@ on:
       wheel-artifact-name:
         required: false
         type: string
-        default: ""
+        default: ''
       enabled-skus:
         required: true
         type: string
