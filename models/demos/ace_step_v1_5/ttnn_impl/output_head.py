@@ -43,6 +43,7 @@ class TtAceStepDiTOutputHead:
         device: ttnn.Device,
         activation_dtype: ttnn.DataType | None = None,
         weights_dtype: ttnn.DataType | None = None,
+        compute_kernel_config=None,
     ) -> None:
         self.device = device
         self.config = config
@@ -55,6 +56,7 @@ class TtAceStepDiTOutputHead:
         if activation_dtype is None or weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
         self.activation_dtype = activation_dtype
+        self.ckc = compute_kernel_config
 
         norm_w_key = _maybe_get_state_dict_key(
             state_dict,
@@ -114,6 +116,7 @@ class TtAceStepDiTOutputHead:
             device=device,
             activation_dtype=activation_dtype,
             weights_dtype=weights_dtype,
+            compute_kernel_config=compute_kernel_config,
         )
 
     def forward(
@@ -147,6 +150,7 @@ class TtAceStepDiTOutputHead:
             weight=self.norm_weight,
             epsilon=self.eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.ckc,
         )
 
         temb_u = ttnn.reshape(temb, (b, 1, self.hidden_size))

@@ -82,6 +82,35 @@ def _require_ttnn():
     return ttnn
 
 
+def _build_dit_compute_kernel_config(mesh_device):
+    """
+    Arch-aware compute kernel config for every BF16 matmul/linear/rms_norm/softmax/SDPA call
+    in the DiT decoder.
+
+    Rationale: the default TTNN compute kernel config (HiFi2 / approx softmax / BF16 dest) is
+    tuned for throughput, not for diffusion denoising loops that compound error across 24 layers
+    × N timesteps. We raise the math fidelity and enable FP32 destination accumulation to keep
+    BF16 round-off from drifting the velocity field.
+
+    Arch-specific note: on Wormhole, ``HiFi4 + fp32_dest_acc_en`` triggers a known hardware bug
+    (see ``compute_kernel_config.cpp::verify_numerical_configuration``); we use HiFi3 there.
+    """
+    ttnn = _require_ttnn()
+    if not hasattr(ttnn, "init_device_compute_kernel_config") or not hasattr(ttnn, "MathFidelity"):
+        return None
+    arch = mesh_device.arch() if hasattr(mesh_device, "arch") else None
+    arch_enum = getattr(getattr(ttnn, "device", None), "Arch", None) or getattr(ttnn, "Arch", None)
+    is_wh = bool(arch_enum is not None and arch is not None and arch == getattr(arch_enum, "WORMHOLE_B0", object()))
+    fidelity = ttnn.MathFidelity.HiFi3 if is_wh else ttnn.MathFidelity.HiFi4
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def _to_numpy_host_array(x):
     """
     Normalize a host tensor/array to a numpy array.
@@ -146,12 +175,14 @@ class TtTimestepEmbedding:
         timesteps_host: np.ndarray,  # shape [N]
         scale: float = 1000.0,
         dtype=None,
+        compute_kernel_config=None,
     ) -> None:
         ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.hidden_size = int(cfg.hidden_size)
         self.scale = float(scale)
+        self.ckc = compute_kernel_config
 
         self.in_channels = 256
         self.time_embed_dim = int(cfg.hidden_size)
@@ -215,13 +246,13 @@ class TtTimestepEmbedding:
 
         # Slice out [1,1,1,in_channels]
         t_freq = ttnn.slice(self.t_freq_table, (timestep_index, 0, 0, 0), (timestep_index + 1, 1, 1, self.in_channels))
-        temb = ttnn.linear(t_freq, self.w1, bias=self.b1, transpose_b=True)
+        temb = ttnn.linear(t_freq, self.w1, bias=self.b1, transpose_b=True, compute_kernel_config=self.ckc)
         temb = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
-        temb = ttnn.linear(temb, self.w2, bias=self.b2, transpose_b=True)
+        temb = ttnn.linear(temb, self.w2, bias=self.b2, transpose_b=True, compute_kernel_config=self.ckc)
 
         # time_proj(act2(temb)) -> [1,1,1,6*D] -> reshape to [1,6,1,D] then [1,6,D]
         h = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
-        tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True)
+        tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True, compute_kernel_config=self.ckc)
         d = self.time_embed_dim
         tp = ttnn.reshape(tp, (1, 6, 1, d))
         tp = ttnn.reshape(tp, (1, 6, d))
@@ -252,11 +283,11 @@ class TtTimestepEmbedding:
         # Upload and run the same MLP projection as the lookup-table path.
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         t_freq = ttnn.from_torch(emb, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
-        temb = ttnn.linear(t_freq, self.w1, bias=self.b1, transpose_b=True)
+        temb = ttnn.linear(t_freq, self.w1, bias=self.b1, transpose_b=True, compute_kernel_config=self.ckc)
         temb = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
-        temb = ttnn.linear(temb, self.w2, bias=self.b2, transpose_b=True)
+        temb = ttnn.linear(temb, self.w2, bias=self.b2, transpose_b=True, compute_kernel_config=self.ckc)
         h = ttnn.silu(temb) if hasattr(ttnn, "silu") else ttnn.gelu(temb)
-        tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True)
+        tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True, compute_kernel_config=self.ckc)
         d = self.time_embed_dim
         tp = ttnn.reshape(tp, (1, 6, 1, d))
         tp = ttnn.reshape(tp, (1, 6, d))
@@ -402,6 +433,7 @@ def _ace_step_cross_attention_decomposed(
     scale: float,
     additive_mask_b1qk,
     activations_dtype,
+    compute_kernel_config=None,
 ):
     """
     Cross-attention without fused SDPA: matches torch_ref `dit_decoder_core._sdpa`
@@ -432,7 +464,12 @@ def _ace_step_cross_attention_decomposed(
         vf = ttnn.typecast(vf, dtype=fp32)
 
     kt = ttnn.permute(kf, (0, 2, 1))
-    scores = ttnn.matmul(qf, kt, **mem_kw)
+    matmul_kw = dict(mem_kw)
+    softmax_kw = dict(mem_kw)
+    if compute_kernel_config is not None:
+        matmul_kw["compute_kernel_config"] = compute_kernel_config
+        softmax_kw["compute_kernel_config"] = compute_kernel_config
+    scores = ttnn.matmul(qf, kt, **matmul_kw)
     scores = ttnn.multiply(scores, float(scale))
     if additive_mask_b1qk is not None:
         m = ttnn.repeat(additive_mask_b1qk, (1, int(h), 1, 1))
@@ -440,8 +477,8 @@ def _ace_step_cross_attention_decomposed(
         if use_fp32:
             m = ttnn.typecast(m, dtype=fp32)
         scores = ttnn.add(scores, m, **mem_kw)
-    attn = ttnn.softmax(scores, dim=-1, **mem_kw)
-    ctx = ttnn.matmul(attn, vf, **mem_kw)
+    attn = ttnn.softmax(scores, dim=-1, **softmax_kw)
+    ctx = ttnn.matmul(attn, vf, **matmul_kw)
     if use_fp32 and activations_dtype is not None:
         ctx = ttnn.typecast(ctx, dtype=activations_dtype)
     return ttnn.reshape(ctx, (b, h, s_q, dh))
@@ -468,6 +505,7 @@ class TtAceStepAttentionSDPA:
         mesh_device,
         dtype=None,
         rotary_embedding: Optional[TtHfRotaryEmbedding] = None,
+        compute_kernel_config=None,
     ):
         ttnn = _require_ttnn()
         transformer = getattr(ttnn, "transformer", None)
@@ -488,6 +526,7 @@ class TtAceStepAttentionSDPA:
         self.d_head = int(cfg.head_dim)
         self.scale = 1.0 / math.sqrt(float(self.d_head))
         self._rotary = rotary_embedding
+        self.ckc = compute_kernel_config
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
@@ -586,12 +625,12 @@ class TtAceStepAttentionSDPA:
         ttnn = self.ttnn
         _trace = _ace_step_attn_trace_print(debug_prefix)
         x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # [B,1,S,D]
-        q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
+        q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True, compute_kernel_config=self.ckc)
         if encoder_hidden_states is None:
-            kv = ttnn.linear(x, self.wkv, bias=self.bkv, transpose_b=True)
+            kv = ttnn.linear(x, self.wkv, bias=self.bkv, transpose_b=True, compute_kernel_config=self.ckc)
         else:
             enc = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
-            kv = ttnn.linear(enc, self.wkv, bias=self.bkv, transpose_b=True)
+            kv = ttnn.linear(enc, self.wkv, bias=self.bkv, transpose_b=True, compute_kernel_config=self.ckc)
 
         B = int(q.shape[0])
         S = int(q.shape[2])
@@ -753,10 +792,18 @@ class TtAceStepAttentionSDPA:
 
         # Head-dim RMSNorm on q and k.
         q = ttnn.rms_norm(
-            q, weight=self.q_norm_w, epsilon=self.eps, memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            q,
+            weight=self.q_norm_w,
+            epsilon=self.eps,
+            memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+            compute_kernel_config=self.ckc,
         )
         k = ttnn.rms_norm(
-            k, weight=self.k_norm_w, epsilon=self.eps, memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            k,
+            weight=self.k_norm_w,
+            epsilon=self.eps,
+            memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+            compute_kernel_config=self.ckc,
         )
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}q_norm"] = q
@@ -874,11 +921,14 @@ class TtAceStepAttentionSDPA:
                 scale=self.scale,
                 additive_mask_b1qk=sdpa_attn_mask,
                 activations_dtype=self.dtype,
+                compute_kernel_config=self.ckc,
             )
         else:
             sdpa_kwargs = dict(attn_mask=sdpa_attn_mask, is_causal=is_causal, scale=self.scale)
             if sliding_window_size is not None:
                 sdpa_kwargs["sliding_window_size"] = int(sliding_window_size)
+            if self.ckc is not None:
+                sdpa_kwargs["compute_kernel_config"] = self.ckc
             ctx = self._sdpa(q, k, v, **sdpa_kwargs)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}ctx_after_sdpa_BHSD", ctx, ttnn=ttnn)
@@ -895,7 +945,7 @@ class TtAceStepAttentionSDPA:
         ctx = ttnn.reshape(ctx, (B, 1, S_ctx, H * Dh))
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
-        out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
+        out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True, compute_kernel_config=self.ckc)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}attn_out_B1SD", out, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
@@ -909,7 +959,15 @@ class TtQwen3MLP:
     """
 
     def __init__(
-        self, *, state_dict: dict, base_address: str, mesh_device, hidden_size: int, intermediate_size: int, dtype=None
+        self,
+        *,
+        state_dict: dict,
+        base_address: str,
+        mesh_device,
+        hidden_size: int,
+        intermediate_size: int,
+        dtype=None,
+        compute_kernel_config=None,
     ):
         ttnn = _require_ttnn()
         self.ttnn = ttnn
@@ -917,6 +975,7 @@ class TtQwen3MLP:
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
+        self.ckc = compute_kernel_config
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
@@ -941,8 +1000,8 @@ class TtQwen3MLP:
     def __call__(self, x, *, debug: Optional[dict] = None, debug_prefix: str = ""):
         ttnn = self.ttnn
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True)
-        up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True)
+        gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, compute_kernel_config=self.ckc)
+        up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, compute_kernel_config=self.ckc)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}gate_lin"] = gate
             debug[f"{debug_prefix}up_lin"] = up
@@ -950,7 +1009,7 @@ class TtQwen3MLP:
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}gate_act"] = gate
         h = ttnn.multiply(gate, up)
-        out = ttnn.linear(h, self.w_down, bias=None, transpose_b=True)
+        out = ttnn.linear(h, self.w_down, bias=None, transpose_b=True, compute_kernel_config=self.ckc)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}mlp_raw_out"] = out
         return out
@@ -970,6 +1029,7 @@ class TtAceStepDiTLayer:
         mesh_device,
         dtype=None,
         rotary_embedding: Optional[TtHfRotaryEmbedding] = None,
+        compute_kernel_config=None,
     ) -> None:
         ttnn = _require_ttnn()
         self.ttnn = ttnn
@@ -978,6 +1038,7 @@ class TtAceStepDiTLayer:
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
+        self.ckc = compute_kernel_config
 
         d = int(cfg.hidden_size)
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
@@ -1025,6 +1086,7 @@ class TtAceStepDiTLayer:
             mesh_device=mesh_device,
             dtype=self.dtype,
             rotary_embedding=rotary_embedding,
+            compute_kernel_config=self.ckc,
         )
         self.cross_attn = TtAceStepAttentionSDPA(
             cfg=cfg,
@@ -1033,6 +1095,7 @@ class TtAceStepDiTLayer:
             mesh_device=mesh_device,
             dtype=self.dtype,
             rotary_embedding=None,
+            compute_kernel_config=self.ckc,
         )
 
         # MLP sizes (from config.json; store in state dict as well, but we pass explicit)
@@ -1046,6 +1109,7 @@ class TtAceStepDiTLayer:
             hidden_size=d,
             intermediate_size=intermediate,
             dtype=self.dtype,
+            compute_kernel_config=self.ckc,
         )
 
         # Scale-shift table: [1,6,D]
@@ -1109,6 +1173,7 @@ class TtAceStepDiTLayer:
             weight=self.self_norm_w,
             epsilon=self.eps,
             memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+            compute_kernel_config=self.ckc,
         )
         ones = ttnn.ones_like(scale_msa)
         one_plus = ttnn.add(scale_msa, ones)
@@ -1138,6 +1203,7 @@ class TtAceStepDiTLayer:
             weight=self.cross_norm_w,
             epsilon=self.eps,
             memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+            compute_kernel_config=self.ckc,
         )
         cross_dbg_pfx = f"{core_pfx}cross." if (debug is not None and debug.get("enabled", False)) else ""
         ca = self.cross_attn(
@@ -1160,6 +1226,7 @@ class TtAceStepDiTLayer:
             weight=self.mlp_norm_w,
             epsilon=self.eps,
             memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+            compute_kernel_config=self.ckc,
         )
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_norm_out"] = x3
@@ -1197,6 +1264,7 @@ class TtAceStepDiTCore:
         state_dict: dict,
         mesh_device,
         dtype=None,
+        compute_kernel_config=None,
     ) -> None:
         ttnn = _require_ttnn()
         self.ttnn = ttnn
@@ -1204,6 +1272,11 @@ class TtAceStepDiTCore:
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
+        self.ckc = (
+            compute_kernel_config
+            if compute_kernel_config is not None
+            else _build_dit_compute_kernel_config(mesh_device)
+        )
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
@@ -1245,6 +1318,7 @@ class TtAceStepDiTCore:
                 mesh_device=mesh_device,
                 dtype=self.dtype,
                 rotary_embedding=self._rotary,
+                compute_kernel_config=self.ckc,
             )
             for i in range(int(cfg.num_hidden_layers))
         ]
@@ -1263,7 +1337,7 @@ class TtAceStepDiTCore:
         enc = ttnn.to_layout(encoder_hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         enc = ttnn.unsqueeze(enc, 1)
         enc = ttnn.to_layout(enc, ttnn.TILE_LAYOUT)
-        enc = ttnn.linear(enc, self.cond_w, bias=self.cond_b, transpose_b=True)
+        enc = ttnn.linear(enc, self.cond_w, bias=self.cond_b, transpose_b=True, compute_kernel_config=self.ckc)
         if debug is not None and debug.get("enabled", False):
             debug["core.enc_conditioned"] = enc
 

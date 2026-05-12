@@ -120,30 +120,45 @@ def _prepare_condition_fast(
         src_latents = src_latents.repeat(1, rep, 1)[:, :frames, :].contiguous()
 
     chunk_masks = torch.ones((1, frames, 64), dtype=torch.float32)
-    ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
+    # Force a uniform BF16 load so every Linear weight inside `prepare_condition` has the same
+    # dtype; otherwise `text_projector` (or other Linears) fails with `m1 and m2 dtype mismatch`.
+    ace = (
+        AutoModel.from_pretrained(str(model_dir), trust_remote_code=True, torch_dtype=torch.bfloat16)
+        .eval()
+        .to(torch_dev)
+    )
+    ace_dtype = torch.bfloat16
     B = 1
     lyric_dim = int(text_hidden_states.shape[-1])
-    lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=torch_dev)
+    lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=ace_dtype, device=torch_dev)
     lyric_attention_mask = torch.ones((B, 1), dtype=torch.bool, device=torch_dev)
-    refer_audio_acoustic_hidden_states_packed = torch.zeros((B, 1, 64), dtype=torch.float32, device=torch_dev)
+    refer_audio_acoustic_hidden_states_packed = torch.zeros((B, 1, 64), dtype=ace_dtype, device=torch_dev)
     refer_audio_order_mask = torch.zeros((B,), dtype=torch.long, device=torch_dev)
-    latent_attention_mask = torch.ones((B, frames), dtype=torch.float32, device=torch_dev)
+    latent_attention_mask = torch.ones((B, frames), dtype=ace_dtype, device=torch_dev)
+
+    # `prepare_condition` runs `tokenize → detokenize` to build LM hints for covers. With
+    # `is_covers=False` the result is discarded by `torch.where`, but the tokenize step still
+    # executes a `ResidualFSQ` whose codebook is registered as an FP32 buffer (not a parameter),
+    # which `torch_dtype=bfloat16` does not convert. Feeding zeros here short-circuits the
+    # `if precomputed_lm_hints_25Hz is not None` branch and avoids the dtype mismatch.
+    lm_hint_dim = int(src_latents.shape[-1])
+    precomputed_lm_hints = torch.zeros((B, frames, lm_hint_dim), dtype=ace_dtype, device=torch_dev)
 
     with torch.inference_mode():
         enc_hs, enc_mask, ctx_lat = ace.prepare_condition(
-            text_hidden_states=text_hidden_states.to(dtype=torch.float32),
+            text_hidden_states=text_hidden_states.to(dtype=ace_dtype),
             text_attention_mask=attn_mask,
             lyric_hidden_states=lyric_hidden_states,
             lyric_attention_mask=lyric_attention_mask,
             refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
             refer_audio_order_mask=refer_audio_order_mask,
-            hidden_states=src_latents.to(device=torch_dev, dtype=torch.float32),
+            hidden_states=src_latents.to(device=torch_dev, dtype=ace_dtype),
             attention_mask=latent_attention_mask,
-            silence_latent=silence.to(device=torch_dev, dtype=torch.float32),
-            src_latents=src_latents.to(device=torch_dev, dtype=torch.float32),
-            chunk_masks=chunk_masks.to(device=torch_dev, dtype=torch.float32),
+            silence_latent=silence.to(device=torch_dev, dtype=ace_dtype),
+            src_latents=src_latents.to(device=torch_dev, dtype=ace_dtype),
+            chunk_masks=chunk_masks.to(device=torch_dev, dtype=ace_dtype),
             is_covers=torch.zeros((B,), dtype=torch.bool, device=torch_dev),
-            precomputed_lm_hints_25Hz=None,
+            precomputed_lm_hints_25Hz=precomputed_lm_hints,
         )
 
     enc_hs = enc_hs.float().cpu()

@@ -299,6 +299,70 @@ def main() -> None:
         action="store_true",
         help="Do not set throw_exception_on_fallback (may hide TTNN fallbacks).",
     )
+    # ---- Sampler corrections (port of official ACE-Step `generate_audio` features) ----
+    ap.add_argument(
+        "--velocity-norm-threshold",
+        type=float,
+        default=0.0,
+        help="Velocity norm clamp threshold (official default 0.0 = off; try 0.5 if outputs over-saturate).",
+    )
+    ap.add_argument(
+        "--velocity-ema-factor",
+        type=float,
+        default=0.0,
+        help="Velocity EMA smoothing factor in [0,1) (official default 0.0 = off; try 0.1 for stability).",
+    )
+    ap.add_argument(
+        "--use-dcw",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="DCW wavelet-domain correction (official default on for base, off for turbo). Requires pytorch_wavelets.",
+    )
+    ap.add_argument(
+        "--dcw-mode",
+        type=str,
+        default="double",
+        choices=["low", "high", "double", "pix"],
+        help="DCW correction mode (official default 'double').",
+    )
+    ap.add_argument("--dcw-scaler", type=float, default=0.05, help="DCW low-band scaler (official default 0.05).")
+    ap.add_argument(
+        "--dcw-high-scaler",
+        type=float,
+        default=0.02,
+        help="DCW high-band scaler (official default 0.02, only used by mode=double).",
+    )
+    ap.add_argument(
+        "--dcw-wavelet",
+        type=str,
+        default="haar",
+        help="PyWavelets basis for DCW (e.g. 'haar', 'db4', 'sym8'). Default 'haar'.",
+    )
+    ap.add_argument(
+        "--sampler-backend",
+        type=str,
+        default="torch",
+        choices=["torch", "ttnn"],
+        help="Where to run the post-DiT sampler corrections. 'ttnn' uses on-device ops where possible (DCW always falls back to host).",
+    )
+    ap.add_argument(
+        "--activation-dtype",
+        type=str,
+        default="bfloat16",
+        choices=["bfloat16", "float32"],
+        help=(
+            "TTNN activation dtype for the DiT decoder. 'bfloat16' is the default and matches the model's "
+            "training precision. 'float32' eliminates the per-op bf16 quantization noise floor that the "
+            "host sampler corrections cannot fully suppress (~2x memory, ~slower; try if audio still hisses)."
+        ),
+    )
+    ap.add_argument(
+        "--weights-dtype",
+        type=str,
+        default="bfloat16",
+        choices=["bfloat16", "float32", "bfloat8_b"],
+        help="TTNN weight storage dtype. Defaults match activation_dtype's natural pairing; bfloat8_b saves DRAM at a precision cost.",
+    )
     args = ap.parse_args()
 
     fast_preprocess = bool(args.fast_preprocess)
@@ -350,6 +414,10 @@ def main() -> None:
     use_adg = args.use_adg
     if use_adg is None:
         use_adg = "base" in str(args.variant).lower() and "turbo" not in str(args.variant).lower()
+
+    use_dcw = args.use_dcw
+    if use_dcw is None:
+        use_dcw = "turbo" not in str(args.variant).lower()
 
     torch.manual_seed(int(args.seed))
     np.random.seed(int(args.seed))
@@ -632,9 +700,16 @@ def main() -> None:
     mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
     if mem is None:
         raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
-    act_dtype = getattr(ttnn, "bfloat16", None)
-    if act_dtype is None:
-        raise RuntimeError("TTNN build missing bfloat16 dtype.")
+    # Resolve user-selected dtypes; default bf16/bf16 matches training and is fastest.
+    # float32 activations close the precision gap vs. the official fp32 CPU path at the cost of
+    # ~2x memory bandwidth and slower kernels — only worth it when bf16 noise is the bottleneck.
+    act_dtype = getattr(ttnn, str(args.activation_dtype), None)
+    weights_dtype = getattr(ttnn, str(args.weights_dtype), None)
+    if act_dtype is None or weights_dtype is None:
+        raise RuntimeError(
+            f"TTNN build missing requested dtype(s): activation={args.activation_dtype}, weights={args.weights_dtype}."
+        )
+    print(f"[ttnn-dtype] activations={args.activation_dtype} weights={args.weights_dtype}", flush=True)
 
     def _as_host_numpy_f32(t: torch.Tensor) -> np.ndarray:
         """TTNN staging: never call ``.numpy()`` on tensors that may still require grad."""
@@ -646,15 +721,105 @@ def main() -> None:
             checkpoint_safetensors_path=str(safetensors_path),
             timesteps_host=timesteps_host,
             expected_input_length=int(frames),
+            activation_dtype=act_dtype,
+            weights_dtype=weights_dtype,
         )
 
         _ensure_acestep_on_path()
         from acestep.models.common.apg_guidance import MomentumBuffer, adg_forward, apg_forward
 
+        from models.demos.ace_step_v1_5.sampler_corrections import (
+            apply_velocity_ema,
+            apply_velocity_norm_clamp,
+            make_dcw_corrector,
+        )
+        from models.demos.ace_step_v1_5.ttnn_impl.sampler_corrections import (
+            lift_to_device,
+            ttnn_apply_dcw_correction,
+            ttnn_apply_velocity_ema,
+            ttnn_apply_velocity_norm_clamp,
+        )
+
         momentum_buffer = MomentumBuffer() if do_cfg and not use_adg else None
         num_steps = len(t_schedule)
         cfg_lo = float(args.cfg_interval_start)
         cfg_hi = float(args.cfg_interval_end)
+
+        # ---- Sampler-side corrections (mirrors official `generate_audio`) ----
+        # `dcw_corrector` is a callable (xt, denoised, t_curr) -> xt' (or None).
+        # `prev_vt` is the EMA tape (post-clamp, post-EMA velocity from the previous step).
+        norm_threshold = float(args.velocity_norm_threshold)
+        ema_factor = float(args.velocity_ema_factor)
+        dcw_corrector = make_dcw_corrector(
+            enabled=bool(use_dcw),
+            mode=str(args.dcw_mode),
+            scaler=float(args.dcw_scaler),
+            high_scaler=float(args.dcw_high_scaler),
+            wavelet=str(args.dcw_wavelet),
+        )
+        sampler_backend = str(args.sampler_backend)
+        prev_vt = None  # torch [1, T, 64] from the previous step, or None on step 0.
+        print(
+            f"[sampler] backend={sampler_backend} norm_thr={norm_threshold:g} "
+            f"ema={ema_factor:g} dcw={'on' if dcw_corrector is not None else 'off'}"
+            + (
+                f" (mode={args.dcw_mode}, scaler={args.dcw_scaler:g}, high={args.dcw_high_scaler:g}, wavelet={args.dcw_wavelet})"
+                if dcw_corrector is not None
+                else ""
+            ),
+            flush=True,
+        )
+
+        def _apply_post_vt_corrections(xt_h, vt_h, t_curr, dt_step, prev_vt_h):
+            """Apply norm-clamp -> EMA -> Euler -> DCW. Returns (new_xt, vt_save).
+
+            All host (torch) tensors at the boundary; the TTNN backend lifts
+            to device for the elementwise math and falls back to host for DCW
+            (wavelet ops aren't in TTNN).
+            """
+            if sampler_backend == "ttnn":
+                vt_tt = lift_to_device(
+                    vt_h, device=dev, dtype=act_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=mem
+                )
+                xt_tt = lift_to_device(
+                    xt_h, device=dev, dtype=act_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=mem
+                )
+                vt_tt = ttnn_apply_velocity_norm_clamp(vt_tt, xt_tt, norm_threshold)
+                if prev_vt_h is not None and ema_factor > 0.0:
+                    prev_vt_tt = lift_to_device(
+                        prev_vt_h, device=dev, dtype=act_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=mem
+                    )
+                    vt_tt = ttnn_apply_velocity_ema(vt_tt, prev_vt_tt, ema_factor)
+                    ttnn.deallocate(prev_vt_tt)
+                vt_save_h = ttnn.to_torch(vt_tt).to(torch.float32)
+                new_xt_tt = ttnn.sub(xt_tt, ttnn.mul(vt_tt, float(dt_step)))
+                if dcw_corrector is not None:
+                    denoised_tt = ttnn.sub(xt_tt, ttnn.mul(vt_tt, float(t_curr)))
+                    new_xt_tt = ttnn_apply_dcw_correction(
+                        new_xt_tt,
+                        denoised_tt,
+                        t_curr,
+                        dcw_corrector,
+                        device=dev,
+                        dtype=act_dtype,
+                        memory_config=mem,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    ttnn.deallocate(denoised_tt)
+                new_xt_h = ttnn.to_torch(new_xt_tt).to(torch.float32)
+                ttnn.deallocate(vt_tt)
+                ttnn.deallocate(xt_tt)
+                ttnn.deallocate(new_xt_tt)
+                return new_xt_h, vt_save_h
+            vt_h = apply_velocity_norm_clamp(vt_h, xt_h, norm_threshold)
+            vt_h = apply_velocity_ema(vt_h, prev_vt_h, ema_factor)
+            xt_before = xt_h
+            vt_save_h = vt_h
+            new_xt_h = xt_h - vt_h * float(dt_step)
+            if dcw_corrector is not None:
+                denoised = xt_before - vt_save_h * float(t_curr)
+                new_xt_h = dcw_corrector(new_xt_h, denoised, float(t_curr))
+            return new_xt_h, vt_save_h
 
         def _apply_cfg(
             t_curr: float, xt_h: torch.Tensor, vt_cond: torch.Tensor, vt_uncond: torch.Tensor
@@ -760,7 +925,7 @@ def main() -> None:
             else:
                 vt = vt2
 
-            xt = xt - vt * float(dt)
+            xt, prev_vt = _apply_post_vt_corrections(xt, vt, t_curr_f, dt, prev_vt)
             print(f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}", flush=True)
 
         # Final step toward t=0
@@ -839,7 +1004,8 @@ def main() -> None:
         else:
             vt = vt2
 
-        xt = xt - vt * float(t_curr_f)
+        # Final step: dt = t_curr_f (drives to t=0).
+        xt, prev_vt = _apply_post_vt_corrections(xt, vt, t_curr_f, t_curr_f, prev_vt)
         pred_latents = xt
         print(f"[ttnn] final t={t_curr_f:.5f}", flush=True)
     finally:
@@ -847,14 +1013,35 @@ def main() -> None:
 
     from diffusers.models import AutoencoderOobleck
 
+    # Diagnostic stats on the final latent — helps tell apart "latent is good, decode/normalize bad"
+    # vs. "latent itself drifted into a noisy region of latent space".
+    _lat_stats = pred_latents.detach().to(torch.float32)
+    print(
+        f"[diag] final latent: shape={tuple(_lat_stats.shape)} "
+        f"min={float(_lat_stats.min().item()):+.4f} max={float(_lat_stats.max().item()):+.4f} "
+        f"mean={float(_lat_stats.mean().item()):+.4f} std={float(_lat_stats.std().item()):.4f} "
+        f"abs_mean={float(_lat_stats.abs().mean().item()):.4f}",
+        flush=True,
+    )
+
     vae = AutoencoderOobleck.from_pretrained(str(vae_dir)).eval().to(torch_dev)
     with torch.inference_mode():
         lat = pred_latents.transpose(1, 2).contiguous().to(device=torch_dev, dtype=next(vae.parameters()).dtype)
         wav = vae.decode(lat).sample.float().cpu()
-        # Full peak normalize so quiet VAE outputs (|x| << 1) are still audible in WAV players.
-        # The old rule only scaled when peak > 1.0, which often leaves TTNN latents' decode near-silent.
-        peak = wav.abs().amax(dim=[1, 2], keepdim=True).clamp(min=1e-8)
-        wav = (wav / peak).clamp(-1.0, 1.0)
+
+    # Match the official post-decode rule (acestep/core/generation/handler/generate_music_decode.py):
+    # only divide by peak when peak > 1.0, and do NOT clamp to [-1,1]. The previous demo always
+    # normalized to peak=1.0 as a workaround for near-silent decodes; with the precision fix that
+    # workaround amplifies residual noise instead of revealing a quiet signal.
+    peak = wav.abs().amax(dim=[1, 2], keepdim=True)
+    print(
+        f"[diag] decoded wav: shape={tuple(wav.shape)} peak={float(peak.max().item()):.4f} "
+        f"rms={float(wav.pow(2).mean().sqrt().item()):.4f}",
+        flush=True,
+    )
+    if torch.any(peak > 1.0):
+        wav = wav / peak.clamp(min=1.0)
+        print(f"[diag] peak > 1.0 -> normalized to peak<=1.0", flush=True)
 
     out_path = Path(args.out)
     _save_wav_fallback(wav[0], out_path, sample_rate=48000)

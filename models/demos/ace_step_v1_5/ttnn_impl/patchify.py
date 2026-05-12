@@ -313,6 +313,7 @@ class TtAceStepDePatchify1D:
         device: ttnn.Device,
         activation_dtype: ttnn.DataType | None = None,
         weights_dtype: ttnn.DataType | None = None,
+        compute_kernel_config=None,
     ) -> None:
         self.config = config
         self.device = device
@@ -322,6 +323,7 @@ class TtAceStepDePatchify1D:
             weights_dtype = getattr(ttnn, "bfloat16", None)
         if activation_dtype is None or weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
+        self.ckc = compute_kernel_config
 
         self.patch_size = int(getattr(config, "patch_size"))
         self.in_channels = int(getattr(config, "hidden_size"))
@@ -434,6 +436,7 @@ class TtAceStepDePatchify1D:
             transpose_b=True,  # y = x @ W^T
             dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.ckc,
         )
         y2d_rm = ttnn.to_layout(y2d, ttnn.ROW_MAJOR_LAYOUT)
 

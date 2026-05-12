@@ -10,7 +10,12 @@ import numpy as np
 
 import ttnn
 
-from .dit_decoder_core import AceStepDecoderConfigTTNN, TtAceStepDiTCore, TtTimestepEmbedding
+from .dit_decoder_core import (
+    AceStepDecoderConfigTTNN,
+    TtAceStepDiTCore,
+    TtTimestepEmbedding,
+    _build_dit_compute_kernel_config,
+)
 from .output_head import TtAceStepDiTOutputHead
 from .patchify import TtAceStepPatchEmbed1D
 from .safetensors_loader import load_safetensors_state_dict
@@ -73,6 +78,11 @@ class AceStepV15TTNNPipeline:
             raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
         self.activation_dtype = activation_dtype
         self.weights_dtype = weights_dtype
+
+        # Single arch-aware compute kernel config for every matmul/linear/rms_norm/softmax/SDPA in
+        # the decoder. HiFi4 + fp32_dest_acc on BH, HiFi3 + fp32_dest_acc on WH (avoids HiFi4+fp32
+        # HW bug, see ttnn compute_kernel_config.cpp::verify_numerical_configuration).
+        self.compute_kernel_config = _build_dit_compute_kernel_config(device)
 
         # Load weights on host, then transfer once per weight tensor during module init.
         sd = load_safetensors_state_dict(checkpoint_safetensors_path, prefix=decoder_prefix).tensors
@@ -145,6 +155,7 @@ class AceStepV15TTNNPipeline:
             device=device,
             activation_dtype=activation_dtype,
             weights_dtype=weights_dtype,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         # Decoder core config. Values are derived from checkpoint tensors.
@@ -191,6 +202,7 @@ class AceStepV15TTNNPipeline:
             mesh_device=device,
             timesteps_host=timesteps_host,
             dtype=self.activation_dtype,
+            compute_kernel_config=self.compute_kernel_config,
         )
         self.time_embed_r = TtTimestepEmbedding(
             cfg=core_cfg,
@@ -199,9 +211,16 @@ class AceStepV15TTNNPipeline:
             mesh_device=device,
             timesteps_host=timesteps_host,
             dtype=self.activation_dtype,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
-        self.core = TtAceStepDiTCore(cfg=core_cfg, state_dict=sd, mesh_device=device, dtype=self.activation_dtype)
+        self.core = TtAceStepDiTCore(
+            cfg=core_cfg,
+            state_dict=sd,
+            mesh_device=device,
+            dtype=self.activation_dtype,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         self.cond_dim = int(sd["condition_embedder.weight"].shape[1])
 
         # Cache for host-built additive masks uploaded to device.
