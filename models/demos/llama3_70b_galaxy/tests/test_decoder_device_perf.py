@@ -12,7 +12,12 @@ from collections import defaultdict
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, perf_target_check, strict_perf_target_checks_enabled
+from models.perf.benchmarking_utils import (
+    BenchmarkData,
+    BenchmarkProfiler,
+    perf_target_check,
+    strict_perf_target_checks_enabled,
+)
 from models.perf.device_perf_utils import run_device_perf
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
