@@ -282,7 +282,7 @@ ttnn::Tensor ttml_variable_matmul(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        MathFidelity::HiFi4,
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);
