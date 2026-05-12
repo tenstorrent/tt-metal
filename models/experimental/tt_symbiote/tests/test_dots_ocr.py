@@ -5,6 +5,7 @@
 
 import os
 import time
+from urllib.parse import urlparse
 
 import pytest
 import torch
@@ -106,6 +107,18 @@ def _dots_ocr_stack_input_ids_for_dp(input_ids: torch.Tensor) -> torch.Tensor:
     return input_ids.expand(bs, -1).contiguous()
 
 
+# Vision test: top-of-image height crops (full width retained).
+DOTS_OCR_VISION_DEMO_CROP_HEIGHT_FRAC = 0.575
+DOTS_OCR_FORMULA_CROP_HEIGHT_FRAC = 0.35
+
+
+def _crop_image_top_height_fraction(image, height_fraction: float):
+    """Keep full width; retain the top ``height_fraction`` of the height."""
+    w, h = image.size
+    new_h = max(1, int(h * height_fraction))
+    return image.crop((0, 0, w, new_h))
+
+
 @pytest.mark.parametrize(
     "device_params",
     [_dots_ocr_device_params()],
@@ -188,7 +201,14 @@ def test_dots_ocr_text(mesh_device):
 @pytest.mark.parametrize(
     "image_link",
     [
-        "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg",
+        # pytest.param(
+        #     "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg",
+        #     id="image1",
+        # ),
+        pytest.param(
+            "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/assets/showcase/origin/formula_3.jpg",
+            id="image2",
+        ),
     ],
 )
 def test_dots_ocr_vision(mesh_device, image_link):
@@ -223,19 +243,23 @@ def test_dots_ocr_vision(mesh_device, image_link):
     processor.image_token = "<|imgpad|>"
     processor.image_token_id = 151665
 
-    # Load and crop the image
-    image = Image.open(requests.get(image_link, stream=True).raw)
-    original_width, original_height = image.size
+    image_name = urlparse(image_link).path.rstrip("/").rsplit("/", 1)[-1]
+    print(f"Vision input image: {image_name}")
 
-    # Crop to 57.5% of original height from the top
-    new_height = int(original_height * 0.575)
-    top = 0
-    bottom = new_height
+    original = Image.open(requests.get(image_link, stream=True).raw).convert("RGB")
+    original_width, original_height = original.size
 
-    # Crop box: (left, top, right, bottom)
-    image = image.crop((0, top, original_width, bottom))
-
-    print(f"Cropped image from {original_width}x{original_height} to {original_width}x{new_height}")
+    if image_name == "formula_3.jpg":
+        image = _crop_image_top_height_fraction(original, DOTS_OCR_FORMULA_CROP_HEIGHT_FRAC)
+        new_height = image.size[1]
+        print(
+            f"Cropped image (formula_1, 80% height) from {original_width}x{original_height} "
+            f"to {original_width}x{new_height}"
+        )
+    else:
+        image = _crop_image_top_height_fraction(original, DOTS_OCR_VISION_DEMO_CROP_HEIGHT_FRAC)
+        new_height = image.size[1]
+        print(f"Cropped image from {original_width}x{original_height} to {original_width}x{new_height}")
 
     messages = [
         {
@@ -254,13 +278,23 @@ def test_dots_ocr_vision(mesh_device, image_link):
         images=image_inputs,
         videos=video_inputs,
         padding=True,
-        max_length=2800,
         return_tensors="pt",
     )
 
     input_ids = _dots_ocr_stack_input_ids_for_dp(inputs["input_ids"])
     pixel_values = inputs["pixel_values"].to(torch.bfloat16)
     image_grid_thw = inputs["image_grid_thw"]
+
+    _bs, _seq = input_ids.shape[0], input_ids.shape[-1]
+    print(f"Input tokens [{image_name}]: batch={_bs}, sequence_length={_seq}")
+    if "attention_mask" in inputs and inputs["attention_mask"] is not None:
+        am = inputs["attention_mask"]
+        if am.shape[0] == 1 and _bs > 1:
+            _n = int(am.sum(dim=-1).item())
+            _pad = [_n] * _bs
+        else:
+            _pad = am.sum(dim=-1).tolist()
+        print(f"Input tokens (non-padding per row) [{image_name}]: {_pad}")
 
     pipeline.warmup(input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
 
