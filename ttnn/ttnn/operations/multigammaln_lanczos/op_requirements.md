@@ -61,33 +61,10 @@
 
 ### [ ] Refinement 1 — Reuse DST across lgamma iterations
 
-Goal: Reduce per-element DST acquire/release cycle count by keeping the running accumulator in a DST register across all 4 lgamma sub-evaluations, rather than round-tripping through `cb_accumulator` between iterations.
+Try not to have a `cb_accumulator` round-trip between lgamma iterations.
 
-Why: The Phase 0 compute kernel issues `tile_regs_acquire/commit/wait/release` **6 times per output element** (Phase 1 zero-init, 4× Phase 2.k, Phase 3 finalize) and reads `cb_accumulator` from L1 4 times per element. Each acquire/release costs hardware reconfig for the math/pack barrier; this overhead is the dominant contributor to the per-tile compute gap vs. a single-cycle reference design.
-
-Empirical evidence supporting this scope:
-- Benchmarked via `verify_makora.py multigammaln_lanczos --readme-shapes`: ttnn=163965 ns vs makora=157856 ns (gmean), speedup ratio 1.04× — i.e. our kernel runs at ~96% of Makora's speed.
-- DRAM is not the bottleneck. With DRAM reads/writes disabled (compute-only experiment), the gap stayed at exactly 1.04×. DRAM contributes < 1.5% of total time. See `data_transfer.md` arithmetic intensity ≈ 20 FLOPs/byte — solidly compute-bound.
-- Reference design (Makora's `LGAMMA_AND_ACCUMULATE` macro in `/localdev/dnijemcevic/kernels/Tenstorrent/fusion_store/unary/multigammaln/multigammaln.py`): one DST acquire/release per output element, with D[0] as the cross-iteration accumulator and D[1-3] as per-iteration working state.
-
-Suggested approach (not mandatory; the implementer chooses):
-- **One** `tile_regs_acquire` / `tile_regs_commit` / `tile_regs_wait` / `tile_regs_release` block per output element. Inside:
-  - `D0` holds the running sum across all 4 lgamma sub-evaluations. Initialize to 0 at the top.
-  - `D1`, `D2`, `D3` hold the per-iteration working state for the current lgamma (input `a + offset_k`, scratch, the lgamma result before adding it onto `D0`).
-- After all 4 lgamma evaluations are folded into `D0`, do `D0 += 3·log(π)` and pack to `cb_output_tiles` — still inside the same DST block.
-- If this lands cleanly, `cb_accumulator` becomes unused and should be removed from the program descriptor (CB count drops from 3 to 2, matching the reference design). The `unpack_to_dest_mode[cb_accumulator]` setting goes away with it.
-- The Lanczos polynomial inside each lgamma must be re-organized so the inner loop uses only `D1`/`D2`/`D3` for scratch, never touching `D0`. The `copy_dest_values<Float32>` pattern from Phase 0 still helps to keep `a` resident in one DST slot across the polynomial loop.
-
-What stays the same:
-- Algorithm (Lanczos 6-term, same coefficients, same algebraic simplification, same pole-zero masks on integer poles 1 and 2).
-- fp32 precision policy (HiFi4 + fp32_dest_acc + `UnpackToDestFp32` on `cb_input_tiles` — but `cb_accumulator` unpack-mode setting disappears if the CB itself goes away).
-- Multi-core work distribution via `ttnn.split_work_to_cores`.
-- Reader and writer kernels (no changes expected).
-
-Acceptance criteria:
-- All Phase 0 tests still pass (`test_multigammaln_lanczos.py`, `test_multigammaln_lanczos_extended.py`, `test_multigammaln_lanczos_precision_baseline.py`). 24/24 currently passing — must stay 24/24.
-- Numerical precision must not regress: PCC ≥ 0.99999999, max_abs_err ≤ 0.01, rel_rms ≤ 1e-4 on the safe domain `[2.0, 10.0]`. (Phase 0 achieves max_abs_err ≈ 0.005; this refinement must not loosen those bounds.)
-- Re-running `verify_makora.py multigammaln_lanczos --readme-shapes` (after `rm -rf built/tt-metal-cache*`) should show the device-kernel speedup ratio closer to 1.0 (target: ≤ 1.02×, ideally 1.00×). Record the before/after numbers in `changelog.md`.
+Acceptance: all Phase 0 tests must continue passing; the precision-baseline
+numbers (PCC, max_abs_err) must not regress.
 
 ### [ ] Refinement 2 — Expose `compute_kernel_config`
 
