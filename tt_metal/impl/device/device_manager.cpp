@@ -235,7 +235,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         // Must open all devices in cluster to use fabric
         if (any_remote_devices) {
             device_ids_to_open.clear();
-            for (int id = 0; id < env_impl_.get_cluster().number_of_devices(); ++id) {
+            for (int id = 0; id < static_cast<int>(env_impl_.get_cluster().number_of_devices()); ++id) {
                 device_ids_to_open.push_back(id);
             }
         }
@@ -312,7 +312,7 @@ void DeviceManager::activate_device(ChipId id) {
         id,
         env_impl_.get_cluster().number_of_devices());
     const std::lock_guard<std::mutex> lock(lock_);
-    if (this->devices_.size() < id + 1) {
+    if (this->devices_.size() < static_cast<size_t>(id) + 1) {
         this->devices_.reserve(id + 1);
     }
     auto* device = get_device(id);
@@ -420,7 +420,7 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     tt_fabric::FabricConfig fabric_config = ctx_.get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config) and
         (env_impl_.get_cluster().mmio_chip_ids().size() != env_impl_.get_cluster().all_chip_ids().size())) {
-        for (int i = 0; i < env_impl_.get_cluster().number_of_devices(); i++) {
+        for (int i = 0; i < static_cast<int>(env_impl_.get_cluster().number_of_devices()); i++) {
             // Fabric currently requires all devices to be active
             TT_FATAL(
                 this->is_device_active(i),

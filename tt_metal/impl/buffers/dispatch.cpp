@@ -279,12 +279,12 @@ private:
 
     bool were_full_pages_written_in_last_write_transaction() const {
         const int32_t page_size = this->address - this->curr_full_pages_start_address;
-        return page_size == this->buffer.aligned_page_size();
+        return page_size == static_cast<int32_t>(this->buffer.aligned_page_size());
     }
 
     bool will_full_pages_be_written_in_next_write_transaction() const {
         const int32_t page_size = this->address + this->page_size_to_write - this->curr_full_pages_start_address;
-        return page_size == (this->num_partial_pages_in_single_full_page * this->page_size_to_write);
+        return page_size == static_cast<int32_t>(this->num_partial_pages_in_single_full_page * this->page_size_to_write);
     }
 
     bool will_next_full_page_be_round_robined() const {
@@ -713,7 +713,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     // Issue wait commands once at the beginning if needed
     if (dispatch_params.issue_wait && num_worker_counters > 0) {
         DeviceCommandCalculator calculator;
-        for (int i = 0; i < num_worker_counters; ++i) {
+        for (uint32_t i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
         }
 
@@ -931,7 +931,7 @@ void issue_buffer_dispatch_command_sequence(
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (dispatch_params.issue_wait) {
-        for (int i = 0; i < num_worker_counters; ++i) {
+        for (uint32_t i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
         }
     }

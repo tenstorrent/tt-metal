@@ -135,7 +135,8 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {},
             .defines = kernel_defines,
-            .named_compile_args = {}});
+            .named_compile_args = {},
+            .compiler_include_paths = {}});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
     tt_metal::detail::LaunchProgram(

@@ -699,7 +699,7 @@ uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) c
     const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
     uint32_t num_nocs = MetalEnvAccessor(*env_).impl().get_hal().get_num_nocs();
     for (uint32_t noc = 0; noc < num_nocs; noc++) {
-        for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
+        for (uint32_t channel = 0; channel < static_cast<uint32_t>(this->num_dram_channels()); ++channel) {
             if (soc_desc.get_preferred_worker_core_for_dram_view(channel, noc) == virtual_core) {
                 return channel;
             }
@@ -858,7 +858,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
         const metal_SocDescriptor& soc_d = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
-        for (int i = 0; i < num_dram_banks; ++i) {
+        for (uint32_t i = 0; i < num_dram_banks; ++i) {
             auto dram_core = this->dram_core_from_dram_channel(i, noc);
             if (dram_is_virtualized) {
                 tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
@@ -869,21 +869,21 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         }
         // Get all logical cores in the worker grid
         std::vector<CoreCoord> all_worker_cores_logical;
-        for (int i = 0; i < num_cores_x; ++i) {
-            for (int j = 0; j < num_cores_y; ++j) {
+        for (uint32_t i = 0; i < num_cores_x; ++i) {
+            for (uint32_t j = 0; j < num_cores_y; ++j) {
                 all_worker_cores_logical.push_back(CoreCoord(i, j));
             }
         }
         // Get the physical rows and cols  (y, x) in the worker grid
         std::vector<uint32_t> worker_phy_y;
         worker_phy_y.reserve(num_cores_y);
-        for (int i = 0; i < num_cores_y; ++i) {
+        for (uint32_t i = 0; i < num_cores_y; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
             worker_phy_y.push_back(core_phy.y);
         }
         std::vector<uint32_t> worker_phy_x;
         worker_phy_x.reserve(num_cores_x);
-        for (int i = 0; i < num_cores_x; ++i) {
+        for (uint32_t i = 0; i < num_cores_x; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
             worker_phy_x.push_back(core_phy.x);
         }

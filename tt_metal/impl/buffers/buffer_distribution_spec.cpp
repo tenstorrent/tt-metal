@@ -225,6 +225,7 @@ void BufferDistributionSpec::init_precomputed_data() {
             core_groups_ = CoreGroups{
                 .cores_with_data = cores_with_data,
                 .cores_in_group_1 = std::move(cores_with_data),
+                .cores_in_group_2 = {},
                 .num_shards_per_core_in_group_1 = num_shards() / num_cores(),
             };
         } else {
