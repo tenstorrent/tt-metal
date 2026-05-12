@@ -36,11 +36,18 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
     // cache_tensor: [max_num_blocks, 1, block_size, head_dim]
     // page_table_tensor: [b, max_num_blocks_per_seq]
+    //
+    // ``head_dim`` (and therefore ``Wt``) is read from the input —
+    // CUDA-style — so callers can write into a cache that was physically
+    // allocated with a different ``head_dim`` per their HMA tensor-sharing
+    // view, as long as the per-block byte count is preserved (enforced
+    // in validate_on_program_cache_miss). ``block_size`` honors the
+    // optional override for the same reason.
     const uint32_t num_heads = input_tensor.padded_shape()[1];
     const uint32_t input_seq_len = input_tensor.padded_shape()[2];
 
-    const uint32_t block_size = cache_tensor.padded_shape()[2];
-    const uint32_t head_dim = cache_tensor.padded_shape()[3];
+    const uint32_t block_size = operation_attributes.block_size_override.value_or(cache_tensor.padded_shape()[2]);
+    const uint32_t head_dim = input_tensor.padded_shape()[3];
 
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
     const uint32_t Wt = head_dim / TILE_WIDTH;
@@ -300,7 +307,8 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
                 PagedFillCacheParams dummy_attrs{
                     .batch_idx_fallback = operation_attributes.batch_idx_fallback,
                     .mesh_coords = operation_attributes.mesh_coords,
-                    .noop = true};
+                    .noop = true,
+                    .block_size_override = operation_attributes.block_size_override};
                 auto cached_program =
                     PagedFillCacheProgramFactory::create(dummy_attrs, tensor_args, tensor_return_value);
                 shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
@@ -348,7 +356,8 @@ void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
         PagedFillCacheParams coord_attrs{
             .batch_idx_fallback = operation_attributes.batch_idx_fallback,
             .mesh_coords = operation_attributes.mesh_coords,
-            .noop = is_dummy};
+            .noop = is_dummy,
+            .block_size_override = operation_attributes.block_size_override};
 
         ttnn::device_operation::mesh_device_operation_utils::apply_override_runtime_arguments(
             program_factory, program, shared_variables, coord_attrs, coord, tensor_args, tensor_return_value);

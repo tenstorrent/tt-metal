@@ -24,6 +24,18 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
     const auto* paged_update_cache_doc =
         R"doc(
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
+
+         The per-token write geometry (``head_dim``) is taken from
+         ``input_tensor.padded_shape[-1]``. The cache's block dimension
+         comes from ``cache_tensor.padded_shape[2]`` by default; pass
+         ``block_size`` to override it for callers (e.g. vLLM's hybrid
+         kv-cache-groups path) that reinterpret one physical cache buffer
+         as having a different ``(block_size, head_dim)`` tile arrangement
+         per layer type. The total bytes per cache block must be
+         preserved: ``num_kv_heads * block_size * head_dim`` (taking
+         num_kv_heads from cache.padded_shape[1], block_size from the
+         override or cache.padded_shape[2], head_dim from input) must
+         equal the cache's physical per-block element count.
         )doc";
 
     ttnn::bind_function<"paged_update_cache", "ttnn.experimental.">(
@@ -39,7 +51,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("page_table").noconvert() = nb::none(),
         nb::arg("batch_offset") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("mesh_coords").noconvert() = nb::none());
+        nb::arg("mesh_coords").noconvert() = nb::none(),
+        nb::arg("block_size").noconvert() = nb::none());
 
     const auto* paged_fused_update_cache_doc =
         R"doc(
@@ -91,6 +104,15 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         batch_idx_tensor (optional) shape: [1] (scalar uint32 tensor)
         batch_idx (scalar, defaults to 0) is used if batch_idx_tensor is not provided.
         mesh_coords (optional) is a set of MeshCoordinate objects that specify the mesh coordinates to execute on.
+
+        The per-token write geometry (``head_dim``) is taken from
+        ``input_tensor.padded_shape[-1]``. The cache's block dimension
+        comes from ``cache_tensor.padded_shape[2]`` by default; pass
+        ``block_size`` to override it for callers that reinterpret one
+        physical cache buffer as having a different
+        ``(block_size, head_dim)`` tile arrangement (see the equivalent
+        kwarg on ``paged_update_cache``). Per-block byte count must be
+        preserved across views.
         )doc";
 
     ttnn::bind_function<"paged_fill_cache", "ttnn.experimental.">(
@@ -104,7 +126,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("batch_idx_tensor").noconvert() = nb::none(),
         nb::arg("batch_idx") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("mesh_coords").noconvert() = nb::none());
+        nb::arg("mesh_coords").noconvert() = nb::none(),
+        nb::arg("block_size").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache::detail

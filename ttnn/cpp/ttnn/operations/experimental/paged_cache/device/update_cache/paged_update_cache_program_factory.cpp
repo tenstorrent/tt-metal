@@ -65,7 +65,16 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
 
-    // Pagetable-specific parameters
+    // Pagetable-specific parameters.
+    //
+    // ``block_size`` selects how many tile-rows live in one cache block.
+    // In the legacy path we always read it from ``cache_tensor.padded_shape()[2]``;
+    // when ``block_size_override`` is set, the caller is reinterpreting
+    // the same physical buffer with a different ``(block_size, head_dim)``
+    // tile arrangement, so we use the override instead. Validation in
+    // ``validate_on_program_cache_miss`` already ensured the per-block
+    // byte count is preserved across views, so ``block_start_id`` math
+    // still addresses the right block boundary.
     bool is_paged_cache = page_table.has_value();
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
@@ -76,7 +85,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
 
-        block_size = cache_tensor.padded_shape()[2];
+        block_size = operation_attributes.block_size_override.value_or(cache_tensor.padded_shape()[2]);
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         page_table_stick_size = page_table_tensor.padded_shape()[-1] * page_table_tensor.element_size();
@@ -84,10 +93,18 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
     }
 
-    uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t St = cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.padded_shape()[-1] * sizeof(float)
-                                       : cache_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    // CUDA-style: per-call write geometry (``head_dim`` and therefore
+    // ``Wt`` / ``Wbytes``) comes from the input tensor — the cache shape
+    // is just a byte-budget hint. The kernel still uses ``num_heads``
+    // from the cache because ``num_heads`` is per-block (a property of
+    // how the cache is laid out), not per-token. ``St`` is the cache's
+    // block-size in tiles — for paged mode it equals ``block_size_t``
+    // (overridden), for non-paged it's the cache's sequence length in
+    // tiles (no override).
+    uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t St = is_paged_cache ? block_size_t : cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)
+                                       : input_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
     uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     uint32_t cache_batch_num_tiles =
         operation_attributes.share_cache
