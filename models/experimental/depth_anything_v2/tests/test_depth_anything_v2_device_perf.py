@@ -19,7 +19,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     num_iterations = 3
     margin = 0.03
     command = (
-        f"pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_pcc.py::test_depth_anything_v2_pcc"
+        "pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_pcc.py::test_depth_anything_v2_pcc"
     )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

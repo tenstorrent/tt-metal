@@ -19,7 +19,7 @@ from transformers import AutoModelForDepthEstimation
 
 import ttnn
 from models.experimental.depth_anything_v2.tt.model_def import (
-    TtDepthAnythingV2, custom_preprocessor, get_model_config
+    TtDepthAnythingV2, custom_preprocessor
 )
 from models.perf.perf_utils import prep_perf_report
 

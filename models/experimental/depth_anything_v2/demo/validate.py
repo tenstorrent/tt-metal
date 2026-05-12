@@ -95,7 +95,7 @@ def main():
 
     # 2. Open device
     device = ttnn.open_device(device_id=0, l1_small_size=16384)
-    print(f"Device opened.")
+    print("Device opened.")
 
     # 3. Convert weights & init TT model
     # Ensure repo root is on the path (editable install or repo-root execution

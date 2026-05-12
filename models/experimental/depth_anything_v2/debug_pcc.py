@@ -6,8 +6,7 @@ import numpy as np
 from transformers import AutoModelForDepthEstimation, AutoImageProcessor
 from PIL import Image
 from models.experimental.depth_anything_v2.tt.model_def import (
-    custom_preprocessor, vit_embeddings, vit_layer, get_model_config, _dram_tile,
-    TtDepthAnythingV2,
+    custom_preprocessor, TtDepthAnythingV2,
 )
 
 
