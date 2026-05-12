@@ -58,6 +58,7 @@
 #include "../../unified_kernels/gated_reduce.hpp"
 #include "../../unified_kernels/residual_add.hpp"
 #include "../../unified_kernels/eltwise_add_or_copy.hpp"
+#include "dram_helpers.hpp"
 #include "sram_helpers.hpp"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../unified_kernels/reduce_to_one_b1.hpp"
@@ -415,8 +416,10 @@ void kernel_main() {
                     get_named_compile_time_arg_val("sram_gather_pages_per_expert"),
             };
 
-            // Eltwise Add (reader — no-op)
-            using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
+            // Eltwise Add (reader — no-op). Uses EltwiseAddOrCopy so the final
+            // DRAM add can fall back to copy(shared_output) when n_dram_active==0.
+            using AddCTArgs = deepseek_b1_ops::EltwiseAddOrCopy::ReaderCTArgs;
+            deepseek_b1_ops::EltwiseAddOrCopy::ReaderArgs add_args{};
 
             // Residual Mcast — receiver (input from sender → residual CB)
             using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
@@ -825,7 +828,8 @@ void kernel_main() {
             };
 
             // Eltwise Add (writer — no-op)
-            using AddCTArgs = deepseek_b1_ops::EltwiseAdd::WriterCTArgs;
+            using AddCTArgs = deepseek_b1_ops::EltwiseAddOrCopy::WriterCTArgs;
+            deepseek_b1_ops::EltwiseAddOrCopy::WriterArgs add_args{};
 
             // Residual Mcast — sender (input from sender → residual CB, pop_src=false)
             using ResidualMcastCTArgs = McastCTArgs;
@@ -1301,8 +1305,12 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_down_merge_num_tiles")>;
             deepseek_b1_ops::EltwiseAddOrCopy::ComputeArgs sram_down_merge_args{/*do_add=*/0};
 
-            // Eltwise Add (compute)
-            using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
+            // Eltwise Add (compute) — switched to EltwiseAddOrCopy so the final
+            // DRAM add can fall back to copy(shared_output) when all TopK
+            // winners are SRAM-flagged (n_dram_active==0). The aliased
+            // cb_in0_wait, asymmetric wait counts, and per-core cb_in1 slice
+            // offset map directly onto EltwiseAddOrCopy's optional CT args.
+            using AddCTArgs = deepseek_b1_ops::EltwiseAddOrCopy::ComputeCTArgs<
                 get_named_compile_time_arg_val("add_cb_in0"),
                 get_named_compile_time_arg_val("add_cb_in1"),
                 get_named_compile_time_arg_val("add_cb_out"),
@@ -1313,8 +1321,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_per_core_n") *
                     get_named_compile_time_arg_val("down_proj_cores_per_bank"),  // cb_in0_wait_tiles
                 get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
+                /*HasSliceOffset=*/true,
                 get_named_compile_time_arg_val("add_sender_index"),
                 get_named_compile_time_arg_val("add_slice_size_bytes")>;
+            // do_add is patched at runtime from n_dram_active in the body.
+            deepseek_b1_ops::EltwiseAddOrCopy::ComputeArgs add_args{/*do_add=*/0};
 
             // Residual Mcast (compute — no-op)
             using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
@@ -1572,11 +1583,23 @@ void kernel_main() {
 #endif
 
         // n_sram_active is computed inside the ENABLE_ROUTING block (post mcast_index
-        // scan on a/b cores + 112 mcast receivers). Declared here so SRAM_DOWN_MERGE
-        // (which lives outside the routing ifdef, since shared_down always runs)
-        // can read it. Stays 0 in the dense MLP path (no routing) → merge defaults
-        // to copy(shared_down → merged).
+        // scan on a/b cores + 112 mcast receivers + DRAM streamer cores). Declared
+        // here so SRAM_DOWN_MERGE (which lives outside the routing ifdef, since
+        // shared_down always runs) can read it. Stays 0 in the dense MLP path
+        // (no routing) → merge defaults to copy(shared_down → merged).
         uint32_t n_sram_active = 0;
+
+        // n_dram_active gates every op in the DRAM gate/up/mul/gather/mcast/down/
+        // eltwise_add chain. Routing mode defaults to 0 → non-scan cores (e.g.,
+        // mcast_worker_grid extras that don't receive mcast_index) skip
+        // uniformly with scan-derived skips; scan cores overwrite below to
+        // num_active_experts - n_sram_active. Dense MLP path defaults to 1 →
+        // DRAM runs once with all experts treated as DRAM.
+#ifdef ENABLE_ROUTING
+        uint32_t n_dram_active = 0;
+#else
+        uint32_t n_dram_active = 1;
+#endif
 
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
@@ -1673,9 +1696,17 @@ void kernel_main() {
         // L1 addr SRAM matmul reads. Also scan on shared mcast receivers
         // (the 112 cores) so they know n_sram_active to wait/push the right
         // number of SRAM down mcast pages.
+        // Extended to include is_gate_proj_streamer_core / is_down_proj_streamer_core:
+        // the DRAM gate/up/down matmul cores derive n_dram_active = num_active -
+        // n_sram_active to gate the DRAM chain (skip when all TopK winners are
+        // SRAM-flagged). They already receive the index_mcast (line 1671 receiver
+        // list), so cb_index / sram_gather_index_l1_addr are populated. In K-split
+        // mode the two streamer sets coincide; in non-K-split they may differ
+        // slightly so cover both.
         if constexpr (
             Core::Shared::is_gate_compute_core || Core::Shared::is_up_compute_core ||
-            Core::Shared::is_mcast_receiver_core) {
+            Core::Shared::is_mcast_receiver_core || Core::Routed::is_gate_proj_streamer_core ||
+            Core::Routed::is_down_proj_streamer_core) {
             n_sram_active = scan_n_sram_active<
                 get_named_compile_time_arg_val("sram_gather_cb_index"),
                 get_named_compile_time_arg_val("sram_gather_index_l1_addr"),
@@ -1683,7 +1714,24 @@ void kernel_main() {
                 get_named_compile_time_arg_val("scan_sync_sem_addr")>();
         }
 
-        // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores
+        // Derive DRAM-active count on cores that scanned (and therefore have a
+        // valid n_sram_active). Sender_core scanned pre-mcast; streamers / a / b
+        // / 112 scanned post-mcast. All other cores keep the routing-mode
+        // default of 0 so they skip uniformly with the scan-derived skips.
+        if constexpr (
+            Core::Shared::is_gated_reduce_core ||  // sender_core (pre-mcast scan)
+            Core::Shared::is_gate_compute_core || Core::Shared::is_up_compute_core ||
+            Core::Shared::is_mcast_receiver_core || Core::Routed::is_gate_proj_streamer_core ||
+            Core::Routed::is_down_proj_streamer_core) {
+            constexpr uint32_t sram_gather_num_active =
+                get_named_compile_time_arg_val("sram_gather_num_active_experts");
+            n_dram_active = sram_gather_num_active - n_sram_active;
+        }
+
+        // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores.
+        //     Skipped when n_dram_active==0 because MUL (its only consumer) is
+        //     skipped too. Unpopped gate_output_cb pages on sender are
+        //     re-anchored by RECONFIG_MOE_CBS at next iter's top.
         {
             DeviceZoneScopedN("MCAST_EXPERT_SCALE");
             deepseek_b1_ops::Mcast::Op<
@@ -1694,7 +1742,7 @@ void kernel_main() {
                 true,
                 /*ReceiverOnBrisc=*/true>
                 expert_scale_mcast;
-            expert_scale_mcast(moe.routed.expert_scale_mcast_args);
+            deepseek_b1_ops::dram_invoke_mcast(expert_scale_mcast, moe.routed.expert_scale_mcast_args, n_dram_active);
         }
 
         // 5c. SRAM Routed Expert pipeline (matmul → gather → GatedReduce → mcast → matmul).
@@ -1847,6 +1895,9 @@ void kernel_main() {
         //    physical wrap — required because GP and UP share cb_in1 back-to-back.
         //    IsActiveCore = is_gate_proj_streamer_core (16 cores in K-split mode = both
         //    K-senders and the K-reducer/primary; 8 cores = primaries only otherwise).
+        //    Skipped via dram_invoke_matmul when n_dram_active==0 (all TopK winners
+        //    are SRAM-flagged); the entire DRAM gate/up/mul/gather/mcast/down chain
+        //    sits idle, and the final eltwise_add copies shared_output through.
         {
             DeviceZoneScopedN("GATE_PROJ");
             constexpr uint32_t gp_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
@@ -1865,7 +1916,7 @@ void kernel_main() {
                 gp_cb_in1_addr,
                 /*pop_out=*/gp_secondary_pop>
                 gate_proj_mm;
-            gate_proj_mm();
+            deepseek_b1_ops::dram_invoke_matmul(gate_proj_mm, n_dram_active);
         }
 
         // 7. up_proj: DRAM Matmul Expert Compressed (PopIn0=true: last consumer of gate input; PopIndex=false).
@@ -1895,14 +1946,14 @@ void kernel_main() {
                 /*pop_out=*/up_secondary_pop,
                 /*SkipNocTridReset=*/true>
                 up_proj;
-            up_proj();
+            deepseek_b1_ops::dram_invoke_matmul(up_proj, n_dram_active);
         }
 
         // 8. Mul: Element-wise multiply (up_proj * gate_proj * expert_scale)
         {
             DeviceZoneScopedN("MUL");
             deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
-            mul_op();
+            deepseek_b1_ops::dram_invoke_eltwise_mul(mul_op, n_dram_active);
         }
 
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
@@ -1997,7 +2048,7 @@ void kernel_main() {
             DeviceZoneScopedN("DOWN_PROJ_GATHER");
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
                 down_proj_gather;
-            down_proj_gather(moe.routed.down_proj_gather_args);
+            deepseek_b1_ops::dram_invoke_moe_gather(down_proj_gather, moe.routed.down_proj_gather_args, n_dram_active);
         }
 
         // 11. down_proj Mcast: broadcast gathered fused output to down_proj streamer cores.
@@ -2011,7 +2062,7 @@ void kernel_main() {
                 true,
                 /*ReceiverOnBrisc=*/true>
                 down_proj_mcast;
-            down_proj_mcast(moe.routed.down_proj_mcast_args);
+            deepseek_b1_ops::dram_invoke_mcast(down_proj_mcast, moe.routed.down_proj_mcast_args, n_dram_active);
         }
 
         // 12. down_proj: DRAM Matmul Expert Compressed (PopIndex=true: last consumer of expert index)
@@ -2025,6 +2076,9 @@ void kernel_main() {
         //     l1_write_addr_in1 wraps at (drifted_wr_ptr + size) while framework wr_ptr
         //     wraps at the CB's physical end, so iter 2's writes land at a different
         //     L1 region than the framework's tracked rd_ptr → UNPACK reads stale bytes.
+        //     When n_dram_active==0 the kernel is skipped via dram_invoke_matmul;
+        //     down_proj's pop_index would have drained cb_index on streamers, but
+        //     RECONFIG_MOE_CBS at next iter's top re-anchors the rd/wr ptrs.
         {
             DeviceZoneScopedN("DOWN_PROJ");
             constexpr uint32_t dp_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
@@ -2043,10 +2097,11 @@ void kernel_main() {
                 /*pop_out=*/dp_secondary_pop,
                 /*SkipNocTridReset=*/true>
                 down_proj;
-            down_proj();
+            deepseek_b1_ops::dram_invoke_matmul(down_proj, n_dram_active);
         }
 
-        // 13. Eltwise Add: down_proj + shared_expert_output
+        // 13. Eltwise Add: down_proj + shared_expert_output, or copy(shared_expert_output)
+        //     when n_dram_active==0 (do_add patched at runtime).
         {
             DeviceZoneScopedN("ELTWISE_ADD");
             constexpr bool add_pop_output =
@@ -2055,13 +2110,10 @@ void kernel_main() {
 #else
                 true;  // pop for looping
 #endif
-            deepseek_b1_ops::EltwiseAdd::Op<
-                Moe::Routed::AddCTArgs,
-                Core::Routed::is_gate_proj_core,
-                true,            // PopInputs
-                add_pop_output>  // PopOutput
-                add_op;
-            add_op();
+            deepseek_b1_ops::EltwiseAddOrCopy::
+                Op<Moe::Routed::AddCTArgs, Core::Routed::is_gate_proj_core, add_pop_output>
+                    add_op;
+            deepseek_b1_ops::dram_invoke_eltwise_add_or_copy(add_op, moe.routed.add_args, n_dram_active);
         }
 
         // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh

@@ -1002,7 +1002,19 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 # Each scenario tests a different (T, n_sram_active) combination.
 @pytest.mark.parametrize(
     "sram_scenario",
-    ["no_sram", "t1_picked", "t1_not_picked", "t2_both_picked", "t2_partial", "t2_none_picked"],
+    [
+        "no_sram",
+        "t1_picked",
+        "t1_not_picked",
+        "t2_both_picked",
+        "t2_partial",
+        "t2_none_picked",
+        "t4_all_picked",
+        "t8_all_picked",
+        "t8_one_picked",
+        "t8_none_picked",
+        "t8_partial",
+    ],
 )
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
@@ -1061,6 +1073,13 @@ def test_moe_fused_with_reduce(
     #   t2_both_picked : T=2, n_active=2 (multi-SRAM dispatch)
     #   t2_partial     : T=2, n_active=1 (mixed; tests is_sram_expert filter)
     #   t2_none_picked : T=2, n_active=0 (multi-SRAM CBs allocated, none fire)
+    #   t4_all_picked  : T=4, n_active=4 (multi-SRAM dispatch, partial-DRAM)
+    #   t8_all_picked  : T=8, n_active=8 (all winners SRAM → n_dram_active=0 →
+    #                    exercises the skip-DRAM path: dram_invoke_* early-returns
+    #                    + EltwiseAddOrCopy with do_add=0 copying shared_output)
+    #   t8_one_picked  : T=8, n_active=1 (only 1 of 8 SRAM slots is a winner)
+    #   t8_none_picked : T=8, n_active=0 (8 SRAM CBs allocated, none fire)
+    #   t8_partial     : T=8, n_active=2 (2 of 8 SRAM slots are winners)
     sram_expert_ids = {
         "no_sram": [],
         "t1_picked": [1],
@@ -1068,6 +1087,11 @@ def test_moe_fused_with_reduce(
         "t2_both_picked": [1, 4],
         "t2_partial": [1, 2],
         "t2_none_picked": [2, 3],
+        "t4_all_picked": [1, 4, 7, 11],
+        "t8_all_picked": [1, 4, 7, 11, 15, 19, 23, 28],
+        "t8_one_picked": [1, 0, 2, 3, 5, 6, 8, 9],
+        "t8_none_picked": [0, 2, 3, 5, 6, 8, 9, 10],
+        "t8_partial": [1, 4, 0, 2, 3, 5, 6, 8],
     }[sram_scenario]
     r = create_routed_expert_tensors(
         submesh,
