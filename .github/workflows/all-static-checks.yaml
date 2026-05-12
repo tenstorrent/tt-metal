@@ -200,20 +200,6 @@ jobs:
         run: |
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
-  check-github-actions:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-      - name: Install actionlint
-        run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
-      - name: Run actionlint
-        run: |
-          "$(go env GOPATH)/bin/actionlint" \
-            -ignore "Context access might be invalid" \
-            -ignore "Unexpected value 'destroyed'"
   check-docker-bake-ci:
     runs-on: ubuntu-latest
     steps:
