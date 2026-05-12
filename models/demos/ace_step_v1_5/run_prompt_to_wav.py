@@ -674,7 +674,7 @@ def main() -> None:
             del qwen_tt_encoder
     do_cfg = gs > 1.0 + 1e-6
 
-    noise = torch.randn((1, frames, 64), dtype=torch.float32)
+    frames_i_prep = int(frames)
 
     t_schedule = _build_t_schedule(
         shift=float(args.shift),
@@ -696,7 +696,6 @@ def main() -> None:
         euler_subtract_v_dt,
         fp32_tile_to_row_bf16,
         slice_batch_btc,
-        tile_fp32_from_numpy_bc,
         typecast_bf16_any_to_fp32_tile,
     )
     from models.demos.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
@@ -731,12 +730,33 @@ def main() -> None:
         cfg_lo = float(args.cfg_interval_start)
         cfg_hi = float(args.cfg_interval_end)
 
-        latent_keep = torch.ones((1, frames), dtype=torch.bool)
-        frames_i = int(frames)
-        c_lat = int(noise.shape[2])
+        frames_i = int(frames_i_prep)
+        c_lat = 64
 
-        mask2_torch = torch.cat([enc_mask, enc_mask], dim=0) if do_cfg else enc_mask
-        keep2_torch = torch.cat([latent_keep, latent_keep], dim=0) if do_cfg else latent_keep
+        # ``ttnn.rand`` is uniform in [from,to] (default [0,1]); ACE-Step uses standard-normal latents.
+        # Use ``ttnn.randn`` for parity with ``torch.randn`` / prior NumPy Gaussian noise.
+        if not hasattr(ttnn, "randn"):
+            raise RuntimeError(
+                "This demo needs ``ttnn.randn`` (Gaussian) for latent init; ``ttnn.rand`` is uniform-only."
+            )
+        xt_tt = ttnn.randn(
+            (1, frames_i, c_lat),
+            dev,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            seed=int(np.uint32(int(args.seed))),
+        )
+
+        encoder_keep_np_single = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32)
+        if encoder_keep_np_single.ndim != 2:
+            raise ValueError(f"encoder_attention_mask must be rank-2 [B,S], got {encoder_keep_np_single.shape}")
+        encoder_keep_np_single = (encoder_keep_np_single > np.float32(0.0)).astype(np.bool_)
+        encoder_attn_1d_bk_np = (
+            np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
+            if do_cfg
+            else encoder_keep_np_single
+        )
 
         if do_cfg:
             enc_tt_pipe = bf16_row_from_numpy_bc(
@@ -757,7 +777,6 @@ def main() -> None:
             enc_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs), device=dev, dram=mem)
             ctx_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
 
-        xt_tt = tile_fp32_from_numpy_bc(_as_host_numpy_f32(noise), device=dev, dram=mem)
         momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
 
         def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
@@ -769,20 +788,16 @@ def main() -> None:
                     ttnn.deallocate(xt_row)
                 except Exception:
                     pass
-                enc_attn = mask2_torch
-                attn_1d = keep2_torch
             else:
                 xt_pipe_in = xt_row
-                enc_attn = enc_mask
-                attn_1d = latent_keep
 
             acoustic = pipe.forward(
                 xt_bt64=xt_pipe_in,
                 context_latents_bt128=ctx_tt_pipe,
                 timestep_index=int(step_idx),
                 encoder_hidden_states_btd=enc_tt_pipe,
-                attention_mask_1d_bt=attn_1d,
-                encoder_attention_mask_1d_bk=enc_attn,
+                attention_mask_1d_bt=None,
+                encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
             )
 
             if do_cfg:
@@ -858,7 +873,8 @@ def main() -> None:
             log_line=f"[ttnn] final t={t_curr_final:.5f}",
         )
 
-        pred_latents = ttnn.to_torch(xt_tt).to(torch.float32).contiguous()
+        # Host VAE (Diffusers) requires a Torch tensor; this is the only device→Torch copy of latents.
+        pred_latents = ttnn.to_torch(xt_tt, dtype=torch.float32).contiguous()
 
         try:
             ttnn.deallocate(enc_tt_pipe)
