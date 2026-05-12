@@ -27,7 +27,6 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
@@ -174,17 +173,6 @@ def prepare_gpt_oss_generator_args(
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        # LoudBox (1×8) - Single device, low latency
-        (1, 8),
-        # Galaxy (4×8) - Multi-device mesh, higher throughput
-        (4, 8),
-    ],
-    ids=["mesh_1x8", "mesh_4x8"],
-)
-@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [
@@ -421,7 +409,6 @@ def prepare_gpt_oss_generator_args(
 def test_gpt_oss_demo(
     mesh_device,
     device_params,
-    mesh_shape,
     input_prompts,
     data_parallel,
     batch_size,
@@ -442,6 +429,7 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    mesh_shape = tuple(mesh_device.shape)
     if mesh_shape[0] == 1:
         if batch_size > 1:
             pytest.skip(
@@ -454,7 +442,6 @@ def test_gpt_oss_demo(
     if os.environ.get("CI", None) and not run_in_ci:
         config_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
         pytest.skip(f"This test configuration is skipped in CI: {config_id}")
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
@@ -538,6 +525,19 @@ def test_gpt_oss_demo(
         enable_log_probs=[enable_log_probs] * SAMPLING_BATCH_SIZE,
         num_logprobs=[num_logprobs] * SAMPLING_BATCH_SIZE,
     )
+
+    # On-device sampling is disabled when per-device padded vocab exceeds the 64K
+    # cap (e.g. tp=1 on a single Blackhole card → 262K-padded vocab). In that case
+    # fall back to host-side sampling. Only greedy is supported for the fallback.
+    on_device_sampling_supported = all(getattr(m, "sampling", None) is not None for m in model)
+    if not on_device_sampling_supported:
+        assert greedy, (
+            "On-device sampling is unavailable on this mesh (per-device vocab > 64K) "
+            "and the host-side fallback only supports greedy decoding. "
+            f"Got temperature={sampling_params['temperature']}."
+        )
+        assert not enable_log_probs, "Host-side sampling fallback does not support logprobs."
+        logger.info("On-device sampling unavailable; using host-side greedy argmax for decode.")
 
     # Prepare input prompts
     logger.info(f"Reading inputs...")
@@ -787,15 +787,28 @@ def test_gpt_oss_demo(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Decode forward with on-device sampling
-            out_tok, _ = generator.decode_forward(
-                out_tok,
-                current_pos,
-                enable_trace=enable_decode_trace,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                sampling_params=device_sampling_params,
-            )
+            # Decode forward — on-device sampling when available, host-side
+            # greedy argmax otherwise (1×1 Blackhole, etc.)
+            if on_device_sampling_supported:
+                out_tok, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_decode_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    sampling_params=device_sampling_params,
+                )
+            else:
+                # decode_forward returns (logits, log_probs) when sampling_params=None.
+                logits, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_decode_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    sampling_params=None,
+                )
+                out_tok = torch.argmax(logits, dim=-1).view(-1)
 
             if iteration == 0:
                 profiler.end(f"compile_decode", iteration=batch_idx)

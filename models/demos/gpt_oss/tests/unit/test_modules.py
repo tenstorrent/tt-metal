@@ -586,17 +586,6 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        (1, 8),
-        (4, 8),
-    ],
-    ids=[
-        "mesh_1x8",
-        "mesh_4x8",
-    ],
-)
-@pytest.mark.parametrize(
     # We want to test the first two layers so we capture both sliding and global attention layers
     "layer_idx",
     [0],
@@ -605,7 +594,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     ],
 )
 def test_decoder(
-    mesh_device, device_params, batch_size, seq_len, mesh_shape, layer_idx, test_modules, test_thresholds, reset_seeds
+    mesh_device, device_params, batch_size, seq_len, layer_idx, test_modules, test_thresholds, reset_seeds
 ):
     """
     Test decoder layer components.
@@ -625,13 +614,13 @@ def test_decoder(
         pytest test_modules.py --test-modules=attention
         pytest test_modules.py --test-modules=attention,mlp
     """
+    mesh_shape = tuple(mesh_device.shape)
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
             f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
         )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
     is_decode = seq_len == 1
     mode = "decode" if is_decode else "prefill"
 
@@ -1046,22 +1035,11 @@ def run_model_forward_test(
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        (1, 8),
-        (4, 8),
-    ],
-    ids=[
-        "mesh_1x8",
-        "mesh_4x8",
-    ],
-)
-@pytest.mark.parametrize(
     "num_layers",
     [1],
     ids=["1_layer"],
 )
-def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
+def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers, reset_seeds):
     """
     Test full model forward pass comparing TT implementation to HuggingFace reference.
 
@@ -1077,7 +1055,6 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         batch_size: Batch size for the test
         seq_len: Sequence length for the test
         mode: "prefill" or "decode"
-        mesh_shape: Mesh shape tuple
         num_layers: Number of layers to use (overrides config.num_hidden_layers)
         reset_seeds: Fixture to reset random seeds
     """
@@ -1085,15 +1062,14 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
 
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
+    mesh_shape = tuple(mesh_device.shape)
+
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
-            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported when mesh rows = 1."
         )
 
     is_decode = mode == "decode"
-
-    # Create submesh with specified shape
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
