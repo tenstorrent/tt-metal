@@ -169,12 +169,7 @@ void kernel_main() {
         mesh_cols,
         axis,
         total_mesh_devices>(
-        fabric_connections,
-        sem_packet_header,
-        dest_chip_ids,
-        dest_mesh_ids,
-        init_noc_semaphore_addr,
-        /*flush=*/false);
+        fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
@@ -249,7 +244,12 @@ void kernel_main() {
             mesh_cols,
             axis,
             total_mesh_devices>(
-            fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
+            fabric_connections,
+            sem_packet_header,
+            dest_chip_ids,
+            dest_mesh_ids,
+            exit_noc_semaphore_addr,
+            /*flush=*/true);
 
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);

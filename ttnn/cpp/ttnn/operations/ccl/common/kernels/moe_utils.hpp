@@ -878,15 +878,15 @@ inline void send_init_semaphore_to_configured_targets(
     const uint8_t dest_chip_ids[NumDevices],
     const uint8_t dest_mesh_ids[NumDevices],
     uint64_t init_noc_semaphore_addr,
-    bool flush = true) {
+    bool flush = false) {
     // `flush` controls the receive-side EDM atomic-inc ordering w.r.t. prior fabric writes
     // to the same destination chip:
-    //   flush=true  (default, exit handshake): EDM holds the atomic-inc until prior fabric
-    //                writes to this destination have committed at the receiver, so a peer
-    //                waiting on the semaphore is guaranteed to observe all data writes
-    //                once the semaphore reaches its threshold.
-    //   flush=false (init handshake only): atomic-inc may overtake prior writes - fine
-    //                because nothing has been written yet at op start; skips one EDM check.
+    //   flush=false (default, init handshake): atomic-inc may overtake prior writes - fine
+    //                because nothing has been written yet at op start.
+    //   flush=true  (exit handshake): EDM holds the atomic-inc until prior fabric writes to
+    //                this destination have committed at the receiver, so a peer waiting on
+    //                the semaphore is guaranteed to observe all data writes once the
+    //                semaphore reaches its threshold.
     uint32_t device_begin_idx = 0;
     uint32_t device_end_idx = NumDevices;
     uint32_t device_stride = 1;
