@@ -4000,7 +4000,6 @@ class MoeOp:
 
         if routed_ctx.enable_forward and routed_ctx.bcast_pkt_cb is not None:
             cb46_cb_id = routed_ctx.bcast_pkt_cb
-            cb46_total_size = routed_ctx.forward_params["payload_size_bytes"] + routed_ctx.forward_metadata_size_bytes
             rmsnorm_fmt = routed_ctx.rmsnorm_output_cb_descriptor.format_descriptors[0]
             cb46_page_size = rmsnorm_fmt.page_size
             cb46_tile = rmsnorm_fmt.tile
