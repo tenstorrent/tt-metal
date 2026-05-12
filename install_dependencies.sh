@@ -519,10 +519,13 @@ install() {
     if [ "$docker" -ne 1 ]; then
         install_sfpi
         install_mpi_ulfm
-        # Set gcc/g++ and clang/clang++ defaults via update-alternatives
-        configure_compiler_alternatives
     fi
     install_llvm
+
+    # Set gcc/g++ and clang/clang++ defaults via update-alternatives (docker builds only)
+    if [ "$docker" -eq 1 ]; then
+        configure_compiler_alternatives
+    fi
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
