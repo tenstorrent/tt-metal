@@ -200,7 +200,6 @@ jobs:
     name: "AI Run Summary"
     needs: [load-test-matrix, demo-sp-release-tests]
     if: always()
-    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
