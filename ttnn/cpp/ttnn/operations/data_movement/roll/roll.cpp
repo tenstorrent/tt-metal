@@ -86,7 +86,7 @@ ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift) {
 
     // Calculate total number of elements for flattening
     int total_elements = 1;
-    for (int i = 0; i < original_shape.rank(); ++i) {
+    for (size_t i = 0; i < original_shape.rank(); ++i) {
         total_elements *= original_shape[i];
     }
 

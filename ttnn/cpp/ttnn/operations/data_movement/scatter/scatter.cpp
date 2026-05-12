@@ -76,7 +76,7 @@ void validate_inputs(
             probe_dim,
             index_shape,
             source_shape);
-        if (probe_dim != normalized_dim) {
+        if (probe_dim != static_cast<uint32_t>(normalized_dim)) {
             TT_FATAL(
                 index_shape[probe_dim] <= input_shape[probe_dim],
                 "index_shape[{}] <= input_shape[{}] == false (index_shape: {}, input_shape: {})",
@@ -300,7 +300,7 @@ Tensor scatter(
     const auto original_layout = input_tensor.layout();
 
     // index and source tensors should have same rank as input tensor
-    const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
+    const bool input_tensor_is_dim_last_idx = (normalized_dim == static_cast<int32_t>(input_tensor_rank) - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
     // tensors sent to the device operation must be:
