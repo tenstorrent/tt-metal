@@ -8,6 +8,7 @@ import os
 
 import torch
 import torch.nn.functional as F
+from transformers.integrations.finegrained_fp8 import Fp8Dequantize
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 import ttnn
@@ -21,6 +22,35 @@ except ImportError:  # minimal fallback if tests package not on PYTHONPATH
     get_updated_device_params = lambda p: p  # type: ignore[assignment]
 
 DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
+
+# HF / model-card style 256K-token context (Devstral long context). Default TT allocation on Blackhole only;
+# Wormhole single-chip DRAM typically cannot hold full preallocated KV at this length.
+DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN = 256_000
+
+_ORIGINAL_FP8_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
+_FP8_PATCH_APPLIED = False
+
+
+def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
+    if scales.ndim == 0:
+        fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
+        if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
+            quantized_fp32 = self._unpack_fp4(quantized)
+        else:
+            quantized_fp32 = quantized.to(torch.float32)
+        out_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
+        scale = scales.to(torch.float32)
+        return (quantized_fp32 * scale).to(out_dtype)
+    return _ORIGINAL_FP8_DEQUANTIZE_ONE(self, quantized, scales)
+
+
+def apply_fp8_dequantize_compat() -> None:
+    """Idempotent patch for FP4/FP8 dequant used when loading Devstral checkpoints."""
+    global _FP8_PATCH_APPLIED
+    if _FP8_PATCH_APPLIED:
+        return
+    Fp8Dequantize._dequantize_one = _dequantize_one_compat
+    _FP8_PATCH_APPLIED = True
 
 
 def text_model_root(multimodal_inner: Mistral3Model):
@@ -102,6 +132,31 @@ def open_devstral_demo_mesh(mesh_width: int):
     }
     mesh_shape = ttnn.MeshShape(1, mesh_width)
     return ttnn.open_mesh_device(mesh_shape=mesh_shape, **get_updated_device_params(device_params))
+
+
+def default_devstral_demo_max_seq_len(mesh_device: ttnn.MeshDevice, prompt_need_tokens: int) -> int:
+    """
+    Default ``ModelArgs.max_seq_len`` when demos omit an explicit cap.
+
+    Uses ``max(256000, prompt_need)`` on **Blackhole** (``ttnn.device.is_blackhole``) for 256K-window support.
+    Uses ``max(4096, prompt_need)`` on Wormhole (and other arches) to reduce single-chip DRAM OOM risk.
+    """
+    need = int(prompt_need_tokens)
+    if ttnn.device.is_blackhole(mesh_device):
+        return max(DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN, need)
+    return max(4096, need)
+
+
+def devstral_tt_kv_cache_max_seq_len(model_args: ModelArgs, run_need_tokens: int) -> int:
+    """
+    Third dimension allocated for KV cache tensors (:class:`~models.tt_transformers.tt.attention.Attention`).
+    Matches TT prefill padding rules (KV tile / ``wo`` chunk) and clamps to ``model_args.max_seq_len``.
+    ``ModelArgs.max_seq_len`` can stay at 262144 for HF RoPE while KV uses this tighter bound so DRAM fits.
+    """
+    need = int(run_need_tokens)
+    cols = int(model_args.cluster_shape[1])
+    capped = tt_prefill_target_seqlen(need, int(model_args.n_kv_heads), cols)
+    return min(int(capped), int(model_args.max_seq_len))
 
 
 def squeeze_tt_hidden_to_bsh(tt_lm_out: ttnn.Tensor, mesh_device, seq_len_keep: int) -> torch.Tensor:

@@ -11,6 +11,9 @@ Demo / smoke test using the **same user prompt** as ``reference/model_loading.py
 ``--vision-square-pixels S`` resizes to ``S×S`` (LANCZOS) before ``processor`` and overrides
 ``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing).
 
+TT ``max_seq_len`` follows ``devstral_utils.default_devstral_demo_max_seq_len``: **Blackhole** defaults to
+at least **256000** tokens; **Wormhole** uses a prompt-sized cap to limit DRAM use.
+
 **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
 ``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge 336).
 Default image ``reference/sample.jpeg``; ``max_new_tokens=100``.
@@ -50,6 +53,7 @@ import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
 from models.experimental.devstarl2_small.devstral_utils import (
+    default_devstral_demo_max_seq_len,
     devstral_supports_on_device_sampling,
     pad_input_ids_and_positions_for_tt_prefill,
     tt_lm_head_logits_block,
@@ -336,10 +340,13 @@ def run_tt(
 
     prompt_len = int(input_ids.shape[1])
     extra_tokens = max(0, max_new_tokens)
-    max_seq = max(4096, prompt_len + extra_tokens + 2048)
+    need = prompt_len + extra_tokens + 2048
 
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
     try:
+        max_seq = default_devstral_demo_max_seq_len(mesh_device, need)
+        logger.info(f"TT max_seq_len={max_seq} (blackhole={ttnn.device.is_blackhole(mesh_device)}; need={need}).")
+
         dtype_tt = ttnn.bfloat16
 
         logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
