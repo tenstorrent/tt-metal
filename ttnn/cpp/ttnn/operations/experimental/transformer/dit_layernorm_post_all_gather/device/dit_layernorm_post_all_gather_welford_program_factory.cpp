@@ -222,6 +222,24 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     compute_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/"
         "layernorm_post_allgather_welford.cpp";
+
+    // Float32 input requires fp32 dest accumulation; otherwise the unpacker would silently
+    // downcast through SrcA to TF32 / Float16_b (~10 mantissa bits).
+    TT_FATAL(
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "dit_layernorm_post_all_gather with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config; otherwise precision is silently lost in the unpacker format "
+        "conversion.");
+
+    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so the
+    // unpacker writes full fp32 to DEST instead of routing through SrcA (which would downcast
+    // to TF32 with only 10 mantissa bits).
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = std::move(compute_args);
@@ -229,6 +247,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 

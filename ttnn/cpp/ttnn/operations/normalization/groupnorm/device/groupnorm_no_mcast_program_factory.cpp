@@ -816,6 +816,23 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp");
 
+    // Float32 input requires fp32 dest accumulation; otherwise the unpacker would silently
+    // downcast through SrcA to TF32 / Float16_b (~10 mantissa bits).
+    TT_FATAL(
+        !(use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
+        "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
+
+    // For Float32 input on the Welford path, force unpack-to-dest in fp32 mode so the unpacker
+    // writes full fp32 to DEST instead of routing through SrcA (which downcasts to TF32 = 10
+    // mantissa bits). Without this the Welford recurrence sees TF32-truncated inputs
+    // and catastrophically loses precision when |mean| >> std.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel_path;
     compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -828,6 +845,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 
@@ -843,6 +861,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 

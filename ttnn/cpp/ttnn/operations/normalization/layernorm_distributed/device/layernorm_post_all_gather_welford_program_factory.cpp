@@ -432,6 +432,23 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
+    // Float32 input requires fp32 dest accumulation; otherwise the unpacker would silently
+    // downcast through SrcA to TF32 / Float16_b (~10 mantissa bits).
+    TT_FATAL(
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "layer_norm_post_all_gather with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config; otherwise precision is silently lost in the unpacker format "
+        "conversion.");
+
+    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so the
+    // unpacker writes full fp32 to DEST instead of routing through SrcA (which would downcast
+    // to TF32 -- 10 mantissa bits).
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Compute kernel
     // Welford preserves the math fidelity selection and FP32 dst-acc setting from compute_kernel_config.
     KernelDescriptor compute_kernel_desc;
@@ -445,6 +462,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 

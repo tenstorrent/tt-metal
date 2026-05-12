@@ -179,6 +179,15 @@ void kernel_main() {
                 transpose_wh_tile(cb_in0_id, tile_id, input_dst);
 #endif
 
+                // For Float32 input with fp32_dest_acc_en the program factory sets
+                // unpack_to_dest_mode=UnpackToDestFp32 on cb_in so transpose_wh_tile takes the
+                // UnpackToDest fp32 path. That path calls llk_math_transpose_dest which writes
+                // to SFPU replay buffer slot 0; the same slot welford_init programmed.
+                // Re-program the replay buffer so welford_update_rows replays welford ops.
+                // LREG4/5 are about to be overwritten by welford_restore_state, so no need to
+                // preserve them.
+                MATH((llk_math_welfords_sfpu_init()));
+
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
                     // Start Welford's Calculation

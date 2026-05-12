@@ -604,3 +604,72 @@ def test_distributed_dit_pre_allgather_welford_precision(device, inp_shape, inp_
         pcc = 0.999
     assert_numeric_metrics(torch_mean, tt_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
     assert_numeric_metrics(torch_var, tt_var, rtol=rtol, atol=atol, pcc_threshold=pcc)
+
+
+@pytest.mark.parametrize("offset", [0.0, 1e6])
+def test_dit_layernorm_pre_allgather_fp32_precision(device, offset):
+    """dit_layernorm_pre_allgather Welford stats are accurate for Float32 input regardless of mean offset.
+
+    Without the unpack_to_dest_mode=UnpackToDestFp32 fix in the program factory (and the kernel-
+    side replay-buffer recovery after transpose_wh_tile), the unpacker silently downcasts fp32
+    through SrcA to TF32 (10 mantissa bits). Large-mean inputs (offset=1e6) then make the
+    Welford recurrence's (x - M) subtraction lose precision -- mean/variance produced for the
+    post_allgather stage become wrong.
+
+    With the fix the answer matches torch fp64 within fp32 noise even at offset=1e6.
+    """
+    torch.manual_seed(0)
+    embedding_dim = 128
+    shape = (1, 1, 32, embedding_dim)
+    torch_input = torch.randn(shape, dtype=torch.float32) + offset
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    recip_tensor = create_recip_tensor_for_welford(device, embedding_dim)
+    tt_inp = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_stats = ttnn.experimental.dit_layernorm_pre_allgather(
+        tt_inp, recip_tensor, compute_kernel_config=compute_kernel_config, dtype=ttnn.float32
+    )
+    actual = ttnn.to_torch(tt_stats)
+
+    # dit_pre returns Welford (mean, variance), unlike the legacy distributed pre_all_gather
+    # which returns (sum(x^2), sum(x)). The Welford kernel uses welford_finalize_to_row to
+    # convert M2 -> variance and writes (mean, var) into the row-broadcast slots.
+    # Output layout: column 0 of tile 0 holds the mean, column 0 of tile 1 (offset 32) holds
+    # variance.  Reference is computed in fp64 so it isn't itself contaminated by fp32 noise.
+    torch_mean = torch_input.to(torch.float64).mean(dim=-1)
+    torch_var = torch_input.to(torch.float64).var(dim=-1, correction=0)
+
+    tt_mean = actual[..., 0].to(torch.float64).squeeze(-1)
+    tt_var = actual[..., 32].to(torch.float64).squeeze(-1)
+
+    # Mean tolerance: scales with offset magnitude due to fp32 Welford's inherent precision
+    # loss when |mean| >> std (each (x - M) subtraction loses ~log2(|mean|/std) bits). At
+    # offset=1e6 this gives ~1e3 absolute error.  The tolerance here is loose enough to
+    # absorb that, tight enough to catch the TF32 catastrophe (which gives ~1e6 absolute
+    # error: the recovered mean collapses or gets entirely truncated).
+    mean_atol = max(1e-2, abs(offset) * 1e-2)
+    assert torch.allclose(
+        tt_mean, torch_mean, rtol=1e-3, atol=mean_atol
+    ), f"offset={offset} mean mismatch: max_abs_err={(tt_mean - torch_mean).abs().max().item()}"
+
+    # Variance is translation-invariant so the reference value is ~1.0 in both cases.  Without
+    # the fix at offset=1e6 the variance collapses toward 0 entirely (relative error ~1.0,
+    # absolute error ~ref_variance).  With the fix the recovered variance has fp32 Welford
+    # noise scaling with the mean/std ratio -- atol=0.5 is loose enough to absorb that but
+    # tight enough to catch the TF32 catastrophe.
+    assert torch.allclose(
+        tt_var, torch_var, rtol=0.3, atol=0.5
+    ), f"offset={offset} variance mismatch: max_abs_err={(tt_var - torch_var).abs().max().item()} tt_var={tt_var.flatten()[:5].tolist()} ref={torch_var.flatten()[:5].tolist()}"

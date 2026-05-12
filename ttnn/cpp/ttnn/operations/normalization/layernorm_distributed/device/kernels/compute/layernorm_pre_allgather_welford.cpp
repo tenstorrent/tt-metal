@@ -187,16 +187,30 @@ void kernel_main() {
         transpose_wh_init(cb_inp, cb_x2);
         welford_init();
 
+        // When the input CB carries Float32 with fp32_dest_acc_en=true, the program factory
+        // sets unpack_to_dest_mode=UnpackToDestFp32 for cb_inp so transpose_wh_tile takes the
+        // UnpackToDest fp32 path (preserves full 23-mantissa-bit fp32 into DEST rather than
+        // downcasting to TF32 in SrcA). That path calls llk_math_transpose_dest, which writes
+        // to SFPU replay buffer slot 0; the same slot welford_init programmed with the
+        // welford recurrence. Re-establish welford state after each transpose_wh_tile so
+        // welford_update replays welford ops instead of stale transpose-dest ops. LREG4/5 (the
+        // running mean / M2 accumulator) survive transpose_dest because it only uses FPU MOVs.
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
+            transpose_wh_init_short(cb_inp);
             transpose_wh_tile(cb_inp, 0, dst0);
+            welford_reinit(cb_inp);
+            MATH((llk_math_welfords_sfpu_init()));
             // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
             welford_update<W>(dst0, start_N, *p_reciprocals);
             start_N += 32;
             cb_pop_front(cb_inp, 1);
         }
         cb_wait_front(cb_inp, 1);  // cumulative wait
+        transpose_wh_init_short(cb_inp);
         transpose_wh_tile(cb_inp, 0, dst0);
+        welford_reinit(cb_inp);
+        MATH((llk_math_welfords_sfpu_init()));
         welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
         cb_pop_front(cb_inp, 1);
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);

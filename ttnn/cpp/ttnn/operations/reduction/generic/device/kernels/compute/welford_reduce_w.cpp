@@ -170,7 +170,7 @@ void kernel_main() {
             //   1. welford_reinit re-establishes UNPACK+MATH datacopy config (parallel of the
             //      do_scale path which calls this after mul_tiles_bcast_scalar)
             //   2. llk_math_welfords_sfpu_init re-programs the replay buffer with the welford
-            //      recurrence -- without clearing LREG4/5 (which would lose the running
+            //      recurrence, without clearing LREG4/5 (which would lose the running
             //      mean/M2 accumulator).
             welford_reinit(cb_in);
             MATH((llk_math_welfords_sfpu_init()));

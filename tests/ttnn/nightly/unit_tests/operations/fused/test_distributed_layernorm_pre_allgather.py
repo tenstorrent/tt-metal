@@ -889,3 +889,69 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
 
     # test for equivalance
     assert_equal(out_from_torch, out_from_ones)
+
+
+@pytest.mark.parametrize("offset", [0.0, 1e6])
+@pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128)])
+def test_layernorm_pre_all_gather_fp32_precision(device, inp_shape, offset):
+    """Welford pre_all_gather stats are accurate for Float32 input regardless of mean offset.
+
+    Without the unpack_to_dest_mode=UnpackToDestFp32 fix in the program factory (and the kernel-
+    side replay-buffer recovery after transpose_wh_tile), the unpacker silently downcasts fp32
+    through SrcA to TF32 (10 mantissa bits). Large-mean inputs (offset=1e6) then collapse the
+    sum(x^2) tail in the Welford recurrence -- variance drops to ~0 against torch's fp64 result.
+
+    With the fix the answer matches torch fp64 to within fp32 representation noise even at
+    offset=1e6; without it the assert at offset=1e6 fails dramatically.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset
+
+    # fp64 reference matches the layout the device returns: sum(x^2) at col 0 of tile 0,
+    # sum(x) at col 0 of tile 1 (offset 32).
+    out_torch = reference([torch_input.to(torch.float64)], 1, False)[0].to(torch.float32)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_inp = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_stats = ttnn.layer_norm_pre_all_gather(
+        tt_inp,
+        dtype=ttnn.float32,
+        compute_kernel_config=kernel_config,
+    )
+
+    actual = ttnn.to_torch(tt_stats)
+    # Tolerances scale with the magnitude of the stats themselves: sum(x^2) ~ N * x^2 is huge
+    # at offset=1e6 (~6.4e12) so use relative tolerance.  sum(x) ~ N * x is smaller (~6.4e7).
+    # These tight tolerances catch the TF32 truncation bug -- without the fix, sum(x^2) at
+    # offset=1e6 has ~100% relative error.
+    ref_sumx2 = out_torch[..., 0]
+    tt_sumx2 = actual[..., 0]
+    ref_sumx = out_torch[..., 32]
+    tt_sumx = actual[..., 32]
+    # Use relative error with an absolute-error floor so rows whose sum(x) happens to be near
+    # zero (which can occur at offset=0 with randn input) don't produce a huge relative error
+    # from a small absolute fp32 rounding difference.
+    abs_atol = max(1.0, abs(offset) * 1e-3)
+    rel_err_sumx2 = (tt_sumx2 - ref_sumx2).abs() / (ref_sumx2.abs() + abs_atol)
+    rel_err_sumx = (tt_sumx - ref_sumx).abs() / (ref_sumx.abs() + abs_atol)
+    logger.info(
+        f"offset={offset} max_rel_err sum(x^2)={rel_err_sumx2.max().item():.2e} sum(x)={rel_err_sumx.max().item():.2e}"
+    )
+    # With the fix, rel error is fp32-noise level.  Without the fix, at offset=1e6 sum(x^2)
+    # has ~1.0 relative error (variance silently collapses to 0).  1e-2 is loose enough to
+    # absorb fp32 rounding on values near zero but still catches the catastrophic TF32 bug.
+    assert rel_err_sumx2.max().item() < 1e-2, f"sum(x^2) rel error too large: {rel_err_sumx2.max().item()}"
+    assert rel_err_sumx.max().item() < 1e-2, f"sum(x) rel error too large: {rel_err_sumx.max().item()}"

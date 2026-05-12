@@ -376,10 +376,13 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // large-mean fp32 variance silently collapsing to ~0 due to TF32 truncation
     // wiping the bits that distinguish nearby samples.
     //
-    // Applied to all three reduction paths (H, W, HW): the input CB plus each Float32 scratch
-    // CB the compute kernel reads back via copy_tile / transpose_wh_tile; W reads cb_var
-    // (c_19) after the initial transpose to undo it; HW reads cb_combined (c_22) after the
-    // writer-side re-reduction.
+    // Apply this to every Float32 CB the compute kernel reads back via copy_tile /
+    // transpose_wh_tile:
+    //   - Input CB: needed on all three reduction paths (H, W, HW).
+    //   - W-reduce only: cb_var (c_19) -- the variance tile is read back after the initial
+    //     transpose to undo it.
+    //   - HW-reduce only: cb_combined (c_22) -- the variance tile is read back after the
+    //     writer-side cross-core re-reduction.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_cb_data_format == tt::DataFormat::Float32) {
