@@ -13,9 +13,9 @@ loguru>=0.7.0
 
 # HF model + dataset dependencies used to generate reference tensors
 # (see reference/run_metadata.json for exact runtime versions used)
-transformers==5.8.0
+transformers>=4.30.0
 datasets>=2.0.0
-huggingface_hub==1.14.0
+huggingface_hub>=0.20.0
 safetensors>=0.4.0
 
 # Note: ttnn is provided by the tt-metal environment
