@@ -816,12 +816,12 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  *
  * Return value: None
  *
- * | Template Param  | Description                                                                                  | Type       | Valid Range                                                | Required |
- * |-----------------|----------------------------------------------------------------------------------------------|------------|------------------------------------------------------------|----------|
- * | fmt             | Data format of the values stored in DEST                                        | DataFormat | See supported formats above                                | True     |
+ * | Template Param  | Description                                                                                  | Type       | Valid Range                                   | Required |
+ * |-----------------|----------------------------------------------------------------------------------------------|------------|-----------------------------------------------|----------|
+ * | fmt             | Data format of the values stored in DEST                                                     | DataFormat | See supported formats above                   | True     |
  *
- * | Argument        | Description                                                                                  | Type       | Valid Range                                                | Required |
- * |-----------------|----------------------------------------------------------------------------------------------|------------|------------------------------------------------------------|----------|
+ * | Argument        | Description                                                                                  | Type       | Valid Range                                   | Required |
+ * |-----------------|----------------------------------------------------------------------------------------------|------------|-----------------------------------------------|----------|
  * | tile_id         | Index of the tile within DEST to read                                           | uint32_t   | Must be less than the size of the DST register buffer      | True     |
  * | dst_buffer      | Destination buffer with space for TILE_HEIGHT * TILE_WIDTH elements of *fmt*    | void*      | Non-null                                                   | True     |
  * | enable_swizzle  | When true, read with hardware swizzling enabled                                 | bool       | true or false                                              | False    |

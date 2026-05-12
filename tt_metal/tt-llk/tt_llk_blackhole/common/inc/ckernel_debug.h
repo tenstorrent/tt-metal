@@ -158,11 +158,6 @@ inline void dbg_thread_unhalt()
 // Dump a single tile from the DEST register through the RISC-V memory-mapped
 // dest register.
 //
-// SyncHalf note: tile_id is a direct index into DEST starting at offset 0.
-// In SyncHalf mode the math thread uses the upper half of DEST when
-// dest_offset_id == 1; in that case pass (DEST_NUM_TILES_FP16_HALF + logical_tile_id)
-// or precompute the offset via get_dest_buffer_base().
-//
 // Parameters:
 //   fmt:             data format of the values stored in DEST.
 //   tile_id:         index of the tile within DEST to dump.
@@ -177,8 +172,6 @@ inline void dbg_dump_dest_tile(DataFormat fmt, std::uint32_t tile_id, void *dst_
         thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
         "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
 
-    // Only the formats explicitly handled by fmt_to_dest_type and the byte-width
-    // dispatch below are supported on the RISC-V debug dest pathway.
     LLK_ASSERT(
         fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
             fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
@@ -225,6 +218,16 @@ inline void dbg_dump_dest_tile(DataFormat fmt, std::uint32_t tile_id, void *dst_
     }
 }
 
+// Write a single tile into the DEST register through the RISC-V memory-mapped
+// dest register.
+//
+// Parameters:
+//   fmt:             data format of the values to be stored in DEST.
+//   tile_id:         index of the tile within DEST to overwrite.
+//   src_buffer:      source buffer pointer to copy the tile from. Must hold
+//                    TILE_HEIGHT * TILE_WIDTH elements of `fmt`.
+//   enable_swizzle:  when true, write with hardware swizzling enabled (matches
+//                    the FPU's view of DEST); when false, write the raw layout.
 template <ThreadId thread_id = ThreadId::MathThreadId>
 inline void dbg_write_dest_tile(DataFormat fmt, std::uint32_t tile_id, const void *src_buffer, bool enable_swizzle = true)
 {
