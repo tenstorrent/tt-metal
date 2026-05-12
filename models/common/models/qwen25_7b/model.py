@@ -78,6 +78,8 @@ class Qwen25ExecutorRuntimeConfig:
     optimizations: Any = None
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int) -> bool:
+        # Prefill trace replay is not supported for this graph today: capture hits TT_FATAL on
+        # event sync / host reads / writes (``LazyWeight`` + distributed norms). Decode trace remains enabled.
         return False
 
 
@@ -110,6 +112,26 @@ def _qwen_wh_mlp_matmul_compute_kernel() -> ttnn.WormholeComputeKernelConfig:
     )
 
 
+def _qwen_wh_mlp_decode_matmul_compute_kernel() -> ttnn.WormholeComputeKernelConfig:
+    """HiFi2 decode FF matmuls: faster steady-state decode while prefill keeps HiFi4 (``_qwen_wh_mlp_matmul_compute_kernel``)."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _qwen_wh_decode_attn_lofi_kernel() -> ttnn.WormholeComputeKernelConfig:
+    """LoFi decode attention matmuls + SDPA when ``perf_decode_tuning`` is enabled (performance demo only)."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
 def _all_gather_rmsnorm_tensor(
     norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
 ) -> ttnn.Tensor:
@@ -130,8 +152,8 @@ def _all_gather_rmsnorm_tensor(
         topology=default_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
+        chunks_per_sync=24,
+        num_workers_per_link=4,
         num_buffers_per_channel=2,
     )
 
@@ -259,6 +281,7 @@ class Qwen25_7BTTT(LightweightModule):
         lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b,
         block_size: int = 32,
         executor_mode: bool = False,
+        perf_decode_tuning: bool = False,
     ) -> Qwen25_7BTTT:
         """
         Load HF weights on host and build TTNN modules (weights materialize on first forward).
@@ -274,6 +297,9 @@ class Qwen25_7BTTT(LightweightModule):
             block_size: Paged attention block size (tokens per block).
             executor_mode: If True, use external paged KV (``set_kv_cache`` + shared executor).
                 If False, internal KV tensors (smoke / ``prefill_from_token_ids`` without executor).
+            perf_decode_tuning: If True, apply decode-only throughput knobs (SDPA exp-approx, LoFi decode
+                attention math, HiFi2 MLP decode FF, no W1 DRAM spill for small batch). Intended for
+                ``optimizations=="performance"`` in the demo; leave False for accuracy mode.
         """
         ttnn.SetDefaultDevice(mesh_device)
         cache_path = Path(cache_dir) if cache_dir else None
@@ -364,15 +390,35 @@ class Qwen25_7BTTT(LightweightModule):
         mlp_prefill_len_cutoff: int | None = None
         mlp_ff_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
         mlp_decode_spill_w1_to_dram: bool = False
+        mlp_decode_ff_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
         lm_head_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+        perf_decode_sdpa_cfg: ttnn.SDPAProgramConfig | None = None
+        perf_li_qkv_decode: ttnn.WormholeComputeKernelConfig | None = None
+        perf_sdpa_decode: ttnn.WormholeComputeKernelConfig | None = None
+        perf_li_o_decode: ttnn.WormholeComputeKernelConfig | None = None
         if (model_slug.startswith("Qwen2.5-7B") or model_slug.startswith("Qwen2.5-VL-7B")) and num_dev in (1, 2):
             mlp_prefill_len_cutoff = 256
             mlp_ff_compute_kernel_cfg = _qwen_wh_mlp_matmul_compute_kernel()
-            mlp_decode_spill_w1_to_dram = True
+            mlp_decode_spill_w1_to_dram = max_batch_size >= 16
             lm_head_compute_kernel_cfg = _qwen_wh_mlp_matmul_compute_kernel()
+            mlp_decode_ff_compute_kernel_cfg = (
+                _qwen_wh_mlp_decode_matmul_compute_kernel() if perf_decode_tuning else mlp_ff_compute_kernel_cfg
+            )
+            if perf_decode_tuning:
+                lo = _qwen_wh_decode_attn_lofi_kernel()
+                perf_decode_sdpa_cfg = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    exp_approx_mode=True,
+                    q_chunk_size=0,
+                    k_chunk_size=0,
+                )
+                perf_li_qkv_decode = lo
+                perf_sdpa_decode = lo
+                perf_li_o_decode = lo
             logger.info(
-                f"MLP/LM L1 tuning for {hf_model_id} on {num_dev} device(s): "
-                "prefill_len_cutoff=256, FF HiFi4, decode W1→DRAM before W3, LM head HiFi4"
+                f"MLP/LM tuning for {hf_model_id} on {num_dev} device(s): "
+                f"prefill_len_cutoff=256, FF prefill HiFi4, decode spill W1→DRAM={mlp_decode_spill_w1_to_dram}, "
+                f"perf_decode_tuning={perf_decode_tuning}"
             )
 
         layers: list[Qwen25_7BDecoderLayer] = []
@@ -450,6 +496,10 @@ class Qwen25_7BTTT(LightweightModule):
                 paged_attention_config=paged_cfg,
                 kv_cache=None,
                 kv_cache_dtype=kv_cache_dtype,
+                decode_sdpa_prg_config=perf_decode_sdpa_cfg,
+                li_qkv_decode_compute_kernel_cfg=perf_li_qkv_decode,
+                sdpa_decode_compute_kernel_cfg=perf_sdpa_decode,
+                li_o_decode_compute_kernel_cfg=perf_li_o_decode,
             )
             attn = Attention1D.from_config(attn_cfg)
 
@@ -469,8 +519,8 @@ class Qwen25_7BTTT(LightweightModule):
                     prefill_len_cutoff=mlp_prefill_len_cutoff,
                     ff1_3_compute_kernel_cfg=mlp_ff_compute_kernel_cfg,
                     ff2_compute_kernel_cfg=mlp_ff_compute_kernel_cfg,
-                    decode_ff1_3_compute_kernel_cfg=mlp_ff_compute_kernel_cfg,
-                    decode_ff2_compute_kernel_cfg=mlp_ff_compute_kernel_cfg,
+                    decode_ff1_3_compute_kernel_cfg=mlp_decode_ff_compute_kernel_cfg,
+                    decode_ff2_compute_kernel_cfg=mlp_decode_ff_compute_kernel_cfg,
                     decode_spill_w1_to_dram_before_w3=mlp_decode_spill_w1_to_dram,
                 )
             )
@@ -695,8 +745,8 @@ class Qwen25_7BTTT(LightweightModule):
                 memory_config=logits.memory_config(),
                 topology=default_topology(self.mesh_device),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
+                chunks_per_sync=24,
+                num_workers_per_link=4,
                 num_buffers_per_channel=2,
             )
         return ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
