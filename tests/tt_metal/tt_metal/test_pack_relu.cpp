@@ -155,8 +155,6 @@ static void run_pack_relu_test(
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
-        // Legacy DFBs used enable_implicit_sync = true; implicit-sync DFBs require DM0/DM1.
-        ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);

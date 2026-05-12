@@ -95,12 +95,13 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     constexpr const char* COMPUTE_KERNEL_NAME = "wp_compute";
 
     if (is_quasar) {
-        auto num_dms = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
+        // On Quasar, kernel runs on the 6 user DMs (DM2..DM7). DM0/DM1 are reserved for internal use.
+        constexpr uint32_t kQuasarUserDmCores = 6;
         auto core_range = CoreRange(xy_start, xy_end);
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
-            .num_threads = num_dms,
+            .num_threads = kQuasarUserDmCores,
             .runtime_arguments_schema = {.num_common_runtime_varargs = 1},
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
@@ -123,7 +124,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .program_id = "watcher_waypoints",
             .kernels = {dm_spec, compute_spec},
             .work_units = {wu},
-            ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
         program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
@@ -187,11 +187,14 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
-    // Build poll patterns and wait for waypoints to appear
+    // Build poll patterns and wait for waypoints to appear.
+    // On Quasar, slots 0/1 (reserved DM0/DM1) post a non-AAAA status (e.g. " NTW,  W1,") before
+    // the first user AAAA. Glob between ": " and the waypoint absorbs that prefix; it matches
+    // empty on non-Quasar where AAAA is the very first status field.
     std::vector<std::string> poll_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: {}", x, y, waypoint));
+            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: *{}", x, y, waypoint));
         }
     }
     if (has_eth_cores) {
@@ -231,27 +234,38 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    // Get processor counts from HAL and build expected waypoint strings
+    // Get processor counts from HAL and build expected waypoint strings.
+    // On Quasar, DM0/DM1 are reserved for internal use and don't post a user waypoint,
+    // so the expected per-tensix waypoint count drops by 2.
     uint32_t num_tensix = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
+    if (is_quasar) {
+        num_tensix -= 2;
+    }
     uint32_t num_idle_eth = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
     std::string tensix_waypoints = build_waypoint_string(num_tensix);
     std::string idle_eth_waypoints = build_waypoint_string(num_idle_eth);
 
     log_info(tt::LogTest, "Verifying: {} waypoints/TENSIX, 1/active ETH, {}/idle ETH", num_tensix, num_idle_eth);
 
-    // Verify waypoints with device ID and virtual coordinates
+    // Verify waypoints with device ID and virtual coordinates.
+    // On Quasar, the first two 4-wide status fields belong to the reserved DM0/DM1 (e.g. " NTW",
+    // "  W1") and do not show the AAAA waypoint. Use four '?' wildcards per reserved slot to
+    // skip them and anchor the literal AAAA waypoints right after.
+    const std::string tensix_status_prefix = is_quasar ? "????,????," : "";
     auto check_core = [&](const CoreCoord& logical_core,
                           const CoreCoord& virtual_core,
                           const std::string& type,
-                          const std::string& wp) {
+                          const std::string& wp,
+                          const std::string& status_prefix) {
         std::string expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {}*rmsg:*",
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {}{}*rmsg:*",
             device->id(),
             type,
             logical_core.x,
             logical_core.y,
             virtual_core.x,
             virtual_core.y,
+            status_prefix,
             wp);
         bool found = FileContainsAllStringsInOrder(fixture->log_file_name, {expected});
         EXPECT_TRUE(found) << "Missing waypoint log for " << type << " core (" << logical_core.x << ","
@@ -262,19 +276,19 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord logical_core = {x, y};
             CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-            check_core(logical_core, virtual_core, "worker", tensix_waypoints);
+            check_core(logical_core, virtual_core, "worker", tensix_waypoints, tensix_status_prefix);
         }
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, virtual_core, "acteth", waypoint);
+            check_core(core, virtual_core, "acteth", waypoint, "");
         }
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, virtual_core, "idleth", idle_eth_waypoints);
+            check_core(core, virtual_core, "idleth", idle_eth_waypoints, "");
         }
     }
 }

@@ -74,13 +74,13 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     constexpr const char* DM_KERNEL_NAME = "pause_dm";
 
     if (is_quasar) {
-        // On Quasar, launch kernel on all DMs
+        // On Quasar, launch kernel on all user DMs (DM2..DM7). DM0/DM1 are reserved for internal use.
         // TODO: Watcher features for ERISCs and TRISCs are temporarily skipped on Quasar until basic runtime bring-up.
-        auto num_dms = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
+        constexpr uint32_t kQuasarUserDmCores = 6;
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
-            .num_threads = static_cast<uint8_t>(num_dms),
+            .num_threads = static_cast<uint8_t>(kQuasarUserDmCores),
             .runtime_arguments_schema = {.num_common_runtime_varargs = 1},
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
@@ -96,7 +96,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .program_id = "watcher_pause",
             .kernels = {dm_spec},
             .work_units = {wu},
-            ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
         program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
@@ -165,8 +164,10 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             uint32_t num_processors =
                 is_quasar ? hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0)  // DMs only
                           : hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);      // all 5
-            // Add expected messages for all TENSIX processors
-            for (uint32_t processor_idx = 0; processor_idx < num_processors; processor_idx++) {
+            // On Quasar, DM0/DM1 are reserved for internal use and don't run the pause kernel,
+            // so the pause message only appears for DM2..DM7.
+            uint32_t first_processor_idx = is_quasar ? 2u : 0u;
+            for (uint32_t processor_idx = first_processor_idx; processor_idx < num_processors; processor_idx++) {
                 const std::string& risc_str =
                     hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false);
                 std::string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);

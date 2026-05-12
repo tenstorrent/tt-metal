@@ -56,9 +56,6 @@ static void run_kernel(
         .program_id = "idma",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
-        // TODO(quasar-firmware): Remove once the dmk.cc thread_0_hartid bug is fixed.
-        // See dmk_thread_0_hartid_bug.md.
-        ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 

@@ -270,7 +270,6 @@ void run_single_dfb_program(
                                              : experimental::metal2_host_api::DFBAccessPattern::STRIDED;
 
         // enable_implicit_sync: true  -> default disable_implicit_sync = false (implicit sync ON)
-        //                              + program-level _unsafe_disable_dm0_dm1_reservation_for_bob = true
         // enable_implicit_sync: false -> disable_implicit_sync = true
         experimental::metal2_host_api::DataflowBufferSpec dfb_spec{
             .unique_id = DFB_NAME,
@@ -397,8 +396,6 @@ void run_single_dfb_program(
             .dataflow_buffers = {dfb_spec},
             .tensor_parameters = tensor_parameters,
             .work_units = {wu},
-            // Implicit-sync DFBs need DM0/DM1 setup; lift the reservation only when needed.
-            // ._unsafe_disable_dm0_dm1_reservation_for_bob = dfb_config.enable_implicit_sync,
         };
 
         program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -840,7 +837,6 @@ void run_concurrent_dfbs_program(
                 {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
             },
         .work_units = {wu},
-        // ._unsafe_disable_dm0_dm1_reservation_for_bob = dfb_config.enable_implicit_sync,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -1006,7 +1002,6 @@ void run_concurrent_tensix_dm_dfbs_program(
         .dataflow_buffers = dfb_specs,
         .tensor_parameters = tensor_parameters,
         .work_units = {wu},
-        // ._unsafe_disable_dm0_dm1_reservation_for_bob = dfb_config.enable_implicit_sync,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -1244,7 +1239,6 @@ void run_sequential_dfbs_program(
         .dataflow_buffers = dfb_specs,
         .tensor_parameters = tensor_parameters,
         .work_units = {wu},
-        // ._unsafe_disable_dm0_dm1_reservation_for_bob = configs[0].enable_implicit_sync,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -1441,8 +1435,6 @@ void run_in_dfb_out_dfb_program(
                 {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
             },
         .work_units = {wu},
-        // ._unsafe_disable_dm0_dm1_reservation_for_bob =
-        //     dm2tensix_config.enable_implicit_sync || tensix2dm_config.enable_implicit_sync,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -2247,7 +2239,6 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
         .dataflow_buffers = {remapper_dfb_spec, intra_dfb_spec},
         .tensor_parameters = {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()}},
         .work_units = {wu},
-        // ._unsafe_disable_dm0_dm1_reservation_for_bob = true,  // remapper DFB uses implicit sync
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);

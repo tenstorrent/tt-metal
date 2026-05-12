@@ -357,9 +357,9 @@ static bool reader_datacopy_writer_quasar(
     auto* device = mesh_device->get_devices()[0];
 
     if (test_config.num_tiles > 1) {
-        TT_FATAL(test_config.num_tiles % 4 == 0, "Number of tiles must be divisible by 4");
+        TT_FATAL(test_config.num_tiles % 2 == 0, "Number of tiles must be divisible by 2");
     }
-    const uint32_t num_threads = test_config.num_tiles == 1 ? 1 : 4;
+    const uint32_t num_threads = test_config.num_tiles == 1 ? 1 : 2;
     const uint32_t per_core_tile_cnt = test_config.num_tiles / num_threads;
     const uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
 
@@ -462,8 +462,6 @@ static bool reader_datacopy_writer_quasar(
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
-        // Implicit-sync DFBs require setup_local_dfb_interfaces() on DM0; lift the reservation.
-        ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);

@@ -52,12 +52,6 @@ bool run_im2col_test(
         .program_id = "im2col",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
-        // TODO(quasar-firmware): Remove once the dmk.cc thread_0_hartid bug is fixed.
-        // See dmk_thread_0_hartid_bug.md: a KernelSpec with only CTAs (no RTAs/CRTAs/sems/CBs/DFBs)
-        // lays the kernel binary at kernel_text_offset == 0, which falsely matches reserved DM0/DM1
-        // slots and hangs the user DM. Disabling the DM0/DM1 reservation enables those slots so
-        // the thread_0_hartid match is well-defined.
-        ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 

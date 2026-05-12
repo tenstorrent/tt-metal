@@ -41,6 +41,11 @@ protected:
         device = mesh_device->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         is_quasar = arch_ == tt::ARCH::QUASAR;
+        // On Quasar, DM0/DM1 are reserved for internal use; user kernels can only land on DM2..DM7.
+        if (is_quasar) {
+            constexpr uint32_t kQuasarReservedDmCores = 2;
+            num_dms_ -= kQuasarReservedDmCores;
+        }
         l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     }
     // Common test data
@@ -254,7 +259,6 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
             .program_id = "rta_validation",
             .kernels = {dm_spec},
             .work_units = {wu},
-            ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
         program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
     };
@@ -418,7 +422,6 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
             .program_id = "rta_oob",
             .kernels = {kspec},
             .work_units = {wu},
-            ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
         program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
@@ -507,7 +510,6 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .program_id = "multi_dm_oob",
         .kernels = {dm_spec},
         .work_units = {wu},
-        ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
     program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 

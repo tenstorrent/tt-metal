@@ -59,15 +59,18 @@ void RunOneTest(
     auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
 
     if (is_quasar) {
-        // quasar_dms_per_kernel = 8, num_kernels = 1. Same Kernel launched on all DMs (default)
-        // quasar_dms_per_kernel = 1, num_kernels = 8. A single kernel launched on a unique DM
-        uint32_t dms_per_kernel = quasar_dms_per_kernel.value_or(num_dms);
+        // On Quasar, DM0/DM1 are reserved for internal use; user kernels can only run on DM2..DM7.
+        constexpr uint32_t kQuasarReservedDmCores = 2;
+        const uint32_t num_user_dms = num_dms - kQuasarReservedDmCores;
+        // quasar_dms_per_kernel = num_user_dms, num_kernels = 1. Same kernel launched on all user DMs (default)
+        // quasar_dms_per_kernel = 1, num_kernels = num_user_dms. A single kernel launched on a unique user DM
+        uint32_t dms_per_kernel = quasar_dms_per_kernel.value_or(num_user_dms);
         TT_FATAL(
-            dms_per_kernel > 0 && num_dms % dms_per_kernel == 0,
-            "dms_per_kernel ({}) must be positive and evenly divide num_dms ({})",
+            dms_per_kernel > 0 && num_user_dms % dms_per_kernel == 0,
+            "dms_per_kernel ({}) must be positive and evenly divide num_user_dms ({})",
             dms_per_kernel,
-            num_dms);
-        uint32_t num_kernels = num_dms / dms_per_kernel;
+            num_user_dms);
+        uint32_t num_kernels = num_user_dms / dms_per_kernel;
 
         std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
         std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
@@ -109,7 +112,6 @@ void RunOneTest(
             .program_id = "watcher_stack",
             .kernels = kernel_specs,
             .work_units = {wu},
-            ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
         Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
         workload.add_program(device_range, std::move(program));
@@ -143,9 +145,10 @@ void RunOneTest(
         }
     }
 
-    // Add expected messages for all DMs. On Quasar we opted into the unsafe DM0/DM1
-    // reservation override so user kernels run on every DM (DM0..DM7); dm_start stays 0.
-    for (uint32_t type_idx = 0; type_idx < num_dms; type_idx++) {
+    // Add expected messages for the DMs that ran a user kernel. On Quasar DM0/DM1 are reserved
+    // for internal use, so user kernels run on DM2..DM7 (6 user DMs).
+    const uint32_t dm_start = is_quasar ? 2u : 0u;
+    for (uint32_t type_idx = dm_start; type_idx < num_dms; type_idx++) {
         uint32_t processor_idx =
             hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, type_idx);
         add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
@@ -198,10 +201,10 @@ INSTANTIATE_TEST_SUITE_P(
     WatcherStackUsageTests,
     StackUsageTest,
     ::testing::Values(
-        // Standard tests (all architectures, default Quasar uses single kernel with all DMs)
+        // Standard tests (all architectures, default Quasar uses single kernel with all user DMs)
         StackUsageTestParams{"StackUsage0", 0, std::nullopt, false},
         StackUsageTestParams{"StackUsage16", 16, std::nullopt, false},
-        // Quasar only: multi-kernel mode (launch 8 kernels in total, each mapped to a unique DM each)
+        // Quasar only: multi-kernel mode (launch one kernel per user DM, i.e. 6 kernels on Quasar)
         StackUsageTestParams{"StackUsage0_QuasarMultiKernel", 0, 1, true},
         StackUsageTestParams{"StackUsage16_QuasarMultiKernel", 16, 1, true}),
     [](const ::testing::TestParamInfo<StackUsageTestParams>& info) { return info.param.test_name; });

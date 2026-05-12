@@ -79,13 +79,14 @@ static void RunTest(
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM:
                     if (is_quasar) {
-                        // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
-                        // others exit early. This lets us verify assert works on each DM individually
+                        // On Quasar, kernel runs on the 6 user DMs (DM2..DM7); only dm_id executes the test;
+                        // others exit early. DM0/DM1 are reserved for internal use and are skipped by the
+                        // outer test fixture.
                         uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
                         experimental::metal2_host_api::KernelSpec assert_kernel_spec{
                             .unique_id = ASSERT_KERNEL_NAME,
                             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
-                            .num_threads = 8,
+                            .num_threads = 6,
                             .compile_time_arg_bindings = {{"dm_id", dm_id}},
                             .runtime_arguments_schema = {.num_runtime_varargs = 4},
                             .config_spec =
@@ -102,7 +103,6 @@ static void RunTest(
                             .program_id = "watcher_assert_dm",
                             .kernels = {assert_kernel_spec},
                             .work_units = {wu},
-                            ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
                         };
                         program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
                     } else {
@@ -334,6 +334,12 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     bool is_dram = (params.processor.core_type == HalProgrammableCoreType::DRAM);
     bool is_quasar = (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR);
     bool using_slow_dispatch = this->IsSlowDispatch();
+
+    // On Quasar, DM0 and DM1 are reserved for internal use; user kernels can only land on DM2..DM7.
+    if (is_quasar && params.processor.core_type == HalProgrammableCoreType::TENSIX &&
+        params.processor.processor_class == HalProcessorClassType::DM && params.processor.processor_type < 2) {
+        GTEST_SKIP() << "DM0/DM1 are reserved for internal use on Quasar";
+    }
 
     if ((is_idle_eth || is_dram) && !using_slow_dispatch) {
         log_info(

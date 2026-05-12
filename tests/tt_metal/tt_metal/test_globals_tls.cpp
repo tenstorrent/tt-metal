@@ -98,7 +98,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     };
 
     // Total user-DM threads = 3 + 2 + 1 = 6, fitting within the default DM2..DM7 cap.
-    // No _unsafe_disable_dm0_dm1_reservation_for_bob needed.
     experimental::metal2_host_api::ProgramSpec spec{
         .program_id = "globals_and_tls",
         .kernels = {k1, k2, k3},

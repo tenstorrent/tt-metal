@@ -115,7 +115,8 @@ void RunTestOnCore(
     }
 
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
-    uint32_t dm_id = use_ncrisc ? 1 : 0;
+    // On Quasar, DM0/DM1 are reserved for internal use; map brisc/ncrisc onto the first two user DMs.
+    uint32_t dm_id = is_quasar ? (use_ncrisc ? 3 : 2) : (use_ncrisc ? 1 : 0);
 
     // Set up program
     distributed::MeshWorkload workload;
@@ -188,9 +189,9 @@ void RunTestOnCore(
         dram_copy_kernel = tt_metal::CreateKernel(program, kernel, core, config);
     } else {
         if (is_quasar) {
-            // Quasar: all DMs run kernel; multi_dm_race syncs them to race, else only dm_id executes
-            uint32_t num_dms =
-                MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
+            // Quasar: user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
+            // DM0/DM1 are reserved for internal use, so the test exercises 6 user DMs.
+            constexpr uint32_t num_dms = 6;
             experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings;
             experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
             if (multi_dm_race) {
@@ -235,7 +236,6 @@ void RunTestOnCore(
                 .program_id = "watcher_sanitize",
                 .kernels = {dm_spec},
                 .work_units = {wu},
-                ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
             };
             program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher

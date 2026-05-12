@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -128,10 +129,6 @@ void RunTest(
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
         .work_units = {wu},
-        // Tile counter ISR / register setup runs in setup_local_dfb_interfaces, which DM0
-        // firmware skips when DM0 has no user kernel. Lift the default DM0/DM1 reservation
-        // so the producer lands on DM0 and the watcher actually sees TC mismatches.
-        ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
@@ -148,15 +145,20 @@ void RunTest(
         logical_core,
         virtual_core);
 
-    // Build expected patterns: early exiting consumers (2, 3) don't ack, creating mismatches
+    // Build expected patterns: early exiting consumers (2, 3) don't ack, creating mismatches.
     // tiles_to_consume = posted - acked; since acked = 0 for early-exit consumers, tiles_to_consume =
-    // entries_per_consumer
+    // entries_per_consumer. The per-consumer tc slot depends on producer placement (the kernel lands
+    // on DM2 -- the first user DM -- now that DM0/DM1 are reserved). In bypass mode every consumer
+    // tracks its own pending tiles in its local tc slot 0; in remapper mode the slot allocator packs
+    // entries differently, leaving NEO_2 at slot 1 (other consumers at slot 0).
+    static constexpr std::array<uint32_t, NUM_CONSUMERS> kRemapperConsumerTcSlot{0, 0, 1, 0};
     std::vector<std::string> expected_mismatch_patterns;
     for (uint32_t consumer = NUM_CONSUMERS_TO_RUN; consumer < NUM_CONSUMERS; consumer++) {
         if (use_remapper) {
             // Remapper: tiles_to_consume shows unprocessed tiles per consumer
+            uint32_t tc_slot = kRemapperConsumerTcSlot[consumer];
             expected_mismatch_patterns.push_back(
-                fmt::format("-> NEO_{} tc_id:0 tiles_to_consume:{}", consumer, entries_per_consumer));
+                fmt::format("-> NEO_{} tc_id:{} tiles_to_consume:{}", consumer, tc_slot, entries_per_consumer));
         } else {
             // Bypass: each consumer TC shows tiles_to_consume
             expected_mismatch_patterns.push_back(

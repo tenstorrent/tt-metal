@@ -702,11 +702,6 @@ static void run_quasar_tilize_untilize_test(
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
-        // Implicit-sync DFBs require setup_local_dfb_interfaces() to run on DM0,
-        // which only happens when DM0 has a user kernel bound to it. Lifting the
-        // reservation lets the placer assign the reader to DM0 so the ISR for
-        // DFB credit posting actually gets enabled.
-        ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
