@@ -16,7 +16,7 @@ class Qwen3TTSTalkerConfig:
     """Configuration for the Qwen3-TTS Talker model."""
 
     hidden_size: int = 2048
-    num_hidden_layers: int = int(__import__("os").environ.get("TT_QWEN3_TALKER_LAYERS", "28"))
+    num_hidden_layers: int = 28
     num_attention_heads: int = 16
     num_key_value_heads: int = 8
     head_dim: int = 128
@@ -44,7 +44,7 @@ class Qwen3TTSCodePredictorConfig:
     """Configuration for the Qwen3-TTS Code Predictor model."""
 
     hidden_size: int = 1024
-    num_hidden_layers: int = int(__import__("os").environ.get("TT_QWEN3_CP_LAYERS", "5"))
+    num_hidden_layers: int = 5
     num_attention_heads: int = 16
     num_key_value_heads: int = 8
     head_dim: int = 128

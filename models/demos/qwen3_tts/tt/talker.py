@@ -95,12 +95,9 @@ class Talker(LightweightModule):
             self.text_embedding = None
             self.text_vocab_size = 0
 
-        # Decoder layers — TT_QWEN3_BF8_WEIGHTS=1 switches matmul (QKV/o_proj/MLP)
-        # weights to bfloat8_b for ~2× DRAM-bandwidth on those reads. RMSNorm
-        # weights stay bfloat16 (small, dynamic-range-sensitive).
-        import os as _os_bf8
-
-        _matmul_dtype = ttnn.bfloat8_b if _os_bf8.environ.get("TT_QWEN3_BF8_WEIGHTS", "0") == "1" else ttnn.bfloat16
+        # Decoder layers — matmul (QKV/o_proj/MLP) weights at bfloat16.
+        # RMSNorm weights stay bfloat16 (small, dynamic-range-sensitive).
+        _matmul_dtype = ttnn.bfloat16
         self.layers = []
         for i in range(self.num_layers):
             layer = DecoderLayer(
@@ -208,11 +205,8 @@ class Talker(LightweightModule):
         else:
             self.has_text_projection = False
 
-        import os as _os_fid
-
-        _hi_fi = _os_fid.environ.get("TT_QWEN3_HIFI4", "0") == "1"
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4 if _hi_fi else ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
