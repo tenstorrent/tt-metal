@@ -159,3 +159,7 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# Pi0 EmitPy reference graphs (tensor dumps not for git; see branch akannan/concat_issue_pi0)
+pi0_bracket_action_in_proj_bias_codegen/graph_0/tensors/
+pi0_bracket_no_bias_codegen/graph_0/tensors/
