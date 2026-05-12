@@ -93,10 +93,7 @@ std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const Tens
  * @brief Runtime-arity overload of add_backward_node.
  *
  * Same semantics as the variadic template version (branch pruning + link
- * collection), but accepts a runtime-sized vector of TensorPtrs. Useful when
- * the input set has variable size that's only known at runtime (e.g. a
- * std::vector<TensorPtr> of per-expert weights). Collect fixed args + list
- * args into a single vector at the call site and pass it here.
+ * collection), but accepts a runtime-sized vector of TensorPtrs.
  */
 inline std::optional<NodeId> add_backward_node(
     GradFunction&& grad_function, const TensorPtr& output, const std::vector<TensorPtr>& inputs) {
