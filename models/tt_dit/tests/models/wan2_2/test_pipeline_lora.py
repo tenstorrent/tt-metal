@@ -78,7 +78,6 @@ def test_pipeline_inference(
     guidance_scale = float(os.environ.get("GUIDANCE_SCALE", "3.5"))
     guidance_scale_2 = float(os.environ.get("GUIDANCE_SCALE_2", str(guidance_scale)))
     lora_scale = float(os.environ.get("LORA_SCALE", "1.0"))
-    boundary_ratio = float(os.environ.get("BOUNDARY_RATIO", "0.875"))
 
     pipeline = WanLoraPipelineI2V.create_pipeline(
         mesh_device=mesh_device,

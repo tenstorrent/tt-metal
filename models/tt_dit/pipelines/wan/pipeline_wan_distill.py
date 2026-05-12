@@ -117,10 +117,8 @@ class WanDistillPipelineI2V(WanPipelineI2V):
         self._allow_download = allow_download
         self._random_weights = random_weights
 
-        if random_weights:
-            with _patch_torch_transformer_random():
-                super().__init__(*args, **kwargs)
-        else:
+        ctx = _patch_torch_transformer_random() if random_weights else contextlib.nullcontext()
+        with ctx:
             super().__init__(*args, **kwargs)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
