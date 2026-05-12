@@ -200,14 +200,14 @@ inline void _calculate_atanh_()
         v_elseif (abs_inp == sfpi::vConst1)
         {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
-            res              = sfpi::setsgn(inf, inp);
+            res              = sfpi::copysgn(inf, inp);
         }
         v_else
         {
             sfpi::vFloat num = sfpi::vConst1 + inp;
             sfpi::vFloat den = sfpi::vConst1 - inp;
             sfpi::vFloat tmp = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(den);
-            tmp              = sfpi::setsgn(tmp, den);
+            tmp              = sfpi::copysgn(tmp, den);
             if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE)
             {
                 den = tmp;
