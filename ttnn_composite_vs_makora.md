@@ -368,6 +368,70 @@ Four ops, four different attribution patterns:
 
 **To investigate:** `triu` — the remaining unattributed composite-A win. Device-kernel curve is non-monotonic (Makora 1.46× small / 0.34× large). The .json shows 38.92× wall-clock at the largest shape, which suggests TTNN's `index_triu` may have an O(volume) host-side mask construction, but this hasn't been independently verified. The bucket-A multigammaln/isclose/glu attribution methodology applied to `triu` would resolve this.
 
+## Apples-to-apples vs agent-generated kernels
+
+Two bucket-A ops were regenerated end-to-end by the incremental pipeline
+(`run_op.py` → planner → implementer → verifier) and then benchmarked against
+Makora's hand-written kernel via `verify_makora.py`. Both compared at
+device-kernel duration (same harness as the rest of this doc).
+
+### `multigammaln_lanczos` (agent) vs `multigammaln` (Makora)
+
+Setup: both kernels run at fp32. Makora's `multigammaln` host wrapper accepts
+fp32 transparently, so no patches required on either side. Agent's `glu`-style
+file naming (`multigammaln_lanczos`) reflects that the algorithm is the
+Lanczos 6-term polynomial — same as the (nuked) TTNN composite and the same
+as Makora's kernel.
+
+Measured 2026-05-12 (Phase 0 baseline, then Refinement 1 — DST reuse):
+
+| Shape | Phase 0 speedup | After R1 | PCC | max_abs_diff |
+|---|---|---|---|---|
+| (1, 1, 32, 32) | 1.04× | 1.02× | 1.0000 | 6.7e-2 |
+| (1, 1, 32, 128) | 1.04× | 1.06× | 1.0000 | 6.7e-2 |
+| (1, 5, 2240, 32) | 1.04× | 1.06× | 1.0000 | 6.8e-2 |
+| **GMEAN** | **1.04×** | **1.04×** | | |
+
+Phase 0 baseline: ttnn 163 965 ns, makora 157 856 ns gmean.
+After R1: ttnn 162 486 ns, makora 157 842 ns gmean.
+
+Speedup ratio is identical across all three shapes, indicating the gap is per-tile compute structural overhead, not dispatch or DRAM. `max_abs_diff` is the bf16-noise floor of two different algebraic regroupings of the same Lanczos formula.
+
+**Agent's design choices** (independent of Makora):
+- Same Lanczos coefficients and pole-zeroing strategy.
+- Algebraic simplification: fuses `+0.918938` and `−5.5` into one compile-time constant `4.581...`. Makora doesn't do this — re-derives `x+4.5` from the input CB.
+- Phase 0 used a single `cb_accumulator` CB with round-trip between iterations (vs Makora's pure-DST accumulator). 6 `tile_regs_acquire` cycles per output tile vs Makora's 1.
+- Refinement 1 collapsed those 6 cycles to 1 while keeping the accumulator in D0 — matches Makora's structure. A register-pressure trick the agent had to invent (spill D1, run the multiply, reload D1 from CB) is documented in the kernel but is not in Makora's code.
+- Multi-core distribution via `split_work_to_cores` over the full Tensix grid — same as Makora.
+
+### `glu_fused` (agent) vs `glu` (Makora)
+
+Setup: both kernels run at bf16. Makora's `glu` is bf16-locked at host/CB/kernel level. Agent's Phase 0 was fp32-only; relaxed the dtype validator to accept bf16 and added a dtype-aware compute config (bf16 → LoFi + `fp32_dest_acc_en=False` + default unpack; fp32 retains HiFi4 + `fp32_dest_acc_en=True` + UnpackToDestFp32). Tracked as the op's Refinement 2.
+
+Measured 2026-05-12:
+
+| Shape | Speedup | PCC | max_abs_diff |
+|---|---|---|---|
+| (32, 32, 32, 64) | 1.02× | 1.0000 | 0.00e+00 |
+| (3, 2, 32, 4096) | 1.06× | 1.0000 | 0.00e+00 |
+| **GMEAN** | **1.04×** | | |
+
+GMEAN: ttnn 30 782 ns, makora 29 655 ns. **Outputs are bit-identical to Makora's at bf16.**
+
+**Agent's design choices** (independent of Makora):
+- Reader computes tile-pair indices `(t, t + Wt_half)` from a single input tensor's tile-id arithmetic — the reader-level split trick the audit doc identifies as Makora's win against the TTNN composite. The agent invented this independently from the constraint "no `ttnn::slice` allowed in the implementation".
+- Two reads issued concurrently on NoC0, single `noc_async_read_barrier` per output tile — same as Makora.
+- Compute body is a 4-step `sfpu_chain`: `Load A`, `Load B`, `Sigmoid<Approx::Exact>`, `SfpuMul`. Approx::Exact matches the ACCURATE sigmoid mode of the TTNN composite.
+- 3 CBs (input_a, input_b, output), 2 pages each, double-buffered — same as Makora.
+- Multi-core distribution via `split_work_to_cores` over the full Tensix grid — same as Makora. Tile-to-core mapping is mathematically equivalent (output tiles split with the +1-on-early-cores remainder).
+
+### Net assessment
+
+Both agent-generated kernels land within 4% of Makora's hand-written kernels on device-kernel duration. The structural design choices — multi-core distribution, NoC pattern, CB topology, compute-body algorithm — match Makora's in both cases. Per-op specifics:
+
+- **multigammaln_lanczos**: Phase 0 implementer used a per-iteration accumulator CB (6 DST cycles per tile), about 25% off Makora's pure-DST design. A single-line refinement prompt ("don't round-trip through cb_accumulator") was enough for the implementer to refactor to Makora-equivalent structure (1 DST cycle per tile). Algebraic regrouping and one register-pressure trick are agent-original.
+- **glu_fused**: Phase 0 implementer invented the tile-pair reader directly from the no-slice constraint. The 4% residual gap is in the noise band; functional outputs are bit-identical at bf16. No structural refinement needed; only a dtype-aware compute config to actually realize the perf at bf16.
+
 ## Status / next steps
 
 Verified end-to-end (11 of 12 wired ops):

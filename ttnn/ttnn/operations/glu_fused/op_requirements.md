@@ -79,7 +79,7 @@ def glu_fused(input_tensor: ttnn.Tensor) -> ttnn.Tensor: ...
 - **Tests**: Repeat precision baseline with `math_approx_mode=True` —
   expect a small but measurable PCC drop; record in changelog.
 
-### [ ] Refinement 2 — bfloat16 support
+### [x] Refinement 2 — bfloat16 support
 - Relax the dtype gate in `glu_fused.py` to accept `bfloat16` in addition
   to `float32`.
 - For bfloat16, switch CB formats to bfloat16 (page size 2048 B) and **do

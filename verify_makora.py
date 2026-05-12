@@ -105,6 +105,7 @@ README_SHAPES: dict[str, list[tuple]] = {
     "reglu": [(1, 1, 32, 64), (1, 1, 128, 512), (3, 2, 1024, 4096)],
     "swiglu": [(1, 1, 32, 64), (1, 1, 128, 512), (1, 1, 1024, 4096)],
     "multigammaln_lanczos": [(1, 1, 32, 32), (1, 1, 32, 128), (1, 5, 2240, 32)],
+    "glu_fused": [(32, 32, 32, 64), (3, 2, 32, 4096)],
 }
 
 
@@ -163,6 +164,12 @@ def _ttnn_multigammaln_lanczos(a):
     return multigammaln_lanczos(a)
 
 
+def _ttnn_glu_fused(a):
+    from ttnn.operations.glu_fused import glu_fused
+
+    return glu_fused(a)
+
+
 # Per-op extras: `makora_op` overrides the Makora kernel folder (default = key);
 # `dtype` overrides ttnn.bfloat16 default; `safe_domain` shifts random inputs.
 OP_REGISTRY: dict[str, dict] = {
@@ -186,6 +193,15 @@ OP_REGISTRY: dict[str, dict] = {
         "makora_op": "multigammaln",
         "dtype": "float32",
         "safe_domain": (2.0, 10.0),
+    },
+    "glu_fused": {
+        "category": "unary",
+        "binary": False,
+        "ttnn": _ttnn_glu_fused,
+        "makora_kwargs": {},
+        "makora_op": "glu",
+        # No dtype override — both kernels run at bf16 (Makora's native dtype,
+        # where its published 2.79x gmean speedup was measured).
     },
 }
 

@@ -11,11 +11,20 @@ The operation matches ``torch.nn.functional.glu(x, dim=-1)``:
 
     out[n, c, h, j] = x[n, c, h, j] * sigmoid(x[n, c, h, j + W/2])  for j in [0, W/2)
 
-Phase 0 constraints (see ``op_design.md``):
-    - float32, TILE_LAYOUT, rank == 4
+Supported configurations:
+    - dtype: float32 (Phase 0) or bfloat16 (Refinement 2)
+    - layout: TILE_LAYOUT, rank == 4
     - input on device, output inherits input memory config
     - W % 64 == 0  (each half tile-aligned)
     - H % 32 == 0  (logical H tile-aligned)
+
+Compute config is dtype-aware:
+    - fp32 input: HiFi4 + fp32_dest_acc_en + UnpackToDestFp32 on input CBs.
+      Max precision; this is what the Phase 0 verifier locked in.
+    - bf16 input: LoFi + fp32_dest_acc_en=False + default unpack mode.
+      Matches the precision regime bf16 inputs already carry — running the
+      fp32 settings on bf16 inputs is pure overhead with no precision gain
+      (UnpackToDestFp32 just zero-extends; fp32 DEST halves auto-batching).
 """
 
 import ttnn
@@ -28,8 +37,9 @@ def glu_fused(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     Gated Linear Unit along the last dim, fused into one TTNN kernel.
 
     Args:
-        input_tensor: float32 TILE_LAYOUT tensor of rank 4 ``(N, C, H, W)`` on
-            device, with ``W % 64 == 0`` and ``H % 32 == 0``.
+        input_tensor: float32 or bfloat16 TILE_LAYOUT tensor of rank 4
+            ``(N, C, H, W)`` on device, with ``W % 64 == 0`` and
+            ``H % 32 == 0``.
 
     Returns:
         Tensor of shape ``(N, C, H, W/2)``, same dtype/layout/memory_config as
@@ -65,8 +75,10 @@ def _validate_input(input_tensor: ttnn.Tensor) -> None:
             "glu_fused: input tensor must be allocated on device " f"(got storage_type={input_tensor.storage_type()})."
         )
 
-    if input_tensor.dtype != ttnn.float32:
-        raise ValueError(f"glu_fused: only float32 is supported in Phase 0 (got dtype={input_tensor.dtype}).")
+    if input_tensor.dtype not in (ttnn.float32, ttnn.bfloat16):
+        raise ValueError(
+            f"glu_fused: only float32 and bfloat16 are supported (got dtype={input_tensor.dtype})."
+        )
 
     if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError(f"glu_fused: input must be TILE_LAYOUT (got layout={input_tensor.layout}).")
