@@ -67,6 +67,14 @@ skus:
       - in-service
       - g14glx04
 
+  wh_galaxy_perf_g14glx03:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g14glx03
+
   wh_galaxy_perf_g04glx01:
     runs_on:
       - arch-wormhole_b0
