@@ -27,7 +27,6 @@ from models.experimental.pi0.tt.ttnn_paligemma import PaliGemmaBackboneTTNN
 
 from models.experimental.pi0_5.tt.ttnn_gemma import (
     AdaRMSGemmaBlockTTNN,
-    _plain_rms_norm_weight,
     ada_rms_norm_no_gate_ttnn,
 )
 
@@ -62,10 +61,9 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
 
         super().__init__(config, weights, device)
 
-        # Shared "ones" tile used as the plain-RMS weight for every adaRMS norm.
-        self.ones_weight = _plain_rms_norm_weight(device, config.expert_config.width)
-
         # Rebuild expert blocks with adaRMS, injecting modulation tensors.
+        # adaRMS now fuses the (1+scale)/shift modulation into ttnn.rms_norm via
+        # its weight/bias args — no separate "ones" identity weight needed.
         self.expert_blocks = []
         for i in range(config.expert_config.depth):
             block_weights = self._get_expert_block_weights_ttnn(weights["action_expert"], i)
@@ -76,7 +74,6 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
                     block_weights,
                     i,
                     device,
-                    self.ones_weight,
                     self.expert_cos_meta,
                     self.expert_sin_meta,
                 )
@@ -102,18 +99,36 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
         all_weights: Dict[str, torch.Tensor],
         layer_idx: int,
     ) -> None:
-        """Pull adaRMS modulation weights for layer_idx and add to block_weights."""
+        """
+        Fuse the pre-attention and pre-FFW modulation Dense projections into
+        a single (in=W, out=6*W) linear per block (mirrors tt-dit's `norm1_linear`
+        pattern). At forward time one matmul produces all 6 modulation tensors
+        (scale_a, shift_a, gate_a, scale_f, shift_f, gate_f) for the block.
+
+        Concatenation order on the output dim:
+          [pre_attn.weight (3*W rows), pre_ffw.weight (3*W rows)]
+        so slicing `[:W]` gives scale_a, `[W:2W]` shift_a, `[2W:3W]` gate_a,
+        `[3W:4W]` scale_f, `[4W:5W]` shift_f, `[5W:6W]` gate_f.
+        """
         prefix = f"model.layers.{layer_idx}."
-        for name in ("input_layernorm.dense", "post_attention_layernorm.dense"):
-            w_key = f"{prefix}{name}.weight"
-            b_key = f"{prefix}{name}.bias"
-            if w_key not in all_weights:
-                raise KeyError(f"PI0.5 expects adaRMS weight '{w_key}' in the action_expert checkpoint.")
-            block_weights[f"{name}.weight"] = _convert_linear_to_ttnn(all_weights[w_key], self.device)
-            if b_key in all_weights:
-                block_weights[f"{name}.bias"] = tensor_1d_to_2d_ttnn(
-                    all_weights[b_key], self.device, dtype=ttnn.bfloat16
-                )
+
+        names = ("input_layernorm.dense", "post_attention_layernorm.dense")
+        w_keys = [f"{prefix}{n}.weight" for n in names]
+        b_keys = [f"{prefix}{n}.bias" for n in names]
+
+        for wk in w_keys:
+            if wk not in all_weights:
+                raise KeyError(f"PI0.5 expects adaRMS weight '{wk}' in the action_expert checkpoint.")
+
+        # Concat along output dim. Each input is (3*W, W); result is (6*W, W).
+        fused_w_torch = torch.cat([all_weights[wk] for wk in w_keys], dim=0).contiguous()
+        block_weights["adarms_mod.weight"] = _convert_linear_to_ttnn(fused_w_torch, self.device)
+
+        biases = [all_weights[bk] for bk in b_keys if bk in all_weights]
+        if biases:
+            assert len(biases) == 2, "expected biases for both modulation Denses or neither"
+            fused_b_torch = torch.cat(biases, dim=0).contiguous()
+            block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b_torch, self.device, dtype=ttnn.bfloat16)
 
     def forward_expert(
         self,
@@ -143,7 +158,6 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
 
         hidden_states = ada_rms_norm_no_gate_ttnn(
             hidden_states,
-            self.ones_weight,
             adarms_cond,
             self.expert_final_norm_mod_weight,
             self.expert_final_norm_mod_bias,

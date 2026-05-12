@@ -42,10 +42,9 @@ def test_pi0_5_ttnn_model_constructs(device):
     cfg, model = _build_ttnn_model(device)
     assert model.config.pi05 is True
     assert len(model.backbone.expert_blocks) == cfg.expert_config.depth
-    # adaRMS modulation tensors were successfully read from each expert layer.
+    # adaRMS modulation tensors (fused 6*W Dense per block) were loaded.
     for blk in model.backbone.expert_blocks:
-        assert blk.pre_attn_mod_weight is not None
-        assert blk.pre_ffw_mod_weight is not None
+        assert blk.mod_weight is not None
     # Final expert norm is adaRMS.
     assert model.backbone.expert_final_norm_mod_weight is not None
 
