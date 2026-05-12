@@ -232,8 +232,6 @@ inline void dbg_write_dest_tile(DataFormat fmt, std::uint32_t tile_id, const voi
         thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
         "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
 
-    // Only the formats explicitly handled by fmt_to_dest_type and the byte-width
-    // dispatch below are supported on the RISC-V debug dest pathway.
     LLK_ASSERT(
         fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
             fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
