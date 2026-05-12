@@ -27,7 +27,7 @@ import torch.nn.functional as F
 try:
     from torch.nn import RMSNorm
 except ImportError:
-    RMSNorm = None  # type: ignore[misc, assignment]
+    RMSNorm = None
 
 
 def _rms_norm_cls(dim: int, eps: float):
