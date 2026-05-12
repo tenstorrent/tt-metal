@@ -33,7 +33,22 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_br
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False])
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("use_socket", [True, False])
+@pytest.mark.parametrize(
+    "use_socket",
+    [
+        # TODO(#43071): Root-cause this exact Blackhole socket-backed skip_ccl hang and remove the temporary skip.
+        pytest.param(
+            True,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: test_broadcast_rms_single_device[blackhole-True-mesh_device0-False-"
+                "1e-06-DataType.BFLOAT16-Layout.TILE-output_shape0-input_shard_shape0-"
+                "TensorMemoryLayout.WIDTH_SHARDED] appears to hang on Blackhole after "
+                "'Running fused Broadcast+RMSNorm with skip_ccl=True'. Issue: #43071"
+            ),
+        ),
+        False,
+    ],
+)
 def test_broadcast_rms_single_device(
     mesh_device,
     output_shape,

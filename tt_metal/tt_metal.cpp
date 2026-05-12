@@ -66,6 +66,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 #ifdef TT_METAL_USE_EMULE
 #include "impl/emulation/emulated_program_runner.hpp"
@@ -1537,6 +1538,13 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
+    circular_buffer->assign_global_address();
+}
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    circular_buffer->config().set_globally_allocated_address_and_total_size(tensor, total_size);
     circular_buffer->assign_global_address();
 }
 
