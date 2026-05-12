@@ -184,6 +184,8 @@ Two observations from the matrix:
 
 Surface as a small enum (`CbIndexMode::FirstTile / BlockIter / Pinned / Absolute`) on the element, plus a runtime `cb_tile_idx_` field for `Pinned` / `Absolute`. `FirstTile` and `BlockIter` need no field. Mode is per-CB-operand — the binary FPU element lets A and B pick independently (e.g. `A=BlockIter, B=Pinned` for `block * scalar` under `WaitUpfrontPopAtEnd`).
 
+**Do not collapse per-side `AIndex` / `BIndex` to a single `Index`.** A prior "Q4 collapse" reduced `BinaryFpu` / `BlockBinaryFpu` to one shared index mode driving both sides. That broke the canonical asymmetric broadcast walk — A streams the tile range while B is pinned at the scaler/vector tile (softmax phase 2a `sub_bcast`, phase 4 `mul_bcast`; deepseek_grouped_gate `add_bias`; moreh_layer_norm_backward, moreh_softmax_backward family). Agents discovering no helper variant for the asymmetric pattern fall back to raw `*_tiles_bcast` loops and the helper loses the surface. Keep `AIndex` and `BIndex` as independent template parameters with `BIndex = AIndex` defaulted for back-compat. Per-side wait counts derive from per-side index mode (`a_wait_count`, `b_wait_count`) — FirstTile pins one tile, BlockIter streams `BlockSize` tiles. Same-CB dedup (`CbA == CbB`) requires `AIndex == BIndex` — flag asymmetric indices on shared CBs as a compile-time error since the deduped B-side wait would under-wait.
+
 Validation:
 
 - The chain combinator `static_assert`s the illegal cells whenever both axes are compile-time (most common case — index mode is a template param, wait policy is a template param). A `WaitAndPop` element instantiated with `BlockIter` or `Absolute` fails to compile.
@@ -341,7 +343,15 @@ chain_has_duplicate_upfront_cbs_v<Chain> // static_assert in pipeline
 
 Catch bad chains at compile time. Runtime asserts are the fallback for things the type system genuinely can't see (e.g. `WaitAndPop` policy + non-zero `cb_tile_idx` → ASSERT, since streaming pop-per-call can't index into a batch).
 
-### 4.4 One dispatch signature for every element
+### 4.4 Pipeline lifecycle: every path emits every per-tile call, policy-guarded
+
+The chain combinator has multiple traversal paths (per-tile path, block_path for `is_upfront` elements, future variants). Each path must emit the full set of per-tile lifecycle helpers — `elem_wait_per_tile`, `elem_reserve_per_tile`, `elem_pop_per_tile`, `elem_push_per_tile` — even when the dominant elements in that path don't trigger them. The per-tile helpers are policy-guarded internally (`if constexpr (Policy == PerTile...)` — no-op for upfront policies). Skipping them in a non-default path is a lifecycle gap waiting to be hit by mixed-policy chains.
+
+Real bug: `block_path` historically only emitted `elem_wait_upfront` / `elem_reserve_upfront` / `elem_pop_upfront_end` / `elem_push_at_end`. A chain mixing `CopyTile<WaitUpfrontPopAtEnd>` (triggers `block_path = true`) with `PackTile<PerTileReserveAndPush>` (streaming output) lost its pack reserve/push entirely. `pack_tile` wrote to unreserved slots, no `cb_push_back` fired, downstream consumer hung at `cb_wait_front`. The "block_path is for fully-upfront chains" assumption is wrong — the canonical softmax phase 2b pattern (upfront input + streaming output) needs both per-tile and upfront calls in the same loop.
+
+Order matters: emit pack-output reserve as late as possible (right before `pack_exec`) and pack-output push as early as possible (right after `pack_exec`) so the downstream consumer sees pushed tiles before this iteration releases DEST. Wait/pop on the input side stays at loop top/bottom — they pair with the data dependency, not the pack window. The same ordering applies to per-tile path and block_path.
+
+### 4.5 One dispatch signature for every element
 
 The classification surface (tag inheritance, trait constants) and the dispatch surface (the methods the chain pipeline calls per phase) are different contracts. If they drift — for example, classification places an element in a category whose pipeline path uses a static call, but the element actually carries runtime state via an instance method — the wrong path runs silently. The compiler can't catch it because both methods exist. Pick one dispatch shape (a single member method that takes the loop index) for every element. Stateless ops cost nothing — the compiler folds zero-state members into static dispatch. Stateful ops capture their fields naturally. SFINAE detectors that pick between dispatch shapes are a band-aid for letting two contracts coexist; one contract is the fix.
 
