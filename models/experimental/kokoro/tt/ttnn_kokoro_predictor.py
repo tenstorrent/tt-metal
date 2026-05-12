@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN port of Kokoro predictor (incremental).
+TTNN port of Kokoro ``KokoroPredictor`` (ProsodyPredictor + TextEncoder).
 
-Duration logits run on device; ``pred_dur`` / alignment indices use small CPU tensors
-(``round``, ``repeat_interleave``), then the alignment is uploaded for matmuls on device.
+Neural blocks run on device (bf16). Duration logits and matmul-based alignment use TTNN;
+``pred_dur`` is derived from duration logits on host (no PyTorch module fallback).
 """
 
 from __future__ import annotations
@@ -14,13 +14,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 
 import ttnn
-from models.experimental.kokoro.tt.ttnn_kokoro_conv import Conv1dParams, conv1d_nlc, weight_norm_weight
+from models.experimental.kokoro.tt.ttnn_adain_resblk_encode import (
+    AdainResBlk1d,
+    infer_encode_dims,
+    preprocess_encode_parameters,
+)
+from models.experimental.kokoro.tt.ttnn_kokoro_conv import Conv1dParams, conv1d_nlc
 from models.experimental.kokoro.tt.ttnn_kokoro_lstm import LSTMParams, bilstm_nlc, preprocess_pytorch_lstm_1layer
-from models.experimental.kokoro.tt.ttnn_kokoro_norm import AdaIN1dParams, InstanceNorm1dParams, adain_1d_nlc
 from models.experimental.kokoro.tt.ttnn_kokoro_text_encoder import TtKokoroTextEncoder, preprocess_text_encoder
 
 
@@ -64,167 +69,10 @@ def _adalayernorm_nlc(
     c = c2 // 2
     gamma = ttnn.slice(h, [0, 0, 0], [h.shape[0], 1, c], [1, 1, 1])
     beta = ttnn.slice(h, [0, 0, c], [h.shape[0], 1, c2], [1, 1, 1])
-    one = ttnn.full(gamma.shape, fill_value=1.0, dtype=gamma.dtype, layout=gamma.layout, device=gamma.device())
-    scale = ttnn.add(one, gamma, memory_config=memory_config)
+    scale = ttnn.add(gamma, 1.0, memory_config=memory_config)
     y = ttnn.multiply(y, scale, memory_config=memory_config)
     y = ttnn.add(y, beta, memory_config=memory_config)
     return y
-
-
-@dataclass(frozen=True)
-class AdainResBlk1dParams:
-    conv1: Conv1dParams
-    conv2: Conv1dParams
-    norm1: AdaIN1dParams
-    norm2: AdaIN1dParams
-    conv1x1: Optional[Conv1dParams]
-    upsample: bool
-    # Depthwise ConvTranspose1d(k=3,s=2,p=1,op=1) == conv1d(zero_insert(x), flip(w), p=1, groups=C)
-    pool_conv: Optional[Conv1dParams]
-
-
-def _preprocess_adain_resblk_1d(
-    block: nn.Module, device: ttnn.Device, *, weights_dtype=ttnn.bfloat16
-) -> AdainResBlk1dParams:
-    def conv1d_params(conv: nn.Module) -> Conv1dParams:
-        w = weight_norm_weight(conv.weight_v.detach().cpu(), conv.weight_g.detach().cpu())
-        b = conv.bias.detach().cpu() if conv.bias is not None else None
-        w_tt = ttnn.from_torch(w, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        b_tt = (
-            ttnn.from_torch(b.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-            if b is not None
-            else None
-        )
-        return Conv1dParams(
-            weight=w_tt,
-            bias=b_tt,
-            in_channels=conv.in_channels,
-            out_channels=conv.out_channels,
-            kernel_size=conv.kernel_size[0],
-            stride=conv.stride[0],
-            padding=conv.padding[0],
-            groups=conv.groups,
-        )
-
-    def adain_params(adain: nn.Module) -> AdaIN1dParams:
-        in_w = getattr(adain.norm, "weight", None)
-        in_b = getattr(adain.norm, "bias", None)
-        inst = InstanceNorm1dParams(
-            weight=ttnn.from_torch(in_w.detach().cpu(), dtype=weights_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-            if in_w is not None
-            else None,
-            bias=ttnn.from_torch(in_b.detach().cpu(), dtype=weights_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-            if in_b is not None
-            else None,
-            eps=adain.norm.eps,
-        )
-        fc_w = ttnn.from_torch(
-            adain.fc.weight.detach().cpu(), dtype=weights_dtype, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        fc_b = ttnn.from_torch(
-            adain.fc.bias.detach().cpu().reshape(1, 1, 1, -1),
-            dtype=weights_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
-        return AdaIN1dParams(fc_weight=fc_w, fc_bias=fc_b, instancenorm=inst)
-
-    upsample = getattr(block, "upsample_type", "none") != "none"
-    pool_conv = None
-    if upsample:
-        convt = block.pool
-        assert (
-            convt.kernel_size[0] == 3
-            and convt.stride[0] == 2
-            and convt.padding[0] == 1
-            and convt.output_padding[0] == 1
-        )
-        assert convt.groups == convt.in_channels == convt.out_channels
-        w = weight_norm_weight(convt.weight_v.detach().cpu(), convt.weight_g.detach().cpu())  # [C,1,3]
-        w = torch.flip(w, dims=[2])
-        b = convt.bias.detach().cpu() if convt.bias is not None else None
-        w_tt = ttnn.from_torch(w, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        b_tt = (
-            ttnn.from_torch(b.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-            if b is not None
-            else None
-        )
-        pool_conv = Conv1dParams(
-            weight=w_tt,
-            bias=b_tt,
-            in_channels=convt.in_channels,
-            out_channels=convt.out_channels,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            groups=convt.groups,
-        )
-
-    conv1 = conv1d_params(block.conv1)
-    conv2 = conv1d_params(block.conv2)
-    conv1x1 = conv1d_params(block.conv1x1) if getattr(block, "learned_sc", False) else None
-    norm1 = adain_params(block.norm1)
-    norm2 = adain_params(block.norm2)
-    return AdainResBlk1dParams(
-        conv1=conv1,
-        conv2=conv2,
-        norm1=norm1,
-        norm2=norm2,
-        conv1x1=conv1x1,
-        upsample=upsample,
-        pool_conv=pool_conv,
-    )
-
-
-def _adain_resblk1d_forward_bcl(
-    *,
-    x_bcl: ttnn.Tensor,
-    style_bs: ttnn.Tensor,
-    params: AdainResBlk1dParams,
-    device: ttnn.Device,
-    compute_kernel_config,
-) -> ttnn.Tensor:
-    # BCL -> NLC for conv wrappers
-    x = ttnn.permute(x_bcl, (0, 2, 1))  # [B,L,C]
-    shortcut = x
-    if params.upsample:
-        # Reference shortcut uses nearest upsample (not convtranspose pool)
-        shortcut = ttnn.repeat_interleave(shortcut, repeats=2, dim=1)
-    if params.conv1x1 is not None:
-        shortcut = conv1d_nlc(
-            x_nlc=shortcut, params=params.conv1x1, device=device, compute_config=compute_kernel_config
-        )
-
-    y = adain_1d_nlc(x_nlc=x, s_bc=style_bs, params=params.norm1, compute_kernel_config=compute_kernel_config)
-    y = ttnn.leaky_relu(y, negative_slope=0.2)
-    if params.upsample:
-        # Reference residual uses depthwise ConvTranspose1d pool before conv1
-        assert params.pool_conv is not None
-        # zero-insert upsample by 2: [x0,0,x1,0,...], then depthwise conv1d with flipped kernel
-        zeros = ttnn.zeros(y.shape, dtype=y.dtype, layout=y.layout, device=device)
-        y2 = ttnn.reshape(y, [y.shape[0], y.shape[1], 1, y.shape[2]])
-        z2 = ttnn.reshape(zeros, [zeros.shape[0], zeros.shape[1], 1, zeros.shape[2]])
-        y = ttnn.concat([y2, z2], dim=2)
-        # y is [B, L, 2, C] -> [B, 2L, C]
-        y = ttnn.reshape(y, [y.shape[0], y.shape[1] * 2, y.shape[3]])
-        ttnn.deallocate(zeros)
-        ttnn.deallocate(y2)
-        ttnn.deallocate(z2)
-        y = conv1d_nlc(x_nlc=y, params=params.pool_conv, device=device, compute_config=compute_kernel_config)
-    y = conv1d_nlc(x_nlc=y, params=params.conv1, device=device, compute_config=compute_kernel_config)
-    y = adain_1d_nlc(x_nlc=y, s_bc=style_bs, params=params.norm2, compute_kernel_config=compute_kernel_config)
-    y = ttnn.leaky_relu(y, negative_slope=0.2)
-    y = conv1d_nlc(x_nlc=y, params=params.conv2, device=device, compute_config=compute_kernel_config)
-
-    out = ttnn.add(y, shortcut)
-    out = ttnn.multiply(out, 1.0 / (2.0**0.5))
-    # conv ops can return sharded tensors; make interleaved before transpose
-    try:
-        out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    except Exception:
-        pass
-    out = ttnn.permute(out, (0, 2, 1))  # back to BCL
-    return out
 
 
 @dataclass(frozen=True)
@@ -286,6 +134,7 @@ class TtKokoroDurationEncoder:
         *,
         d_en_bct: ttnn.Tensor,  # [B,C,T]
         style_bs: ttnn.Tensor,  # [B, sty]
+        input_lengths: torch.LongTensor,
         text_mask: torch.Tensor,  # [B,T] bool
     ) -> ttnn.Tensor:
         # Convert to NLC and concat style
@@ -295,7 +144,7 @@ class TtKokoroDurationEncoder:
         s = ttnn.repeat(s, (1, T, 1))
         x = ttnn.concat([x, s], dim=2)
 
-        # apply mask (masked -> 0)
+        # apply mask (masked -> 0), reuse across all layers
         m = ttnn.from_torch(
             (~text_mask).to(torch.float32).unsqueeze(-1),
             dtype=ttnn.bfloat16,
@@ -303,11 +152,15 @@ class TtKokoroDurationEncoder:
             device=self.device,
         )
         x = ttnn.multiply(x, m)
-        ttnn.deallocate(m)
 
+        lengths_list = input_lengths.detach().cpu().tolist()
         for layer in self.params.layers:
             x = bilstm_nlc(
-                x_nlc=x, fwd=layer.lstm_fwd, rev=layer.lstm_rev, compute_kernel_config=self.compute_kernel_config
+                x_nlc=x,
+                fwd=layer.lstm_fwd,
+                rev=layer.lstm_rev,
+                compute_kernel_config=self.compute_kernel_config,
+                sequence_lengths=lengths_list,
             )
             # AdaLayerNorm applies on d_model (not including style); slice first d_model dims
             x_d = ttnn.slice(x, [0, 0, 0], [x.shape[0], x.shape[1], self.params.d_model], [1, 1, 1])
@@ -319,17 +172,40 @@ class TtKokoroDurationEncoder:
             )
             # concat style again for next layer / output
             x = ttnn.concat([x_d, s], dim=2)
-            # re-mask
-            m = ttnn.from_torch(
-                (~text_mask).to(torch.float32).unsqueeze(-1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
             x = ttnn.multiply(x, m)
-            ttnn.deallocate(m)
 
+        ttnn.deallocate(m)
         return x  # [B,T,d_model+sty]
+
+
+def _pred_alignment_from_duration(
+    dur_ttnn: ttnn.Tensor,
+    *,
+    text_len: int,
+    device: ttnn.Device,
+) -> tuple[torch.LongTensor, ttnn.Tensor]:
+    """Match reference ``KokoroPredictor`` discrete duration + one-hot alignment (host numpy + upload)."""
+    dur_np = np.asarray(
+        ttnn.to_torch(dur_ttnn).to(torch.float32).detach().cpu().numpy(),
+        dtype=np.float64,
+    )
+    if dur_np.ndim >= 2:
+        dur_row = np.reshape(dur_np[0], (-1,))[:text_len]
+    else:
+        dur_row = np.reshape(dur_np, (-1,))[:text_len]
+    pred_dur_np = np.clip(np.round(dur_row), 1.0, None).astype(np.int64)
+    idx = np.repeat(np.arange(text_len, dtype=np.int64), pred_dur_np)
+    l_out = int(idx.shape[0])
+    pred_aln = np.zeros((1, text_len, l_out), dtype=np.float32)
+    pred_aln[0, idx, np.arange(l_out, dtype=np.int64)] = 1.0
+    pred_aln_tt = ttnn.from_torch(
+        torch.from_numpy(pred_aln),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    pred_dur = torch.from_numpy(pred_dur_np).long().squeeze()
+    return pred_dur, pred_aln_tt
 
 
 @dataclass(frozen=True)
@@ -385,18 +261,28 @@ class TtKokoroPredictorDuration:
         input_lengths: torch.LongTensor,
         text_mask: torch.Tensor,  # [B,T] bool
         speed: float = 1.0,
+        style_bs_tt: Optional[ttnn.Tensor] = None,
     ):
-        # style s is ref_s[:,128:]
-        s_torch = ref_s[:, 128:].detach().cpu()
-        s = ttnn.from_torch(s_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        if style_bs_tt is None:
+            s_torch = ref_s[:, 128:].detach().cpu()
+            s = ttnn.from_torch(s_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        else:
+            s = style_bs_tt
 
-        d = self.duration_encoder(d_en_bct=d_en_bct, style_bs=s, text_mask=text_mask)  # [B,T,d_hid+sty]
+        lengths_list = input_lengths.detach().cpu().tolist()
+        d = self.duration_encoder(
+            d_en_bct=d_en_bct,
+            style_bs=s,
+            input_lengths=input_lengths,
+            text_mask=text_mask,
+        )  # [B,T,d_hid+sty]
 
         x = bilstm_nlc(
             x_nlc=d,
             fwd=self.params.lstm_fwd,
             rev=self.params.lstm_rev,
             compute_kernel_config=self.compute_kernel_config,
+            sequence_lengths=lengths_list,
         )
         # x is [B,T,d_hid]
         dur_logits = ttnn.linear(
@@ -413,16 +299,7 @@ class TtKokoroPredictorDuration:
         if speed != 1.0:
             dur = ttnn.multiply(dur, 1.0 / speed)
 
-        # Host discrete ops for pred_dur and alignment (fallback).
-        dur_host = ttnn.to_torch(dur).to(torch.float32)
-        pred_dur = torch.round(dur_host).clamp(min=1).long().squeeze()
-
-        indices = torch.repeat_interleave(torch.arange(input_ids.shape[1]), pred_dur)
-        pred_aln_trg = torch.zeros((input_ids.shape[1], indices.shape[0]), dtype=torch.float32)
-        pred_aln_trg[indices, torch.arange(indices.shape[0])] = 1.0
-        pred_aln_trg = pred_aln_trg.unsqueeze(0)
-
-        pred_aln_tt = ttnn.from_torch(pred_aln_trg, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        pred_dur, pred_aln_tt = _pred_alignment_from_duration(dur, text_len=int(input_ids.shape[1]), device=self.device)
         return d, dur, pred_dur, pred_aln_tt
 
 
@@ -430,8 +307,8 @@ class TtKokoroPredictorDuration:
 class PredictorFullParams(PredictorDurationParams):
     shared_fwd: LSTMParams
     shared_rev: LSTMParams
-    f0_blocks: list[AdainResBlk1dParams]
-    n_blocks: list[AdainResBlk1dParams]
+    f0_blocks: list[AdainResBlk1d]
+    n_blocks: list[AdainResBlk1d]
     f0_proj: Conv1dParams
     n_proj: Conv1dParams
     text_encoder: object
@@ -445,8 +322,14 @@ def preprocess_predictor_full(
     shared_fwd, shared_rev = preprocess_pytorch_lstm_1layer(model.predictor.shared, device, weights_dtype=weights_dtype)
     assert shared_rev is not None
 
-    f0_blocks = [_preprocess_adain_resblk_1d(b, device, weights_dtype=weights_dtype) for b in model.predictor.F0]
-    n_blocks = [_preprocess_adain_resblk_1d(b, device, weights_dtype=weights_dtype) for b in model.predictor.N]
+    f0_blocks: list[AdainResBlk1d] = []
+    for b in model.predictor.F0:
+        di, do, sd = infer_encode_dims(b)
+        f0_blocks.append(AdainResBlk1d(device, preprocess_encode_parameters(b, device), di, do, sd))
+    n_blocks: list[AdainResBlk1d] = []
+    for b in model.predictor.N:
+        di, do, sd = infer_encode_dims(b)
+        n_blocks.append(AdainResBlk1d(device, preprocess_encode_parameters(b, device), di, do, sd))
 
     def proj_params(conv: nn.Conv1d) -> Conv1dParams:
         w = conv.weight.detach().cpu()
@@ -504,7 +387,15 @@ class TtKokoroPredictor:
         input_lengths: torch.LongTensor,
         text_mask: torch.Tensor,
         speed: float = 1.0,
+        style_bs_tt: Optional[ttnn.Tensor] = None,
     ):
+        if style_bs_tt is None:
+            style = ttnn.from_torch(
+                ref_s[:, 128:].detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        else:
+            style = style_bs_tt
+
         d, dur, pred_dur, pred_aln_tt = self.duration_part(
             d_en_bct=d_en_bct,
             ref_s=ref_s,
@@ -512,6 +403,7 @@ class TtKokoroPredictor:
             input_lengths=input_lengths,
             text_mask=text_mask,
             speed=speed,
+            style_bs_tt=style,
         )
 
         d_bct = ttnn.permute(d, (0, 2, 1))  # [B,C,T]
@@ -527,34 +419,21 @@ class TtKokoroPredictor:
         )
         x_shared_bcl = ttnn.permute(x_shared, (0, 2, 1))
 
-        style = ttnn.from_torch(
-            ref_s[:, 128:].detach().cpu(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-
-        f0 = x_shared_bcl
+        style_f32 = ttnn.typecast(style, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        f0 = ttnn.typecast(x_shared_bcl, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for blk in self.params.f0_blocks:
-            f0 = _adain_resblk1d_forward_bcl(
-                x_bcl=f0,
-                style_bs=style,
-                params=blk,
-                device=self.device,
-                compute_kernel_config=self.compute_kernel_config,
-            )
+            f0 = blk(f0, style_f32)
+        f0 = ttnn.typecast(f0, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         f0_nlc = ttnn.permute(f0, (0, 2, 1))
         f0_1 = conv1d_nlc(
             x_nlc=f0_nlc, params=self.params.f0_proj, device=self.device, compute_config=self.compute_kernel_config
         )
         f0_1 = ttnn.permute(f0_1, (0, 2, 1))  # [B,1,L]
 
-        n = x_shared_bcl
+        n = ttnn.typecast(x_shared_bcl, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for blk in self.params.n_blocks:
-            n = _adain_resblk1d_forward_bcl(
-                x_bcl=n,
-                style_bs=style,
-                params=blk,
-                device=self.device,
-                compute_kernel_config=self.compute_kernel_config,
-            )
+            n = blk(n, style_f32)
+        n = ttnn.typecast(n, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         n_nlc = ttnn.permute(n, (0, 2, 1))
         n_1 = conv1d_nlc(
             x_nlc=n_nlc, params=self.params.n_proj, device=self.device, compute_config=self.compute_kernel_config
