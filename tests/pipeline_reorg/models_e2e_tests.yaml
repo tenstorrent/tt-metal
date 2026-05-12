@@ -423,9 +423,6 @@
     bh_p150:
       timeout: 15
       tier: 2
-    bh_deskbox:
-      timeout: 15
-      tier: 2
     bh_llmbox:
       timeout: 15
       tier: 2
