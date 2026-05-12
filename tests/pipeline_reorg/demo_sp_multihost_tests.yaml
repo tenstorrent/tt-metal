@@ -80,7 +80,7 @@
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
       --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
-      python3 -m models.demos.deepseek_v3_b1.demo.cli \
+      python -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 2048 \
         --weights real \
         --cache-path /home/esmal/cache \
