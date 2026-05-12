@@ -537,6 +537,25 @@ jobs:
               echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
               return 0
             fi
+            # Check if any vector file in this partition has vectors for
+            # the current arch.  When all vectors are for a different arch
+            # (e.g. wormhole ROW vectors on a blackhole runner), the sweep
+            # runner loads 0 vectors and generic_ops_tracer exits 1 on the
+            # "0 trace files" check.  Skip the pass entirely in that case.
+            local arch_tag="${ARCH_NAME:-}"
+            if [[ -n "$arch_tag" ]]; then
+              local arch_matched=0
+              for f in "$vectors_dir"/*.json; do
+                [[ "$(basename "$f")" == "generation_manifest.json" ]] && continue
+                if [[ "$(basename "$f")" == *"$arch_tag"* ]] || [[ "$(basename "$f")" == *"$(echo "$arch_tag" | cut -d_ -f1)"* ]]; then
+                  arch_matched=1; break
+                fi
+              done
+              if [[ "$arch_matched" == "0" ]]; then
+                echo "[two-pass] $axis partition has no vectors for arch $arch_tag — skipping"
+                return 0
+              fi
+            fi
             echo "[two-pass] === axis=$axis ==="
             TTNN_DISPATCH_AXIS="$axis" \
               TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
