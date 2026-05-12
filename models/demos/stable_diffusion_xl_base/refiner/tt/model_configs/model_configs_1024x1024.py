@@ -184,7 +184,7 @@ class RefinerModelOptimisations1024x1024(RefinerModelOptimisationsBase, ModelOpt
                     per_core_M=4,
                     per_core_N=24,
                     out_subblock_h=1,
-                    out_subblock_w=8,
+                    out_subblock_w=1,
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
