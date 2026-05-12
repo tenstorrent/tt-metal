@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+
 /**
  * Generate index tiles for TopK multicore local processing phase.
  *
@@ -26,11 +29,11 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     constexpr uint32_t one_tile = 1;
 
     // Reserve space
-    cb_reserve_back(cb_id, one_tile);
+    experimental::CircularBuffer cb(cb_id);
+    cb.reserve_back(one_tile);
 
     // Writer config
-    const uint32_t writer_addr = get_write_ptr(cb_id);
-    volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(writer_addr);
+    experimental::CoreLocalMem<volatile T> ptr(cb.get_write_ptr());
     const uint32_t w = wt << 5;  // wt * 2^(5)
 
     // Writer loop
@@ -54,5 +57,5 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
         }  // j loop
     }  // i loop
     // Push the tile
-    cb_push_back(cb_id, one_tile);
+    cb.push_back(one_tile);
 }

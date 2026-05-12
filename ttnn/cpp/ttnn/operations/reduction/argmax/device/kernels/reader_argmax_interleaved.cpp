@@ -3,6 +3,9 @@
 
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 #include <stdint.h>
 
@@ -42,12 +45,16 @@ void kernel_main() {
     const auto s_src = TensorAccessor(s_src_args, src_base_addr);
     const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer src_cb(src_cb_idx);
+    experimental::CircularBuffer dst_cb(dst_cb_idx);
+
     // CB in L1 memory for storing input
-    const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
+    const uint32_t src_cb_addr = src_cb.get_write_ptr();
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
 
     // CB in L1 memory for storing output
-    const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
+    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
 
     uint32_t max_idx = 0;
@@ -57,9 +64,8 @@ void kernel_main() {
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
         for (uint32_t j = 0; j < inner_dim_units; ++j) {
-            const uint64_t src_noc_addr = get_noc_addr(k * inner_dim_units + j, s_src);
-            noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
-            noc_async_read_barrier();
+            noc.async_read(s_src, src_cb, src_page_size, {.page_id = k * inner_dim_units + j}, {.offset_bytes = 0});
+            noc.async_read_barrier();
 
             // Reset max_val for each new output
             if constexpr (not reduce_all) {
@@ -77,17 +83,15 @@ void kernel_main() {
         }
 
         if constexpr (not reduce_all) {
-            uint64_t dst_noc_addr = get_noc_addr(k, s_dst);
-            noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);
-            noc_async_write_barrier();
+            noc.async_write(dst_cb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
+            noc.async_write_barrier();
         }
     }
 
     // TODO: Generalize write for argmax for other dims
     if constexpr (reduce_all) {
         out_idxs[0] = max_idx;
-        const uint64_t dst_noc_addr = get_noc_addr(0, s_dst);
-        noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);
-        noc_async_write_barrier();
+        noc.async_write(dst_cb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
+        noc.async_write_barrier();
     }
 }
