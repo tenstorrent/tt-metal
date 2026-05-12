@@ -94,6 +94,11 @@ struct MeshReadEventDescriptor {
 
 struct MeshBufferReadDescriptor {
     std::unordered_map<IDevice*, uint32_t> num_reads_per_dev;
+    // Keeps host-buffer memory alive until the reader thread finishes the async memcpy.
+    // Without this, a caller that discards the returned Tensor before synchronize_device()
+    // would free the destination buffer while the NumaAwareExecutor thread is still copying
+    // into it (use-after-free / SIGSEGV in libumd read_from_sysmem). See issue #43638.
+    std::vector<MemoryPin> memory_pins;
 };
 
 struct MeshCoreDataReadDescriptor {
@@ -678,9 +683,13 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+    bool blocking,
+    std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device)));
+        std::in_place_type<MeshBufferReadDescriptor>,
+        std::move(num_txns_per_device),
+        std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
