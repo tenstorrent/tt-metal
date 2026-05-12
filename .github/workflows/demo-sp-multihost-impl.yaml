@@ -164,7 +164,7 @@ jobs:
 
       - name: Reset cards for ${{ matrix.test-group.name }}
         working-directory: /tmp
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           MAX_RECOVERY_ATTEMPTS=3
 
