@@ -652,15 +652,8 @@ class TtMolmo2Model(LightweightModule):
 
         return trace_id, trace_logits
 
-    def _execute_decode_trace(self, token_id: int, position: int) -> torch.Tensor:
-        """Update stable input buffers and execute the captured decode trace.
-
-        Each update allocates a small staging tensor, copies into the stable buffer
-        in-place (ttnn.copy requires both to be device tensors), then frees staging.
-        This follows the same pattern used by the reference demo generator.
-
-        Returns logits [vocab_size] on CPU.
-        """
+    def _update_decode_inputs(self, token_id: int, position: int) -> None:
+        """Upload decode-step inputs into the trace's stable buffers (no execute)."""
         tt = self._decode_trace_tensors
 
         def _upload(t_cpu, dtype, layout, device_buf):
@@ -675,22 +668,27 @@ class TtMolmo2Model(LightweightModule):
             ttnn.copy(staging, device_buf)
             ttnn.deallocate(staging)
 
-        # Update token ID ([1, 1, 1] uint32)
         _upload(torch.tensor([[[token_id]]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, tt["tok_id"])
-        # Update position ([1] int32)
         _upload(torch.tensor([position], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, tt["cur_pos"])
-        # Update RoPE cos/sin for this position ([1, 1, 1, head_dim])
         cos_p = self._cos_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
         sin_p = self._sin_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
         _upload(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["cos"])
         _upload(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["sin"])
 
-        # Replay the captured trace — reads from the stable buffers updated above
-        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=True)
+    def _dispatch_decode_trace(self, blocking: bool = False) -> None:
+        """Replay the captured decode trace. Inputs must already be uploaded."""
+        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=blocking)
 
-        # Read logits from the trace output buffer (written by lm_head inside trace)
+    def _read_decode_output(self) -> torch.Tensor:
+        """Read logits from the trace output buffer to host. Blocking."""
         logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(self._decode_trace_output)[0]).float()
         return logits_cpu.squeeze(0).squeeze(0).squeeze(0)  # [vocab_size]
+
+    def _execute_decode_trace(self, token_id: int, position: int) -> torch.Tensor:
+        """Single-mesh convenience: update + dispatch (blocking) + read. Returns logits."""
+        self._update_decode_inputs(token_id, position)
+        self._dispatch_decode_trace(blocking=True)
+        return self._read_decode_output()
 
     # ------------------------------------------------------------------ #
     # Vision backbone
