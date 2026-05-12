@@ -2,12 +2,13 @@
 ACE-Step v1.5 demo: official-style host preprocessing + TTNN DiT sampler + host VAE.
 
 By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`` for **Phase 1**
-(5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, Qwen text encoder, and HF
-``prepare_condition`` with **precomputed LM hints**), emitting the same style of **loguru** / model
-logs as the official CLI. Only the diffusion loop runs on TTNN.
+(5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, TTNN Qwen3 caption encoder via
+``infer_text_embeddings``, and HF ``prepare_condition`` with **precomputed LM hints**), emitting the
+same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
 
-Use ``--fast-preprocess`` to skip the LM and use the lightweight Qwen + ``precomputed_lm_hints_25Hz=None``
-path (faster iteration).
+Use ``--fast-preprocess`` to skip the LM and use the lightweight path (tokenizer + TTNN ``Qwen3Model``
+embedding encoder + ``precomputed_lm_hints_25Hz=None``), avoiding a PyTorch Qwen forward while still
+using HF ``prepare_condition`` on the host.
 
 ``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
 """
@@ -63,6 +64,21 @@ _SHIFT_TIMESTEPS: dict[float, list[float]] = {
     ],
     3.0: [1.0, 0.9545454545454546, 0.9, 0.8333333333333334, 0.75, 0.6428571428571429, 0.5, 0.3],
 }
+
+
+def _prepend_ttnn_pkg_to_syspath() -> None:
+    tt_metal_root = str(Path(__file__).resolve().parents[3])
+    ttnn_pkg_root = str(Path(tt_metal_root) / "ttnn")
+    for p in (tt_metal_root, ttnn_pkg_root):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+
+def _configure_ttnn_runtime(*, no_ttnn_strict: bool) -> None:
+    """Insert tt-metal roots and optional strict fallback before ``import ttnn``."""
+    _prepend_ttnn_pkg_to_syspath()
+    if not no_ttnn_strict:
+        os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
 
 
 def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, variant: str) -> list[float]:
@@ -289,8 +305,8 @@ def main() -> None:
         "--fast-preprocess",
         action="store_true",
         help=(
-            "Skip 5 Hz LM + handler batching; use Qwen-only HF prepare_condition (no precomputed LM hints). "
-            "Avoids importing AceStepHandler (no torchaudio / full ACE-Step training stack). "
+            "Skip 5 Hz LM + handler batching; use tokenizer + TTNN Qwen3 embedding encoder and HF prepare_condition "
+            "(no precomputed LM hints). Avoids importing AceStepHandler (no torchaudio / full ACE-Step training stack). "
             "If omitted and torchaudio is not installed, this path is selected automatically."
         ),
     )
@@ -315,7 +331,7 @@ def main() -> None:
             fast_preprocess = True
 
     import torch
-    from transformers import AutoModel, AutoTokenizer
+    from transformers import AutoModel, AutoTokenizer  # tokenizer always; AceStep ``prepare_condition`` via AutoModel
 
     ckpt_dir = Path(args.ckpt_dir)
     os.environ["ACESTEP_CHECKPOINTS_DIR"] = str(ckpt_dir)
@@ -341,6 +357,8 @@ def main() -> None:
     infer_steps = args.infer_steps
     if infer_steps is None:
         infer_steps = 8 if "turbo" in str(args.variant).lower() else 50
+
+    dev_opened_for_ttnn_text_encoder = False
 
     gs = args.guidance_scale
     if gs is None:
@@ -441,9 +459,8 @@ def main() -> None:
         return
 
     if fast_preprocess:
-        # --- Lightweight: Qwen + HF prepare_condition (no 5 Hz LM / no precomputed hints) ---
+        # --- Lightweight: TTNN Qwen3 embedding encoder + HF prepare_condition (no 5 Hz LM / no precomputed hints) ---
         tok = AutoTokenizer.from_pretrained(str(text_model_dir))
-        txt_model = AutoModel.from_pretrained(str(text_model_dir)).eval().to(torch_dev)
         dit_instruction = "Fill the audio semantic mask based on the given conditions:"
         metas = {"caption": args.prompt, "duration": float(args.duration_sec), "language": "en"}
         text_prompt = f"""# Instruction
@@ -456,11 +473,7 @@ def main() -> None:
 {metas}<|endoftext|>
 """
         tokens = tok(text_prompt, padding="max_length", truncation=True, max_length=256, return_tensors="pt")
-        input_ids = tokens["input_ids"].to(torch_dev)
-        attn_mask = tokens["attention_mask"].to(torch_dev).to(torch.bool)
-        with torch.inference_mode():
-            text_out = txt_model(input_ids=input_ids, attention_mask=attn_mask)
-            text_hidden_states = text_out.last_hidden_state
+        attn_mask_bool = tokens["attention_mask"].to(torch_dev).to(torch.bool)
 
         frames = int(round(float(args.duration_sec) * 25.0))
         if frames <= 0:
@@ -482,6 +495,40 @@ def main() -> None:
 
         chunk_masks = torch.ones((1, frames, 64), dtype=torch.float32)
 
+        _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
+        import ttnn
+        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+
+        if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
+            ttnn.CONFIG.throw_exception_on_fallback = True
+
+        qwen_safetensors = text_model_dir / "model.safetensors"
+        if not qwen_safetensors.is_file():
+            raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
+
+        dev = ttnn.open_device(device_id=int(args.device_id))
+        if hasattr(dev, "enable_program_cache"):
+            dev.enable_program_cache()
+        dev_opened_for_ttnn_text_encoder = True
+
+        input_ids_np = tokens["input_ids"].numpy().astype(np.uint32)
+        attn_mask_np = tokens["attention_mask"].numpy().astype(np.float32)
+
+        qwen_enc = TtQwen3EmbeddingEncoder(
+            device=dev,
+            hf_model_dir=str(text_model_dir),
+            qwen_safetensors_path=str(qwen_safetensors),
+        )
+        try:
+            text_hs_tt = qwen_enc.forward(input_ids_np, attn_mask_np)
+            text_hidden_states = ttnn.to_torch(text_hs_tt).float()
+        finally:
+            del qwen_enc
+
+        if text_hidden_states.ndim == 4:
+            text_hidden_states = text_hidden_states.squeeze(1).contiguous()
+        text_hidden_states = text_hidden_states.to(torch_dev)
+
         ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
         B = 1
         lyric_dim = int(text_hidden_states.shape[-1])
@@ -494,7 +541,7 @@ def main() -> None:
         with torch.inference_mode():
             enc_hs, enc_mask, ctx_lat = ace.prepare_condition(
                 text_hidden_states=text_hidden_states.to(dtype=torch.float32),
-                text_attention_mask=attn_mask,
+                text_attention_mask=attn_mask_bool,
                 lyric_hidden_states=lyric_hidden_states,
                 lyric_attention_mask=lyric_attention_mask,
                 refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
@@ -518,6 +565,7 @@ def main() -> None:
         ref_root = _ensure_acestep_on_path()
 
         from models.demos.ace_step_v1_5.official_lm_preprocess import (
+            attach_infer_text_embeddings_ttnn,
             build_filtered_dit_kwargs_for_handler,
             configure_acestep_logging,
             handler_prepare_condition_tensors,
@@ -595,7 +643,35 @@ def main() -> None:
             constrained_decoding_debug=True,
         )
         filtered = build_filtered_dit_kwargs_for_handler(dit_handler, llm_handler, params, config, progress=None)
-        enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(dit_handler, filtered)
+        qwen_safetensors = text_model_dir / "model.safetensors"
+        if not qwen_safetensors.is_file():
+            raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
+
+        _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
+        import ttnn
+        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+
+        if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
+            ttnn.CONFIG.throw_exception_on_fallback = True
+
+        dev = ttnn.open_device(device_id=int(args.device_id))
+        if hasattr(dev, "enable_program_cache"):
+            dev.enable_program_cache()
+        dev_opened_for_ttnn_text_encoder = True
+
+        qwen_tt_encoder = TtQwen3EmbeddingEncoder(
+            device=dev,
+            hf_model_dir=str(text_model_dir),
+            qwen_safetensors_path=str(qwen_safetensors),
+        )
+        _restore_infer_txt = attach_infer_text_embeddings_ttnn(
+            dit_handler, tt_qwen_encoder=qwen_tt_encoder, max_seq_len=256
+        )
+        try:
+            enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(dit_handler, filtered)
+        finally:
+            _restore_infer_txt()
+            del qwen_tt_encoder
     do_cfg = gs > 1.0 + 1e-6
 
     noise = torch.randn((1, frames, 64), dtype=torch.float32)
@@ -609,25 +685,18 @@ def main() -> None:
     )
     timesteps_host = np.asarray(t_schedule + [0.0], dtype=np.float32)
 
-    # --- TTNN ---
-    tt_metal_root = str(Path(__file__).resolve().parents[3])
-    ttnn_pkg_root = str(Path(tt_metal_root) / "ttnn")
-    for p in (tt_metal_root, ttnn_pkg_root):
-        if p not in sys.path:
-            sys.path.insert(0, p)
-
-    if not args.no_ttnn_strict:
-        os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
-
+    # --- TTNN (DiT): device may already be open after TTNN Qwen3 caption embedding (fast or handler path) ---
+    _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
     import ttnn
     from models.demos.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
 
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True
 
-    dev = ttnn.open_device(device_id=int(args.device_id))
-    if hasattr(dev, "enable_program_cache"):
-        dev.enable_program_cache()
+    if not dev_opened_for_ttnn_text_encoder:
+        dev = ttnn.open_device(device_id=int(args.device_id))
+        if hasattr(dev, "enable_program_cache"):
+            dev.enable_program_cache()
 
     mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
     if mem is None:

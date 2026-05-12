@@ -7,7 +7,8 @@ passed into ``AceStepHandler.generate_music``, then runs only:
   ``_normalize_service_generate_inputs`` → ``_prepare_batch`` → ``preprocess_batch``
   → ``model.prepare_condition``
 
-so TTNN can own diffusion.  Does not call ``service_generate`` / PyTorch DiT.
+so TTNN can own DiT diffusion. The DiT-caption branch can swap in a TTNN Qwen encoder via
+``attach_infer_text_embeddings_ttnn``. Does not call ``service_generate`` / PyTorch DiT.
 """
 
 from __future__ import annotations
@@ -15,10 +16,61 @@ from __future__ import annotations
 import inspect
 import math
 import sys
-from typing import Any
+from typing import Any, Callable
 
+import numpy as np
 import torch
 from loguru import logger
+
+
+def attach_infer_text_embeddings_ttnn(
+    dit_handler: Any, *, tt_qwen_encoder: Any, max_seq_len: int = 256
+) -> Callable[[], None]:
+    """Replace ``dit_handler.infer_text_embeddings`` with ``TtQwen3EmbeddingEncoder`` on TTNN.
+
+    AceStep pads captions to ``max(text lengths in batch)`` (≤256); the TTNN encoder requires a fixed
+    width of ``max_seq_len``, so IDs and masks are padded to ``max_seq_len`` for device forward and the
+    result is cropped back to the original padded width ``S`` before ``prepare_condition``.
+    Lyrics still use Torch ``embed_tokens`` from the loaded HF checkpoint.
+    """
+    import ttnn
+
+    pad_id = getattr(dit_handler.text_tokenizer, "pad_token_id", None)
+    dtype = getattr(dit_handler, "dtype", torch.float32)
+    orig = dit_handler.infer_text_embeddings
+
+    def _replacement(text_token_idss: torch.Tensor) -> torch.Tensor:
+        ids = text_token_idss.detach()
+        ids_cpu = ids.cpu()
+        b, seq = int(ids_cpu.shape[0]), int(ids_cpu.shape[1])
+        if seq > int(max_seq_len):
+            raise ValueError(f"Text sequence length {seq} exceeds max_seq_len={max_seq_len}")
+        attn_cpu = (
+            ids_cpu.ne(pad_id).to(dtype=torch.float32)
+            if pad_id is not None
+            else torch.ones_like(ids_cpu, dtype=torch.float32)
+        )
+        ids_np = ids_cpu.numpy().astype(np.uint32)
+        attn_np = attn_cpu.numpy().astype(np.float32)
+        if seq < int(max_seq_len):
+            pad_val = int(pad_id) if pad_id is not None else 0
+            pad_w = int(max_seq_len) - seq
+            ids_np = np.pad(ids_np, ((0, 0), (0, pad_w)), constant_values=pad_val).astype(np.uint32)
+            attn_np = np.pad(attn_np, ((0, 0), (0, pad_w)), constant_values=np.float32(0.0)).astype(np.float32)
+        hid_tt = tt_qwen_encoder.forward(ids_np, attn_np)
+        out = ttnn.to_torch(hid_tt).float()
+        if out.ndim == 4:
+            out = out.squeeze(1)
+        out = out[:, :seq, :].contiguous()
+        target_device = ids.device if ids.device.type != "meta" else torch.device("cpu")
+        return out.to(device=target_device, dtype=dtype)
+
+    dit_handler.infer_text_embeddings = _replacement
+
+    def _restore() -> None:
+        dit_handler.infer_text_embeddings = orig
+
+    return _restore
 
 
 def configure_acestep_logging(*, level: str = "DEBUG") -> None:
