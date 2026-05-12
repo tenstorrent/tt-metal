@@ -1327,6 +1327,10 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     // noc_xy_addr);
 
     // TRIDs for the two scratch DB halves (unique from fetch_q's 2-5 and exec_buf's 1).
+    // Each TRID is barriered before the next read to the same half, so the max outstanding
+    // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
+    static_assert(
+        (scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
     static constexpr uint32_t RELAY_LINEAR_TRIDS[2] = {6U, 7U};
 
     // First step - read into DB0
