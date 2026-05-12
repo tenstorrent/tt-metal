@@ -91,7 +91,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         writer_defines);
 
     auto outer_stride = Ht * Wt;
-    for (int i = dim; i < shape.rank() - 2; i++) {
+    for (int i = dim; i < static_cast<int>(shape.rank()) - 2; i++) {
         outer_stride *= shape[i];
     }
     auto dim_size = shape[dim];

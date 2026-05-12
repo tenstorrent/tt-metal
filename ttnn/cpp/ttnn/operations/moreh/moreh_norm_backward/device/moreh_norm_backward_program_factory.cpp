@@ -23,7 +23,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 
 void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
         if (idx == rank - 1 || idx == rank - 2) {
             dim[i] = (shape[idx] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
@@ -42,7 +42,7 @@ ttnn::Shape get_output_grad_shape(
     auto shape = input_grad.logical_shape();
     auto rank = shape.rank();
     for (auto dim : dims) {
-        TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
+        TT_FATAL(static_cast<size_t>(dim) < rank, "dim {} < rank {}", dim, rank);
         shape[dim] = 1;
     }
     return shape;
@@ -84,7 +84,7 @@ ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
     ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
-    for (auto i = 0; i < input_grad_rank; ++i) {
+    for (size_t i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
     }
