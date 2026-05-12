@@ -23,7 +23,7 @@ from models.experimental.mistral_24b.tt.generator import MistralGenerator
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.experimental.mistral_24b.tt.model_config import Mistral24BModelArgs
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
 import re
@@ -124,6 +124,18 @@ def next_token_ids_from_decode_output(decode_output):
     return tok.reshape(-1).long()
 
 
+def read_first_token_id_from_device(tt_decode_output):
+    """Per-step token read for greedy on-device sampling when decode_forward was
+    called with read_from_device=False. Reads just slot 0 from one device's
+    replica of the [1,1,1,padded_batch] token tensor; tokens are replicated
+    across the mesh, so the value matches what process_decode_output_host would
+    return, while skipping its per-device .cpu() + reshape/concat (the 30-70ms
+    host-side gap between Tilize ops in the decoder perf report)."""
+    item = tt_decode_output[0]
+    tt_tok = item[0] if isinstance(item, tuple) else item
+    return int(ttnn.to_torch(ttnn.get_device_tensors(tt_tok)[0]).flatten()[0].item())
+
+
 def log_e2e_performance_measurements(
     *,
     batch_size,
@@ -140,6 +152,11 @@ def log_e2e_performance_measurements(
     Log throughput and latency metrics in the same shape as Qwen VL demos
     (see models/demos/qwen3_vl/demo/demo.py measurements + Performance metrics block).
     Vision/text prefill are not split here without a profiler; vision timing is optional.
+
+    For decode, ``inference_decode_time`` is total wall time for the decode region and
+    ``decode_step_times`` may be a synthetic list of identical ``wall_time / N`` entries
+    (so ``num_decode_tokens`` matches ``N``) when per-call ``decode_forward`` timing is
+    not meaningful (e.g. non-blocking trace with ``read_from_device=False``).
     """
     avg_time_to_first_token = inference_prefill_time / batch_size if batch_size else inference_prefill_time
     prefill_tok_s = (num_prefill_tokens / inference_prefill_time * batch_size) if inference_prefill_time > 0 else 0.0
@@ -188,13 +205,15 @@ def log_e2e_performance_measurements(
     )
     if decode_step_times:
         first_decode_s = decode_step_times[0]
+        uniform_steps = len(decode_step_times) > 1 and all(s == first_decode_s for s in decode_step_times)
+        step_label = "Mean decode step (wall/N)" if uniform_steps else "1st decode step"
         if first_decode_s > 0:
             logger.info(
-                f"1st decode step: {first_decode_s * 1000:.2f}ms "
+                f"{step_label}: {first_decode_s * 1000:.2f}ms "
                 f"[{1.0 / first_decode_s:.2f} t/s/u, {(1.0 / first_decode_s) * batch_size:.2f} t/s]"
             )
         else:
-            logger.info(f"1st decode step: {first_decode_s * 1000:.2f}ms")
+            logger.info(f"{step_label}: {first_decode_s * 1000:.2f}ms")
     logger.info(
         f"Decode: {num_decode_tokens} tokens in {inference_decode_time:.4f}s → "
         f"{decode_tok_s_user:.2f} tok/s/user, {decode_tok_s:.2f} tok/s aggregate"
@@ -208,7 +227,7 @@ def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optim
     """Setup model arguments for vision-enabled model (Single Responsibility)."""
     instruct = True if weights == "instruct" else False
 
-    model_args = ModelArgs(
+    model_args = Mistral24BModelArgs(
         mesh_device=mesh_device,
         instruct=instruct,
         optimizations=optimizations,
@@ -430,11 +449,10 @@ def run_generation_exactly_like_test_end2end(
     generation_length = max_gen_len
 
     results = []
-    decode_step_times = []
 
     logger.info("Starting decode loop...")
     # Phase A: decode warmups before timed region (trace capture/replay steady-state, not measured).
-    decode_warmup_iters = 3
+    decode_warmup_iters = 1
     logger.info(f"Decode warmup: {decode_warmup_iters} steps (not timed)")
     for _ in range(decode_warmup_iters):
         decode_output = generator.decode_forward(
@@ -448,9 +466,20 @@ def run_generation_exactly_like_test_end2end(
         out_tok = next_token_ids_from_decode_output(decode_output)
         current_pos = current_pos + 1
 
+    # Cache eos id once — avoids tokenizer attribute lookup every step.
+    eos_token_id = model_args.tokenizer.eos_token_id
+
     signpost("Mistral24B::DecodeLoop::Start", f"max_gen_len={generation_length}")
+    # Wall-clock the whole decode loop: with read_from_device=False, decode_forward
+    # returns after non-blocking trace submit (~µs), so per-call timers are meaningless.
+    loop_start = time.perf_counter()
     for _ in range(generation_length):
-        decode_t0 = time.perf_counter()
+        # read_from_device=False: keep the sampled token on-device. The trace's
+        # sampling op writes the next-step token directly into the trace input
+        # buffer, so when reset_inputs=False (steady state after warmup) the host
+        # `out_tok` is ignored by decode_forward — we don't need to feed it back.
+        # This skips process_decode_output_host's per-device .cpu()+reshape+concat
+        # which dominates the 30-70ms per-step gap in the report.
         decode_output = generator.decode_forward(
             out_tok,
             current_pos,
@@ -458,16 +487,17 @@ def run_generation_exactly_like_test_end2end(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=DECODE_GREEDY_SAMPLING,
+            read_from_device=False,
         )
-        decode_t1 = time.perf_counter()
-        decode_step_times.append(decode_t1 - decode_t0)
 
-        # On-device greedy sampling: first tensor is next token ids [B] (Phase C harness).
-        out_tok = next_token_ids_from_decode_output(decode_output)
-        token_id = int(out_tok[0].item())
+        # Lightweight per-step read for EOS / repetition checks.
+        token_id = read_first_token_id_from_device(decode_output)
+        # Mirror the device's token in `out_tok` so a future reset_inputs=True
+        # path (e.g., page_table change) still sees the correct value.
+        out_tok = torch.tensor([token_id], dtype=torch.long)
 
         # Stop if EOS detected
-        if token_id == model_args.tokenizer.eos_token_id:
+        if token_id == eos_token_id:
             logger.info("EOS token detected, stopping generation.")
             break
 
@@ -487,7 +517,14 @@ def run_generation_exactly_like_test_end2end(
             logger.warning(f"Detected exact repetition of token {all_outputs[0][-1]} five times in a row. Stopping.")
             break
 
+    loop_end = time.perf_counter()
     signpost("Mistral24B::DecodeLoop::End", f"generated={len(results)}")
+
+    total_decode_time = loop_end - loop_start
+    num_decoded = len(all_outputs[0]) - prefill_lens[0]
+    _n = max(num_decoded, 1)
+    decode_step_times = [total_decode_time / _n] * _n
+    inference_decode_time = total_decode_time
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
     logger.info(f"Final Generated Response:\n{response}")
@@ -499,7 +536,6 @@ def run_generation_exactly_like_test_end2end(
 
     run_t1 = time.perf_counter()
     full_run_time = run_t1 - run_t0
-    inference_decode_time = sum(decode_step_times)
 
     log_e2e_performance_measurements(
         batch_size=batch_size,
