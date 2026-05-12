@@ -105,6 +105,17 @@ on:
     - cron: "0 */4 * * *"
     # P100 nightly: P100 / P100a CIv2 viommu only.
     - cron: "0 7 * * *"
+  # REVERT ME: auto-fire on every push to the BH reorg branch so we can iterate
+  # without `gh workflow run` (this file does not yet exist on `main`, so the
+  # dispatch endpoint would refuse it). Drop this block before merging.
+  push:
+    branches:
+      - tdowdall/30675-reorg-bh-pipeline
+    paths:
+      - '.github/workflows/blackhole-sanity-tests*.yaml'
+      - '.github/workflows/build-artifact.yaml'
+      - 'tests/pipeline_reorg/blackhole_sanity_tests.yaml'
+      - '.github/time_budget.yaml'
 
 run-name: >-
   ${{ (github.event_name == 'schedule' && github.event.schedule == '0 7 * * *' && '(Blackhole) Sanity Tests (P100 nightly)')
