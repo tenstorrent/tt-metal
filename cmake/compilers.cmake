@@ -25,25 +25,85 @@ function(CHECK_COMPILERS)
     # which yields literal *-NOTFOUND in Ninja rules; Tracy also prefixes link/archive
     # steps with ccache (RULE_LAUNCH_LINK), so the failure surfaces as ccache not finding
     # the "compiler". Fall back to the global archiver from the initial toolchain probe.
+    #
+    # CMake can also leave CMAKE_AR itself empty while still writing CMAKE_C_COMPILER_AR to
+    # the sentinel CMAKE_C_COMPILER_AR-NOTFOUND, so the old logic (which required CMAKE_AR to
+    # already be set) never repaired the cache or CMake*Compiler.cmake on those toolchains.
+    if(NOT WIN32)
+        if(NOT CMAKE_AR OR "${CMAKE_AR}" MATCHES "NOTFOUND")
+            find_program(
+                _tt_resolved_ar
+                NAMES
+                    ar
+                    llvm-ar
+                    gcc-ar
+                    NO_CACHE
+            )
+            if(_tt_resolved_ar)
+                set(CMAKE_AR "${_tt_resolved_ar}" CACHE FILEPATH "Path to archiver for static libraries" FORCE)
+                message(STATUS "CMAKE_AR was unset/invalid; using ${CMAKE_AR}")
+            endif()
+        endif()
+        if(NOT CMAKE_RANLIB OR "${CMAKE_RANLIB}" MATCHES "NOTFOUND")
+            find_program(
+                _tt_resolved_ranlib
+                NAMES
+                    ranlib
+                    llvm-ranlib
+                    gcc-ranlib
+                    NO_CACHE
+            )
+            if(_tt_resolved_ranlib)
+                set(CMAKE_RANLIB "${_tt_resolved_ranlib}" CACHE FILEPATH "Path to ranlib for static libraries" FORCE)
+                message(STATUS "CMAKE_RANLIB was unset/invalid; using ${CMAKE_RANLIB}")
+            endif()
+        endif()
+    endif()
+
     foreach(_lang IN ITEMS C CXX ASM)
-        if(CMAKE_${_lang}_COMPILER_AR MATCHES "-NOTFOUND$")
+        set(_tt_lang_ar "${CMAKE_${_lang}_COMPILER_AR}")
+        if(
+            CMAKE_AR
+            AND NOT "${CMAKE_AR}"
+                MATCHES
+                "NOTFOUND"
+            AND (
+                NOT _tt_lang_ar
+                OR "${_tt_lang_ar}"
+                    MATCHES
+                    "NOTFOUND"
+            )
+        )
             set(CMAKE_${_lang}_COMPILER_AR "${CMAKE_AR}" CACHE FILEPATH "Archiver for ${_lang}" FORCE)
-            # Normal var was set from CMake*Compiler.cmake at project() time; it shadows CACHE until overwritten.
             set(CMAKE_${_lang}_COMPILER_AR "${CMAKE_AR}")
         endif()
-        if(CMAKE_${_lang}_COMPILER_RANLIB MATCHES "-NOTFOUND$")
+        set(_tt_lang_ranlib "${CMAKE_${_lang}_COMPILER_RANLIB}")
+        if(
+            CMAKE_RANLIB
+            AND NOT "${CMAKE_RANLIB}"
+                MATCHES
+                "NOTFOUND"
+            AND (
+                NOT _tt_lang_ranlib
+                OR "${_tt_lang_ranlib}"
+                    MATCHES
+                    "NOTFOUND"
+            )
+        )
             set(CMAKE_${_lang}_COMPILER_RANLIB "${CMAKE_RANLIB}" CACHE FILEPATH "Ranlib for ${_lang}" FORCE)
             set(CMAKE_${_lang}_COMPILER_RANLIB "${CMAKE_RANLIB}")
         endif()
+        unset(_tt_lang_ar)
+        unset(_tt_lang_ranlib)
     endforeach()
 
     # project() writes CMake{C,CXX}Compiler.cmake before this runs. Those files keep
     # CMAKE_*_COMPILER_AR=-NOTFOUND for Clang without llvm-ar and override CACHE on the next
     # configure pass, so Ninja rules still embed the bogus path until we sync the files.
-    if(CMAKE_AR AND CMAKE_RANLIB)
-        file(GLOB _tt_c_compiler_info "${CMAKE_BINARY_DIR}/CMakeFiles/*/CMakeCCompiler.cmake")
-        foreach(_f IN LISTS _tt_c_compiler_info)
-            file(READ "${_f}" _txt)
+    file(GLOB _tt_c_compiler_info "${CMAKE_BINARY_DIR}/CMakeFiles/*/CMakeCCompiler.cmake")
+    foreach(_f IN LISTS _tt_c_compiler_info)
+        file(READ "${_f}" _txt)
+        if(CMAKE_AR AND NOT "${CMAKE_AR}" MATCHES "NOTFOUND")
             string(
                 REPLACE
                 [[set(CMAKE_C_COMPILER_AR "CMAKE_C_COMPILER_AR-NOTFOUND")]]
@@ -53,16 +113,34 @@ function(CHECK_COMPILERS)
             )
             string(
                 REPLACE
+                [[set(CMAKE_C_COMPILER_AR CMAKE_C_COMPILER_AR-NOTFOUND)]]
+                "set(CMAKE_C_COMPILER_AR \"${CMAKE_AR}\")"
+                _txt
+                "${_txt}"
+            )
+        endif()
+        if(CMAKE_RANLIB AND NOT "${CMAKE_RANLIB}" MATCHES "NOTFOUND")
+            string(
+                REPLACE
                 [[set(CMAKE_C_COMPILER_RANLIB "CMAKE_C_COMPILER_RANLIB-NOTFOUND")]]
                 "set(CMAKE_C_COMPILER_RANLIB \"${CMAKE_RANLIB}\")"
                 _txt
                 "${_txt}"
             )
-            file(WRITE "${_f}" "${_txt}")
-        endforeach()
-        file(GLOB _tt_cxx_compiler_info "${CMAKE_BINARY_DIR}/CMakeFiles/*/CMakeCXXCompiler.cmake")
-        foreach(_f IN LISTS _tt_cxx_compiler_info)
-            file(READ "${_f}" _txt)
+            string(
+                REPLACE
+                [[set(CMAKE_C_COMPILER_RANLIB CMAKE_C_COMPILER_RANLIB-NOTFOUND)]]
+                "set(CMAKE_C_COMPILER_RANLIB \"${CMAKE_RANLIB}\")"
+                _txt
+                "${_txt}"
+            )
+        endif()
+        file(WRITE "${_f}" "${_txt}")
+    endforeach()
+    file(GLOB _tt_cxx_compiler_info "${CMAKE_BINARY_DIR}/CMakeFiles/*/CMakeCXXCompiler.cmake")
+    foreach(_f IN LISTS _tt_cxx_compiler_info)
+        file(READ "${_f}" _txt)
+        if(CMAKE_AR AND NOT "${CMAKE_AR}" MATCHES "NOTFOUND")
             string(
                 REPLACE
                 [[set(CMAKE_CXX_COMPILER_AR "CMAKE_CXX_COMPILER_AR-NOTFOUND")]]
@@ -72,12 +150,28 @@ function(CHECK_COMPILERS)
             )
             string(
                 REPLACE
+                [[set(CMAKE_CXX_COMPILER_AR CMAKE_CXX_COMPILER_AR-NOTFOUND)]]
+                "set(CMAKE_CXX_COMPILER_AR \"${CMAKE_AR}\")"
+                _txt
+                "${_txt}"
+            )
+        endif()
+        if(CMAKE_RANLIB AND NOT "${CMAKE_RANLIB}" MATCHES "NOTFOUND")
+            string(
+                REPLACE
                 [[set(CMAKE_CXX_COMPILER_RANLIB "CMAKE_CXX_COMPILER_RANLIB-NOTFOUND")]]
                 "set(CMAKE_CXX_COMPILER_RANLIB \"${CMAKE_RANLIB}\")"
                 _txt
                 "${_txt}"
             )
-            file(WRITE "${_f}" "${_txt}")
-        endforeach()
-    endif()
+            string(
+                REPLACE
+                [[set(CMAKE_CXX_COMPILER_RANLIB CMAKE_CXX_COMPILER_RANLIB-NOTFOUND)]]
+                "set(CMAKE_CXX_COMPILER_RANLIB \"${CMAKE_RANLIB}\")"
+                _txt
+                "${_txt}"
+            )
+        endif()
+        file(WRITE "${_f}" "${_txt}")
+    endforeach()
 endfunction()
