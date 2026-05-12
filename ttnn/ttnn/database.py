@@ -10,6 +10,14 @@ from loguru import logger
 import networkx as nx
 
 import ttnn
+from .stack_trace_source import (
+    CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+    CREATE_SOURCE_FILES_TABLE_SQL,
+    CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+    get_source_file_id,
+    normalize_source_path_from_stack_trace,
+    read_source_file,
+)
 
 SQLITE_DB_PATH = "db.sqlite"
 TENSORS_PATH = "tensors"
@@ -196,10 +204,8 @@ def get_or_create_sqlite_db(report_path):
         """CREATE TABLE IF NOT EXISTS operation_arguments
                 (operation_id int, name text, value text)"""
     )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS stack_traces
-                (operation_id int, stack_trace text)"""
-    )
+    cursor.execute(CREATE_SOURCE_FILES_TABLE_SQL)
+    cursor.execute(CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL)
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS input_tensors
                 (operation_id int, input_index int, tensor_id int)"""
@@ -239,6 +245,7 @@ def get_or_create_sqlite_db(report_path):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_buffer_type ON buffers (buffer_type)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_output_tensors_tensor_id ON output_tensors (tensor_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_input_tensors_tensor_id ON input_tensors (tensor_id)")
+    cursor.execute(CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL)
     sqlite_connection.commit()
     return sqlite_connection
 
@@ -316,8 +323,16 @@ def insert_stack_trace(report_path, operation_id, stack_trace):
     formatted_stack_trace = "\n".join(stack_trace[:-2][::-1])
 
     # let sqlite handle formatting strings with mixed quotes
-    statement = "INSERT INTO stack_traces (operation_id, stack_trace) VALUES (?, ?)"
-    cursor.execute(statement, (operation_id, formatted_stack_trace))
+    source_file_id = None
+    normalized_path = normalize_source_path_from_stack_trace(formatted_stack_trace)
+    if normalized_path is not None:
+        file_contents = read_source_file(normalized_path)
+        if file_contents is not None:
+            source_file_id = get_source_file_id(cursor, normalized_path, file_contents)
+
+    statement = "INSERT INTO stack_traces (operation_id, stack_trace, source_file_id) VALUES (?, ?, ?)"
+    cursor.execute(statement, (operation_id, formatted_stack_trace, source_file_id))
+
     sqlite_connection.commit()
 
 
@@ -744,12 +759,9 @@ def query_stack_trace(report_path, operation_id):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
-    cursor.execute("SELECT * FROM stack_traces WHERE operation_id = ?", (operation_id,))
-    stack_trace = None
-    for row in cursor.fetchall():
-        _, stack_trace = row
-        break
-    return stack_trace
+    cursor.execute("SELECT stack_trace FROM stack_traces WHERE operation_id = ?", (operation_id,))
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def query_buffers(report_path, operation_id):

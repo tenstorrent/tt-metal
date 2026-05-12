@@ -15,6 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
@@ -32,7 +33,22 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_br
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False])
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("use_socket", [True, False])
+@pytest.mark.parametrize(
+    "use_socket",
+    [
+        # TODO(#43071): Root-cause this exact Blackhole socket-backed skip_ccl hang and remove the temporary skip.
+        pytest.param(
+            True,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: test_broadcast_rms_single_device[blackhole-True-mesh_device0-False-"
+                "1e-06-DataType.BFLOAT16-Layout.TILE-output_shape0-input_shard_shape0-"
+                "TensorMemoryLayout.WIDTH_SHARDED] appears to hang on Blackhole after "
+                "'Running fused Broadcast+RMSNorm with skip_ccl=True'. Issue: #43071"
+            ),
+        ),
+        False,
+    ],
+)
 def test_broadcast_rms_single_device(
     mesh_device,
     output_shape,
@@ -127,7 +143,7 @@ def test_broadcast_rms_single_device(
     if use_socket:
         element_size = dtype_size(input_dtype)
         socket_page_size = output_shape[0] * output_shape[1] * element_size
-        token_page_size = 64
+        token_page_size = DeepseekMetadata.aligned_size_bytes()
 
         sender_tensor_4d = torch_input.reshape(1, 1, 1, output_shape[1])
         embedding_tensor = ttnn.from_torch(

@@ -111,7 +111,11 @@ def run(
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    if input_a_tensor_placement is None:
+        input_a_tensor_placement = kwargs.get("input_tensor_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    if input_b_tensor_placement is None:
+        input_b_tensor_placement = kwargs.get("input_tensor_b_tensor_placement", None)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -145,7 +149,9 @@ def run(
     weight_dtype_actual = weight_dtype if weight_dtype is not None else input_b_dtype
     weight_layout_actual = weight_layout if weight_layout is not None else input_b_layout
     weight_memory_config_actual = weight_memory_config if weight_memory_config is not None else input_b_memory_config
-    weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
+    weight_tensor_placement = kwargs.get("weight_tensor_placement")
+    if weight_tensor_placement is None:
+        weight_tensor_placement = input_b_tensor_placement
 
     # Generate weight tensor
     torch_weight_tensor = gen_func_with_cast_tt(
@@ -226,10 +232,54 @@ def run(
             embedding_kwargs["layout"] = parsed_layout
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
+    # Master is inconsistent: 6/8 configs trace weight positionally ("arg1"),
+    # 2/8 use the "weight" kwarg.  Pass positional to match the majority.
+    # Reproduce master's call form: 2 cfgs used `weight=` named (vector
+    # has weight_shape), 6 used positional (vector has input_b_shape).
+    # Master used `weight=` named for 2 cfgs (vector has weight_shape, input_b_shape
+    # is __ABSENT__) and positional for 6.  Detect from __absent_keys__.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    if "input_b_shape" in _absent and "weight_shape" not in _absent:
+        output_tensor = ttnn.embedding(input_tensor, weight=weight_tensor, **embedding_kwargs)
+    else:
+        output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+
+    # Vocab-sharded embedding recovery: when the weight is sharded along the
+    # vocab dim across mesh-rows, each chip computes a partial lookup over
+    # only its slice of vocab. The model normally all-reduces across the
+    # vocab-shard axis to combine partial outputs into the full embedding.
+    # The mesh gather here just concatenates, so the actual ends up shaped
+    # (1, S × mesh_cols, D × mesh_rows). Reshape to expose the chip dims,
+    # sum across mesh_rows (vocab partitions), then take the first chip-col
+    # (input replicated along mesh_cols → all cols identical) and re-add the
+    # leading 1 dim to match the per-device golden shape.
+    if (
+        is_mesh_device
+        and weight_tensor_placement
+        and "PlacementShard" in str(weight_tensor_placement.get("placement", ""))
+        and output_tensor.ndim == 3
+        and torch_output_tensor.ndim == 4
+    ):
+        try:
+            import ast as _ast_e
+
+            _ms_raw = weight_tensor_placement.get("mesh_device_shape", "[1, 1]")
+            if isinstance(_ms_raw, str):
+                _ms_raw = _ast_e.literal_eval(_ms_raw)
+            _mr, _mc = int(_ms_raw[0]), int(_ms_raw[1])
+            _S = torch_output_tensor.shape[2]
+            _D = torch_output_tensor.shape[3]
+            if output_tensor.shape[1] == _S * _mc and output_tensor.shape[2] == _D * _mr:
+                _ot = output_tensor.reshape(1, _mc, _S, _mr, _D)
+                _ot = _ot.sum(dim=3)  # (1, mc, S, D), partials combined
+                _ot = _ot[:, 0:1, :, :]  # (1, 1, S, D), de-replicate cols
+                output_tensor = _ot.reshape(*torch_output_tensor.shape)
+        except Exception:
+            pass
+
     if is_mesh_device:
         torch_output_tensor = reconcile_golden_to_actual(
             torch_output_tensor, output_tensor, input_a_tensor_placement, weight_tensor_placement

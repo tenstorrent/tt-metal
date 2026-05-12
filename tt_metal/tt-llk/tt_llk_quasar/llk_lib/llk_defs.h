@@ -10,7 +10,7 @@ namespace ckernel
 {
 
 // Currently unused but kept for backwards compatibility
-enum class VectorMode
+enum VectorMode
 {
     None      = 0,
     R         = 1,
@@ -89,7 +89,17 @@ enum class SfpuType : std::uint32_t
     square,
     sigmoid,
     silu,
-    abs
+    abs,
+    fill,
+    swiglu,
+    where
+};
+
+enum class BinaryOp : std::uint8_t
+{
+    ADD,
+    SUB,
+    MUL,
 };
 
 enum class DstSync : std::uint8_t

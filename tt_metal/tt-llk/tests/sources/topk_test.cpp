@@ -396,6 +396,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ============================================================================
 
 #ifdef LLK_TRISC_PACK
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -468,23 +469,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // We need to use reconfigure API to avoid race condition between hardware configuration in the second stage and pack in the first
                         // stage.
 #ifdef ARCH_BLACKHOLE
-                        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
-                            pack_src_format,
-                            pack_dst_format,
-                            16 * 16 * 4,
-                            FACE_R_DIM,
-                            TILE_C_DIM,
-                            4 /* num_faces */,
-                            false /* partial_face */,
-                            false /* narrow_tile */,
-                            1 /* num_tiles */);
+                        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
+                            pack_src_format, pack_dst_format, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, false /* partial_face */);
 #else
-                        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
+                        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
                             pack_src_format, pack_dst_format, 16 * 16 * 4, FACE_R_DIM, 4 /* num_faces */, false /* partial_face */, false /* narrow_tile */);
 #endif
                     }
 
-                    _llk_pack_init_<false, false>(pack_dst_format);
+                    _llk_pack_init_wrapper_<false, false>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 

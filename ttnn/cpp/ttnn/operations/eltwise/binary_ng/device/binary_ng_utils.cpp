@@ -772,7 +772,6 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     }
 
     // enable a few more conditions for faster performance
-    // in order to achieve performance parity with legacy binary
     auto output_shape = compute_broadcasted_output(a.logical_shape(), b->logical_shape());
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();

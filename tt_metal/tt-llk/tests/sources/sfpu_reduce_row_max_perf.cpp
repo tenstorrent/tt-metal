@@ -128,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+            _llk_math_eltwise_unary_sfpu_start_(0);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
@@ -153,7 +153,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         i, formats.math, formats.math);
                 }
 
-                _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+                _llk_math_eltwise_unary_sfpu_start_(0);
                 _calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>(BLOCK_CT_DIM, BLOCK_RT_DIM);
                 _llk_math_eltwise_unary_sfpu_done_();
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -167,6 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -188,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
-        _llk_pack_init_<false, false>(formats.pack_dst);
+        _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
 
 #ifdef ARCH_BLACKHOLE
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -9,8 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
@@ -114,7 +113,7 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
             output.shape == torch_results[i].shape
         ), f"Output shape {output.shape} does not match torch shape {torch_results[i].shape}"
 
-        assert_with_pcc(torch_results[i], output, 0.9999)
+        assert_equal(torch_results[i], output)
         if i == 0:
             base_count = device.cache_entries_counter.total
         else:

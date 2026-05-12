@@ -81,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         INPUT_TILE_B, formats.math, formats.math);
 
-    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC>(0);
+    _llk_math_eltwise_binary_sfpu_start_(0);
 
     _sfpu_binary_bcast_init_<BCAST_DIM>();
 
@@ -106,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_init_<false, false>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
