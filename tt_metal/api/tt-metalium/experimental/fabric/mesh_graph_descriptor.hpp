@@ -53,10 +53,10 @@ struct InstanceData {
     std::string type;
     NodeKind kind;  // Type of instance (mesh, graph, device, switch)
     std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*, const proto::SwitchDescriptor*>
-        desc;                                        // Pointer to the descriptor that this instance is based on
-    std::unordered_set<GlobalNodeId> sub_instances;  // direct list of child GlobalNodeIds
-    std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id;  // child LocalId -> GlobalId
-    std::vector<GlobalNodeId> hierarchy;  // path from root using GlobalNodeIds
+        desc = static_cast<const proto::MeshDescriptor*>(nullptr);  // Pointer to the descriptor (nullptr for devices)
+    std::unordered_set<GlobalNodeId> sub_instances = {};  // direct list of child GlobalNodeIds
+    std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id = {};  // child LocalId -> GlobalId
+    std::vector<GlobalNodeId> hierarchy = {};  // path from root using GlobalNodeIds
 
     GlobalNodeId global_id = generate_next_global_id();
 

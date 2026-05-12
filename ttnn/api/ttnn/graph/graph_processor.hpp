@@ -87,9 +87,9 @@ public:
         node_id counter = 0;
         std::string node_type;
         std::unordered_map<std::string, std::string> params;
-        std::vector<std::string> arguments;
+        std::vector<std::string> arguments = {};
         std::vector<node_id> connections;
-        std::vector<node_id> input_tensors;
+        std::vector<node_id> input_tensors = {};
         int stacking_level = 0;
         uint64_t duration_ns = 0;  // Duration in nanoseconds (for function_end nodes)
     };

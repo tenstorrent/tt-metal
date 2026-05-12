@@ -100,8 +100,8 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
     const auto& mesh_graph = topology_mapper_.get_mesh_graph();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
-        for (ChipId src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
-            for (ChipId dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < static_cast<ChipId>(this->intra_mesh_table_[mesh_id_val].size()); src_chip_id++) {
+            for (ChipId dst_chip_id = 0; dst_chip_id < static_cast<ChipId>(this->intra_mesh_table_[mesh_id_val].size()); dst_chip_id++) {
                 auto src_mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, src_chip_id);
                 auto dst_mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, dst_chip_id);
                 // X first routing, traverse rows first
@@ -156,7 +156,7 @@ std::vector<std::vector<std::pair<ChipId, MeshId>>> RoutingTableGenerator::get_f
         MeshId current_mesh_id = q.front();
         q.pop();
 
-        for (ChipId chip_in_mesh = 0; chip_in_mesh < inter_mesh_connectivity[*current_mesh_id].size(); chip_in_mesh++) {
+        for (ChipId chip_in_mesh = 0; chip_in_mesh < static_cast<ChipId>(inter_mesh_connectivity[*current_mesh_id].size()); chip_in_mesh++) {
             for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[*current_mesh_id][chip_in_mesh]) {
                 if (!visited[*connected_mesh_id]) {
                     q.push(connected_mesh_id);
@@ -214,7 +214,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
         auto first_hops = get_first_hops_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
         MeshShape mesh_shape = mesh_graph.get_mesh_shape(src_mesh_id);
         std::uint32_t ew_size = mesh_shape[1];
-        for (ChipId src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < static_cast<ChipId>(this->inter_mesh_table_[src_mesh_id_val].size()); src_chip_id++) {
             for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size();
                  dst_mesh_id_val++) {
                 MeshId dst_mesh_id{dst_mesh_id_val};
@@ -324,10 +324,10 @@ void RoutingTableGenerator::print_routing_tables() const {
     ss << "Routing Table Generator: IntraMesh Routing Tables" << std::endl;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         ss << "M" << mesh_id_val << ":" << std::endl;
-        for (ChipId src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < static_cast<ChipId>(this->intra_mesh_table_[mesh_id_val].size()); src_chip_id++) {
             ss << "   D" << src_chip_id << ": ";
             for (ChipId dst_chip_or_mesh_id = 0;
-                 dst_chip_or_mesh_id < this->intra_mesh_table_[mesh_id_val][src_chip_id].size();
+                 dst_chip_or_mesh_id < static_cast<ChipId>(this->intra_mesh_table_[mesh_id_val][src_chip_id].size());
                  dst_chip_or_mesh_id++) {
                 auto direction = this->intra_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
                 ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
@@ -340,10 +340,10 @@ void RoutingTableGenerator::print_routing_tables() const {
     ss << "Routing Table Generator: InterMesh Routing Tables" << std::endl;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->inter_mesh_table_.size(); mesh_id_val++) {
         ss << "M" << mesh_id_val << ":" << std::endl;
-        for (ChipId src_chip_id = 0; src_chip_id < this->inter_mesh_table_[mesh_id_val].size(); src_chip_id++) {
+        for (ChipId src_chip_id = 0; src_chip_id < static_cast<ChipId>(this->inter_mesh_table_[mesh_id_val].size()); src_chip_id++) {
             ss << "   D" << src_chip_id << ": ";
             for (ChipId dst_chip_or_mesh_id = 0;
-                 dst_chip_or_mesh_id < this->inter_mesh_table_[mesh_id_val][src_chip_id].size();
+                 dst_chip_or_mesh_id < static_cast<ChipId>(this->inter_mesh_table_[mesh_id_val][src_chip_id].size());
                  dst_chip_or_mesh_id++) {
                 auto direction = this->inter_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
                 ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
@@ -365,7 +365,7 @@ const std::vector<FabricNodeId>& RoutingTableGenerator::get_exit_nodes_routing_t
 FabricNodeId RoutingTableGenerator::get_exit_node_from_mesh_to_mesh(
     MeshId src_mesh_id, ChipId src_chip_id, MeshId dst_mesh_id) const {
     TT_FATAL(*src_mesh_id < this->exit_node_lut_.size(), "src_mesh_id out of range");
-    TT_FATAL(src_chip_id < this->exit_node_lut_[*src_mesh_id].size(), "src_chip_id out of range");
+    TT_FATAL(static_cast<size_t>(src_chip_id) < this->exit_node_lut_[*src_mesh_id].size(), "src_chip_id out of range");
     TT_FATAL(*dst_mesh_id < this->exit_node_lut_[*src_mesh_id][src_chip_id].size(), "dst_mesh_id out of range");
 
     ChipId exit_chip = this->exit_node_lut_[*src_mesh_id][src_chip_id][*dst_mesh_id];

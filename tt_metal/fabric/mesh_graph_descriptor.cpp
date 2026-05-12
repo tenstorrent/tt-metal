@@ -648,11 +648,11 @@ void MeshGraphDescriptor::validate_express_connections(
 
         // Check that express connections are valid and have the right number of devices
         for (const auto& express_connection : mesh.express_connections()) {
-            if (express_connection.src() < 0 || express_connection.src() >= num_devices) {
+            if (express_connection.src() < 0 || static_cast<uint32_t>(express_connection.src()) >= num_devices) {
                 error_messages.push_back(
                     fmt::format("Express connection source is out of bounds (Mesh: {})", mesh.name()));
             }
-            if (express_connection.dst() < 0 || express_connection.dst() >= num_devices) {
+            if (express_connection.dst() < 0 || static_cast<uint32_t>(express_connection.dst()) >= num_devices) {
                 error_messages.push_back(
                     fmt::format("Express connection destination is out of bounds (Mesh: {})", mesh.name()));
             }
@@ -1320,7 +1320,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
         // Add the connection in every direction of the connection
-        for (std::size_t i = 0; i < connection.nodes_size(); ++i) {
+        for (std::size_t i = 0; i < static_cast<std::size_t>(connection.nodes_size()); ++i) {
             // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
             std::vector<GlobalNodeId> nodes_copy = nodes;
             std::swap(nodes_copy[0], nodes_copy[i]);
