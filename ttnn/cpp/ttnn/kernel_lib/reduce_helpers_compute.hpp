@@ -235,7 +235,7 @@ struct Accumulate {
     constexpr bool is_first() const { return iteration == 0; }
 };
 
-// NoAccumulation is defined in common_types.hpp (shared with binary_op_helpers).
+// NoAccumulation is defined in common_types.hpp.
 
 // =============================================================================
 // Type Traits
@@ -277,7 +277,7 @@ struct is_post_reduce_op<T, std::void_t<decltype(std::declval<T>()(std::declval<
 template <typename T>
 inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 
-// NoOp is defined in common_types.hpp (shared with binary_op_helpers).
+// NoOp is defined in common_types.hpp.
 
 // =============================================================================
 // Main Reduce Function
