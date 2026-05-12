@@ -29,6 +29,12 @@ namespace ckernel {
  * FLOAT32 before reaching this kernel; invoke_binary_ng_isclose handles
  * this via explicit ttnn::typecast calls before dispatch.
  *
+ * INT32 precision: FLOAT32 has a 24-bit significand, so converting INT32
+ * to FLOAT32 is lossy when |x| exceeds about 2^24 (~1.67e7). Comparison runs
+ * on the rounded operands and can disagree with ``torch.isclose`` on the
+ * original integers (e.g. two distinct INT32 values that round to the same
+ * float may compare as close even when rtol = atol = 0).
+ *
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once
