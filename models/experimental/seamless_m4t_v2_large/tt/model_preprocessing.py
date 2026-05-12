@@ -532,16 +532,21 @@ def create_text_to_unit_parameters(encoder, *, device: ttnn.Device) -> dict:
     Weights cover the transformer stack only (``inputs_embeds`` path; no token or position
     embeddings on this submodule).
 
-    Stage 1.3: store FFN ``fc1``/``fc2`` weights as ``bfloat8_b`` (block-float8).
+    Store FFN ``fc1``/``fc2`` weights as ``bfloat8_b`` (block-float8).
     Halves DRAM bandwidth on the two largest matmuls per layer; the multiplier still
     runs at bf16 fidelity (``HiFi2`` + ``fp32_dest_acc_en``), so PCC is preserved.
-    Attention projections stay at ``bfloat16`` -- their activations are less
-    consistently scaled and the bf8 saving there is marginal.
+
+    Extend the same ``bfloat8_b`` storage to the attention projections
+    (``q_proj``, ``k_proj``, ``v_proj``, ``out_proj``).  The underlying matmul
+    still accumulates in fp32 with HiFi math fidelity, so the bf8 weight
+    quantization is well below PCC headroom and we pick up an extra
+    DRAM-bandwidth saving on 4 projections per encoder layer.
     """
     layers = _m4t_encoder_self_attn_ffn_layers(
         encoder,
         device=device,
         ffn_weight_dtype=ttnn.bfloat8_b,
+        attn_weight_dtype=ttnn.bfloat8_b,
     )
     out = {
         "layers": layers,
