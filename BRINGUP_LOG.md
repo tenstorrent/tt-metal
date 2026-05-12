@@ -280,3 +280,45 @@ vs CPU audio on current short test vector)
 - Cannot test directly due to torchaudio symbol incompatibility with TT Metal torch build
 - Error: `undefined symbol: aoti_torch_create_device_guard` in libtorchaudio.so
 - Would require separate clean venv to test official package
+
+
+---
+
+## 2026-05-12 — CP fp32-layer / lm_head precision env knobs (opt-in, no default change)
+
+**Status:** Env knobs landed; default behavior unchanged. PCC neutral.
+**Commits:** f0418bc..f50addaf (5 commits).
+
+### Knobs
+
+`TT_QWEN3_CP_FP32_LAYERS=<csv>` — selects which CodePredictor layers run with fp32
+activations + HiFi4. Unset (default) = all 5 layers fp32. `""` = no layers fp32 (bf16
+fallback path, matches pre-d833d7b4 accuracy regression).
+
+`TT_QWEN3_CP_LMHEAD_FP32=<0|1>` — controls the final lm_head matmul precision.
+Default `1` (fp32). Independent of the layer set.
+
+### Why opt-in (multi-voice sweep findings)
+
+Tested 5 configs against 12 voices in 10 languages (`tests/test_ar_perf_gate_multi_voice.py`).
+Baseline ECAPA cos vs. reference is voice-dependent; non-monotonic with precision:
+
+| Config | avg ms/frame | ECAPA fails | Whisper fails |
+|---|---:|---|---|
+| baseline (all fp32 + lm_head fp32) | 61.1 | Johanna_de 0.934 (pre-existing) | none |
+| `{4}` + bf16 lm_head | 55.5 | Alex_en 0.95, Xiaoyin_zh 0.93 | Satoshi_ja 0.94 |
+| `{3,4}` + bf16 lm_head | 57.4 | none | Satoshi_ja 0.92 |
+| `{3,4}` + fp32 lm_head | 57.7 | Xiaoyin_zh 0.95, Heitor_pt 0.97 | none |
+| `{2,3,4}` + bf16 lm_head | 58.6 | Xiaoyin_zh 0.94, Heitor_pt 0.96 | none |
+
+Conclusion: no single non-default config dominates baseline across all 12 voices.
+Different voices want different precision profiles (Heitor_pt + Xiaoyin_zh prefer
+bf16 lm_head; Satoshi_ja Japanese prefers fp32 lm_head). Shipping any non-default
+would regress at least one voice. Keep the knobs available for users who can tune
+to their voice mix.
+
+### Single-voice gate
+
+`tests/test_ar_perf_gate.py` (jim reference, English): the `{4}` + bf16 lm_head
+config passes `<55 ms/frame` + `ECAPA ≥ 0.97` + Whisper exact-match. Use as a
+local-iteration sanity check.
