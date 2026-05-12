@@ -10,9 +10,10 @@ unit upsample, self-attn + conv decoder stack; ``lm_head`` logits in the field H
 
 **Implementation policy:** All math in this file runs through **ttnn** (no ``torch`` / no ``numpy`` /
 no Transformers helpers). Host-side control flow uses Python ``int`` / ``Sequence[int]`` for repeat
-counts and sequence lengths. Small host readbacks use ``ttnn.from_device`` plus the host buffer API and
-stdlib ``struct`` (no torch/numpy) to unpack float32 values into integer repeat counts for
-``ttnn.repeat_interleave``, matching HF ``round(expm1(...))`` with clamp. I/O tensors stay on device except for that readback.
+counts and sequence lengths. Small host readbacks use ``ttnn.from_device`` plus ``ttnn.to_torch`` as a
+host transport only — torch is not used for any math — to unpack float32 values into integer repeat
+counts for ``ttnn.repeat_interleave``, matching HF ``round(expm1(...))`` with clamp. I/O tensors stay
+on device except for that readback.
 
 **Whole-model compatibility:** Callers should pass ``char_count_per_id`` as a length-``enc_seq`` list of
 non-negative integers (batch size 1), matching HF ``char_count_per_id.sum(-1)`` semantics; build the
@@ -22,9 +23,9 @@ encoder 4D additive mask with the same helpers used for the text encoder PCC tes
 from __future__ import annotations
 
 import math
-import struct
 from typing import Any, Optional, Sequence, Tuple
 
+import torch
 import ttnn
 
 from models.common.utility_functions import nearest_32
@@ -33,22 +34,19 @@ from models.common.utility_functions import nearest_32
 _BF16_MASK_FLOOR = -3.3895313892565356e38
 
 
-def _host_tensor_shard_bytes(host_tensor: ttnn.Tensor) -> bytes:
-    """Single-shard host tensor payload as bytes (batch-1 / local mesh shard at ``(0, 0)``)."""
-    dbuf = host_tensor.host_buffer()
-    shard = dbuf.get_shard(ttnn.MeshCoordinate(0, 0))
-    if shard is None:
-        raise RuntimeError("Expected a local host buffer shard at MeshCoordinate(0, 0).")
-    return bytes(shard)
-
-
 def _row_major_host_f32_flat(host_tensor: ttnn.Tensor, *, num_floats: int) -> list[float]:
-    raw = _host_tensor_shard_bytes(host_tensor)
-    need = int(num_floats) * 4
-    if len(raw) < need:
-        raise RuntimeError(f"Host buffer is {len(raw)} bytes; need {need} for {num_floats} float32 values.")
-    # Little-endian float32 (device/host convention in this stack).
-    return list(struct.unpack(f"<{int(num_floats)}f", raw[:need]))
+    """Flat list of float32 values from a host-side ttnn tensor.
+
+    Uses ``ttnn.to_torch`` for the host readback because the ``HostBuffer`` iterator yields
+    ``std::byte``, which pybind does not auto-convert (``bytes(shard)`` raises TypeError). The
+    decoded values feed integer repeat counts for ``ttnn.repeat_interleave`` — torch is only used
+    as a host transport, no math runs through it.
+    """
+    flat = ttnn.to_torch(host_tensor).to(torch.float32).reshape(-1)
+    n = int(num_floats)
+    if int(flat.numel()) < n:
+        raise RuntimeError(f"Host tensor has {int(flat.numel())} floats; need {n}.")
+    return flat[:n].tolist()
 
 
 def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
@@ -163,10 +161,22 @@ def _hard_upsample_nlc(
     return out
 
 
-def _discrete_duration_counts(log_dur_bf16: ttnn.Tensor, *, batch: int, seq: int) -> list[int]:
-    """Match HF ``clamp(round(expm1(log_dur)), min=1)`` per position (host ints, no torch/numpy)."""
-    ld = ttnn.reshape(log_dur_bf16, (int(batch), int(seq)))
-    ld = ttnn.typecast(ld, ttnn.float32)
+def _discrete_duration_counts(log_dur: ttnn.Tensor, *, batch: int, seq: int) -> list[int]:
+    """HF-exact ``clamp(round(expm1(log_dur)), min=1).long()`` per position.
+
+    Caller (``_duration_predictor``) produces ``log_dur`` already in float32 — no bf16→fp32 typecast
+    is needed, and the bf16 write-out that previously perturbed ``log_dur`` is gone.
+
+    Round mode: ``ttnn.round`` uses the SFPU ``_round_even_`` op (round-half-to-even, banker's
+    rounding) — bit-identical to ``torch.round`` semantics, so the on-device pipeline below is
+    HF-equivalent ``expm1`` → banker's-round → clamp. The host loop only converts fp32 → Python int
+    and applies a defensive ``max(1, ...)`` (no further rounding); we use ``int(round(...))`` rather
+    than ``int(...)`` because ``int()`` truncates toward zero and could surprise on negative values
+    (which clamp rules out anyway, but the explicit ``round`` is cheap insurance).
+    """
+    ld = ttnn.reshape(log_dur, (int(batch), int(seq)))
+    if ld.dtype != ttnn.float32:
+        ld = ttnn.typecast(ld, ttnn.float32)
     x = ttnn.expm1(ld, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.round(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.clamp(x, min=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -518,6 +528,22 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             packer_l1_acc=True,
         )
 
+        # Pre-cast the duration-predictor's final projection (proj) weight/bias to float32.
+        # The proj produces the scalar ``log_dur`` that feeds into ``clamp(round(expm1(...)), min=1)``;
+        # the rounding boundary at .5 (banker's-rounded, matching HF) means any bf16-level noise in
+        # ``log_dur`` flips ``t_audio`` for some characters, which shifts the entire downstream
+        # waveform. Running the proj in fp32 (fp32 weights, fp32 dest accumulator, fp32 output) keeps
+        # ``log_dur`` at fp32 precision so the round() decision matches HF for ~all characters.
+        # The cast is done once at init — the per-call cost is zero, only memory is +4× for this tiny
+        # weight (hidden_dim → 1, ~256 floats).
+        p_dp = parameters.decoder.duration_predictor
+        self._dp_proj_w_fp32 = ttnn.typecast(p_dp.proj.weight, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self._dp_proj_b_fp32 = (
+            ttnn.typecast(p_dp.proj.bias, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if getattr(p_dp.proj, "bias", None) is not None
+            else None
+        )
+
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         m = max(seq_q, seq_k)
         if m > 96:
@@ -673,7 +699,25 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             activation="relu",
         )
         h = self._layer_norm(h, weight=p.ln2.weight, bias=p.ln2.bias)
-        return self._linear(h, p.proj.weight, p.proj.bias)
+
+        # Final projection in float32: cast h (bf16) → fp32 and use the fp32-cached proj weights so
+        # that ``log_dur`` keeps the fp32-accumulator precision all the way through to the
+        # downstream ``expm1`` + banker's-round. Without this, the bf16 write-out of proj loses
+        # ~1% precision, which flips the rounding decision near .5 boundaries and propagates a
+        # one-frame ``t_audio`` shift through every downstream conv in the vocoder.
+        h_fp32 = ttnn.typecast(h, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(h)
+        log_dur = ttnn.linear(
+            h_fp32,
+            self._dp_proj_w_fp32,
+            bias=self._dp_proj_b_fp32,
+            core_grid=_core_grid(self.device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._linear_ln_compute_cfg,
+            dtype=ttnn.float32,
+        )
+        ttnn.deallocate(h_fp32)
+        return log_dur
 
     def _decoder_layer(
         self,
@@ -898,15 +942,21 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         ttnn.deallocate(pos2_tt)
         ttnn.deallocate(up2)
 
+        # Pad the unit sequence to a tile-aligned length so the decoder SDPA does not score real
+        # queries against tile-padded garbage keys. ``pad_unit`` carries the valid-prefix length so
+        # the additive mask drives padded keys to -inf and the post-SDPA gating zeros padded queries.
         dur_sum = int(sum(dur_list))
         assert dur_sum == unit_seq
-        pad_unit = _mask_row_valid_prefix(self.device, unit_seq, dur_sum)
-        attn_4d_tt = _expand_4d_padding_additive_b1(self.device, pad_unit, unit_seq, unit_seq)
-        pad_unit_tt = ttnn.reshape(pad_unit, (1, unit_seq, 1))
+        padded_unit_seq = ((unit_seq + 31) // 32) * 32
+        if padded_unit_seq > unit_seq:
+            hidden = ttnn.pad(hidden, [(0, 0), (0, padded_unit_seq - unit_seq), (0, 0)], value=0.0)
+        pad_unit = _mask_row_valid_prefix(self.device, padded_unit_seq, dur_sum)
+        attn_4d_tt = _expand_4d_padding_additive_b1(self.device, pad_unit, padded_unit_seq, padded_unit_seq)
+        pad_unit_tt = ttnn.reshape(pad_unit, (1, padded_unit_seq, 1))
 
         num_heads = self.decoder_attention_heads
         head_dim = self.hidden_size // num_heads
-        sdpa_cfg = self._sdpa_program_config(unit_seq, unit_seq)
+        sdpa_cfg = self._sdpa_program_config(padded_unit_seq, padded_unit_seq)
 
         for i in range(self.decoder_layers):
             hidden = self._decoder_layer(
@@ -915,7 +965,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
                 pad_unit_tt,
                 dec.layers[i],
                 batch=batch,
-                seq=unit_seq,
+                seq=padded_unit_seq,
                 num_heads=num_heads,
                 head_dim=head_dim,
                 hidden_size=self.hidden_size,
@@ -938,6 +988,19 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         ttnn.deallocate(hidden)
         ttnn.deallocate(attn_4d_tt)
         ttnn.deallocate(pad_unit_tt)
+        # Slice back to the logical unit-seq so callers see ``[..., unit_seq, vocab]``. ``ttnn.slice``
+        # requires the begins/ends/strides to match the input rank, which can be 3D or 4D depending
+        # on the linear output layout.
+        if padded_unit_seq > unit_seq:
+            logits_shape = tuple(logits.shape)
+            vocab = int(logits_shape[-1])
+            rank = len(logits_shape)
+            begins = [0] * rank
+            ends = list(logits_shape)
+            ends[-2] = unit_seq
+            ends[-1] = vocab
+            strides = [1] * rank
+            logits = ttnn.slice(logits, begins, ends, strides)
 
         pad_out = pad_unit
         return logits, pad_out
