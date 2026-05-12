@@ -452,7 +452,9 @@ def run(
             is_lofi = ckc.math_fidelity == ttnn.MathFidelity.LoFi
         except Exception:
             pass
-    pcc_threshold = 0.98 if is_lofi else 0.99
+    # BFLOAT8_B K/V has lower precision — relax PCC threshold
+    is_low_precision_kv = str(input_b_dtype) in ("DataType.BFLOAT8_B", "DataType.BFLOAT4_B")
+    pcc_threshold = 0.98 if is_lofi else (0.97 if is_low_precision_kv else 0.99)
     if is_mesh_device and output_tensor.shape != torch_output_golden.shape:
         torch_output_golden = reconcile_golden_to_actual(
             torch_output_golden, output_tensor, input_a_tensor_placement, input_b_tensor_placement
