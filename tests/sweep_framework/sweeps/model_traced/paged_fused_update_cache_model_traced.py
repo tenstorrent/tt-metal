@@ -218,11 +218,13 @@ def run(
             input_b_layout,
             input_b_memory_config,
             "input_b_tensor_placement",
-            sharded_mem=sharded_b
-            if sharded_b
-            and hasattr(sharded_b, "memory_layout")
-            and sharded_b.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-            else None,
+            sharded_mem=(
+                sharded_b
+                if sharded_b
+                and hasattr(sharded_b, "memory_layout")
+                and sharded_b.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+                else None
+            ),
         )
         input_tensors.append(input_tensor_b)
 
@@ -240,11 +242,13 @@ def run(
             input_d_layout,
             input_d_memory_config,
             "input_d_tensor_placement",
-            sharded_mem=sharded_d
-            if sharded_d
-            and hasattr(sharded_d, "memory_layout")
-            and sharded_d.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-            else None,
+            sharded_mem=(
+                sharded_d
+                if sharded_d
+                and hasattr(sharded_d, "memory_layout")
+                and sharded_d.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+                else None
+            ),
         )
         input_tensors.append(input_tensor_d)
 
@@ -333,6 +337,12 @@ def run(
 
     ttnn.experimental.paged_fused_update_cache(*input_tensors, **op_kwargs)
     e2e_perf = stop_measuring_time(start_time)
-    pcc = (True, "1.0")
+    # In-place cache update has no clean golden; validate that the cache tensor
+    # is still valid (correct dtype, not all-NaN) as a basic sanity check.
+    cache_out = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
+    if cache_out is not None and cache_out.numel() > 0 and not torch.isnan(cache_out).all():
+        pcc = (True, "1.0")
+    else:
+        pcc = (False, "Cache tensor is all-NaN or empty after paged_fused_update_cache")
 
     return [pcc, e2e_perf]

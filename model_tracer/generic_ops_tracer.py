@@ -709,7 +709,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
         # serialized arguments happen to hash identically.
         sweep_source_hash = operation.get("sweep_source_hash")
         if sweep_source_hash:
-            arg_signature = sweep_source_hash
+            arg_signature = None  # Not used; matching uses sweep_source_hash directly
         else:
             args_str = json.dumps(op_args, sort_keys=True, default=str)
             arg_signature = hashlib.md5(args_str.encode()).hexdigest()

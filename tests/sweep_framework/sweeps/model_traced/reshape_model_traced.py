@@ -196,7 +196,11 @@ def run(
     in_shape = (
         tuple(input_a_shape)
         if isinstance(input_a_shape, (list, tuple))
-        else (tuple(_ast_r.literal_eval(input_a_shape)) if isinstance(input_a_shape, str) else input_a_shape)
+        else (
+            tuple(_ast_r.literal_eval(input_a_shape))
+            if isinstance(input_a_shape, str) and len(input_a_shape) < 200
+            else input_a_shape
+        )
     )
 
     # Ensure shape is at least 2D for TILE_LAYOUT compatibility

@@ -237,18 +237,6 @@ def run(
                     )
             elif not isinstance(raw_pc, dict):
                 op_kwargs["program_config"] = raw_pc
-    # Pass program_config as-is from master trace — no grid clamping.
-    # If the grid doesn't fit this device, the op will fail and the config
-    # becomes "missing" rather than recording a wrong program_config diff.
-    elif "program_config" not in absent_keys and "program_config" not in op_kwargs:
-        # Master had program_config (possibly None) but build_op_kwargs didn't include it
-        traced_pc = kwargs.get("program_config")
-        if traced_pc is not None and traced_pc != "__ABSENT__":
-            parsed_pc = parse_dict_value("program_config", traced_pc) if isinstance(traced_pc, dict) else traced_pc
-            op_kwargs["program_config"] = parsed_pc
-        else:
-            op_kwargs["program_config"] = None
-
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     # Also check kwargs for shapes in case they're passed as extra kwargs
     if input_b_shape is None or input_b_shape == "__ABSENT__":

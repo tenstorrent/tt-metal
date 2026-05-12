@@ -84,20 +84,6 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Forward dtype when master had it (use __absent_keys__ guard).
-    _positional_dtype = None
-    absent_keys = kwargs.get("__absent_keys__")
-    has_absent_info = absent_keys is not None
-    absent_keys = set(absent_keys or [])
-    if _positional_dtype is None:
-        traced_dtype = kwargs.get("dtype")
-        if traced_dtype is not None and traced_dtype != "__ABSENT__":
-            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
-
-            parsed_dt = parse_dict_value("dtype", traced_dtype) if isinstance(traced_dtype, dict) else traced_dtype
-            if parsed_dt is not None:
-                _positional_dtype = parsed_dt
-
     pos_args = extract_positional_args(kwargs)
     traced_output_mem_config = pos_args.get(1, None)
     traced_output_dtype = pos_args.get(2, None)

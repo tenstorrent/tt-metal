@@ -79,10 +79,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Forward memory_config and dtype when master had them (use __absent_keys__ guard).
-    absent_keys = kwargs.get("__absent_keys__")
-    has_absent_info = absent_keys is not None
-    absent_keys = set(absent_keys or [])
+    # Forward memory_config and dtype when master had them.
     if "memory_config" not in op_kwargs:
         traced_mc = kwargs.get("memory_config")
         if traced_mc is not None and traced_mc != "__ABSENT__":
@@ -230,7 +227,8 @@ def run(
         if isinstance(shape_b, str):
             import ast as _ast_wb
 
-            shape_b = tuple(_ast_wb.literal_eval(shape_b))
+            if len(shape_b) < 200:
+                shape_b = tuple(_ast_wb.literal_eval(shape_b))
         torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
         torch_input_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
@@ -284,14 +282,14 @@ def run(
             try:
                 apply_tensor_placement_topology(condition_tensor, input_a_tensor_placement, (1, 2))
             except Exception:
-                pass
+                pass  # Topology application is best-effort; mismatch is non-fatal
         if is_mesh_device and input_b_tensor_placement:
             from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
 
             try:
                 apply_tensor_placement_topology(input_tensor_b, input_b_tensor_placement, (1, 2))
             except Exception:
-                pass
+                pass  # Topology application is best-effort; mismatch is non-fatal
 
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, scalar_false, **op_kwargs)

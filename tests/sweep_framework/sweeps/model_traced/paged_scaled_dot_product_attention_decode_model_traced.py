@@ -380,7 +380,6 @@ def run(
                 max_pages = pt_row.shape[0]
                 n_pages_active = min(n_pages_active, max_pages)
                 padded_len = min(padded_len, n_pages_active * pg_size)
-                n_active = min(n_active, padded_len)
                 pages = pt_row[:n_pages_active].clamp(0, num_pg - 1)
                 k_pages = torch_input_b[pages].float()
                 v_pages = torch_input_c[pages].float()
