@@ -893,12 +893,22 @@ class TTSeamlessM4Tv2Model:
         generate_speech: bool = True,
         **kwargs: Any,
     ) -> Union[TTSeamlessM4Tv2GreedySearchOutput, TTSeamlessM4Tv2GenerationOutput, Tuple[ttnn.Tensor, ttnn.Tensor]]:
-        if input_ids is None and input_features is None:
-            raise ValueError("Provide input_ids or input_features.")
+        """Greedy ``num_beams=1`` analog of HF ``SeamlessM4Tv2Model.generate``.
+
+        Accepts ``inputs_embeds`` (in ``kwargs``) like HF. For text modality, the first-pass encoder output
+        is reused in the speech generation path — mirrors HF, which pulls it from
+        ``text_generation_output.encoder_hidden_states[-1]``.
+        """
+        inputs_embeds = kwargs.pop("inputs_embeds", None)
+
+        if input_ids is None and input_features is None and inputs_embeds is None:
+            raise ValueError("Provide one of `input_ids`, `input_features`, or `inputs_embeds`.")
         if input_ids is not None and not isinstance(input_ids, ttnn.Tensor):
             raise TypeError("input_ids must be a ttnn.Tensor on device when provided.")
         if input_features is not None and not isinstance(input_features, ttnn.Tensor):
             raise TypeError("input_features must be a ttnn.Tensor on device when provided.")
+        if inputs_embeds is not None and not isinstance(inputs_embeds, ttnn.Tensor):
+            raise TypeError("inputs_embeds must be a ttnn.Tensor on device when provided.")
         if generate_speech and tgt_lang is None:
             raise ValueError("tgt_lang is required when generate_speech=True.")
         if tgt_lang is not None:
@@ -923,8 +933,10 @@ class TTSeamlessM4Tv2Model:
 
         if input_features is not None:
             batch_size = int(input_features.shape[0])
+        elif input_ids is not None:
+            batch_size = int(input_ids.shape[0])
         else:
-            batch_size = int(input_ids.shape[0])  # type: ignore[union-attr]
+            batch_size = int(inputs_embeds.shape[0])  # type: ignore[union-attr]
         if batch_size != 1:
             raise NotImplementedError("TT generate supports batch_size=1.")
 
@@ -945,6 +957,8 @@ class TTSeamlessM4Tv2Model:
         # --- First encode ---
         if input_features is not None:
             enc_tt, enc_attn_tt = self._encode_speech_from_ttnn(input_features, attn_tt_text)
+        elif inputs_embeds is not None:
+            enc_tt, enc_attn_tt = self._encode_text_from_ttnn(None, attn_tt_text, inputs_embeds=inputs_embeds)
         else:
             enc_tt, enc_attn_tt = self._encode_text_from_ttnn(input_ids, attn_tt_text)  # type: ignore[arg-type]
 
@@ -995,14 +1009,19 @@ class TTSeamlessM4Tv2Model:
                 if bool(finished.all()):
                     break
 
-        ttnn.deallocate(enc_tt)
-        if enc_attn_tt is not None and enc_attn_tt is not attn_tt_text:
-            ttnn.deallocate(enc_attn_tt)
+        # For text modality (HF reuses ``text_generation_output.encoder_hidden_states[-1]``), keep the
+        # first-pass encoder outputs alive — they will be reused below in the speech generation path.
+        # For speech modality, HF re-runs the speech encoder; we mirror that and free the first-pass copies.
+        reuse_text_encoder = generate_speech and input_features is None
+        if not reuse_text_encoder:
+            ttnn.deallocate(enc_tt)
+            if enc_attn_tt is not None and enc_attn_tt is not attn_tt_text:
+                ttnn.deallocate(enc_attn_tt)
 
         if not generate_speech:
             return TTSeamlessM4Tv2GreedySearchOutput(sequences=sequences_tt)
 
-        # --- Speech generation: re-encode + run text decoder for T2U embeddings ---
+        # --- Speech generation: run text decoder for T2U embeddings (reuse text encoder, re-run speech encoder) ---
         gc = self.generation_config
         pad_token_id = int(gc.pad_token_id)
 
@@ -1010,9 +1029,11 @@ class TTSeamlessM4Tv2Model:
         if attn_enc is not None and not isinstance(attn_enc, ttnn.Tensor):
             raise TypeError("speech/text attention_mask for second encode must be ttnn.Tensor on device.")
         if input_features is not None:
+            # HF: speech path re-runs ``self.speech_encoder`` to refresh the subsampled attention mask.
             enc_tt2, enc_attn_tt2 = self._encode_speech_from_ttnn(input_features, attn_enc)
         else:
-            enc_tt2, enc_attn_tt2 = self._encode_text_from_ttnn(input_ids, kwargs_text.get("attention_mask", None))  # type: ignore[arg-type]
+            # HF: text path reuses the first-pass encoder output (no second encode).
+            enc_tt2, enc_attn_tt2 = enc_tt, enc_attn_tt
 
         # Download sequences to CPU for T2U char/subword preparation (unavoidable for string ops).
         seq_cpu = ttnn.to_torch(ttnn.from_device(sequences_tt)).to(torch.int64).contiguous()
@@ -1022,37 +1043,57 @@ class TTSeamlessM4Tv2Model:
         dec_seq = dec_in.shape[1]
         enc_seq2 = int(enc_tt2.shape[1])
 
+        # Pad dec_in to tile-aligned for decoder SDPA correctness (same reason as the forward path).
+        padded_dec_seq = _tile_align(dec_seq)
+        pad_n = padded_dec_seq - dec_seq
+        if pad_n > 0:
+            dec_in_padded = torch.cat([dec_in, torch.full((bsz, pad_n), self.pad_token_id, dtype=dec_in.dtype)], dim=1)
+            dec_attn_padded = torch.cat(
+                [(dec_in != pad_token_id).long(), torch.zeros(bsz, pad_n, dtype=torch.long)], dim=1
+            )
+        else:
+            dec_in_padded = dec_in
+            dec_attn_padded = (dec_in != pad_token_id).long()
+
         # Build decoder inputs for T2U hidden-state extraction (HF-aligned 4D masks).
         dec_ids_tt = ttnn.from_torch(
-            dec_in.to(torch.int32),
+            dec_in_padded.to(torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         dec_pos_tt = _tt_position_ids(dec_ids_tt, self.pad_token_id)
-        dummy_dec = torch.zeros(bsz, dec_seq, self.hidden_size, dtype=torch.bfloat16)
-        dec_attn_cpu = (dec_in != pad_token_id).long().cpu().contiguous()
+        dummy_dec = torch.zeros(bsz, padded_dec_seq, self.hidden_size, dtype=torch.bfloat16)
         dec_causal_torch = _prepare_4d_causal_attention_mask(
-            dec_attn_cpu, (bsz, dec_seq), dummy_dec, past_key_values_length=0
+            dec_attn_padded.cpu().contiguous(), (bsz, padded_dec_seq), dummy_dec, past_key_values_length=0
         )
         if enc_attn_tt2 is None:
             dec_cross_torch = None
         else:
             enc_cpu = ttnn.to_torch(ttnn.from_device(enc_attn_tt2)).float().cpu().contiguous()
             enc_cpu = enc_cpu[:, :enc_seq2].contiguous()
-            dec_cross_torch = _prepare_4d_attention_mask(enc_cpu, torch.bfloat16, tgt_len=dec_seq)
+            dec_cross_torch = _prepare_4d_attention_mask(enc_cpu, torch.bfloat16, tgt_len=padded_dec_seq)
         dec_causal_tt = self._torch_additive_4d_to_tt(dec_causal_torch)
         dec_cross_tt = self._torch_additive_4d_to_tt(dec_cross_torch) if dec_cross_torch is not None else None
 
-        dec_hidden = self.text_decoder.forward(dec_ids_tt, dec_pos_tt, enc_tt2, dec_causal_tt, dec_cross_tt)
+        dec_hidden_padded = self.text_decoder.forward(dec_ids_tt, dec_pos_tt, enc_tt2, dec_causal_tt, dec_cross_tt)
         ttnn.deallocate(dec_ids_tt)
         ttnn.deallocate(dec_pos_tt)
         ttnn.deallocate(dec_causal_tt)
         if dec_cross_tt is not None:
             ttnn.deallocate(dec_cross_tt)
+        # Keep the decoder hidden state at the padded sequence length: the T2U encoder runs its own
+        # SDPA over this sequence and would hit the same tile-padding bug for ``dec_seq < 32``. Pad
+        # ``cc_list`` / attention mask below to match ``padded_dec_seq``.
+        dec_hidden = dec_hidden_padded
+        dec_seq_for_t2u = padded_dec_seq
+        # ``enc_tt2`` is either freshly allocated (speech re-encode) or the same object as ``enc_tt``
+        # (text reuse). Either way, this is the final use; deallocate once.
         ttnn.deallocate(enc_tt2)
-        if enc_attn_tt2 is not None and enc_attn_tt2 is not attn_enc:
+        # ``enc_attn_tt2`` may be (a) freshly allocated by speech subsampling, (b) the user-supplied
+        # ``attn_enc`` / ``attn_tt_text`` for text modality, or (c) None. Only free freshly-allocated.
+        if enc_attn_tt2 is not None and enc_attn_tt2 is not attn_enc and enc_attn_tt2 is not attn_tt_text:
             ttnn.deallocate(enc_attn_tt2)
 
         # --- T2U preparation (requires CPU string ops — unavoidable) ---
@@ -1073,6 +1114,12 @@ class TTSeamlessM4Tv2Model:
         t2u_char_input_ids = _get_char_input_ids(
             gc, t2u_input_ids, t2u_subwords, t2u_char_count_per_id, pad_token_id=pad_token_id
         )
+        # Pad ``t2u_char_count_per_id`` to ``dec_seq_for_t2u`` so its length matches the (padded)
+        # T2U encoder sequence length; padded positions contribute zero characters (no-op).
+        if t2u_char_count_per_id.shape[1] < dec_seq_for_t2u:
+            extra = dec_seq_for_t2u - t2u_char_count_per_id.shape[1]
+            zero_pad = t2u_char_count_per_id.new_zeros((t2u_char_count_per_id.shape[0], extra))
+            t2u_char_count_per_id = torch.cat([t2u_char_count_per_id, zero_pad], dim=1)
 
         mask_4d = _prepare_4d_attention_mask(t2u_model_attention_mask, torch.bfloat16)
         enc_seq_t2u = int(t2u_input_embeds.shape[1])
@@ -1111,12 +1158,21 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(attn_tt)
         ttnn.deallocate(char_ids_tt)
 
-        t2u_logits = ttnn.to_torch(ttnn.from_device(t2u_logits_tt)).to(torch.float32)
+        # Read the logical unit-sequence and vocab size from the ttnn tensor's logical shape — the
+        # ``ttnn.to_torch`` readback may unfold a ``[1, unit_seq, vocab]`` tile into 4D and report
+        # tile-padded widths. Force ROW_MAJOR before readback so the torch tensor strips internal
+        # tile padding and matches the logical shape exactly.
+        t2u_shape = tuple(t2u_logits_tt.shape)
+        if len(t2u_shape) < 2:
+            raise RuntimeError(f"t2u logits shape {t2u_shape} has rank < 2.")
+        vb = int(t2u_shape[-1])
+        ulen = int(t2u_shape[-2])
+        t2u_logits_rm = ttnn.to_layout(t2u_logits_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(t2u_logits_tt)
+        t2u_logits = ttnn.to_torch(ttnn.from_device(t2u_logits_rm)).to(torch.float32)
+        ttnn.deallocate(t2u_logits_rm)
         pad_mask = ttnn.to_torch(ttnn.from_device(padding_tt)).to(torch.bool)
         ttnn.deallocate(padding_tt)
-        vb = int(t2u_logits.shape[-1])
-        ulen = int(t2u_logits.shape[1])
         t2u_logits = t2u_logits.reshape(1, ulen, vb).contiguous()
 
         if temperature is None or float(temperature) == 1.0 or not do_sample:
@@ -1126,6 +1182,9 @@ class TTSeamlessM4Tv2Model:
             probs = F.softmax(logits_scaled, dim=-1).reshape(-1, vb)
             unit_ids = torch.multinomial(probs, num_samples=1).view(1, -1)
 
+        # ``unit_ids`` is ``[1, ulen]``; flatten ``pad_mask`` to the same logical shape because
+        # ``ttnn.to_torch`` may unfold the tile-padded buffer into an extra leading dim.
+        pad_mask = pad_mask.reshape(-1)[:ulen].reshape(1, ulen)
         output_unit_ids = unit_ids.detach().clone()
         replace_mask = (unit_ids == self.t2u_eos_token_id) | (~pad_mask)
         unit_ids = unit_ids.masked_fill(replace_mask, self.t2u_pad_token_id)
@@ -1157,18 +1216,15 @@ class TTSeamlessM4Tv2Model:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        wav_tt, lengths_torch = self.vocoder.forward(unit_ids_tt, spk_tt, voc_tt, input_ids_torch=unit_ids)
+        wav_tt, lengths_tt = self.vocoder.forward(unit_ids_tt, spk_tt, voc_tt, input_ids_torch=unit_ids)
         ttnn.deallocate(unit_ids_tt)
         ttnn.deallocate(voc_tt)
         ttnn.deallocate(spk_tt)
 
-        lengths_tt = ttnn.from_torch(
-            lengths_torch.long().reshape(1, -1).to(torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Vocoder returns ``lengths`` as a 1D device int32 ``[B]`` tensor; downstream consumers
+        # expect a 2D ``[1, B]`` shape, mirroring the HF ``waveform_lengths`` layout in tests.
+        if len(tuple(lengths_tt.shape)) == 1:
+            lengths_tt = ttnn.reshape(lengths_tt, (1, int(lengths_tt.shape[0])))
         unit_ids_out_tt = ttnn.from_torch(
             output_unit_ids.to(torch.int32),
             dtype=ttnn.uint32,
