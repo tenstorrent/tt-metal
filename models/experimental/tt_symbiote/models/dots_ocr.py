@@ -76,6 +76,19 @@ def _deep_sync_profile_enabled() -> bool:
     return os.environ.get("DOTS_OCR_PROFILE_DECODE_GRAPH", "").lower() in {"1", "true", "yes", "on"}
 
 
+def _select_decoder_layer_indices(num_layers: int) -> list[int]:
+    """Optional experiment: instantiate only a subset of decoder layers."""
+    limit_env = os.environ.get("DOTS_OCR_DECODER_LAYER_LIMIT")
+    stride = int(os.environ.get("DOTS_OCR_DECODER_LAYER_STRIDE", "1"))
+    stride = max(1, stride)
+
+    indices = list(range(0, num_layers, stride))
+    if limit_env:
+        limit = max(1, int(limit_env))
+        indices = indices[:limit]
+    return indices or [0]
+
+
 @contextlib.contextmanager
 def _profile_stage(device, name: str):
     if not _sync_profile_enabled():
@@ -195,7 +208,12 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
         with _profile_graph_stage(self.device, "decode.graph.lm_head"):
             logits = self._d_lm.forward(h)
         with _profile_graph_stage(self.device, "decode.graph.argmax"):
-            return _argmax_token_on_device(logits)
+            new_token = _argmax_token_on_device(logits)
+        # Write new token back into the trace input buffer so the next replay
+        # reads the correct token without any host-side copy between steps.
+        if self._d_embedding is not None:
+            ttnn.copy(new_token, decode_input)
+        return new_token
 
     def post_trace_execute(self, func_args, func_kwargs, result):
         past_key_value = func_kwargs.get("past_key_value")
@@ -378,8 +396,18 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tower._unique_name = "vision_tower"
         vision_tower.override_children_module_names()
 
+        all_decoder_layers = list(hf_model.model.layers)
+        decoder_layer_indices = _select_decoder_layer_indices(len(all_decoder_layers))
+        if len(decoder_layer_indices) != len(all_decoder_layers):
+            print(
+                "DOTS OCR decoder layer pruning enabled: "
+                f"using {len(decoder_layer_indices)}/{len(all_decoder_layers)} layers "
+                f"(indices={decoder_layer_indices})"
+            )
+
         decoder_layers = []
-        for i, hf_layer in enumerate(hf_model.model.layers):
+        for i in decoder_layer_indices:
+            hf_layer = all_decoder_layers[i]
             layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer)
             layer._unique_name = f"model.layers.{i}"
             layer.override_children_module_names()
@@ -715,20 +743,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     ttnn.copy_host_to_device_tensor(token_host_tt, self._decode_token_buffer)
 
             self._decode_seq_counter += 1
-            if self._batch_input_mapper is not None:
-                with _profile_stage(self.device, "decode.cache_position_h2d"):
-                    self._decode_cache_pos_host[0] = self._decode_seq_counter
-                    cache_host_tt = ttnn.from_torch(
-                        self._decode_cache_pos_host,
-                        dtype=ttnn.int32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                    )
-                    ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
-            else:
-                with _profile_stage(self.device, "decode.cache_position_device_inc"):
-                    cache_next = ttnn.add(self._decode_cache_position, 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                    ttnn.copy(cache_next, self._decode_cache_position)
-                    ttnn.deallocate(cache_next)
+            with _profile_stage(self.device, "decode.cache_position_h2d"):
+                self._decode_cache_pos_host[0] = self._decode_seq_counter
+                cache_host_tt = ttnn.from_torch(
+                    self._decode_cache_pos_host,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
 
         trace_decode_tokens = getattr(self.graph_decode, "_d_embedding", None) is not None
         if trace_decode_tokens:
@@ -744,8 +766,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
             token_id_tt = self.graph_decode(decode_input, self._decode_cache_position, past_key_value=self.paged_cache)
         token_id_snapshot = None
         if self._batch_input_mapper is None:
-            ttnn.copy(token_id_tt, self._decode_token_buffer)
-            self._decode_token_buffer_has_next = True
+            # Token feedback is handled inside the traced graph (TTNNDotsOCRDecodeGraph
+            # writes new_token into decode_input before returning), so no external copy
+            # is needed here. _decode_token_buffer_has_next stays True from _init_decode_buffers.
             if not read_from_device:
                 token_id_snapshot = token_id_tt.cpu(blocking=False)
 
