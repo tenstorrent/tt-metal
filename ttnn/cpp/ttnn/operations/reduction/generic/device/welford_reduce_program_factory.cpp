@@ -393,8 +393,8 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     std::vector<CoreCoord> cores;
     if (operation_attributes.sub_core_grids.has_value()) {
         for (const auto& range : all_cores.ranges()) {
-            for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
-                for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+            for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
                     cores.emplace_back(x, y);
                 }
             }

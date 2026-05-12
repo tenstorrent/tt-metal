@@ -21,7 +21,7 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
         input_shape_wo_padding[args.dim] = 1;
     }
 
-    for (int i = 0; i < input_shape.rank(); ++i) {
+    for (size_t i = 0; i < input_shape.rank(); ++i) {
         TT_FATAL(
             input_shape[i] == output_shape[i],
             "Input and output shapes must match at dimension {}, got input: {} vs output: {}",

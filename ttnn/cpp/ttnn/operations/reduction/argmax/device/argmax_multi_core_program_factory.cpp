@@ -311,7 +311,7 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
 
     // If red_dim_units is not a multiple of min_red_dim_units_per_core, then the last core will read a smaller amount
     // of data We calculate that number here
-    const int ideal_red_dim_units = (num_cores0 * red_dim_units0) + (num_cores1 * red_dim_units1);
+    const uint32_t ideal_red_dim_units = (num_cores0 * red_dim_units0) + (num_cores1 * red_dim_units1);
 
     uint32_t red_dim_units_last0 = 0, red_dim_units_last1 = 0;
     if (num_cores1 > 0) {

@@ -25,7 +25,7 @@ using AccumulationProgramFactory = AccumulationDeviceOperation::AccumulationProg
 uint32_t AccumulationProgramFactory::calc_input_tile_offset(
     const Shape& input_shape, const int32_t& dim, uint32_t tile_height, uint32_t tile_width) {
     uint32_t input_tile_offset{1};
-    for (int32_t i = dim + 1; i < input_shape.rank() - 2; ++i) {
+    for (int32_t i = dim + 1; i < static_cast<int32_t>(input_shape.rank()) - 2; ++i) {
         input_tile_offset *= input_shape[i];
     }
     if (input_shape.rank() > 1) {
