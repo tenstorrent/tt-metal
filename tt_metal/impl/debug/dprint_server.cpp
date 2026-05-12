@@ -751,7 +751,7 @@ void DevicePrintImpl::attach_device(ChipId device_id) {
     // (IDevices aren't registered yet at attach_device time): for Blackhole NOC0 and NOC1
     // share the virtual coordinate space, and for other archs the cluster's soc_desc
     // grid_size + HAL noc_coordinate transform yields the NOC1 coord.
-    const auto& print_cores = device_to_core_range_[device_id];
+    const auto& print_cores = get_print_cores(device_id);
     for (const auto& core_desc : print_cores) {
         auto virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core_desc.coord, core_desc.type);
