@@ -349,15 +349,18 @@
 #   owner_id: U08TJ70UFRT # Harry Andrews
 #   team: models
 
-- name: GPT-OSS 120B unit tests (Galaxy, high batch)
+- name: GPT-OSS 120B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
-  model: gpt-oss-120b-high-batch-galaxy
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit
+  model: gpt-oss-120b
   skus:
     wh_galaxy_perf:
       timeout: 25
+      tier: 1
+    bh_quietbox_2:
+      timeout: 30
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
