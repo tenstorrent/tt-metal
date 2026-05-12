@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "experimental/core_local_mem.h"
-#include "experimental/kernel_args.h"
 #include "api/debug/dprint.h"
+#ifdef ARCH_QUASAR
+#include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
+#endif
 
 /**
  * add two ints
@@ -14,13 +16,19 @@
  */
 
 void kernel_main() {
-    uint32_t val_a = get_vararg(0);
-    uint32_t val_b = get_vararg(1);
+#ifdef ARCH_QUASAR
+    uint32_t a = get_arg(args::a);
+    uint32_t b = get_arg(args::b);
     constexpr uint32_t l1_address = get_arg(args::l1_address);
+    CoreLocalMem<std::uint32_t> result(l1_address);
+#else
+    uint32_t a = get_arg_val<uint32_t>(0);
+    uint32_t b = get_arg_val<uint32_t>(1);
+    constexpr uint32_t l1_address = get_compile_time_arg_val(0);
+    volatile tt_l1_ptr std::uint32_t* result = (tt_l1_ptr uint32_t*)(l1_address);
+#endif
 
-    experimental::CoreLocalMem<std::uint32_t> result(l1_address);
-
-    result[0] = val_a + val_b;
-    DPRINT << "Adding two ints: " << val_a << " + " << val_b << " = " << result[0] << ENDL();
-    DEVICE_PRINT("Adding two ints: {} + {} = {}\n", val_a, val_b, result[0]);
+    result[0] = a + b;
+    DPRINT << "Adding two ints: " << a << " + " << b << " = " << result[0] << ENDL();
+    DEVICE_PRINT("Adding two ints: {} + {} = {}\n", a, b, result[0]);
 }
