@@ -796,14 +796,15 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         return;
     }
 
-    uint32_t max_command_size_B = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    const DispatchMemMap& dispatch_mem_map = MetalContext::instance(this->context_id).dispatch_mem_map();
+    const uint32_t max_command_size_B = dispatch_mem_map.max_prefetch_command_size();
     TT_ASSERT(
         command_size_B <= max_command_size_B,
         "Generated prefetcher command of size {} B exceeds max command size {} B",
         command_size_B,
         max_command_size_B);
 
-    const uint32_t entry_bytes = MetalContext::instance().dispatch_mem_map().prefetch_q_entry_size_bytes();
+    const uint32_t entry_bytes = dispatch_mem_map.prefetch_q_entry_size_bytes();
     const uint32_t shift_for_msb = entry_bytes * 8 - 1;
     const uint32_t max_encodable = 1u << shift_for_msb;
     TT_ASSERT(
