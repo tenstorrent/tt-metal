@@ -218,7 +218,7 @@ uint32_t RelayMux::get_dispatch_link_index(
         const auto& fabric_channels =
             control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_direction);
 
-        for (auto i = 0; i < fabric_channels.size(); i++) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(fabric_channels.size()); i++) {
             const auto fabric_route =
                 control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, fabric_channels[i]);
             if (fabric_route.size() == 1) {

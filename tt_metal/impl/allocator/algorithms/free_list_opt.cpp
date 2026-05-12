@@ -113,7 +113,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     for (size_t i = size_segregated_index; i < free_blocks_segregated_by_size_.size(); i++) {
         auto& free_blocks = free_blocks_segregated_by_size_[i];
         ssize_t increment = bottom_up ? 1 : -1;
-        for (ssize_t j = bottom_up ? 0 : free_blocks.size() - 1; j >= 0 && j < free_blocks.size(); j += increment) {
+        for (ssize_t j = bottom_up ? 0 : static_cast<ssize_t>(free_blocks.size()) - 1; j >= 0 && j < static_cast<ssize_t>(free_blocks.size()); j += increment) {
             size_t block_index = free_blocks[j];
             if (policy_ == SearchPolicy::BEST) {
                 if (block_size_[block_index] == alloc_size) {
@@ -463,7 +463,7 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
     };
     auto leftpad_num = [leftpad](auto num, size_t width) {
         // HACK: -1 for us means none
-        if (num == -1) {
+        if (num == (decltype(num))(-1)) {
             return leftpad("none", width);
         }
         return leftpad(std::to_string(num), width);
@@ -538,7 +538,7 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
         }
     }
 
-    TT_FATAL(block_to_shrink != -1, "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
+    TT_FATAL(block_to_shrink != static_cast<size_t>(-1), "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
 
     // Find the relevant size segregated list
     size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);
@@ -588,7 +588,7 @@ void FreeListOpt::reset_size() {
         auto* segregated_list =
             &free_blocks_segregated_by_size_[get_size_segregated_index(block_size_[lowest_block_index])];
         for (size_t i = 0; i < segregated_list->size(); i++) {
-            if ((*segregated_list)[i] == lowest_block_index) {
+            if ((*segregated_list)[i] == static_cast<size_t>(lowest_block_index)) {
                 segregated_list->erase(segregated_list->begin() + i);
                 break;
             }

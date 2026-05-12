@@ -318,9 +318,9 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
             TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");
             node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {
-                .addr = *rta_addr + ringbuffer_starts_[index]};
+                .addr = *rta_addr + ringbuffer_starts_[index], .size = 0, .sync_count = 0};
             node.dispatch_metadata.binary_kernel_config_addrs[index] = {
-                .addr = binary_addr + ringbuffer_starts_[index]};
+                .addr = binary_addr + ringbuffer_starts_[index], .size = 0, .sync_count = 0};
         }
 
         node.dispatch_metadata.send_binary = !all_binaries_cached;

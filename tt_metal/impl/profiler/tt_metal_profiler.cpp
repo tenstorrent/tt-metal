@@ -134,7 +134,8 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {},
-            .defines = kernel_defines});
+            .defines = kernel_defines,
+            .named_compile_args = {}});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
     tt_metal::detail::LaunchProgram(
@@ -176,7 +177,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
 
     log_info(tt::LogMetal, "SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((profiler_state_manager->smallest_host_time.at(device_id) == 0) ||
-        (profiler_state_manager->smallest_host_time.at(device_id) > static_cast<decltype(profiler_state_manager->smallest_host_time.at(device_id))>(hostStartTime))) {
+        (profiler_state_manager->smallest_host_time.at(device_id) > static_cast<uint64_t>(hostStartTime))) {
         profiler_state_manager->smallest_host_time.at(device_id) = hostStartTime;
     }
 
@@ -395,13 +396,13 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             program_sender,
             "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
             eth_sender_core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args, .defines = {}});
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args, .defines = {}, .named_compile_args = {}});
 
         tt_metal::CreateKernel(
             program_receiver,
             "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
             eth_receiver_core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args, .defines = {}});
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args, .defines = {}, .named_compile_args = {}});
 
         try {
             detail::CompileProgram(device_sender, program_sender);

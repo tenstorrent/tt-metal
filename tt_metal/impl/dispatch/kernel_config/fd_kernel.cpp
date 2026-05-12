@@ -307,11 +307,10 @@ KernelHandle FDKernel::configure_kernel_variant(
                                            : tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
-            .defines = {},
-            .named_compile_args = {},
-            .compiler_include_paths = {},
                 .defines = defines,
-                .opt_level = opt_level});
+                .named_compile_args = {},
+                .opt_level = opt_level,
+                .compiler_include_paths = {}});
     } else {
         kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
@@ -322,6 +321,7 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines,
+                .named_compile_args = {},
                 .opt_level = opt_level});
     }
 
