@@ -67,51 +67,6 @@
 
 - name: "Pipeline Test (DeepSeek V3 B1 Superpod 4)"
   cmd: |
-    MAX_RECOVERY_ATTEMPTS=3
-
-    for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
-      echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
-
-      echo "--- Resetting cards with tt-smi ---"
-      if ! mpirun --pernode --tag-output /usr/local/bin/tt-smi -glx_reset; then
-        echo "WARNING: Reset failed on attempt $attempt"
-        if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
-          echo "ERROR: Reset failed on final attempt"
-          exit 1
-        fi
-        echo "Sleeping 30 seconds before retry..."
-        sleep 30
-        continue
-      fi
-
-      echo "--- Sleeping 5 seconds after reset ---"
-      sleep 5
-
-      echo "--- Running cluster validation ---"
-      if mpirun --pernode --tag-output \
-        -x LD_LIBRARY_PATH=/home/user/tt-metal/build/lib \
-        -x TT_METAL_RUNTIME_ROOT=/home/user/tt-metal \
-        /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-          --send-traffic \
-          --hard-fail \
-          --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-          --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-          --num-iterations 10; then
-        echo "SUCCESS: Recovery completed on attempt $attempt"
-        break
-      fi
-
-      echo "WARNING: Validation failed on attempt $attempt"
-
-      if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
-        echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
-        exit 1
-      fi
-
-      echo "Sleeping 30s before retry..."
-      sleep 30
-    done
-
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     echo "PIPELINE_HOSTS: $PIPELINE_HOSTS"
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
@@ -123,9 +78,9 @@
 
     echo "=== SP4 superpod: running tt-run ==="
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal -x PYTHONPATH" \
       --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
-      python -m models.demos.deepseek_v3_b1.demo.cli \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 2048 \
         --weights real \
         --cache-path /home/esmal/cache \

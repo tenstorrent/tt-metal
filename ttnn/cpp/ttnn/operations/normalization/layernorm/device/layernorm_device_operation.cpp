@@ -56,9 +56,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
         TT_FATAL(
-            a.padded_shape() == b.value().padded_shape(),
-            "Input and residual shapes must match, got input: {} vs residual: {}",
+            a.logical_shape() == b.value().logical_shape() && a.padded_shape() == b.value().padded_shape(),
+            "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
+            "logical={} padded={}",
+            a.logical_shape(),
             a.padded_shape(),
+            b.value().logical_shape(),
             b.value().padded_shape());
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "Input and residual tensors must be on same device");
@@ -67,9 +70,13 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
-                "{} != {}",
+                a.logical_shape()[-1] == gamma.value().logical_shape()[-1] &&
+                    a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
+                "Input and gamma last logical and padded dims must match, got input: logical[-1]={} padded[-1]={} vs "
+                "gamma: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                gamma.value().logical_shape()[-1],
                 gamma.value().padded_shape()[-1]);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -111,9 +118,13 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (beta.has_value()) {
         if (beta.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == beta.value().padded_shape()[-1],
-                "Input and beta inner dimensions must match, got input: {} vs beta: {}",
+                a.logical_shape()[-1] == beta.value().logical_shape()[-1] &&
+                    a.padded_shape()[-1] == beta.value().padded_shape()[-1],
+                "Input and beta last logical and padded dims must match, got input: logical[-1]={} padded[-1]={} vs "
+                "beta: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                beta.value().logical_shape()[-1],
                 beta.value().padded_shape()[-1]);
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
