@@ -106,7 +106,11 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        # WH runners host weights and tt_cache under /mnt/MLPerf; BH runners
+        # host the equivalent layout under /localdev/blackhole_demos/huggingface_data.
+        # Map the BH path onto /mnt/MLPerf/huggingface inside the container so a
+        # single test cmd referencing /mnt/MLPerf/... resolves correctly on both.
+        - ${{ startsWith(matrix.test-group.sku, 'bh_') && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
