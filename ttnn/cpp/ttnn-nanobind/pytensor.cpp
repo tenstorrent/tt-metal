@@ -858,6 +858,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
                         case DataType::UINT16: return self.to_vector<uint16_t>()[0];
                         case DataType::UINT8: return self.to_vector<uint8_t>()[0];
+                        case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 item() is not supported");
                         case DataType::INVALID: TT_THROW("Unsupported DataType");
                     }
                     TT_THROW("Unreachable");
