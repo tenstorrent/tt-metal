@@ -94,25 +94,28 @@ if(NOT _tt_tracy_emcmake AND CMAKE_HOST_UNIX)
     endif()
 endif()
 if(NOT _tt_tracy_emcmake)
+    # cibuildwheel / manylinux and other minimal images configure without Emscripten. Full
+    # dev builds use ./build_metal.sh (emsdk + PATH) or a system emcmake on PATH at configure.
     message(
-        FATAL_ERROR
-        "Tracy WASM build requires 'emcmake' (Emscripten). "
-        "Install and activate emsdk, or run ./build_metal.sh which installs it under "
-        "<build-dir>/emsdk and puts emcmake on PATH during configure."
+        WARNING
+        "Tracy WASM viewer will not be built: 'emcmake' not found and "
+        "${CMAKE_BINARY_DIR}/emsdk/emsdk_env.sh is missing or unusable. "
+        "Host Tracy profiling still works; install emsdk or run build_metal.sh to enable the web UI."
+    )
+else()
+    get_filename_component(_tt_tracy_emcmake "${_tt_tracy_emcmake}" REALPATH)
+
+    add_custom_target(
+        tracy_profiler_wasm
+        ALL
+        COMMAND
+            ${CMAKE_COMMAND} -E echo "Building Tracy profiler WASM..."
+        COMMAND
+            "${_tt_tracy_emcmake}" cmake -DEMSCRIPTEN=ON -B ${CMAKE_BINARY_DIR}/profiler/build_wasm -S
+            ${TRACY_HOME}/profiler
+        COMMAND
+            ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/profiler/build_wasm
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Building Tracy profiler WASM with Emscripten"
     )
 endif()
-get_filename_component(_tt_tracy_emcmake "${_tt_tracy_emcmake}" REALPATH)
-
-add_custom_target(
-    tracy_profiler_wasm
-    ALL
-    COMMAND
-        ${CMAKE_COMMAND} -E echo "Building Tracy profiler WASM..."
-    COMMAND
-        "${_tt_tracy_emcmake}" cmake -DEMSCRIPTEN=ON -B ${CMAKE_BINARY_DIR}/profiler/build_wasm -S
-        ${TRACY_HOME}/profiler
-    COMMAND
-        ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/profiler/build_wasm
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Building Tracy profiler WASM with Emscripten"
-)
