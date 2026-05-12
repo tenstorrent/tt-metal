@@ -202,6 +202,9 @@ jobs:
               continue
             fi
 
+            echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+            sleep 5
+
             echo "--- Running cluster validation ---"
             if mpirun --pernode --tag-output \
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
