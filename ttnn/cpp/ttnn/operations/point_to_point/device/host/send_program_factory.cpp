@@ -149,6 +149,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             .send_unary_reader_kernel_id = send_unary_reader_kernel_id,
             .send_unary_writer_kernel_id = send_unary_writer_kernel_id,
             .sender_cores = sender_cores,
+            .receive_unary_reader_kernel_id = {},
+            .receive_unary_writer_kernel_id = {},
+            .receiver_cores = {},
             .semaphore = semaphore}};
 }
 }  // namespace ttnn::operations::point_to_point

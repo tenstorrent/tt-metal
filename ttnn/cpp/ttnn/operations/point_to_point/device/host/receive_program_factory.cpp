@@ -143,6 +143,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     return {
         std::move(program),
         PointToPointOp::SendReceive::shared_variables_t{
+            .send_unary_reader_kernel_id = {},
+            .send_unary_writer_kernel_id = {},
+            .sender_cores = {},
             .receive_unary_reader_kernel_id = receive_unary_reader_kernel_id,
             .receive_unary_writer_kernel_id = receive_unary_writer_kernel_id,
             .receiver_cores = receiver_cores,

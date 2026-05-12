@@ -234,7 +234,7 @@ cached_workload_t PointToPointOp::SendReceive::create_at(
     }
 
     TT_THROW("Invalid coordinate in p2p");
-    return {Program{}, shared_variables_t{.semaphore = semaphore}};
+    return {Program{}, shared_variables_t{.send_unary_reader_kernel_id = {}, .send_unary_writer_kernel_id = {}, .sender_cores = {}, .receive_unary_reader_kernel_id = {}, .receive_unary_writer_kernel_id = {}, .receiver_cores = {}, .semaphore = semaphore}};
 }
 
 void PointToPointOp::SendReceive::override_runtime_arguments(
