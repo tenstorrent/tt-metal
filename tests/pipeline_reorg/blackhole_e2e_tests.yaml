@@ -119,13 +119,13 @@
 
 - id: bh-ring-sdpa-perf
   name: ring sdpa perf tests
+  # Skip QB1 (bh_llmbox / 4xP150): perf differs slightly from QB2 (2xP300);
+  # running on one machine class lets us keep a tighter tolerance (PR #44069).
   cmd: |
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
   skus:
     bh_deskbox:
-      timeout: 10
-    bh_llmbox:
       timeout: 10
     bh_loudbox:
       timeout: 10
@@ -262,7 +262,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900
   skus:
     bh_loudbox:
-      timeout: 68
+      timeout: 70 # PR #43775: FP8 combine adds runtime; bumped from 68 to 70
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
