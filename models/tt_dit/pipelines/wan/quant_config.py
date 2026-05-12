@@ -24,7 +24,7 @@ import ttnn
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class LinearQuantConfig:
     """Precision config for a single linear layer type."""
 
@@ -34,7 +34,7 @@ class LinearQuantConfig:
     fp32_dest_acc: bool = True
 
 
-@dataclass
+@dataclass(frozen=True)
 class SDPAQuantConfig:
     """Precision config for ring SDPA (self-attention)."""
 
