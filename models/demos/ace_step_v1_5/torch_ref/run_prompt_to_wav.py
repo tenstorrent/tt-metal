@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 import torch
 
+from models.demos.ace_step_v1_5.torch_ref.e2e_model import decode_with_vae, run_torch_denoise_loop
 from models.demos.ace_step_v1_5.torch_ref.full_pipeline import AceStepV15TorchPipeline
 
 # Turbo discrete timesteps (aligned with acestep turbo modeling).
@@ -285,9 +286,6 @@ def run_prompt_to_wav(
     chunk_masks = torch.ones((1, frames, 64), dtype=torch.float32)
     context_latents = torch.cat([src_latents, chunk_masks], dim=-1)
 
-    noise = torch.randn((1, frames, 64), dtype=torch.float32)
-    xt = noise
-
     if infer_steps is None:
         infer_steps = 8 if "turbo" in str(variant).lower() else 50
 
@@ -474,7 +472,6 @@ def run_prompt_to_wav(
 
         ctx_t = context_latents_final.to(device=dev, dtype=decoder_dtype)
         enc_t = encoder_hidden_states.to(device=dev, dtype=decoder_dtype)
-        xt_t = xt.to(device=dev, dtype=decoder_dtype)
 
         do_cfg = float(gs) not in (0.0, 1.0)
         num_steps = len(t_schedule)
@@ -496,83 +493,38 @@ def run_prompt_to_wav(
                 return v_cond
             return v_uncond + float(scale) * (v_cond - v_uncond)
 
-        enc_uncond: torch.Tensor | None = None
-        if do_cfg:
-            enc_uncond = torch.zeros_like(enc_t)
+        enc_uncond = torch.zeros_like(enc_t) if do_cfg else None
 
-        with torch.inference_mode():
-            for step_idx, t_curr in enumerate(t_schedule):
-                t_curr_f = float(t_curr)
-                if step_idx == len(t_schedule) - 1:
-                    break
-                t_next_f = float(t_schedule[step_idx + 1])
-                dt = t_curr_f - t_next_f
-                print(f"[torch_ref] step {step_idx+1}/{len(t_schedule)} t={t_curr_f:.6g} dt={dt:.6g}", flush=True)
+        def _apply_cfg(
+            step_idx: int, t_curr: float, xt_h: torch.Tensor, vt_cond: torch.Tensor, vt_uncond: torch.Tensor
+        ) -> torch.Tensor:
+            return _cfg_v(vt_cond, vt_uncond, _current_guidance_scale(step_idx))
 
-                s = _current_guidance_scale(step_idx)
-                if float(s) not in (0.0, 1.0) and enc_uncond is not None:
-                    ctx_2 = torch.cat([ctx_t, ctx_t], dim=0)
-                    xt_2 = torch.cat([xt_t, xt_t], dim=0)
-                    enc_2 = torch.cat([enc_t, enc_uncond], dim=0)
-                    vt2 = pipe.forward(
-                        xt_bt64=xt_2,
-                        context_latents_bt128=ctx_2,
-                        timestep_index=step_idx,
-                        encoder_hidden_states_btd=enc_2,
-                    )
-                    vt_cond = vt2[:1]
-                    vt_uncond = vt2[1:2]
-                    vt = _cfg_v(vt_cond, vt_uncond, float(s))
-                else:
-                    vt = pipe.forward(
-                        xt_bt64=xt_t,
-                        context_latents_bt128=ctx_t,
-                        timestep_index=step_idx,
-                        encoder_hidden_states_btd=enc_t,
-                    )
-
-                xt_t = xt_t - vt * float(dt)
-
-            s_last = _current_guidance_scale(len(t_schedule) - 1)
-            print(
-                f"[torch_ref] final step {len(t_schedule)}/{len(t_schedule)} t={float(t_schedule[-1]):.6g}", flush=True
-            )
-            if float(s_last) not in (0.0, 1.0) and enc_uncond is not None:
-                ctx_2 = torch.cat([ctx_t, ctx_t], dim=0)
-                xt_2 = torch.cat([xt_t, xt_t], dim=0)
-                enc_2 = torch.cat([enc_t, enc_uncond], dim=0)
-                vt2 = pipe.forward(
-                    xt_bt64=xt_2,
-                    context_latents_bt128=ctx_2,
-                    timestep_index=len(t_schedule) - 1,
-                    encoder_hidden_states_btd=enc_2,
-                )
-                vt_cond = vt2[:1]
-                vt_uncond = vt2[1:2]
-                vt = _cfg_v(vt_cond, vt_uncond, float(s_last))
+        def _progress(step_idx: int, total_steps: int, t_curr: float, dt: float) -> None:
+            if step_idx == total_steps - 1:
+                print(f"[torch_ref] final step {total_steps}/{total_steps} t={t_curr:.6g}", flush=True)
             else:
-                vt = pipe.forward(
-                    xt_bt64=xt_t,
-                    context_latents_bt128=ctx_t,
-                    timestep_index=len(t_schedule) - 1,
-                    encoder_hidden_states_btd=enc_t,
-                )
-            t_last = float(t_schedule[-1])
-            xt_t = xt_t - vt * float(t_last)
+                print(f"[torch_ref] step {step_idx+1}/{total_steps} t={t_curr:.6g} dt={dt:.6g}", flush=True)
 
-            pred_latents = xt_t.float().cpu()
+        pred_latents = run_torch_denoise_loop(
+            pipe=pipe,
+            t_schedule=t_schedule,
+            frames=frames,
+            enc_hs=enc_t,
+            ctx_lat=ctx_t,
+            null_emb=enc_uncond,
+            do_cfg=do_cfg,
+            seed=int(seed),
+            cfg_fn=_apply_cfg if do_cfg else None,
+            progress_fn=_progress,
+        )
 
     assert pred_latents is not None
 
     from diffusers.models import AutoencoderOobleck
 
     vae = AutoencoderOobleck.from_pretrained(str(vae_dir)).eval().to(dev)
-    with torch.inference_mode():
-        lat = pred_latents.transpose(1, 2).contiguous().to(device=dev, dtype=next(vae.parameters()).dtype)
-        wav = vae.decode(lat).sample
-        wav = wav.float().cpu()
-        peak = wav.abs().amax(dim=[1, 2], keepdim=True).clamp(min=1e-8)
-        wav = (wav / peak).clamp(-1.0, 1.0)
+    wav = decode_with_vae(vae, pred_latents, dev)
 
     out_p = Path(out_path)
     _save_wav_fallback(wav[0], out_p, sample_rate=48000)
