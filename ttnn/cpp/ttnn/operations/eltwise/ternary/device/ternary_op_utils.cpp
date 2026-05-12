@@ -809,8 +809,8 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 
     // Accumulate all dimensions except the last
     for (int i = 0; i < rank - 1; ++i) {
-        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
-        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
+        uint32_t from_dim = (i < static_cast<int>(from_shape.rank())) ? from_shape[i] : 1;
+        uint32_t to_dim = (i < static_cast<int>(to_shape.rank())) ? to_shape[i] : 1;
         from_volume_except_width *= from_dim;
         to_volume_except_width *= to_dim;
     }
