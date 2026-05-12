@@ -2,7 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pytest fixtures for AceStep v1.5 demo tests."""
+"""Pytest fixtures for AceStep v1.5 demo tests.
+
+Prefer the repo Python environment (``./create_venv.sh`` → ``./python_env``):
+
+- ``source python_env/bin/activate`` then ``python -m pytest ...``
+- or ``./python_env/bin/python -m pytest ...``
+
+Conv-heavy TTNN kernels (patchify / Oobleck VAE) rely on adequate ``l1_small_size`` when opening
+device (matches ``ign/ACE_perf``; override via ``ACE_STEP_L1_SMALL_SIZE``).
+"""
 
 from __future__ import annotations
 
@@ -26,6 +35,9 @@ for _p in (_TT_METAL_ROOT, _TTNN_ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# Default aligns with TTNN conv1d unit tests needing non-trivial L1 small space (Blackhole / Wormhole).
+_DEFAULT_L1_SMALL = int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304"))
+
 
 @pytest.fixture
 def torch_seed():
@@ -37,8 +49,13 @@ def torch_seed():
 @pytest.fixture(scope="session")
 def device():
     ttnn = require_ttnn()
-    dev = ttnn.open_device(device_id=0, trace_region_size=128 << 20)
-    dev.enable_program_cache()
+    dev = ttnn.open_device(
+        device_id=int(os.environ.get("TT_DEVICE_ID", "0")),
+        l1_small_size=_DEFAULT_L1_SMALL,
+        trace_region_size=128 << 20,
+    )
+    if hasattr(dev, "enable_program_cache"):
+        dev.enable_program_cache()
     yield dev
     ttnn.close_device(dev)
 
@@ -61,7 +78,11 @@ def mesh_device():
     ttnn = require_ttnn()
     # Prefer a mesh device when supported.
     if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape") and os.environ.get("MESH_DEVICE"):
-        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+        mesh = ttnn.open_mesh_device(
+            ttnn.MeshShape(1, 1),
+            l1_small_size=_DEFAULT_L1_SMALL,
+            trace_region_size=128 << 20,
+        )
         if hasattr(mesh, "enable_program_cache"):
             mesh.enable_program_cache()
         try:
@@ -72,7 +93,11 @@ def mesh_device():
 
     # Fallback: some TTNN builds only expose single-device APIs.
     if hasattr(ttnn, "open_device"):
-        dev = ttnn.open_device(device_id=0, trace_region_size=128 << 20)
+        dev = ttnn.open_device(
+            device_id=int(os.environ.get("TT_DEVICE_ID", "0")),
+            l1_small_size=_DEFAULT_L1_SMALL,
+            trace_region_size=128 << 20,
+        )
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         try:
