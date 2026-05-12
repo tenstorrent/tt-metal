@@ -57,9 +57,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
-    // Int32 max/min uses SFPU reduce path
-    const bool use_sfpu_int32_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
-    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_int32_path;
+    // Int32 and Float32 max/min use the SFPU reduce path.
+    //  - Int32: GMPOOL has no Int32 support at all.
+    //  - Float32: GMPOOL feeds SrcA/SrcB which truncates to bf16, losing fp32 precision.
+    // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
+    // so this single check covers both MAX and MIN.
+    const bool use_sfpu_reduce_path = (a.dtype() == DataType::INT32 || a.dtype() == DataType::FLOAT32) &&
+                                      operation_attributes.math_op == ReduceOpMath::MAX;
+    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
@@ -263,8 +268,16 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
-    if (use_sfpu_int32_path) {
-        reduce_defines["REDUCE_FORMAT"] = "DataFormat::Int32";
+    if (use_sfpu_reduce_path) {
+        reduce_defines["REDUCE_FORMAT"] = a.dtype() == DataType::INT32 ? "DataFormat::Int32" : "DataFormat::Float32";
+    }
+
+    // Float32 SFPU reduce must unpack source tiles straight into the fp32 DST register.
+    // Without this, the unpacker rounds Float32 -> Tf32/bf16 before SFPU sees the data,
+    // silently destroying mantissa precision.
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (use_sfpu_reduce_path && a.dtype() == DataType::FLOAT32) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     KernelDescriptor reader_desc;
@@ -336,7 +349,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     const std::string compute_kernel =
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/") +
-        (use_sfpu_int32_path ? "reduce_sfpu" : "reduce") + (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
+        (use_sfpu_reduce_path ? "reduce_sfpu" : "reduce") + (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;
@@ -348,6 +361,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
@@ -371,6 +385,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         compute_desc_g2 = std::move(d);
     }

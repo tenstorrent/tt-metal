@@ -4,6 +4,7 @@
 
 // SFPU reduce (no negate). Host sets REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT.
 // Similar to reduce.cpp; MIN is dispatched to reduce_sfpu_{h,w}_neg.cpp.
+// Supports Int32 and Float32 (LLK supports both natively).
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_sfpu_helpers_compute.hpp"

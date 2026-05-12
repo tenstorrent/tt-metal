@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SFPU sibling of reduce_w_neg.cpp: Int32 MIN along W as -MAX(-x).
+// SFPU sibling of reduce_w_neg.cpp: MIN along W as -MAX(-x).
+// Format-aware via REDUCE_FORMAT (Int32 or Float32). Negate is the only MIN-specific
+// step and stays here; the MAX-fold and post-mul logic is shared with the non-neg path.
 
 #include <cstdint>
 
-#include "api/compute/binary_max_min.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -14,11 +15,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-
-#ifdef REDUCE_POST_MUL
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/typecast.h"
-#endif
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_sfpu_helpers_compute.hpp"
 
 #ifdef TRISC_PACK
 #include "llk_pack_api.h"
@@ -40,6 +37,15 @@ void kernel_main() {
     constexpr uint32_t acc_dst = 0;
     constexpr uint32_t work_dst = 1;
 
+    // Format-specific negate (the only MIN-specific op in this kernel).
+    auto negate = [](uint32_t dst) {
+        if constexpr (REDUCE_FORMAT == DataFormat::Int32) {
+            negative_tile_int32(dst);
+        } else {
+            negative_tile(dst);
+        }
+    };
+
     init_sfpu(cb_input, cb_output);
     copy_tile_to_dst_init_short(cb_input);
 
@@ -53,22 +59,22 @@ void kernel_main() {
             tile_regs_acquire();
 
             if (Wt > 1) {
-                binary_max_int32_tile_init();
+                compute_kernel_lib::detail::sfpu_reduce_max_fold_init<REDUCE_FORMAT>();
             }
 
             cb_wait_front(cb_input, onetile);
             copy_tile(cb_input, 0, acc_dst);
             cb_pop_front(cb_input, onetile);
             negative_tile_init();
-            negative_tile_int32(acc_dst);
+            negate(acc_dst);
 
             for (uint32_t wt = 1; wt < Wt; ++wt) {
                 cb_wait_front(cb_input, onetile);
                 copy_tile(cb_input, 0, work_dst);
                 negative_tile_init();
-                negative_tile_int32(work_dst);
-                binary_max_int32_tile_init();
-                binary_max_int32_tile(acc_dst, work_dst, acc_dst);
+                negate(work_dst);
+                compute_kernel_lib::detail::sfpu_reduce_max_fold_init<REDUCE_FORMAT>();
+                compute_kernel_lib::detail::sfpu_reduce_max_fold_tile<REDUCE_FORMAT>(acc_dst, work_dst, acc_dst);
                 cb_pop_front(cb_input, onetile);
             }
 
@@ -76,17 +82,10 @@ void kernel_main() {
             sfpu_reduce<REDUCE_OP, REDUCE_FORMAT, REDUCE_DIM>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
 
             negative_tile_init();
-            negative_tile_int32(acc_dst);
+            negate(acc_dst);
 
 #ifdef REDUCE_POST_MUL
-            // sfpu_reduce leaves Int32 bits in DST; mul_unary_tile is fp32-only.
-            // Cast Int32 -> fp32, multiply, then cast fp32 -> Int32 (truncates toward zero).
-            typecast_tile_init<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>();
-            typecast_tile<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>(acc_dst);
-            binop_with_scalar_tile_init();
-            mul_unary_tile(acc_dst, post_mul_scaler_bits);
-            typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
-            typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(acc_dst);
+            compute_kernel_lib::detail::sfpu_post_mul_tile<REDUCE_FORMAT>(acc_dst, post_mul_scaler_bits);
 #endif
 
             tile_regs_commit();

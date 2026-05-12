@@ -11,7 +11,8 @@
 
 /**
  * @file reduce_sfpu_helpers_compute.hpp
- * @brief SFPU path for Int32 tile reduction when the FPU GMPOOL reduce path is invalid on device
+ * @brief SFPU path for tile reduction (Int32 + Float32) when the FPU GMPOOL reduce path is
+ *        invalid (Int32) or imprecise (Float32: GMPOOL bf16-truncates SrcA/SrcB).
  *
  * Provides ONE function, `reduce_sfpu`, as the SFPU counterpart to `compute_kernel_lib::reduce`
  * in reduce_helpers_compute.hpp (same streaming WaitAndPopPerTile-style flow for one axis):
@@ -28,7 +29,8 @@
  * - Packer reduce mask setup (sfpu_reduce does not configure it; this helper does)
  *
  * Within-tile reduction uses SFPU `sfpu_reduce`; cross-tile folds along the reduce axis use
- * `binary_max_int32_tile` / `binary_min_int32_tile`.
+ * `binary_max[_int32]_tile` only (selected by `format`). MIN is not folded here; host launches
+ * `reduce_sfpu_{h,w}_neg.cpp` which implements MIN as -MAX(-x) and reuses the same MAX fold.
  *
  * IMPORTANT: Do not call `compute_kernel_hw_startup()` before `reduce_sfpu`. This helper runs
  * on the SFPU path and calls `init_sfpu` / `copy_tile_to_dst_init_short` itself.
@@ -40,7 +42,7 @@
  *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_sfpu_helpers_compute.hpp"
  *
  *   // Row reduction (W) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce_sfpu<ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW, DataFormat::Int32>(
+ *   compute_kernel_lib::reduce_sfpu<ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW, DataFormat::Float32>(
  *       cb_in, cb_scaler, cb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
  *       post_mul_scaler_bits);
@@ -58,11 +60,11 @@
 namespace compute_kernel_lib {
 
 /**
- * @brief SFPU reduce for Int32 along one tile axis (templates match host REDUCE_* defines).
+ * @brief SFPU reduce along one tile axis (templates match host REDUCE_* defines).
  *
- * @tparam pool_type   PoolType::MAX
+ * @tparam pool_type   PoolType::MAX (MIN is dispatched via reduce_sfpu_{h,w}_neg.cpp).
  * @tparam reduce_dim  ReduceDim::REDUCE_ROW (W) or ReduceDim::REDUCE_COL (H).
- * @tparam format      DataFormat::Int32 (only supported format).
+ * @tparam format      DataFormat::Int32 or DataFormat::Float32.
  *
  * @param input_cb_id        Tiles to reduce (streaming order matches `reduce()` for same dim).
  * @param scaler_cb_id       Scaler tile CB (waited/popped; not passed into sfpu_reduce).

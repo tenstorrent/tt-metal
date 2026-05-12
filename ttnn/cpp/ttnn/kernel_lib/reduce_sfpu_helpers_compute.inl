@@ -34,25 +34,48 @@ ALWI void sfpu_reduce_pack_mask_config() {
 
 ALWI void sfpu_reduce_pack_mask_clear() { PACK((llk_pack_reduce_mask_clear())); }
 
-template <ckernel::PoolType pool_type, DataFormat format>
-ALWI void sfpu_reduce_binary_fold_init() {
-    static_assert(format == DataFormat::Int32, "reduce_sfpu binary fold: Int32 only");
-    if constexpr (pool_type == ckernel::PoolType::MAX) {
+// Cross-tile MAX fold along the reduce axis. MIN is dispatched to reduce_sfpu_{h,w}_neg.cpp
+// where it is computed as -MAX(-x), so only the MAX variant is needed here.
+template <DataFormat format>
+ALWI void sfpu_reduce_max_fold_init() {
+    static_assert(format == DataFormat::Int32 || format == DataFormat::Float32, "reduce_sfpu max fold: Int32 or Float32");
+    if constexpr (format == DataFormat::Int32) {
         binary_max_int32_tile_init();
     } else {
-        binary_min_int32_tile_init();
+        binary_max_tile_init();
     }
 }
 
-template <ckernel::PoolType pool_type, DataFormat format>
-ALWI void sfpu_reduce_binary_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "reduce_sfpu binary fold: Int32 only");
-    if constexpr (pool_type == ckernel::PoolType::MAX) {
+template <DataFormat format>
+ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
+    static_assert(format == DataFormat::Int32 || format == DataFormat::Float32, "reduce_sfpu max fold: Int32 or Float32");
+    if constexpr (format == DataFormat::Int32) {
         binary_max_int32_tile(a, b, out);
     } else {
-        binary_min_int32_tile(a, b, out);
+        binary_max_tile(a, b, out);
     }
 }
+
+#ifdef REDUCE_POST_MUL
+// Post-reduction scaling. sfpu_reduce ignores the scaler CB (LLK takes no scalar), so the user
+// scalar (packed fp32 bits) is applied here. mul_unary_tile is fp32-only; Int32 is bracketed with
+// typecasts (truncates toward zero on the way back).
+template <DataFormat format>
+ALWI void sfpu_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
+    static_assert(format == DataFormat::Int32 || format == DataFormat::Float32, "sfpu_post_mul_tile: Int32 or Float32");
+    if constexpr (format == DataFormat::Int32) {
+        typecast_tile_init<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>();
+        typecast_tile<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>(dst);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, scaler_bits);
+        typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
+        typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(dst);
+    } else {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, scaler_bits);
+    }
+}
+#endif
 
 }  // namespace detail
 
@@ -69,23 +92,18 @@ ALWI void reduce_sfpu(
 #ifndef REDUCE_POST_MUL
     (void)post_mul_scaler_bits;
 #endif
-    static_assert(
-        pool_type == ckernel::PoolType::MAX || pool_type == ckernel::PoolType::MIN,
-        "reduce_sfpu: MAX or MIN only");
+    static_assert(pool_type == ckernel::PoolType::MAX, "reduce_sfpu: MAX only; MIN dispatches to reduce_sfpu_{h,w}_neg.cpp");
     static_assert(
         reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL,
         "reduce_sfpu: REDUCE_ROW or REDUCE_COL only");
-    static_assert(format == DataFormat::Int32, "reduce_sfpu: Int32 only");
-    static_assert(
-        !(pool_type == ckernel::PoolType::MIN && reduce_dim == ckernel::ReduceDim::REDUCE_ROW),
-        "reduce_sfpu: MIN + REDUCE_ROW unsupported (LLK); host must launch reduce_sfpu_w_neg.cpp");
+    static_assert(format == DataFormat::Int32 || format == DataFormat::Float32, "reduce_sfpu: Int32 or Float32 only");
 
     constexpr uint32_t onetile = 1;
 
     // Two DST registers used per output tile:
     //   acc_dst  - running max/min (initialised from the first input tile)
-    //   work_dst - holds each subsequent input tile while binary_*_int32_tile
-    //              folds it into acc_dst element-wise.
+    //   work_dst - holds each subsequent input tile while the binary fold
+    //              (binary_*_tile / binary_*_int32_tile) merges it into acc_dst.
     constexpr uint32_t acc_dst = 0;
     constexpr uint32_t work_dst = 1;
 
@@ -110,7 +128,7 @@ ALWI void reduce_sfpu(
             tile_regs_acquire();
 
             if (needs_cross_tile_fold) {
-                detail::sfpu_reduce_binary_fold_init<pool_type, format>();
+                detail::sfpu_reduce_max_fold_init<format>();
             }
 
             cb_wait_front(input_cb_id, onetile);
@@ -120,7 +138,7 @@ ALWI void reduce_sfpu(
             for (uint32_t k = 1; k < tiles_per_output; ++k) {
                 cb_wait_front(input_cb_id, onetile);
                 copy_tile(input_cb_id, 0, work_dst);
-                detail::sfpu_reduce_binary_fold_tile<pool_type, format>(acc_dst, work_dst, acc_dst);
+                detail::sfpu_reduce_max_fold_tile<format>(acc_dst, work_dst, acc_dst);
                 cb_pop_front(input_cb_id, onetile);
             }
 
@@ -128,14 +146,7 @@ ALWI void reduce_sfpu(
             sfpu_reduce<pool_type, format, reduce_dim>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
 
 #ifdef REDUCE_POST_MUL
-            // sfpu_reduce leaves Int32 bits in DST; mul_unary_tile is fp32-only.
-            // Cast Int32 -> fp32, multiply, then cast fp32 -> Int32 (truncates toward zero).
-            typecast_tile_init<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>();
-            typecast_tile<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>(acc_dst);
-            binop_with_scalar_tile_init();
-            mul_unary_tile(acc_dst, post_mul_scaler_bits);
-            typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
-            typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(acc_dst);
+            detail::sfpu_post_mul_tile<format>(acc_dst, post_mul_scaler_bits);
 #endif
 
             tile_regs_commit();
