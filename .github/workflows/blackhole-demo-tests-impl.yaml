@@ -59,7 +59,7 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ALL_SKUS_IN_TESTS \
             ./.github/sku_config.yaml \
-            ./.github/scripts/utils/blackhole_demo_systems.yaml
+            ./.github/blackhole_demo_systems.yaml
       - name: Filter test matrix by model + system-type
         id: filter-matrix
         env:
@@ -111,7 +111,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         # Cache-mode is per-job now (matrix.test-group.weights-cache-mode), populated
-        # from .github/scripts/utils/blackhole_demo_systems.yaml during matrix build.
+        # from .github/blackhole_demo_systems.yaml during matrix build.
         # If weights-cache-mode is lfc, we don't mount the model cache volume — weights download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
         # If weights-cache-mode is cloud-mlperf, mount from /mnt/MLPerf/huggingface (canonical HF cache root, shared with the Wormhole pipelines)
         # If weights-cache-mode is local-disk, mount from /localdev/blackhole_demos/huggingface_data (CIv1 GH VLAN, not on Cloud)

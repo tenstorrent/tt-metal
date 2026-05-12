@@ -138,7 +138,7 @@ jobs:
 
           with open("tests/pipeline_reorg/blackhole_demo_tests.yaml") as f:
               tests = yaml.safe_load(f) or []
-          with open(".github/scripts/utils/blackhole_demo_systems.yaml") as f:
+          with open(".github/blackhole_demo_systems.yaml") as f:
               systems = yaml.safe_load(f) or {}
 
           sku_to_system = {s["sku"]: s["name"] for s in systems.get("systems", [])}
