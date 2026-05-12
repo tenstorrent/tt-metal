@@ -365,10 +365,7 @@ def parse_args() -> argparse.Namespace:
         "--high-tol-multiplier",
         type=float,
         default=1.15,
-        help=(
-            "Upper-bound tolerance multiplier (>1.0). "
-            "Example: 1.15 allows up to +15%% above expected value."
-        ),
+        help=("Upper-bound tolerance multiplier (>1.0). " "Example: 1.15 allows up to +15%% above expected value."),
     )
     args = parser.parse_args()
     if args.high_tol_multiplier <= 1.0:
