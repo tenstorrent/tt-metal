@@ -156,6 +156,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # MoE Group
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/moe_group.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_program_factory.cpp
     # SwiGLU Elemwise Backward (fused eltwise backward)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
