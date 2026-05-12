@@ -29,7 +29,9 @@ void kernel_main() {
 #ifdef REDUCE_POST_MUL
     constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
 #endif
-    constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
+    // Chunk one less than DEST_AUTO_LIMIT so the binary max fold has a spare DST register
+    // for its copy_tile destination (FPU folds in place and uses the full DEST_AUTO_LIMIT).
+    constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT - 1;
 
     // Circular buffers:
     constexpr uint32_t cb_input = tt::CBIndex::c_0;

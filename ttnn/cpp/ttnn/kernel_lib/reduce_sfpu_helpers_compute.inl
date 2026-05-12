@@ -127,9 +127,12 @@ ALWI void reduce_sfpu(
         // PreloadedPolicy: Tiles in row-major order, indexed as batch_offset + ht*stride + wt
         // =================================================================
 
-        // Auto-detect chunk size from DEST register capacity
-        // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
-        constexpr uint32_t chunk_size = DEST_AUTO_LIMIT;
+        // Auto-detect chunk size from DEST register capacity.
+        // Both reader (dataflow) and compute kernels compute this identically. SFPU needs one DST
+        // beyond the per-column accumulators for the copy_tile destination used by the binary
+        // max fold, so chunk_size = DEST_AUTO_LIMIT - 1 (FPU folds in place and uses the full
+        // DEST_AUTO_LIMIT).
+        constexpr uint32_t chunk_size = DEST_AUTO_LIMIT - 1;
         constexpr uint32_t col_work_dst = chunk_size;
         const bool needs_cross_tile_fold = Ht > 1;
 
