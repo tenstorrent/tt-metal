@@ -403,7 +403,7 @@ int main(int argc, char* argv[]) {
             *driver_ref.get_cluster_description(),
             context_ref.get_distributed_context_ptr(),
             context_ref.rtoptions().get_target_device(),
-            true,
+	    true,
             true);
         physical_system_descriptor.merge(std::move(new_psd));
         missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
