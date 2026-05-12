@@ -6,7 +6,7 @@
 
 // These wrappers are intended exclusively for LLK tests and are only available
 // when the LLK infrastructure is enabled.
-#ifdef ENABLE_LLK_INFRA
+#ifdef ENV_LLK_INFRA
 
 #include <cstdint>
 
@@ -274,4 +274,4 @@ inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_form
 #error "Unsupported architecture"
 #endif
 
-#endif // ENABLE_LLK_INFRA
+#endif // ENV_LLK_INFRA

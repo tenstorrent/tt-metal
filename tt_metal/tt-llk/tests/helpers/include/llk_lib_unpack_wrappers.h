@@ -6,7 +6,7 @@
 
 // These wrappers are intended exclusively for LLK tests and are only available
 // when the LLK infrastructure is enabled.
-#ifdef ENABLE_LLK_INFRA
+#ifdef ENV_LLK_INFRA
 
 #include <cstdint>
 
@@ -122,4 +122,4 @@ inline void _llk_unpack_tilize_uninit_wrapper_(
 #error "Unsupported architecture for LLK unpack tilize wrappers"
 #endif
 
-#endif // ENABLE_LLK_INFRA
+#endif // ENV_LLK_INFRA
