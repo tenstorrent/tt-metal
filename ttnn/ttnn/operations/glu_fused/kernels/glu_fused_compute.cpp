@@ -41,9 +41,10 @@ void kernel_main() {
         Sigmoid<Approx::Exact, Dst::D1>{},
         SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
 
-    sfpu_pipeline<
-        SfpuBatching::Auto,
-        SfpuInputPolicy::WaitAndPopPerTile,
-        SfpuOutputPolicy::PerTile,
-        SfpuDataFormatReconfig::INPUT_AND_OUTPUT>(chain, cb_output_tiles, num_output_tiles);
+    // All sfpu_pipeline template params (SfpuBatching::Auto,
+    // SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::PerTile,
+    // SfpuDataFormatReconfig::INPUT_AND_OUTPUT) match the helper's defaults —
+    // see sfpu_helpers.hpp:1406-1412. Relying on the defaults keeps the
+    // call site readable without changing behavior.
+    sfpu_pipeline(chain, cb_output_tiles, num_output_tiles);
 }

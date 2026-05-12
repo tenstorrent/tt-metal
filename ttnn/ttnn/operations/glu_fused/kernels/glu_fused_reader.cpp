@@ -10,9 +10,11 @@
 //   b_tile_idx  = row_idx * Wt + Wt_half + col_in_half  (second half of input)
 //   where Wt = 2 * Wt_half.
 //
-// Pushes one A tile to cb_input_a and one B tile to cb_input_b per output tile,
-// alternating CBs each iteration. Both CBs are double-buffered so the reader
-// can stage tile (i+1) while compute consumes tile i.
+// Pushes one A tile to cb_input_a and one B tile to cb_input_b per output tile.
+// Both reads are issued concurrently on NoC0 and synchronized by a single
+// noc_async_read_barrier — halves the per-iter barrier count vs. one barrier
+// per tile. Both CBs are double-buffered so the reader can stage tile (i+1)
+// while compute consumes tile i.
 //
 // CT args: [cb_input_a, cb_input_b, Wt_half, TensorAccessorArgs(input)...]
 // RT args: [src_addr, num_output_tiles, start_out_tile_id]
@@ -42,18 +44,21 @@ void kernel_main() {
         const uint32_t a_tile_idx = row_idx * Wt + col_in_half;
         const uint32_t b_tile_idx = a_tile_idx + Wt_half;
 
-        // Push A tile from first half.
+        // Reserve both CBs, issue both reads, single barrier, push both. The
+        // two reads share NoC0 — issuing them concurrently overlaps the NoC
+        // transactions and removes one barrier per output tile. Mirrors the
+        // canonical two-input reader at backward_softmax_reader.cpp:86-97.
         cb_reserve_back(cb_input_a, 1);
-        const uint32_t l1_write_addr_a = get_write_ptr(cb_input_a);
-        noc_async_read_tile(a_tile_idx, src_accessor, l1_write_addr_a);
-        noc_async_read_barrier();
-        cb_push_back(cb_input_a, 1);
-
-        // Push B tile from second half.
         cb_reserve_back(cb_input_b, 1);
+
+        const uint32_t l1_write_addr_a = get_write_ptr(cb_input_a);
         const uint32_t l1_write_addr_b = get_write_ptr(cb_input_b);
+
+        noc_async_read_tile(a_tile_idx, src_accessor, l1_write_addr_a);
         noc_async_read_tile(b_tile_idx, src_accessor, l1_write_addr_b);
         noc_async_read_barrier();
+
+        cb_push_back(cb_input_a, 1);
         cb_push_back(cb_input_b, 1);
     }
 }
