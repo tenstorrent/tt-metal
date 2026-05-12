@@ -126,7 +126,17 @@ class BGEForEmbedding:
             f"Initializing BGE-Large-EN-v1.5 for vLLM: " f"max_batch_size={max_batch_size}, max_seq_len={max_seq_len}"
         )
 
+        # When vLLM wraps the class, it requires vllm_config to be passed
         if vllm_config is not None:
+            # Mark this as an embedding model in override_tt_config for KV cache allocation
+            # This flag is used by get_num_available_blocks_tt to allocate sufficient blocks
+            if (
+                not hasattr(vllm_config.model_config, "override_tt_config")
+                or vllm_config.model_config.override_tt_config is None
+            ):
+                vllm_config.model_config.override_tt_config = {}
+            vllm_config.model_config.override_tt_config["is_embedding_model"] = True
+
             return cls(
                 device=mesh_device,
                 model_location_generator=model_location_generator,
