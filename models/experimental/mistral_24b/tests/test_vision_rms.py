@@ -15,13 +15,6 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
-
 
 def reference_vision_rms(model_args):
     """Mistral-specific reference method for vision RMS norm."""
@@ -52,7 +45,6 @@ def reference_vision_rms(model_args):
     (1,),
 )
 def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
-    signpost("Mistral24B::UnitTest::RMSNorm::Start", f"seq_len={seq_len}")
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -97,18 +89,13 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device=device),
     )
 
-    signpost("Mistral24B::RMSNorm::HarnessCall::Start", mode)
     tt_output = tt_model(tt_input, mode=mode)
-    signpost("Mistral24B::RMSNorm::HarnessCall::End", mode)
 
-    signpost("Mistral24B::DeviceTransfer::RMSNormOutputToHost::Start")
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1))[
         :, : tt_output.shape[-1]
     ]
-    signpost("Mistral24B::DeviceTransfer::RMSNormOutputToHost::End")
 
     logger.info(f"tt_output_torch: {tt_output_torch.shape}")
-    signpost("Mistral24B::OutputValidation::Start", "rmsnorm")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
@@ -119,5 +106,4 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     else:
         logger.warning("rms_norm Failed!")
 
-    signpost("Mistral24B::OutputValidation::End", f"rmsnorm passing={passing}")
     assert passing, f"rms_norm output does not meet PCC requirement {0.99}."

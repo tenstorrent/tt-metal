@@ -16,13 +16,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.mistral_vision_tower import MistralVisionTower
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
-
 
 @pytest.mark.skip(reason="Disabled: see #45992")
 @run_for_wormhole_b0_or_blackhole()
@@ -41,7 +34,6 @@ except ImportError:
     indirect=True,
 )
 def test_mistral_vision_tower(mesh_device, reset_seeds):
-    signpost("Mistral24B::UnitTest::VisionTower::Start")
     pcc_required = 0.99
     dtype = ttnn.bfloat16
 
@@ -72,20 +64,13 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
         dtype=dtype,
         configuration=model_args,
     )
-
-    signpost("Mistral24B::VisionTower::HarnessCall::Start")
     tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
-    signpost("Mistral24B::VisionTower::HarnessCall::End")
-    signpost("Mistral24B::DeviceTransfer::VisionTowerOutputToHost::Start")
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, :, :, : tt_output.shape[-1]
     ]
-    signpost("Mistral24B::DeviceTransfer::VisionTowerOutputToHost::End")
     tt_output = tt_output.squeeze(0)
-    signpost("Mistral24B::OutputValidation::Start", "vision_tower")
     passing, pcc_message = comp_pcc(reference_output, tt_output, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output))
     logger.info(f"PCC: {pcc_message}")
-    signpost("Mistral24B::OutputValidation::End", f"vision_tower passing={passing}")
     assert passing, f"PCC below {pcc_required}. {pcc_message}"

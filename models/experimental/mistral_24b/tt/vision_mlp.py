@@ -12,13 +12,6 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
-
 
 class MistralTTVisionMLP(LightweightModule):
     def __init__(
@@ -87,7 +80,6 @@ class MistralTTVisionMLP(LightweightModule):
         """
 
         # Linear with SILU activation
-        signpost("Mistral24B::VisionMLP::GateMatmul::Start")
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -96,9 +88,7 @@ class MistralTTVisionMLP(LightweightModule):
             activation="silu",
             compute_kernel_config=self.compute_kernel_config,
         )
-        signpost("Mistral24B::VisionMLP::GateMatmul::End")
 
-        signpost("Mistral24B::VisionMLP::UpMatmul::Start")
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -106,15 +96,11 @@ class MistralTTVisionMLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        signpost("Mistral24B::VisionMLP::UpMatmul::End")
 
         # Element-wise multiply
-        signpost("Mistral24B::VisionMLP::GateUpMultiply::Start")
         w2_in = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat16)
-        signpost("Mistral24B::VisionMLP::GateUpMultiply::End")
 
         # Final projection
-        signpost("Mistral24B::VisionMLP::DownMatmul::Start")
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
@@ -122,7 +108,6 @@ class MistralTTVisionMLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        signpost("Mistral24B::VisionMLP::DownMatmul::End")
 
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)

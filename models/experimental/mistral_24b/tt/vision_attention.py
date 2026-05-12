@@ -12,13 +12,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole, nearest_32
 
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
-
 
 def rotate_half(x):
     last_dim = x.shape[-1]
@@ -172,11 +165,9 @@ class TtMistralImageAttention(LightweightModule):
 
         MAX_MM_SEQ_LEN = seq_len
 
-        signpost("Mistral24B::Attention::Forward::Start", f"seq_len={seq_len}")
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        signpost("Mistral24B::Attention::QKVMATMUL::Start", f"seq_len={seq_len}")
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -185,12 +176,10 @@ class TtMistralImageAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
-        signpost("Mistral24B::Attention::QKVMATMUL::End", f"seq_len={seq_len}")
         if seq_len > MAX_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         # split qkv into heads
-        signpost("Mistral24B::Attention::CreateQKVHeads::Start")
         (
             q_heads_1QSD,
             k_heads_1KSD,
@@ -202,37 +191,31 @@ class TtMistralImageAttention(LightweightModule):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        signpost("Mistral24B::Attention::CreateQKVHeads::End")
 
         if position_embeddings is not None:
             cos, sin = position_embeddings
-            signpost("Mistral24B::Attention::RotaryEmbedding::Start")
             q_heads_1QSD, k_heads_1KSD = apply_rotary_pos_emb_vision_tt(q_heads_1QSD, k_heads_1KSD, cos, sin)
-            signpost("Mistral24B::Attention::RotaryEmbedding::End")
         ttnn.deallocate(xqkv_fused)
 
-        # Move Q/K/V from DRAM-interleaved into L1-interleaved immediately before SDPA.
-        # The SDPA op (sdpa_device_operation.cpp:45) requires inputs to be non-sharded
-        # ("DRAM/L1 interleaved"), so we stay interleaved here and only relocate the
-        # backing buffer to L1 to cut DRAM read traffic into the kernel. Keep BF16 dtype
-        # so numerical behavior matches the prior DRAM path exactly.
-        signpost("Mistral24B::Attention::QKVToL1::Start", f"seq_len={seq_len}")
-        q_heads_1QSD_dram = q_heads_1QSD
-        k_heads_1KSD_dram = k_heads_1KSD
-        v_heads_1VSD_dram = v_heads_1VSD
-        q_heads_1QSD = ttnn.to_memory_config(q_heads_1QSD_dram, ttnn.L1_MEMORY_CONFIG)
-        k_heads_1KSD = ttnn.to_memory_config(k_heads_1KSD_dram, ttnn.L1_MEMORY_CONFIG)
-        v_heads_1VSD = ttnn.to_memory_config(v_heads_1VSD_dram, ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(q_heads_1QSD_dram)
-        ttnn.deallocate(k_heads_1KSD_dram)
-        ttnn.deallocate(v_heads_1VSD_dram)
-        signpost("Mistral24B::Attention::QKVToL1::End", f"seq_len={seq_len}")
+        # # Move Q/K/V from DRAM-interleaved into L1-interleaved immediately before SDPA.
+        # # The SDPA op (sdpa_device_operation.cpp:45) requires inputs to be non-sharded
+        # # ("DRAM/L1 interleaved"), so we stay interleaved here and only relocate the
+        # # backing buffer to L1 to cut DRAM read traffic into the kernel. Keep BF16 dtype
+        # # so numerical behavior matches the prior DRAM path exactly.
+        # q_heads_1QSD_dram = q_heads_1QSD
+        # k_heads_1KSD_dram = k_heads_1KSD
+        # v_heads_1VSD_dram = v_heads_1VSD
+        # q_heads_1QSD = ttnn.to_memory_config(q_heads_1QSD_dram, ttnn.L1_MEMORY_CONFIG)
+        # k_heads_1KSD = ttnn.to_memory_config(k_heads_1KSD_dram, ttnn.L1_MEMORY_CONFIG)
+        # v_heads_1VSD = ttnn.to_memory_config(v_heads_1VSD_dram, ttnn.L1_MEMORY_CONFIG)
+        # ttnn.deallocate(q_heads_1QSD_dram)
+        # ttnn.deallocate(k_heads_1KSD_dram)
+        # ttnn.deallocate(v_heads_1VSD_dram)
 
         # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(10, 10), q_chunk_size=512, k_chunk_size=256, exp_approx_mode=True
+            compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
         )
-        signpost("Mistral24B::Attention::SDPA::Start", f"seq_len={seq_len}")
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_1QSD,
             k_heads_1KSD,
@@ -242,7 +225,6 @@ class TtMistralImageAttention(LightweightModule):
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
         )
-        signpost("Mistral24B::Attention::SDPA::End", f"seq_len={seq_len}")
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD)
         ttnn.deallocate(k_heads_1KSD)
@@ -251,19 +233,16 @@ class TtMistralImageAttention(LightweightModule):
         ###
         # Output matmul
         ###
-        signpost("Mistral24B::Attention::ConcatHeads::Start")
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        signpost("Mistral24B::Attention::ConcatHeads::End")
         ttnn.deallocate(attn_output_1QSD)
 
         # reshaping long sequence to matmul fit on device
         if seq_len > MAX_MM_SEQ_LEN:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        signpost("Mistral24B::Attention::OutputMATMUL::Start", f"seq_len={seq_len}")
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -272,7 +251,6 @@ class TtMistralImageAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
-        signpost("Mistral24B::Attention::OutputMATMUL::End", f"seq_len={seq_len}")
         if seq_len > MAX_MM_SEQ_LEN:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
@@ -282,11 +260,8 @@ class TtMistralImageAttention(LightweightModule):
             # TODO: 26411
             # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
-                signpost("Mistral24B::Attention::AllGather::Start", "blackhole")
                 dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-                signpost("Mistral24B::Attention::AllGather::End", "blackhole")
             else:
-                signpost("Mistral24B::Attention::AllGather::Start", "async")
                 dense_out_gathered = ttnn.experimental.all_gather_async(
                     output_11SH,
                     persistent_output_buffer=None,
@@ -299,17 +274,12 @@ class TtMistralImageAttention(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
-                signpost("Mistral24B::Attention::AllGather::End", "async")
             output_11SH.deallocate(True)
-            signpost("Mistral24B::Attention::FastReduce::Start")
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
-            signpost("Mistral24B::Attention::FastReduce::End")
             # slicing the required sequence length
             dense_out_reduced = dense_out_reduced[:, :, : dense_out_gathered.shape[-2], :]
-            signpost("Mistral24B::Attention::Forward::End", "multi-device")
             return dense_out_reduced
         else:
-            signpost("Mistral24B::Attention::Forward::End", "single-device")
             return output_11SH

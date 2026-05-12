@@ -9,14 +9,6 @@ from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
-
-
 """
 This file implements the pixtral image block specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
 """
@@ -85,19 +77,11 @@ class TtPixtralImageTransformerBlock(LightweightModule):
     def forward(self, x_input, position_embeddings=None):
         mode = "prefill"
         # attention norm Input and result replicated
-        signpost("Mistral24B::VisionBlock::AttentionNorm::Start")
         attn_norm_res = self.attention_norm(x_input, mode=mode)
-        signpost("Mistral24B::VisionBlock::AttentionNorm::End")
         # attention Input and results replicated
-        signpost("Mistral24B::Attention::Start")
         attn_out = self.attention(attn_norm_res, position_embeddings=position_embeddings)
         res = ttnn.add(x_input, attn_out)
         ffn_norm_res = self.ffn_norm(res, mode=mode)
-        signpost("Mistral24B::VisionBlock::FFNNorm::End")
-        signpost("Mistral24B::VisionMLP::Start")
         mlp_out = self.mlp(ffn_norm_res)
-        signpost("Mistral24B::VisionMLP::End")
-        signpost("Mistral24B::VisionBlock::FFNResidual::Start")
         out = ttnn.add(res, mlp_out)
-        signpost("Mistral24B::VisionBlock::FFNResidual::End")
         return out

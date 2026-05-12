@@ -10,14 +10,6 @@ We introduced the `simplified_rms_norm` function to be compatible with the Mistr
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
-
-
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
 
@@ -129,10 +121,6 @@ class RMSNorm(LightweightModule):
         self.simplified_rms = simplified_rms
 
     def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
-        signpost(
-            "Mistral24B::RMSNorm::Start",
-            f"mode={mode} in_sharded={in_sharded} out_sharded={out_sharded} simplified={self.simplified_rms}",
-        )
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
@@ -162,35 +150,24 @@ class RMSNorm(LightweightModule):
         )
 
         if in_sharded and not out_sharded:
-            signpost("Mistral24B::RMSNorm::ShardedToInterleaved::Start", "forward output")
             x = ttnn.sharded_to_interleaved(x)
-            signpost("Mistral24B::RMSNorm::ShardedToInterleaved::End", "forward output")
-            signpost("Mistral24B::RMSNorm::End", f"mode={mode}")
             return x
         else:
-            signpost("Mistral24B::RMSNorm::End", f"mode={mode}")
             return x
 
     def _simplified_rmsnorm(
         self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
     ):
-        signpost("Mistral24B::RMSNorm::DRAMMaterialize::Start", "simplified_rmsnorm input")
         inp = ttnn.sharded_to_interleaved(inp, ttnn.DRAM_MEMORY_CONFIG)
-        signpost("Mistral24B::RMSNorm::DRAMMaterialize::End", "simplified_rmsnorm input")
-        signpost("Mistral24B::RMSNorm::Stats::Start")
         xnorm = ttnn.pow(inp, 2)
         xnorm = ttnn.mean(xnorm, dim=-1, keepdim=True)
         xnorm = ttnn.rsqrt(xnorm + epsilon)
-        signpost("Mistral24B::RMSNorm::Stats::End")
-        signpost("Mistral24B::RMSNorm::Scale::Start")
         xnorm = ttnn.multiply(inp, xnorm)
         weight = ttnn.reshape(weight, [1, 1, -1])
         output = ttnn.multiply(xnorm, (weight))
 
         if memory_config is not None:
-            signpost("Mistral24B::RMSNorm::OutputMemoryConfig::Start")
             output = ttnn.to_memory_config(output, memory_config)
-            signpost("Mistral24B::RMSNorm::OutputMemoryConfig::End")
 
         ttnn.deallocate(xnorm)
 

@@ -14,13 +14,6 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
-
 
 def reference_vision_rot_emb(model_args):
     """Mistral-specific reference method for vision rotary embedding."""
@@ -51,7 +44,6 @@ def reference_vision_rot_emb(model_args):
     (1,),
 )
 def test_rot_emb(seq_len, batch_size, reset_seeds, device):
-    signpost("Mistral24B::UnitTest::RotaryEmbedding::Start", f"seq_len={seq_len}")
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -89,11 +81,7 @@ def test_rot_emb(seq_len, batch_size, reset_seeds, device):
         orig_context_len=num_patches,
         datatype=dtype,
     )
-
-    signpost("Mistral24B::VisionTower::RopeMats::HarnessCall::Start")
     cos2, sin2 = tt_model.get_rot_mats(position_ids)
-    signpost("Mistral24B::VisionTower::RopeMats::HarnessCall::End")
-    signpost("Mistral24B::DeviceTransfer::RopeMatsToHost::Start")
     cos2 = ttnn.from_device(cos2)
     cos2 = ttnn.to_torch(cos2)
     cos2 = cos2.squeeze(0)
@@ -101,20 +89,13 @@ def test_rot_emb(seq_len, batch_size, reset_seeds, device):
     sin2 = ttnn.from_device(sin2)
     sin2 = ttnn.to_torch(sin2)
     sin2 = sin2.squeeze(0)
-    signpost("Mistral24B::DeviceTransfer::RopeMatsToHost::End")
-
-    signpost("Mistral24B::OutputValidation::Start", "rotary_cos")
     passing, pcc_message = comp_pcc(cos, cos2)
 
     logger.info(comp_allclose(cos, cos2))
     logger.info(f"PCC: {pcc_message}")
-    signpost("Mistral24B::OutputValidation::End", f"rotary_cos passing={passing}")
     assert passing, f"COS PCC value is lower than {0.99} for some of the outputs. Check Warnings!"
-
-    signpost("Mistral24B::OutputValidation::Start", "rotary_sin")
     passing, pcc_message = comp_pcc(sin, sin2)
 
     logger.info(comp_allclose(sin, sin2))
     logger.info(f"PCC: {pcc_message}")
-    signpost("Mistral24B::OutputValidation::End", f"rotary_sin passing={passing}")
     assert passing, f"SIN PCC value is lower than {0.99} for some of the outputs. Check Warnings!"
