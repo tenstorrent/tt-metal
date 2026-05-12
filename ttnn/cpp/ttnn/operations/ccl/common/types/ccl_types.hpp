@@ -31,6 +31,7 @@ struct Shape4D {
     Shape4D() = default;
     Shape4D(T w, T z, T y, T x): w(w), z(z), y(y), x(x) {}
     Shape4D(Shape4D const& rhs) = default;
+    Shape4D& operator=(Shape4D const&) = default;
 
     Shape4D<T> operator+(const Shape4D<T> &rhs) const {
         return {w + rhs.w, z + rhs.z, y + rhs.y, x + rhs.x};

@@ -53,7 +53,7 @@ struct ReduceToRootOp {
             tt::tt_metal::KernelHandle root2_reader_kernel_id;
             tt::tt_metal::KernelHandle root2_writer_kernel_id;
 
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id = {};
 
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
         };
