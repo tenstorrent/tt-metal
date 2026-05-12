@@ -52,8 +52,8 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& input_indices_tensor = tensor_args.input_indices_tensor;
-    auto& output_tensor = tensor_args.output_tensor;
-    auto& output_indices_tensor = tensor_args.output_indices_tensor;
+    const auto& output_tensor = tensor_args.output_tensor;
+    const auto& output_indices_tensor = tensor_args.output_indices_tensor;
 
     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "input_tensor must be BFLOAT16");
     TT_FATAL(bias_tensor.dtype() == DataType::BFLOAT16, "bias_tensor must be BFLOAT16");
@@ -187,9 +187,9 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     return program_desc;
 }
 
-ttsl::hash::hash_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+std::uint64_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     if (program_descriptor.custom_program_hash.has_value()) {
-        return static_cast<ttsl::hash::hash_t>(program_descriptor.custom_program_hash.value());
+        return static_cast<std::uint64_t>(program_descriptor.custom_program_hash.value());
     }
 
     auto hash_kernel = [&](const tt::tt_metal::KernelDescriptor& kernel) -> size_t {
@@ -247,7 +247,7 @@ ttsl::hash::hash_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDe
     for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
     }
-    return static_cast<ttsl::hash::hash_t>(hash);
+    return static_cast<std::uint64_t>(hash);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate

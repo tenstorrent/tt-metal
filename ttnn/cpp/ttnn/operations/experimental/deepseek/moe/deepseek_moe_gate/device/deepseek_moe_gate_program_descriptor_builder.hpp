@@ -17,6 +17,6 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     const tensor_args_t& tensor_args, const operation_attributes_t& operation_attrs);
 
 // Structural hash excluding buffer addresses (matches generic_op program-cache semantics).
-[[nodiscard]] ttsl::hash::hash_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor&);
+[[nodiscard]] std::uint64_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor&);
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate

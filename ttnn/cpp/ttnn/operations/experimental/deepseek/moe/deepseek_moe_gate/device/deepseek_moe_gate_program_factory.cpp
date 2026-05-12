@@ -83,8 +83,10 @@ void patch_program_from_descriptor(
 }  // namespace
 
 DeepseekMoeGateProgramFactory::cached_program_t DeepseekMoeGateProgramFactory::create(
-    const operation_attributes_t& operation_attrs, const tensor_args_t& tensor_args, tensor_return_value_t&) {
-    ProgramDescriptor program_descriptor = build_moe_gate_program_descriptor(tensor_args, operation_attrs);
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
+    ProgramDescriptor program_descriptor = build_moe_gate_program_descriptor(tensor_args, operation_attributes);
     Program program{program_descriptor};
 
     DeepseekMoeGateSharedVariables shared{};
@@ -100,10 +102,10 @@ DeepseekMoeGateProgramFactory::cached_program_t DeepseekMoeGateProgramFactory::c
 
 void DeepseekMoeGateProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attrs,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t&) {
-    ProgramDescriptor program_descriptor = build_moe_gate_program_descriptor(tensor_args, operation_attrs);
+    [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
+    ProgramDescriptor program_descriptor = build_moe_gate_program_descriptor(tensor_args, operation_attributes);
     patch_program_from_descriptor(cached_program.program, cached_program.shared_variables, program_descriptor);
 }
 
