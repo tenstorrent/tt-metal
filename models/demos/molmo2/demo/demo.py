@@ -230,18 +230,28 @@ def annotate_video_with_points(video_path: str, coords_str: str, output_path: st
         coords_by_t[t_coord].append((x_norm, y_norm))
     sorted_times = sorted(coords_by_t)
 
+    # Visibility window: for dense tracking (many timestamps, tight spacing) the dot
+    # is always visible. For sparse pointing (one or few timestamps) the dot only
+    # appears near the annotated time so it doesn't mislead on other frames.
+    if len(sorted_times) > 1:
+        min_gap = min(b - a for a, b in zip(sorted_times, sorted_times[1:]))
+    else:
+        min_gap = None  # single timestamp — use explicit window below
+    # Show dot if frame is within max_dist of the nearest annotated timestamp
+    max_show_dist = min_gap if min_gap is not None else 2.0  # 2s window for pointing
+
     for frame_idx, packet in enumerate(in_container.decode(video=0)):
         t = frame_idx / fps
         arr = packet.to_ndarray(format="rgb24")
         img = _Image.fromarray(arr)
         if sorted_times:
-            draw = _ImageDraw.Draw(img)
-            # Nearest-timestamp policy: dot always visible, not just on 1-frame window
             nearest_t = min(sorted_times, key=lambda ts: abs(t - ts))
-            for x_norm, y_norm in coords_by_t[nearest_t]:
-                cx = int(x_norm / 1000 * W)
-                cy = int(y_norm / 1000 * H)
-                _draw_dot(draw, cx, cy)
+            if abs(t - nearest_t) <= max_show_dist:
+                draw = _ImageDraw.Draw(img)
+                for x_norm, y_norm in coords_by_t[nearest_t]:
+                    cx = int(x_norm / 1000 * W)
+                    cy = int(y_norm / 1000 * H)
+                    _draw_dot(draw, cx, cy)
         out_frame = av.VideoFrame.from_ndarray(np.array(img), format="rgb24")
         for pkt in out_stream.encode(out_frame):
             out_container.mux(pkt)

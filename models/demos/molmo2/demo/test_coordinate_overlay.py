@@ -366,3 +366,24 @@ def test_annotate_video_dot_persists_across_frames(tmp_path):
     dotted_frames = sum(1 for f in frames if tuple(int(v) for v in f[cy, cx]) != (200, 200, 200))
     # All 20 frames should show the dot (nearest-coord policy)
     assert dotted_frames == 20, f"Dot must persist on all frames, got {dotted_frames}/20"
+
+
+def test_pointing_dot_only_visible_near_annotated_timestamp(tmp_path):
+    """For single-timestamp pointing, dot only appears near that timestamp, not whole video."""
+    from models.demos.molmo2.demo.demo import annotate_video_with_points
+
+    # 40-frame video at 10fps = 4s. Single point at t=3.0
+    vid = tmp_path / "in.mp4"
+    _make_test_video(vid, n_frames=40, w=64, h=64, fps=10.0)
+    out = tmp_path / "out.mp4"
+    annotate_video_with_points(str(vid), "3.0 1 500 500", str(out))
+    frames = _read_video_frames(out)
+    cx, cy = 32, 32
+    # Frame 0 (t=0.0) is far from t=3.0 — should NOT have dot
+    assert tuple(int(v) for v in frames[0][cy, cx]) == (
+        200,
+        200,
+        200,
+    ), "Frame at t=0 must not show dot (too far from annotated t=3.0)"
+    # Frame 30 (t=3.0) — should have dot
+    assert tuple(int(v) for v in frames[30][cy, cx]) != (200, 200, 200), "Frame at t=3.0 must show dot"
