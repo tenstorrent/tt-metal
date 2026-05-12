@@ -83,6 +83,14 @@ skus:
       - in-service
       - g04glx01
 
+  wh_galaxy_perf_g04glx03:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g04glx03
+
   # Temporary SKU separating UF machines
   wh_galaxy_perf_uf:
     runs_on:

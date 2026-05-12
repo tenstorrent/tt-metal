@@ -458,6 +458,9 @@
     wh_galaxy_perf_g04glx01:
       timeout: 20
       tier: 1
+    wh_galaxy_perf_g04glx03:
+      timeout: 20
+      tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
