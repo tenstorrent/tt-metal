@@ -113,7 +113,7 @@ def _dp_repack_batch_sharded_hidden_for_device(device, batch_input_mapper, tt_hi
     row per device. A host compose + re-upload makes the local shard layout
     match the token-id/embedding mapper before traced decoder execution.
     """
-    if batch_input_mapper is None:
+    if batch_input_mapper is None or int(tt_hidden.shape[0]) <= 1:
         return tt_hidden
 
     t = _unwrap_ttnn_tensor(tt_hidden)
@@ -333,6 +333,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self._decode_token_host: Optional[torch.Tensor] = None
         self._decode_cache_pos_host: Optional[torch.Tensor] = None
         self._decode_seq_counter: int = 0
+        self._decode_trace_token_buffer: Optional[ttnn.Tensor] = None
+        self._decode_trace_cache_position: Optional[ttnn.Tensor] = None
         self._scatter_cache_input_ids: Optional[torch.Tensor] = None
         self._scatter_cache_key: Optional[tuple] = None
         self._scatter_cache_idx: Optional[ttnn.Tensor] = None
@@ -625,27 +627,45 @@ class TTNNDotsOCRPipeline(TTNNModule):
             if self._batch_input_mapper is not None
             else ttnn.ReplicateTensorToMesh(self.device)
         )
-        self._decode_token_buffer = ttnn.from_torch(
-            self._decode_token_host,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=token_mapper,
-        )
+        if self._batch_input_mapper is None and self._decode_trace_token_buffer is not None:
+            self._decode_token_buffer = self._decode_trace_token_buffer
+            token_host_tt = ttnn.from_torch(
+                self._decode_token_host,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(token_host_tt, self._decode_token_buffer)
+        else:
+            self._decode_token_buffer = ttnn.from_torch(
+                self._decode_token_host,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=token_mapper,
+            )
         self._decode_token_buffer_has_next = True
         self._decode_seq_counter = self.paged_cache.get_seq_length(layer_idx=0)
         self._decode_cache_pos_host = torch.tensor([self._decode_seq_counter], dtype=torch.int32)
         # Scalar cache position: always replicate (same global index on every
         # device). Do not use ``_batch_input_mapper`` here: ND shard expects one
         # host chunk per mesh device, which a length-1 tensor does not satisfy.
-        self._decode_cache_position = ttnn.from_torch(
-            self._decode_cache_pos_host,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if self._batch_input_mapper is None and self._decode_trace_cache_position is not None:
+            self._decode_cache_position = self._decode_trace_cache_position
+            cache_host_tt = ttnn.from_torch(
+                self._decode_cache_pos_host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
+        else:
+            self._decode_cache_position = ttnn.from_torch(
+                self._decode_cache_pos_host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def decode_step(
         self, prev_token_id: Union[int, List[int]], read_from_device: bool = True
@@ -1012,12 +1032,28 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         # Pass 2: Trace capture (TracedRun phase 2)
         self.generate(input_ids, pixel_values, image_grid_thw, max_new_tokens=4)
+        self._capture_decode_trace_inputs()
         self.paged_cache.reset()
         self._decode_cache_position = None
+
+    def _capture_decode_trace_inputs(self) -> None:
+        self._decode_trace_token_buffer = None
+        self._decode_trace_cache_position = None
+        if self._batch_input_mapper is not None:
+            return
+        for key, entry in TracedRun._trace_cache.items():
+            if not key or key[0] != "dots_ocr_graph_decode":
+                continue
+            if len(entry.trace_inputs) >= 2 and isinstance(entry.trace_inputs[0], ttnn.Tensor):
+                self._decode_trace_token_buffer = entry.trace_inputs[0]
+                self._decode_trace_cache_position = entry.trace_inputs[1]
+                return
 
     def release(self) -> None:
         """Release all traced runs and deallocate pre-allocated buffers."""
         TracedRun.release_all()
+        self._decode_trace_token_buffer = None
+        self._decode_trace_cache_position = None
         self._decode_cache_position = None
         if self._scatter_cache_idx is not None:
             ttnn.deallocate(self._scatter_cache_idx)

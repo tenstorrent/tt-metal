@@ -384,6 +384,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             compute_kernel_config=getattr(self.sdpa, "decode_compute_kernel_config", self.sdpa.compute_kernel_config),
         )
 
+        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_attention_heads * self.head_dim))
 
