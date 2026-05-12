@@ -16,7 +16,6 @@ as reference). Time embedding uses the reference sinusoidal formula on host (che
 SwiGLU. ``VoxtralAcousticRMSNorm`` wraps common ``RMSNorm`` with ``COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC``.
 
 FM trunk matmuls (``ttnn.linear``), attention SDPA, MLP linears, and acoustic norms share that config
-(presets in ``models/experimental/voxtraltts/utils/config_helpers.py``, same layout as DeepSeek v3).
 """
 
 from __future__ import annotations
