@@ -7,6 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
@@ -616,6 +617,89 @@ TEST_F(VariableMatmulTest, In1KOffsetRead_TransposeA_DWDownPattern) {
 
     float err = max_abs_error(result, ref);
     EXPECT_LT(err, 4.0F) << "in1 k-offset dW_down pattern max_abs_error: " << err;
+}
+
+// Write-at-offset: caller provides parent output; matmul writes into a row-range.
+TEST_F(VariableMatmulTest, WriteAtOffset_NoTranspose) {
+    const uint32_t M_e = 128, K = 128, N = 256, M_parent = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_e, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+    auto parent_out = create_random_device_tensor(M_parent, N, device);
+    // Capture original values for non-written-range verification later.
+    auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
+
+    constexpr uint32_t out_row_lo = 128;
+    constexpr uint32_t out_row_hi = 256;
+    constexpr uint32_t out_offset_tiles = out_row_lo / 32;
+
+    ttml::metal::variable_matmul(
+        input,
+        weight,
+        kConfig,
+        std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/parent_out,
+        /*out_row_offset_tiles=*/out_offset_tiles);
+
+    // Reference: matmul into a fresh tensor, then verify parent's row-range matches it.
+    auto ref_chunk = ttnn::matmul(input, weight, false, false);
+    auto ref_chunk_vec = ttml::core::to_vector<float>(ref_chunk);
+
+    auto written_vec = ttml::core::to_vector<float>(parent_out);
+    // Verify written range
+    float written_err = 0.0F;
+    for (uint32_t m = out_row_lo; m < out_row_hi; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            uint32_t idx_parent = m * N + n;
+            uint32_t idx_chunk = (m - out_row_lo) * N + n;
+            written_err = std::max(written_err, std::abs(written_vec[idx_parent] - ref_chunk_vec[idx_chunk]));
+        }
+    }
+    EXPECT_LT(written_err, 2.0F) << "write-at-offset written-range err: " << written_err;
+
+    // Verify non-written ranges preserved
+    float untouched_err = 0.0F;
+    for (uint32_t m = 0; m < M_parent; ++m) {
+        if (m >= out_row_lo && m < out_row_hi)
+            continue;
+        for (uint32_t n = 0; n < N; ++n) {
+            uint32_t idx = m * N + n;
+            untouched_err = std::max(untouched_err, std::abs(written_vec[idx] - parent_orig_vec[idx]));
+        }
+    }
+    EXPECT_LT(untouched_err, 1e-3F) << "write-at-offset non-written rows changed: " << untouched_err;
+}
+
+// Multiple writes into same parent (moe-ffn fwd/bw concat pattern).
+TEST_F(VariableMatmulTest, WriteAtOffset_MultipleRangesIntoSameParent) {
+    const uint32_t K = 128, N = 256, M_parent = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto weight = create_random_device_tensor(K, N, device);
+    auto parent_out = create_random_device_tensor(M_parent, N, device);
+
+    struct Range {
+        uint32_t lo, hi;
+    };
+    // Cover entire parent — full concat replacement.
+    const std::vector<Range> ranges = {{0, 128}, {128, 256}, {256, 384}, {384, 512}};
+    std::vector<ttnn::Tensor> chunks;
+    chunks.reserve(ranges.size());
+    for (const auto& r : ranges) {
+        auto chunk_in = create_random_device_tensor(r.hi - r.lo, K, device);
+        ttml::metal::variable_matmul(chunk_in, weight, kConfig, std::nullopt, 0, 0, 0, 0, parent_out, r.lo / 32);
+        chunks.push_back(ttnn::matmul(chunk_in, weight, false, false));
+    }
+
+    // Reference: concat all chunks; compare with parent_out.
+    auto ref = ttnn::concat(chunks, /*dim=*/2);
+    float err = max_abs_error(parent_out, ref);
+    EXPECT_LT(err, 2.0F) << "write-at-offset multi-range err: " << err;
 }
 
 // Both transposes simultaneously.
