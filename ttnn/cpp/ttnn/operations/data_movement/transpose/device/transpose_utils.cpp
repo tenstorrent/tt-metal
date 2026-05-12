@@ -171,11 +171,15 @@ ShardSpec generate_transpose_shard_spec(
     return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
 }
 
-// Refresh runtime-tensor-shape common args on cache hits. Strict size equality detects any drift
-// in the TensorAccessorArgs footprint between program creation and reuse.
+// Skip refresh when the buffer carries no common runtime args (interleaved case).
+// Only sharded buffers populate RuntimeTensorShape; the strict size check below
+// applies to them.
 void copy_transpose_common_runtime_args(const Buffer& buffer, std::span<std::uint32_t> dst) {
     const auto src =
         TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape).get_common_runtime_args();
+    if (src.empty()) {
+        return;
+    }
     TT_FATAL(
         dst.size() == src.size(),
         "copy_transpose_common_runtime_args: destination span ({} elems) must match common args ({} elems).",

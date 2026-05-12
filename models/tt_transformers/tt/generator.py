@@ -18,6 +18,7 @@ from models.common.llama_models import (
     extract_images_from_messages,
     sample_top_p,
 )
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling import (
     SamplingParams,
     broadcast_sampling_params,
@@ -51,12 +52,12 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
-def _get_max_blocks_prefill(kv_cache) -> int:
+def _get_max_blocks_prefill(kv_cache):
     first_cache_tensor = kv_cache[0][0]
     return int(first_cache_tensor.shape[0])
 
 
-def _pad_or_create_page_table(table, target_blocks: int):
+def _pad_or_create_page_table(table, target_blocks):
     aligned_blocks = ((target_blocks + 7) // 8) * 8
     if table is not None:
         num_pad = aligned_blocks - table.shape[1]
@@ -67,7 +68,7 @@ def _pad_or_create_page_table(table, target_blocks: int):
     return torch.ones(1, aligned_blocks, dtype=torch.int32) * -1
 
 
-class Generator(WarmupForwardMixin):
+class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.

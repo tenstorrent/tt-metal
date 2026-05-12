@@ -43,6 +43,7 @@
 #include <tracy/TracyTTDevice.hpp>
 
 #include "context/metal_context.hpp"
+#include "device/device_manager.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
@@ -97,19 +98,27 @@ struct RealtimeProfilerEligibility {
 
 // Consolidated eligibility check; logs the reason for disabling and returns
 // {enabled=false} on failure. Checks (in order):
-//   1. Device is MMIO-capable (D2H sockets need a PCIe-connected sender core).
-//   2. D2H socket memory-allocation path is supported (64-bit PCIe addressing requires IOMMU).
-//   3. Fabric tensix datamover (MUX / UDM) is disabled (it competes for the same dispatch pool).
-//   4. A tensix core was reserved for the RT profiler at dispatch_core_manager construction.
-//   5. Reserved coordinate lives inside the logical TENSIX grid.
-//   6. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
-//   7. Reserved profiler core's L1 bank fits the ring + socket-config layout.
+//   1. Device is not a mock.
+//   2. Device is MMIO-capable (D2H sockets need a PCIe-connected sender core).
+//   3. D2H socket memory-allocation path is supported (64-bit PCIe addressing requires IOMMU).
+//   4. Fabric tensix datamover (MUX / UDM) is disabled (it competes for the same dispatch pool).
+//   5. A tensix core was reserved for the RT profiler at dispatch_core_manager construction.
+//   6. Reserved coordinate lives inside the logical TENSIX grid.
+//   7. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
+//   8. Reserved profiler core's L1 bank fits the ring + socket-config layout.
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device) {
     auto device_id = device->id();
     auto& metal = MetalContext::instance();
     const auto& hal = metal.hal();
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
+
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+        log_debug(tt::LogMetal,
+                  "Real-time profiler disabled on device {}: target is mock.",
+                  device_id);
+        return {};
+    }
 
     if (!device->is_mmio_capable()) {
         log_debug(
@@ -336,6 +345,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 
         auto eligibility = evaluate_realtime_profiler_eligibility(device);
         if (!eligibility.enabled) {
+            MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
             continue;
         }
         CoreCoord realtime_profiler_core = eligibility.core;
@@ -387,6 +397,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 "profiler on this device.",
                 device_id,
                 e.what());
+            MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
             continue;
         }
 
@@ -564,6 +575,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 config_buffer_addr);
         }
 
+        MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
     }
 

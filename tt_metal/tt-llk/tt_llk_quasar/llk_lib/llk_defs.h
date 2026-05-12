@@ -10,7 +10,7 @@ namespace ckernel
 {
 
 // Currently unused but kept for backwards compatibility
-enum class VectorMode
+enum VectorMode
 {
     None      = 0,
     R         = 1,
