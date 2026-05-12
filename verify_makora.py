@@ -104,6 +104,7 @@ README_SHAPES: dict[str, list[tuple]] = {
     "glu": [(32, 32, 32, 64), (3, 2, 32, 4096)],
     "reglu": [(1, 1, 32, 64), (1, 1, 128, 512), (3, 2, 1024, 4096)],
     "swiglu": [(1, 1, 32, 64), (1, 1, 128, 512), (1, 1, 1024, 4096)],
+    "multigammaln_lanczos": [(1, 1, 32, 32), (1, 1, 32, 128), (1, 5, 2240, 32)],
 }
 
 
@@ -156,7 +157,14 @@ def _ttnn_swiglu(a):
     return ttnn.swiglu(a, -1)
 
 
-# The Makora kernels also take an optional second arg for binary ops.
+def _ttnn_multigammaln_lanczos(a):
+    from ttnn.operations.multigammaln_lanczos import multigammaln_lanczos
+
+    return multigammaln_lanczos(a)
+
+
+# Per-op extras: `makora_op` overrides the Makora kernel folder (default = key);
+# `dtype` overrides ttnn.bfloat16 default; `safe_domain` shifts random inputs.
 OP_REGISTRY: dict[str, dict] = {
     "atan2": {"category": "binary", "binary": True, "ttnn": _ttnn_atan2, "makora_kwargs": {}},
     "isclose": {"category": "binary", "binary": True, "ttnn": _ttnn_isclose, "makora_kwargs": {}},
@@ -170,6 +178,15 @@ OP_REGISTRY: dict[str, dict] = {
     "glu": {"category": "unary", "binary": False, "ttnn": _ttnn_glu, "makora_kwargs": {}},
     "reglu": {"category": "unary", "binary": False, "ttnn": _ttnn_reglu, "makora_kwargs": {}},
     "swiglu": {"category": "unary", "binary": False, "ttnn": _ttnn_swiglu, "makora_kwargs": {}},
+    "multigammaln_lanczos": {
+        "category": "unary",
+        "binary": False,
+        "ttnn": _ttnn_multigammaln_lanczos,
+        "makora_kwargs": {},
+        "makora_op": "multigammaln",
+        "dtype": "float32",
+        "safe_domain": (2.0, 10.0),
+    },
 }
 
 
@@ -184,25 +201,43 @@ def _check_env() -> None:
         sys.exit(2)
 
 
-def _to_device(t: torch.Tensor, device) -> ttnn.Tensor:
-    return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+def _to_device(t: torch.Tensor, device, ttnn_dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    return ttnn.from_torch(t, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def _make_inputs(shape: tuple, binary: bool, op_name: str, device, seed: int = 0):
+def _resolve_dtype(spec: dict):
+    name = spec.get("dtype", "bfloat16")
+    if name == "float32":
+        return ttnn.float32, torch.float32
+    return ttnn.bfloat16, torch.bfloat16
+
+
+def _gen_input(shape, generator, torch_dtype, safe_domain=None):
+    if safe_domain is not None:
+        lo, hi = safe_domain
+        a_f32 = torch.rand(*shape, generator=generator, dtype=torch.float32) * (hi - lo) + lo
+    else:
+        a_f32 = torch.randn(*shape, generator=generator, dtype=torch.float32)
+    return a_f32 if torch_dtype == torch.float32 else a_f32.to(torch_dtype)
+
+
+def _make_inputs(shape: tuple, binary: bool, op_name: str, device, spec: dict, seed: int = 0):
     g = torch.Generator().manual_seed(seed)
-    a = torch.randn(*shape, generator=g, dtype=torch.float32).to(torch.bfloat16)
-    a_dev = _to_device(a, device)
+    ttnn_dtype, torch_dtype = _resolve_dtype(spec)
+    safe_domain = spec.get("safe_domain")
+
+    a = _gen_input(shape, g, torch_dtype, safe_domain)
+    a_dev = _to_device(a, device, ttnn_dtype)
     if not binary:
         return (a_dev,), a
-    # Pick a sensible second input per op.
     if op_name in ("atan2", "isclose", "nextafter"):
-        b = torch.randn(*shape, generator=g, dtype=torch.float32).to(torch.bfloat16)
+        b = _gen_input(shape, g, torch_dtype, safe_domain)
     elif op_name == "remainder":
-        # Avoid divisor close to zero.
-        b = (torch.rand(*shape, generator=g, dtype=torch.float32) + 0.5).to(torch.bfloat16)
+        b_f32 = torch.rand(*shape, generator=g, dtype=torch.float32) + 0.5
+        b = b_f32 if torch_dtype == torch.float32 else b_f32.to(torch_dtype)
     else:
-        b = torch.randn(*shape, generator=g, dtype=torch.float32).to(torch.bfloat16)
-    return (a_dev, _to_device(b, device)), (a, b)
+        b = _gen_input(shape, g, torch_dtype, safe_domain)
+    return (a_dev, _to_device(b, device, ttnn_dtype)), (a, b)
 
 
 def _measure_one_kernel_duration_ns(device) -> int | None:
@@ -265,8 +300,9 @@ def _check_numerics(makora_t: ttnn.Tensor, ttnn_t: ttnn.Tensor) -> tuple[float, 
 
 def _run_one_shape(op: str, shape: tuple, iters: int, warmup: int, device) -> dict:
     spec = OP_REGISTRY[op]
-    makora = _load_makora_module(spec["category"], op)
-    inputs, _torch_inputs = _make_inputs(shape, spec["binary"], op, device)
+    makora_op_name = spec.get("makora_op", op)
+    makora = _load_makora_module(spec["category"], makora_op_name)
+    inputs, _torch_inputs = _make_inputs(shape, spec["binary"], op, device, spec)
 
     def call_ttnn():
         return spec["ttnn"](*inputs)
