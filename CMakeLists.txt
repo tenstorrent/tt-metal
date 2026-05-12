@@ -249,10 +249,12 @@ include(tracy)
 
 if(ENABLE_TRACY AND TARGET TracyClient)
     message(STATUS "Adding -Wno-unused-variable to TracyClient")
-    target_compile_options(TracyClient PRIVATE
-        -Wno-unused-variable
-        -Wno-unused-parameter
-        -Wno-missing-field-initializers
+    target_compile_options(
+        TracyClient
+        PRIVATE
+            -Wno-unused-variable
+            -Wno-unused-parameter
+            -Wno-missing-field-initializers
     )
 endif()
 
