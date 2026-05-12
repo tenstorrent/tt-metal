@@ -6,6 +6,16 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
+// Fallback no-op stubs so this file compiles standalone (e.g. the cross-op
+// fusion compilation test). Production builds receive the real `TYPECAST_LLK` /
+// `TYPECAST_LLK_INIT` macros via the program factory's `unary_defines`.
+#ifndef TYPECAST_LLK_INIT
+#define TYPECAST_LLK_INIT()
+#endif
+#ifndef TYPECAST_LLK
+#define TYPECAST_LLK(idx)
+#endif
+
 namespace {
 
 // Wrap host-defined TYPECAST_LLK / TYPECAST_LLK_INIT macros in a chain element.

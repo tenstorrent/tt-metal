@@ -1099,14 +1099,21 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     // ---- Detect upfront-block path (auto-detected via per-element `is_upfront`) ----
     constexpr bool block_path = ((Es::is_upfront) || ...);
 
-    // ---- F-PERF-1: per-tile init gate on FPU clash ----
+    // ---- F-PERF-1: per-tile init gate ----
     //
-    // Chains without FPU clash (pure CopyTile + SFPU + PackTile) only need init()
-    // emitted once at boot — subsequent tiles re-use the programmed state. Chains
-    // with FPU clash (BinaryFpu, DestReuseBinary, UnaryBcast) need per-tile re-init
-    // because the FPU op overwrites unpacker state that copy_tile / SFPU programs.
-    constexpr bool has_clash = chain_has_non_copy_tile_fpu_clash_v<Chain>;
-    constexpr bool emit_init_per_tile = has_clash;
+    // Init hoisting is correct only for the narrow hoist-safe shapes captured by
+    // `chain_is_hoist_safe_v` (currently size-2 `CopyTile + DestOnly` and size-3
+    // `CopyTile + DestOnly + PackTile`). Wider chains — multiple CopyTile loads
+    // reading different CBs, FPU-clash op classes (BinaryFpu, DestReuseBinary,
+    // UnaryBcast), or pack reconfig that needs to fire per tile — require per-tile
+    // init or the wrong srca/srcb/MOP state persists across the loop.
+    //
+    // Example regression: binary_ng's `eltwise_binary_sfpu_scalar.cpp` chains
+    // [LhsLoad(cb_lhs) + RhsLoad(cb_rhs scalar) + SfpuBinary + Pack]. Both loads
+    // call `copy_tile_to_dst_init_short_with_dt(OldCb, Cb)` per init, but with
+    // boot-time hoisting only the LAST reconfig survives — LhsLoad then reads
+    // cb_lhs with srca configured for cb_rhs, producing garbage (PCC ~0).
+    constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
