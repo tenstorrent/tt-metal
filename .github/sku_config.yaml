@@ -51,6 +51,30 @@ skus:
       - topology-6u
       - in-service
 
+  wh_galaxy_perf_g05glx04:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g05glx04
+
+  wh_galaxy_perf_g14glx04:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g14glx04
+
+  wh_galaxy_perf_g04glx01:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g04glx01
+
   # Temporary SKU separating UF machines
   wh_galaxy_perf_uf:
     runs_on:
