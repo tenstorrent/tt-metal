@@ -29,7 +29,7 @@ bool is_input_batched(const ttnn::Shape& shape) {
     }
 
     auto is_batched = false;
-    for (auto i = 0; i < shape.rank() - 2; ++i) {
+    for (size_t i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {
             is_batched = true;
             break;
