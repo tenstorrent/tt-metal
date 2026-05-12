@@ -18,10 +18,21 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 
 // Variable-M matmul: compiles at most 2 programs (one per transpose variant),
 // then dispatches any M shape without recompilation.
+//
+// Optional read-at-offset support: `in0_row_offset_tiles` is added to in0 tile addresses
+// (treats input_tensor as a parent buffer), and `effective_M_tiles` overrides the M tile
+// count that's actually processed (0 = use input's full M). Together they let the caller
+// process a sub-range of the parent tensor without materializing a slice. These are
+// runtime args — different (offset, length) values reuse the same cached program.
+//
+// Tile alignment: both must be in TILE_HEIGHT (32) units. With transpose_a, "row" still
+// means the matmul-M axis (which maps to the input's stored *col* axis).
 ttnn::Tensor variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const VariableMatmulConfig& config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    uint32_t in0_row_offset_tiles = 0,
+    uint32_t effective_M_tiles = 0);
 
 }  // namespace ttml::metal
