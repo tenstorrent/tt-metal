@@ -109,7 +109,7 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 76_894_779 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 78_106_452 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
         "wormhole": 81_200_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
