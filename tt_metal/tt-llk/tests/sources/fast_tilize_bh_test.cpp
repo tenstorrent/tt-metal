@@ -66,6 +66,32 @@ inline std::uint32_t decompose_row(const std::uint32_t ct_dim, std::uint32_t uni
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
+inline void _llk_unpack_tilize_dispatch_(
+    void (*unpack_tilize)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, bool),
+    const std::uint32_t base_address,
+    const std::uint32_t tile_index,
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces,
+    const bool narrow_tile)
+{
+    unpack_tilize(base_address, tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+}
+
+inline void _llk_unpack_tilize_dispatch_(
+    void (*unpack_tilize)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, bool),
+    const std::uint32_t base_address,
+    const std::uint32_t tile_index,
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces,
+    const bool narrow_tile)
+{
+    unpack_tilize(base_address, tile_index, unpack_src_format, unpack_dst_format, 0, face_r_dim, num_faces, narrow_tile);
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifndef SPEED_OF_LIGHT
@@ -97,7 +123,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    _llk_unpack_tilize_(L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, 0, FACE_R_DIM, 4, false);
+                    _llk_unpack_tilize_dispatch_(
+                        _llk_unpack_tilize_, L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, FACE_R_DIM, 4, false);
                 }
             }
         }

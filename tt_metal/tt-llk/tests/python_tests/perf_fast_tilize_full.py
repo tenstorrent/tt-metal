@@ -9,7 +9,6 @@ fast-tilize numbers are directly comparable in the nightly perf dashboard.
 """
 
 import pytest
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
@@ -22,24 +21,21 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-
-def _skip_non_bh():
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
+from conftest import skip_for_quasar, skip_for_wormhole
 
 
 # ---------------------------------------------------------------------------
 # Same-format: mirrors perf_unpack_tilize.py float matrix (1×1 … 8×8)
 # ---------------------------------------------------------------------------
 @pytest.mark.perf
+@skip_for_wormhole
+@skip_for_quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     rt_dim=[1],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
-    _skip_non_bh()
-
     # Width 1 uses standard tilize fallback — not representative of fast path
     if ct_dim < 2:
         pytest.skip("ct_dim < 2 uses standard tilize fallback")
@@ -51,6 +47,8 @@ def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
 # Cross-format output: mirrors test_fast_tilize_full.py format matrix
 # ---------------------------------------------------------------------------
 @pytest.mark.perf
+@skip_for_wormhole
+@skip_for_quasar
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
@@ -63,7 +61,6 @@ def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
     ct_dim=[2, 4, 8],
 )
 def test_perf_fast_tilize_bfp(perf_report, formats, rt_dim, ct_dim):
-    _skip_non_bh()
     _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
 
 
