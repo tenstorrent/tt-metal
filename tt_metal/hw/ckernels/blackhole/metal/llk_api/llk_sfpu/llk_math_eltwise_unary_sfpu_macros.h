@@ -14,11 +14,8 @@
 /*
  * SFPU invocation helper
  *
- * Validates the destination tile index and then dispatches to the LLK SFPU
- * params function. The dst-bound check used to live inside
- * _llk_math_eltwise_unary_sfpu_params_ itself; placing it here keeps the LLK
- * kernel free of host/firmware-side preconditions and ensures the assertion
- * is defined exactly once instead of being duplicated in every macro.
+ * Validates the destination tile index and dispatches to the LLK unary-SFPU
+ * params function.
  *
  * DST_SYNC_MODE and DST_ACCUM_MODE are propagated as template parameters so
  * the bound is computed for the kernel's actual sync/accumulation mode.

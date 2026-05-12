@@ -15,11 +15,7 @@
 // Ternary SFPU invocation helper
 //
 // Validates the four destination tile indices (three inputs, one output) and
-// then dispatches to the LLK ternary-SFPU params function. The dst-bound
-// checks used to live inside _llk_math_eltwise_ternary_sfpu_params_ itself;
-// placing them here keeps the LLK kernel free of host/firmware-side
-// preconditions and ensures the assertions are defined exactly once instead
-// of being duplicated in every macro.
+// dispatches to the LLK ternary-SFPU params function.
 //
 // DST_SYNC_MODE and DST_ACCUM_MODE are propagated as template parameters so
 // the bound is computed for the kernel's actual sync/accumulation mode.
@@ -63,11 +59,8 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 // =============================================================================
 // Helper for variadic-template macros
 //
-// Wrap a comma-separated template-argument list in `(...)` at the call site
-// and strip the outer parens with _SFPU_TER_EXPAND inside the macro body.
-// The macro is namespaced with the `_TER_` infix so it cannot collide with
-// the unary/binary macros headers if multiple are included in the same
-// translation unit.
+// Expands a parenthesized, comma-separated template-argument list after the
+// preprocessor has parsed it as a single macro argument.
 // =============================================================================
 
 #define _SFPU_TER_EXPAND(...) __VA_ARGS__

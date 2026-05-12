@@ -15,11 +15,7 @@
  * Binary SFPU invocation helper
  *
  * Validates the three destination tile indices (two inputs, one output) and
- * then dispatches to the LLK binary-SFPU params function. The dst-bound check
- * used to live inside _llk_math_eltwise_binary_sfpu_params_ itself; placing
- * it here keeps the LLK kernel free of host/firmware-side preconditions and
- * ensures the assertions are defined exactly once instead of being duplicated
- * in every macro.
+ * dispatches to the LLK binary-SFPU params function.
  *
  * DST_SYNC_MODE and DST_ACCUM_MODE are propagated as template parameters so
  * the bound is computed for the kernel's actual sync/accumulation mode.
@@ -58,10 +54,8 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
 /*
  * Helper for variadic-template macros
  *
- * Wrap a comma-separated template-argument list in `(...)` at the call site
- * and strip the outer parens with _SFPU_BIN_EXPAND inside the macro body.
- * The macro is namespaced with the `_BIN_` infix so it cannot collide with
- * the unary-macros header if both are included in the same translation unit.
+ * Expands a parenthesized, comma-separated template-argument list after the
+ * preprocessor has parsed it as a single macro argument.
  */
 
 #define _SFPU_BIN_EXPAND(...) __VA_ARGS__
