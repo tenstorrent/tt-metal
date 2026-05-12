@@ -32,6 +32,7 @@ void kernel_main() {
     constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(22));
     constexpr bool use_offset = static_cast<bool>(get_compile_time_arg_val(23));
+    constexpr bool use_out_offset = static_cast<bool>(get_compile_time_arg_val(24));
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -58,7 +59,7 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<24>();
+    constexpr auto in0_args = TensorAccessorArgs<25>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -128,6 +129,10 @@ void kernel_main() {
         parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 4);
         in0_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 5);
         parent_K_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
+    }
+    uint32_t out_row_offset_tiles = 0U;
+    if constexpr (use_out_offset) {
+        out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
     }
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
@@ -237,7 +242,7 @@ void kernel_main() {
                         // write_block_sync_split is more generic (support multiple output tensors)
                         // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
                         if constexpr (N_chunks == 1) {
-                            write_block_sync<M_block_tiles, N_block_tiles>(
+                            write_block_sync<M_block_tiles, N_block_tiles, use_out_offset>(
                                 std::get<0>(outputs_tuple),
                                 out_shape,
                                 out_read_ptr,
@@ -245,7 +250,8 @@ void kernel_main() {
                                 defer_write_m_tile,
                                 defer_write_m_tile_end,
                                 defer_write_n_tile,
-                                defer_write_n_tile_end);
+                                defer_write_n_tile_end,
+                                out_row_offset_tiles);
                         } else {
                             write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                                 outputs_tuple,
@@ -378,7 +384,7 @@ void kernel_main() {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                        write_block_sync_granular<M_block_tiles, N_block_tiles, use_out_offset>(
                             std::get<0>(outputs_tuple),
                             out_shape,
                             cb_id_out,
@@ -386,7 +392,8 @@ void kernel_main() {
                             m_tile,
                             m_tile_end,
                             n_tile,
-                            n_tile_end);
+                            n_tile_end,
+                            out_row_offset_tiles);
                     } else {
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                             outputs_tuple,

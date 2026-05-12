@@ -60,17 +60,26 @@ struct VariableMatmulParams {
     //   parent slice). When in1_k_offset > 0, the weight's K_in extent dictates the
     //   matmul-K count (the caller must size things so the in0 K matches the slice).
     //
+    // out_row_offset_tiles:
+    //   When an output tensor is provided in tensor_args_t, the matmul writes its
+    //   actual_M-row output into rows [out_offset, out_offset + actual_M) of the parent
+    //   output tensor. matmul-N must match the parent's N (no N-axis slicing).
+    //
     // Defaults preserve "use the whole input" behavior. All offsets are RUNTIME args
     // (excluded from program hash) so different offset values hit the same cached program.
     uint32_t in0_row_offset_tiles = 0;
     uint32_t effective_M_tiles = 0;
     uint32_t in0_k_offset_tiles = 0;
     uint32_t in1_k_offset_tiles = 0;
+    uint32_t out_row_offset_tiles = 0;
 };
 
 struct VariableMatmulInputs {
     ttnn::Tensor input_tensor;   // [actual_M, K]
     ttnn::Tensor weight_tensor;  // [K, N]
+    // Optional caller-provided output tensor (write-at-offset mode). When set,
+    // out_row_offset_tiles must be a valid sub-range and N must match.
+    std::optional<ttnn::Tensor> output_tensor;
 };
 
 }  // namespace ttml::metal::ops::variable_matmul::device

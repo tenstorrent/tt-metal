@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -92,13 +93,21 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     const ttsl::Span<const EltwiseUnary> no_acts;
     const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
 
-    std::vector<ttnn::Tensor> down_proj_parts;
     std::vector<ttnn::Tensor> gate_proj_parts;
     std::vector<ttnn::Tensor> up_proj_parts;
-    down_proj_parts.reserve(num_experts);
     gate_proj_parts.reserve(num_experts);
     up_proj_parts.reserve(num_experts);
 
+    // Pre-allocate the full output tensor [T_cap, H_down_out]. Each expert's
+    // down_proj writes directly into rows [row_lo, row_hi) of it — no concat.
+    const auto& w_down0_shape = w_down[0]->get_value().logical_shape();
+    const uint32_t down_out_dim = w_down0_shape[-1];
+    auto y = ttml::core::empty(
+        ttnn::Shape({1U, 1U, token_capacity, down_out_dim}),
+        &ttml::autograd::ctx().get_device(),
+        grouped_value.memory_config());
+
+    bool any_nonempty = false;
     for (uint32_t e = 0; e < num_experts; ++e) {
         const uint32_t row_lo = offsets_host[e];
         const uint32_t row_hi = offsets_host[e + 1U];
@@ -109,6 +118,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             // empty expert
             continue;
         }
+        any_nonempty = true;
 
         const auto& w_gate_e = w_gate[e]->get_value();
         const auto& w_up_e = w_up[e]->get_value();
@@ -131,19 +141,27 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*output_tensor=*/std::nullopt,
             /*post_op_activations=*/no_acts,
             /*input_a_activations=*/silu_lhs);  // silu(gate_proj_e) * up_proj_e in one op
-        auto down_proj_e = ttml::metal::variable_matmul(activated_e, w_down_e, kVarMmConfig);
+        // Write down_proj directly into y[row_lo:row_hi] — no per-expert allocation, no concat.
+        ttml::metal::variable_matmul(
+            activated_e,
+            w_down_e,
+            kVarMmConfig,
+            std::nullopt,
+            /*in0_row_offset_tiles=*/0U,
+            /*effective_M_tiles=*/0U,
+            /*in0_k_offset_tiles=*/0U,
+            /*in1_k_offset_tiles=*/0U,
+            /*output_tensor=*/y,
+            /*out_row_offset_tiles=*/offset_tiles);
         activated_e.deallocate();
 
         gate_proj_parts.push_back(std::move(gate_proj_e));
         up_proj_parts.push_back(std::move(up_proj_e));
-        down_proj_parts.push_back(std::move(down_proj_e));
     }
 
-    if (down_proj_parts.empty()) {
+    if (!any_nonempty) {
         throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
     }
-    auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
-    down_proj_parts.clear();
 
     auto out = autograd::create_tensor(y);
 
@@ -158,9 +176,15 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    num_experts]() mutable {
         auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
+        const auto& grouped_shape = grouped_value.logical_shape();
 
-        std::vector<ttnn::Tensor> dX_parts;
-        dX_parts.reserve(num_experts);
+        // Pre-allocate full dX_via_gate and dX_via_up tensors [T_cap, H]; per-expert matmuls
+        // write directly into row ranges. After the loop, one ttnn::add yields dX (single
+        // pass over the full tensor instead of E small adds + concat).
+        auto dX_via_gate =
+            ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
+        auto dX_via_up =
+            ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
 
         std::size_t nonempty_idx = 0U;
         for (uint32_t e = 0; e < num_experts; ++e) {
@@ -246,22 +270,40 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*in0_k_offset_tiles=*/row_lo_tiles);
             w_up[e]->add_grad(dW_up_e);
 
-            // dX_e = d_gate_proj_e @ w_gate_e^T  +  d_up_proj_e @ w_up_e^T
-            auto dX_via_gate_e = ttml::metal::variable_matmul(d_gate_proj_e, w_gate_e, kVarMmConfigTransposeB);
-            auto dX_via_up_e = ttml::metal::variable_matmul(d_up_proj_e, w_up_e, kVarMmConfigTransposeB);
+            // dX = d_gate_proj_e @ w_gate_e^T  +  d_up_proj_e @ w_up_e^T
+            // Write each per-expert matmul into row range of the full-shape dX_via_* tensors.
+            ttml::metal::variable_matmul(
+                d_gate_proj_e,
+                w_gate_e,
+                kVarMmConfigTransposeB,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/0U,
+                /*in1_k_offset_tiles=*/0U,
+                /*output_tensor=*/dX_via_gate,
+                /*out_row_offset_tiles=*/row_lo_tiles);
+            ttml::metal::variable_matmul(
+                d_up_proj_e,
+                w_up_e,
+                kVarMmConfigTransposeB,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/0U,
+                /*in1_k_offset_tiles=*/0U,
+                /*output_tensor=*/dX_via_up,
+                /*out_row_offset_tiles=*/row_lo_tiles);
             d_gate_proj_e.deallocate();
             d_up_proj_e.deallocate();
-
-            auto dX_e = ttnn::add(dX_via_gate_e, dX_via_up_e);
-            dX_via_gate_e.deallocate();
-            dX_via_up_e.deallocate();
-            dX_parts.push_back(std::move(dX_e));
         }
 
         gate_proj_parts.clear();
         up_proj_parts.clear();
 
-        auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
+        auto dX = ttnn::add(dX_via_gate, dX_via_up);
+        dX_via_gate.deallocate();
+        dX_via_up.deallocate();
         grouped->add_grad(dX);
     };
 
