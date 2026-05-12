@@ -65,7 +65,64 @@ def load_fused_qkv(state_dict, device, dtype=ttnn.bfloat16):
     return ttnn.from_torch(qkv, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 ```
 
-### 3. Memory Configuration
+### 3. Mesh Mapper for Weights (MULTI-CHIP)
+
+**CRITICAL — DO NOT default to `ReplicateTensorToMesh` for big weights.** Replicating
+a matmul weight on every chip wastes (n_dev − 1)/n_dev of DRAM and silently OOMs at
+full layer count. The 4-layer test passes, the 64-layer model fails — discovered too
+late. Decide the mesh_mapper at block-design time, not bring-up time.
+
+| Tensor | mesh_mapper | Why |
+|--------|-------------|-----|
+| **MLP gate/up/down** | `ShardTensor2dMesh(dims=(None,-1) or (0,None))` | 70-90% of model DRAM. MUST be sharded — usually column-parallel gate/up + row-parallel down with `reduce_scatter`+`all_gather`. |
+| **Attention QKV (fused)** | `ShardTensor2dMesh(dims=(None,-1))` | Column-parallel on heads → each chip owns `n_heads/n_dev` heads. |
+| **Attention output (Wo)** | `ShardTensor2dMesh(dims=(None,-1))` | Row-parallel — followed by `reduce_scatter` on cluster_axis=1. |
+| **LM head** | `ShardTensor2dMesh(dims=(None,-1))` | Vocab-parallel — replicated for 32K vocab OK, **MUST shard for >128K vocab** (Qwen3 248K replicated = 2.4 GB/chip just for the head). |
+| **Norm weights, QK-norm** | `ReplicateTensorToMesh` | Small 1-D tensors (`[dim]`). |
+| **Embedding table** | `ReplicateTensorToMesh` | Sparse lookup, OK to replicate if vocab small. |
+| **RoPE cos/sin tables** | `ReplicateTensorToMesh` | Small, read by every chip. |
+| **KV cache** | Sharded per `n_kv_heads/n_dev` | Grows with sequence — never replicate. |
+
+**Precedent to copy (Galaxy):** `models/demos/llama3_70b_galaxy/tt/llama_mlp.py` uses
+`ShardTensor2dMesh` + `bfloat8_b`/`bfloat4_b` quantization + `reduce_scatter`/`all_gather`.
+The DeltaNet block in `models/demos/qwen3_6_galaxy/tt/qwen36_deltanet.py` uses
+`ShardTensor2dMesh(dims=(0,None))` for the row-parallel split — also follow this.
+
+**Anti-pattern (caused 64-layer OOM):** `models/demos/qwen3_6_galaxy/tt/llama_mlp.py`
+and `llama_attention.py` (pre-fix) used `ReplicateTensorToMesh` for every linear.
+534 MB/layer/chip × 64 layers = 34 GB/chip > 30 GB budget → DRAM exhaustion at
+layer 52 of model loading. Passing PCC at 1-4 layers hid the real defect.
+
+### 3a. Per-Block Memory Budget Check (RUN AT BLOCK-WRITE TIME)
+
+After writing a block's `__init__` and before running its PCC test, print the
+weight footprint as a self-check:
+
+```python
+def _print_footprint(self, name: str):
+    """Sum bytes uploaded by this block per device."""
+    import sys
+    total = 0
+    for attr in dir(self):
+        t = getattr(self, attr, None)
+        if hasattr(t, "shape") and hasattr(t, "dtype") and hasattr(t, "memory_config"):
+            # ttnn Tensor — bytes per device
+            n = 1
+            for d in t.shape: n *= d
+            bpe = {ttnn.bfloat16: 2, ttnn.bfloat8_b: 1.06, ttnn.bfloat4_b: 0.56,
+                   ttnn.float32: 4, ttnn.uint32: 4}.get(t.dtype, 2)
+            # If replicated: full size. If sharded across N chips: /N.
+            replicated = ... # inspect mesh_mapper or set explicitly
+            per_dev = n * bpe / (1 if replicated else self.args.num_devices)
+            total += per_dev
+    print(f"[{name}] per-device weight DRAM: {total/1e6:.0f} MB")
+```
+
+**Acceptance rule:** `(per_block_MB × n_layers) < 0.6 × dram_per_chip_MB`. If not,
+the block is replicating something it shouldn't. Stop and re-plan before writing
+the next block.
+
+### 4. Memory Configuration (Activations)
 
 | Config | Use Case | When to Use |
 |--------|----------|-------------|

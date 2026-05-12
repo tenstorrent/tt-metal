@@ -242,6 +242,16 @@ Hint (free text or reference to working impl) resets counter to 0.
 #### 3e. Per-block gate
 - [ ] PCC > 0.99 AND p99_diff < 0.02 (isolated, golden input)
 - [ ] Integration test passes (real sequential data, all layers together)
+- [ ] **Per-device weight footprint matches the parallelization plan from ARCHITECTURE.md.**
+      Run block `__init__`, sum `ttnn.Tensor` bytes per device. If a matmul weight
+      uses `ReplicateTensorToMesh` when the plan said sharded → reject; rewrite
+      with `ShardTensor2dMesh` + the necessary CCL ops in forward. Compare against
+      the per-block budget in 7c. **This check must run before scaling layer count**
+      — single-block tests cannot expose replicated-weight OOMs.
+- [ ] **Full-layer-count smoke load.** After 1-layer PCC passes, instantiate the model
+      with all `n_layers` decoder layers (DRAM only, no forward) on real target hardware.
+      If model construction OOMs, the per-block budget is wrong — fix sharding now,
+      not after the demo test fails.
 
 ### Integration Test (mandatory, runs after all blocks pass per-block)
 

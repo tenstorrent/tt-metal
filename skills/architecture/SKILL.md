@@ -260,20 +260,37 @@ CCL operations (reference `tt_transformers/tt/ccl.py`):
 
 #### 7c. Memory Budget
 
+**The formula below assumes the parallelization plan from 7b is actually implemented.**
+If any linear in TTNN code uses `ReplicateTensorToMesh` instead of `ShardTensor2dMesh`,
+its weight bytes do NOT divide by `n_dev` and the budget is wrong. The fact that
+4-layer PCC tests pass does not prove the budget — always recompute per actually-shipped
+mesh_mapper choice before scaling layer count. (Qwen3.6-galaxy shipped MLP/attention
+replicated and OOMed at layer 52/64 on Blackhole Galaxy.)
+
 ```python
 n_dev = n_devices
 fp16 = 2  # bytes
 
-# Approximate per-device weight memory
+# Per-device weight memory — ASSUMES MLP+attention are TP-sharded over n_dev.
+# If you plan to replicate, drop the /n_dev from that line and re-check budget.
 text_mb  = n_layers * (n_q*hd*H + n_kv*hd*H + H*H + 2*I*H + I*H) * fp16 / 1e6 / n_dev
-vit_mb   = vit_params * fp16 / 1e6                  # replicated
-emb_mb   = vocab_size * H * 2 * fp16 / 1e6           # embedding + lm_head, replicated
+vit_mb   = vit_params * fp16 / 1e6                   # replicated (typically small)
+emb_mb   = vocab_size * H * fp16 / 1e6               # embedding replicated
+lm_head_mb = vocab_size * H * fp16 / 1e6 / n_dev     # LM head MUST shard if vocab > 128K
 kv_mb    = (n_kv//n_dev) * max_seq * hd * fp16 * n_layers / 1e6
 
-total_mb = text_mb + vit_mb + emb_mb + kv_mb
+total_mb = text_mb + vit_mb + emb_mb + lm_head_mb + kv_mb
 budget   = dram_per_device * 1024  # MB
 print(f"Weights+KV: {total_mb:.0f}MB / {budget}MB  (headroom: {budget-total_mb:.0f}MB)")
-assert total_mb < budget * 0.85, "Exceeds 85% DRAM budget — revisit parallelism"
+assert total_mb < budget * 0.6, "Exceeds 60% DRAM budget — revisit parallelism"
+# 60%, not 85%: leaves headroom for prefill activations, KV growth, CCL scratch.
+
+# REPLICATED-DRY-RUN: compute what budget would be if every linear is replicated.
+# If this is < budget, replication is a valid bring-up shortcut. If not, replication
+# is forbidden from the start.
+text_repl_mb = n_layers * (n_q*hd*H + n_kv*hd*H + H*H + 2*I*H + I*H) * fp16 / 1e6
+print(f"Weights if every linear REPLICATED: {text_repl_mb:.0f}MB  "
+      f"(must be < {budget*0.6:.0f}MB to allow replicated bring-up)")
 ```
 
 ---

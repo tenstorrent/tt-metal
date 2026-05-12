@@ -11,6 +11,12 @@
 - Follow the "Relay Race" flow: Architecture -> Reference -> TTNN -> Debug -> Opt -> Server.
 - Complete each part of the flow properly, in depth before moving to the next one.
 - Critical: No shortcuts that need to be reverted later.
+- Galaxy / multi-chip: weights for MLP, attention QKV, attention output, and large
+  LM heads MUST use `ShardTensor2dMesh` (NOT `ReplicateTensorToMesh`). Only norm
+  weights, RoPE tables, and small embedding tables may be replicated. Precedent:
+  `models/demos/llama3_70b_galaxy/tt/llama_mlp.py`. Single-layer PCC tests will pass
+  even when weights are wrongly replicated — verify per-device DRAM footprint at
+  `__init__` time and load the full layer count before claiming the block is done.
 
 ## Bring-up Flow
 
