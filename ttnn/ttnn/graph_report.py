@@ -38,7 +38,7 @@ from .stack_trace_source import (
 )
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 2.1
+DATABASE_SCHEMA_VERSION = "2.1"
 
 
 def _int_param(params, key):
