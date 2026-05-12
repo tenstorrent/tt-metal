@@ -169,17 +169,17 @@ void read_in0_block_sync(
 }
 
 /**
- * Read a block of in1 from a potentially padded tensor.
- * Since this is for matmul, no need to read when N >= logical_N
- * Otherwise, if K >= logical_K, fill with zeros.
+ * Read a block of in1 from a potentially padded tensor, optionally at a K-axis offset.
+ * When UseOffset is true the weight is treated as a parent buffer and the K-axis is
+ * sliced [k_offset, k_offset + matmul_K). Bounds checks use the effective (matmul-K)
+ * `shape`, independent of the parent K extent.
  *
  * Iteration order is always K-outer, N-inner (so the CB ends up [K, N] tile-major),
  * which is what the matmul compute kernel expects. When TransposeB is true, the
- * physical tensor is stored as [N, K] (rather than [K, N]); the address formula
- * and bounds-check map to that storage. `shape` should be constructed with d0/d1
- * matching the storage layout: (K, N) without transpose_b, (N, K) with it.
+ * physical tensor is stored as [N, K_parent] (rather than [K_parent, N]); the address
+ * formula uses `parent_K_tiles_stride` for the N-row stride.
  */
-template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool TransposeB, typename TensorAccessorType>
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool TransposeB, bool UseOffset, typename TensorAccessorType>
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -188,7 +188,9 @@ void read_in1_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    uint32_t in1_k_offset_tiles,
+    uint32_t parent_K_tiles_stride) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
     // i sweeps K (matmul-inner), j sweeps N (matmul-outer).
@@ -202,12 +204,21 @@ void read_in1_block_sync(
                 continue;
             }
             if (i < k_bound) {
-                // Storage row-stride is always shape.logical_d1 (storage inner dim).
                 uint32_t tile_id;
                 if constexpr (TransposeB) {
-                    tile_id = j * shape.logical_d1 + i;  // (N, K) storage: N-row * K_tiles + K-col
+                    if constexpr (UseOffset) {
+                        // [N, K_parent] storage: N-row * K_parent_tiles + (K-col + k_offset)
+                        tile_id = j * parent_K_tiles_stride + (i + in1_k_offset_tiles);
+                    } else {
+                        tile_id = j * shape.logical_d1 + i;
+                    }
                 } else {
-                    tile_id = i * shape.logical_d1 + j;  // (K, N) storage: K-row * N_tiles + N-col
+                    if constexpr (UseOffset) {
+                        // [K_parent, N] storage: (K-row + k_offset) * N_tiles + N-col
+                        tile_id = (i + in1_k_offset_tiles) * shape.logical_d1 + j;
+                    } else {
+                        tile_id = i * shape.logical_d1 + j;
+                    }
                 }
                 noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
             } else {

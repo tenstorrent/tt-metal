@@ -30,6 +30,7 @@ void kernel_main() {
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
     constexpr bool transpose_b = static_cast<bool>(get_compile_time_arg_val(21));
+    constexpr bool use_offset_in1 = static_cast<bool>(get_compile_time_arg_val(22));
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -54,8 +55,8 @@ void kernel_main() {
 
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
-    // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<22>();
+    // Tensor accessor for input tensor (CTAs 0..22 are scalar; accessor starts at 23)
+    constexpr auto in1_args = TensorAccessorArgs<23>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -95,6 +96,12 @@ void kernel_main() {
     const uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
     const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
+    uint32_t in1_k_offset_tiles = 0U;
+    uint32_t parent_K_tiles_stride_in1 = 0U;
+    if constexpr (use_offset_in1) {
+        in1_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 3);
+        parent_K_tiles_stride_in1 = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 4);
+    }
 
     // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].
     const TensorShape2D in1_shape = transpose_b ? TensorShape2D(N_tiles, K_tiles, padded_N_tiles, padded_K_tiles)
@@ -220,7 +227,7 @@ void kernel_main() {
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
-                    read_in1_block_sync<K_block_tiles, N_block_tiles, transpose_b>(
+                    read_in1_block_sync<K_block_tiles, N_block_tiles, transpose_b, use_offset_in1>(
                         in1_reader,
                         in1_shape,
                         in1_start_address,
@@ -228,7 +235,9 @@ void kernel_main() {
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles,
                         n_tile,
-                        n_tile_end);
+                        n_tile_end,
+                        in1_k_offset_tiles,
+                        parent_K_tiles_stride_in1);
                 } else {
                     noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
