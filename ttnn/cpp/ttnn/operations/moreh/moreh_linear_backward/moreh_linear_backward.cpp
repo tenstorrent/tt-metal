@@ -20,7 +20,7 @@ std::tuple<bool, bool, bool> get_required_outputs(const std::vector<bool>& are_r
 
 void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
 
         // last 2-dim
@@ -32,7 +32,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
     }
 
     log_debug(tt::LogOp, "rank {}", rank);
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         log_debug(tt::LogOp, "dim[{}] = {}", i, dim[i]);
     }
 }
@@ -89,7 +89,7 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
-    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         if (a_dim[i] != b_dim[i]) {
             log_debug(tt::LogOp, "{}:{} {} a_dim {} - b_dim {}", __func__, __LINE__, i, a_dim[i], b_dim[i]);
             return false;

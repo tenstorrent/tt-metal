@@ -352,7 +352,7 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
     auto input_shape = input.padded_shape();
     auto input_shape_wo_padding = input.logical_shape();
     const auto input_rank = input_shape_wo_padding.rank();
-    auto padded_dim = dim + input_shape.rank() - input_shape_wo_padding.rank();
+    const int64_t padded_dim = dim + static_cast<int64_t>(input_shape.rank()) - static_cast<int64_t>(input_shape_wo_padding.rank());
 
     const auto& output_shape = output.padded_shape();
     const auto& output_shape_wo_padding = output.logical_shape();

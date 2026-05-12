@@ -14,7 +14,7 @@ namespace ttnn::operations::moreh::moreh_matmul {
 
 void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
 
         // last 2-dim
@@ -26,7 +26,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
     }
 
     log_debug(tt::LogOp, "rank {}", rank);
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         log_debug(tt::LogOp, "dim[{}] = {}", i, dim[i]);
     }
 }
@@ -59,7 +59,7 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
-    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         if (a_dim[i] != b_dim[i]) {
             log_debug(tt::LogOp, "{}:{} {} a_dim {} - b_dim {}", __func__, __LINE__, i, a_dim[i], b_dim[i]);
             return false;
@@ -71,11 +71,11 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
 
 void get_tensor_stride(ttnn::SmallVector<uint32_t>& stride, ttnn::SmallVector<uint32_t>& dim) {
     stride[0] = 1;
-    for (auto i = 1; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 1; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         stride[i] = stride[i - 1] * dim[i - 1];
     }
 
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         log_debug(tt::LogOp, "stride[{}] = {}", i, stride[i]);
     }
 }
@@ -87,7 +87,7 @@ void get_not_bcast(
     ttnn::SmallVector<uint32_t>& other_dim) {
     // first 2-dims are M,K and K,N
     // TODO: refaactoring
-    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         if (input_dim[i] == other_dim[i]) {
             input_not_bcast[i] = 1;
             other_not_bcast[i] = 1;
@@ -102,7 +102,7 @@ void get_not_bcast(
         }
     }
 
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         log_debug(tt::LogOp, "not bcast [{}] input {} other {}", i, input_not_bcast[i], other_not_bcast[i]);
     }
 }

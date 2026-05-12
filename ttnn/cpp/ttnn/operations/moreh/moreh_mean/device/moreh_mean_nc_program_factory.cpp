@@ -44,12 +44,12 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
 
     const auto rank = input_shape.rank();
     auto input_tile_stride = HtWt;
-    for (int i = dim + 1; i < rank - 2; i++) {
+    for (int64_t i = dim + 1; i < static_cast<int64_t>(rank) - 2; i++) {
         input_tile_stride *= input_shape[i];
     }
 
     uint32_t inner_size = 1;
-    for (int i = dim + 1; i < rank - 2; i++) {
+    for (int64_t i = dim + 1; i < static_cast<int64_t>(rank) - 2; i++) {
         inner_size *= input_shape[i];
     }
 

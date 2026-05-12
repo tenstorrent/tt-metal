@@ -37,10 +37,10 @@ MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory
 
     auto rank = input.logical_shape().rank();
 
-    if (operation_attributes.dim + 1 == rank) {
+    if (operation_attributes.dim + 1 == static_cast<int64_t>(rank)) {
         return MorehMeanWFactory{};
     }
-    if (operation_attributes.dim + 2 == rank) {
+    if (operation_attributes.dim + 2 == static_cast<int64_t>(rank)) {
         return MorehMeanHFactory{};
     }
     return MorehMeanNCFactory{};
@@ -72,11 +72,11 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
     }
 
     ttnn::SmallVector<uint32_t> shape;
-    const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
+    const bool is_tile_dim = (dim == static_cast<int64_t>(input_rank) - 1 || dim == static_cast<int64_t>(input_rank) - 2);
 
     // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
     // e.g. (2, 64, 64) with dim 0 to be (64, 64)
-    for (int i = 0; i < input_rank; ++i) {
+    for (int i = 0; i < static_cast<int>(input_rank); ++i) {
         bool is_reduced_dim = (i == dim);
         if (is_reduced_dim && !is_tile_dim) {
             continue;
