@@ -46,6 +46,16 @@ class Pi0_5WeightLoader(PI0WeightLoader):
         self._categorized = None
 
     @property
+    def state_dict(self) -> Dict[str, torch.Tensor]:
+        # Override: strip the leading "model." prefix that lerobot finetunes use
+        # (`model.paligemma_with_expert...` -> `paligemma_with_expert...`). Base
+        # `pi05_base` doesn't have that prefix; remapping is a no-op there.
+        sd = super().state_dict
+        if any(k.startswith("model.") for k in sd):
+            return {k[len("model.") :] if k.startswith("model.") else k: v for k, v in sd.items()}
+        return sd
+
+    @property
     def categorized_weights(self) -> Dict[str, Dict[str, torch.Tensor]]:
         if self._categorized is None:
             self._categorized = categorize_pi0_5_weights(self.state_dict)

@@ -325,15 +325,16 @@ class SigLIPAttentionTTNN:
         else:
             self.bo = None
 
-        # Compute kernel configs
+        # Compute kernel configs — HiFi2 for QKV/O linears matches tt_transformers
+        # inference defaults and saves cycles on the SigLIP attention path.
         self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
         self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -392,7 +393,7 @@ class SigLIPAttentionTTNN:
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=False,
+            exp_approx_mode=True,
         )
 
         # SDPA - stays entirely on device
@@ -493,9 +494,9 @@ class SigLIPMLPTTNN:
         self.grid_size = (device_grid.x, device_grid.y)
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
 
-        # Compute kernel config
+        # Compute kernel config — HiFi2 sufficient for SigLIP MLP (bf8_b weights anyway).
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

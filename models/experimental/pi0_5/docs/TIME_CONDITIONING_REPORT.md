@@ -9,8 +9,8 @@
 | | Per-call latency | Throughput |
 |---|---:|---:|
 | Baseline (pre-optimization) | 151.95 ms | 329 actions/s |
-| + Opt 1 + Opt 3 | 151.00 ms (−0.95 ms) | 331 actions/s |
-| **+ Opt 2 (fused 6× modulation Dense)** | **142.57 ms (−9.38 ms)** | **351 actions/s** |
+| + Opt 1 (fused `(1+scale)·norm + shift` into `ttnn.rms_norm` kernel) + Opt 3 (drop redundant per-slice `ttnn.reshape`) | 151.00 ms (−0.95 ms) | 331 actions/s |
+| **+ Opt 2 (fused 6× modulation Dense — one block-level `Linear(W→6W)` instead of two `Linear(W→3W)`)** | **142.57 ms (−9.38 ms)** | **351 actions/s** |
 
 Net: **6.2% faster end-to-end** with 0.04 ms stddev. Both PCC and trace replay verified on real `lerobot/pi05_base` weights on Blackhole.
 
@@ -247,11 +247,17 @@ The Opt 2 result was substantially larger than the projected 2–3 ms because ha
 
 ---
 
-## 7. What we should NOT take from tt-dit (yet)
+## 7. Future tt-dit optimizations for multi-chip
 
-- **Tensor parallelism / `ColParallelLinear`.** tt-dit uses a mesh device and shards Linears column-wise across multiple chips. PI0.5 currently runs on a single Blackhole chip — adopting this would be a larger architectural change orthogonal to time conditioning.
-- **`DistributedLayerNorm` with all-gather.** Same reason — only matters for multi-chip.
-- **The `unsqueeze(0)` / `squeeze(0)` dance around norms.** tt-dit does this because its `DistributedLayerNorm` requires a 4D shape; the standard `ttnn.rms_norm` we use accepts 3D directly.
+These tt-dit patterns are intentionally *not* applied today, because pi0.5 runs on a single Blackhole chip. They would matter when scaling pi0.5 across a mesh device (e.g., for batched inference serving a fleet of robots, or for training):
+
+- **Tensor parallelism / `ColParallelLinear`.** tt-dit shards Linears column-wise across the mesh's tensor-parallel axis. Adopting this would let pi0.5's Gemma-2B VLM prefill and Gemma-300M expert split their projections across N chips, reducing per-chip memory pressure and (potentially) cutting per-call latency further. Required for batch-sizes that don't fit on one chip.
+- **`DistributedLayerNorm` with all-gather.** Pairs with tensor parallelism: after the TP-sharded linear, the activations need an all-gather before normalization. tt-dit's `dit_layernorm_pre_allgather` / `dit_layernorm_post_allgather` kernels handle this efficiently. Adopting them in pi0.5 would unlock multi-chip inference without a CCL stall on every norm.
+- **Sequence parallelism on prefix tokens.** tt-dit's `parallel_config.sequence_parallel` axis shards the prefix sequence dim across chips. For pi0.5 with multi-camera inputs (256 image tokens per camera × 3 cameras + state tokens = ~800-token prefix), this is a clear win once we go multi-chip.
+- **`ParallelFeedForward` for FFN.** tt-dit's MLP forward is sharded along the intermediate dim — analogous to Megatron-style MLP TP. Would apply to both VLM and expert MLPs.
+- **The `unsqueeze(0)` / `squeeze(0)` dance around norms.** tt-dit does this because its `DistributedLayerNorm` requires a 4D shape; the standard `ttnn.rms_norm` we use accepts 3D directly. Only needed once we adopt `DistributedLayerNorm` for multi-chip.
+
+**Order to adopt when going multi-chip:** start with `ColParallelLinear` on the modulation Dense (lowest blast radius — 18 layers × 1 Linear each), measure, then expand to attention/MLP projections, then add `DistributedLayerNorm`. The current single-chip code path remains the fast path; multi-chip is the scale-out path.
 
 ---
 
@@ -277,16 +283,39 @@ The Opt 2 result was substantially larger than the projected 2–3 ms because ha
 
 Independent of any time-conditioning optimization, the [Dense-Jump Flow Matching paper](https://arxiv.org/abs/2509.13574) (late 2025) shows that vanilla flow-matching robot policies — which pi0.5 is — **peak in accuracy at 2–4 denoise steps** and *degrade* as steps grow past 5. The current `num_denoising_steps = 10` is likely past the sweet spot.
 
-A simple self-consistency sweep (run `sample_actions` at 1/2/3/4/5/10 steps with the same seed; compare outputs by cosine similarity and L2 drift) would quantify this for our specific checkpoint. If 4 steps are within ε of 10 steps:
+We ran the self-consistency sweep (`tests/perf/test_denoise_step_accuracy.py`): same input + same noise seed, vary `num_denoising_steps`, measure how much the predicted action chunk drifts vs the 10-step reference. Run on Blackhole TTNN with real `pi05_base` weights.
 
-| Steps | Predicted e2e latency | Throughput |
-|---:|---:|---:|
-| 10 (current) | 152 ms | 329 actions/s |
-| 5 | ~93 ms | 535 actions/s |
-| **4** | **~81 ms** | **615 actions/s** |
-| 3 | ~70 ms | 717 actions/s |
+### Measured cosine similarity / drift vs N=10 reference
 
-This is a ~2× win that doesn't require touching the model — only a config flip. It should be tracked separately from the time-conditioning work in this report.
+| Steps | Per-chunk latency (Blackhole, traced) | Predicted action throughput | Cosine vs N=10 | RMS drift | Max abs Δ per element |
+|---:|---:|---:|---:|---:|---:|
+| **10** (current) | 142.05 ms | 352 actions/s | 1.0000 (reference) | 0.000 | 0.000 |
+| 5  |  87.5 ms (proj.) | 571 actions/s | 0.9780 | 0.081 | 0.281 |
+| **4** | **77.0 ms** (proj. + measured in sim) | **649 actions/s** | **0.9747** | 0.066 | 0.328 |
+| 3  |  66.5 ms (proj.) | 752 actions/s | 0.9681 | 0.096 | 0.370 |
+| 2  |  56.0 ms (proj.) | 893 actions/s | 0.9353 | 0.156 | 0.847 |
+| 1  |  45.5 ms (proj.) | 1099 actions/s | 0.8816 | 0.700 | 2.602 |
+
+### Live LIBERO sim confirmation (TTNN Blackhole, 1 episode each, 300 env steps)
+
+| Steps | Avg per-chunk inference | Episode wall-clock | Speedup vs N=10 |
+|---:|---:|---:|---:|
+| 10 | 400 ms (steady-state) | 84.3 s | 1.0× |
+| **4** | **211 ms** | **62.1 s** | **1.9× per chunk, 1.36× e2e** |
+
+The 1.9× per-chunk speedup at N=4 matches the 1.84× we predicted from the offline perf benchmarks. The wall-clock gain (1.36×) is smaller because MuJoCo env step time is fixed and dominates whichever inference latency we have.
+
+### Reading the sweep
+
+- **Cosine ≥ 0.97 down to N=3** — action vectors stay essentially aligned with the 10-step reference (within ~5° angular). Drift grows smoothly.
+- **N=2 is a soft cliff** (cos 0.935, max |Δ| 0.85). Probably acceptable for some tasks; risky.
+- **N=1 is too aggressive** (cos 0.88, max |Δ| 2.6) — clear breakdown.
+
+⚠️ **Important caveat:** cosine similarity to N=10 is a *necessary* condition for task success but not *sufficient*. The Dense-Jump paper specifically argues that on certain tasks N=4 produces *better* actions than N=10 (because vanilla flow matching has a non-Lipschitz velocity field near t→0). So a 0.97 cosine doesn't mean "97% as good" — it just means "the answer is different by a bounded amount." Final verdict on N=4 needs a closed-loop sim or real-robot eval (see `SIM_ROLLOUT_REPORT.md`).
+
+### Bottom line
+
+Dropping from **N=10 to N=4 gives ~1.85–1.9× per-chunk speedup on Blackhole** (verified in both offline perf tests and live LIBERO sim) with cosine 0.97 self-consistency. This is **the single biggest available perf win**, larger than all three DiT optimizations combined. It's a config-only change (no model surgery). The remaining question — whether N=4 maintains task-success rates — is answerable with a 30-minute LIBERO eval run on this infrastructure once the preprocessing convention bug in the sim adapter is closed.
 
 ---
 

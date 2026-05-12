@@ -335,7 +335,7 @@ class GemmaAttentionTTNN:
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=False,
+            exp_approx_mode=True,
         )
 
         attn_output = ttnn.transformer.scaled_dot_product_attention(
@@ -356,13 +356,14 @@ class GemmaAttentionTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Output projection - use bfloat16 for residual add compatibility
+        # Output projection - HiFi2 matches tt_transformers and the QKV linear above;
+        # HiFi4 was leftover from an earlier conservative choice.
         output = ttnn.linear(
             attn_concat,
             self.o_proj,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             core_grid=self.core_grid,
         )
 

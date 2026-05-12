@@ -192,10 +192,17 @@ class Pi0_5ModelTTNN:
                 adarms_cond=adarms_cond,
                 past_key_values=prefix_kv_cache,
             )
+            ttnn.deallocate(suffix_embs)
 
             velocity = self.suffix_embedding.project_output(expert_output)
+            ttnn.deallocate(expert_output)
+
             velocity_scaled = ttnn.mul(velocity, dt)
-            x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(velocity)
+
+            x_t_new = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(velocity_scaled)
+            x_t_ttnn = x_t_new
 
         return x_t_ttnn
 

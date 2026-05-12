@@ -92,18 +92,27 @@ class PrefixEmbeddingTTNN:
             and all(isinstance(im, ttnn.Tensor) and tuple(im.shape) == tuple(images[0].shape) for im in images)
         )
         if same_shape:
-            stacked = ttnn.concat(images, dim=0)  # (N, C, H, W)
+            # All inputs must be the same layout for concat
+            imgs_tiled = [
+                im if im.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(im, ttnn.TILE_LAYOUT) for im in images
+            ]
+            stacked = ttnn.concat(imgs_tiled, dim=0)  # (N, C, H, W)
             all_embs = self.embed_image_fn(stacked)  # (N, num_tokens, vlm_hidden)
             ttnn.deallocate(stacked)
             num_tokens = all_embs.shape[1]
             hidden = all_embs.shape[2]
             for i in range(len(images)):
                 img_emb = ttnn.slice(all_embs, [i, 0, 0], [i + 1, num_tokens, hidden])
+                if img_emb.layout != ttnn.TILE_LAYOUT:
+                    img_emb = ttnn.to_layout(img_emb, ttnn.TILE_LAYOUT)
                 image_embs.append(img_emb)
             ttnn.deallocate(all_embs)
         else:
             for img in images:
-                image_embs.append(self.embed_image_fn(img))
+                emb = self.embed_image_fn(img)
+                if emb.layout != ttnn.TILE_LAYOUT:
+                    emb = ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
+                image_embs.append(emb)
 
         # Build expanded masks (mask handling unchanged — masks may be per-image)
         for img_emb, mask in zip(image_embs, img_masks):
@@ -149,6 +158,11 @@ class PrefixEmbeddingTTNN:
 
         lang_emb = self.embed_language_fn(lang_tokens)
 
+        # ttnn.embedding returns ROW_MAJOR; convert to TILE so downstream
+        # concat with TILE image embeddings works for any token length.
+        if lang_emb.layout != ttnn.TILE_LAYOUT:
+            lang_emb = ttnn.to_layout(lang_emb, ttnn.TILE_LAYOUT)
+
         # Scale by sqrt(hidden_dim) - use scalar multiply
         hidden_dim = lang_emb.shape[-1]
         scale = math.sqrt(hidden_dim)
@@ -193,7 +207,9 @@ class PrefixEmbeddingTTNN:
             pad_masks.append(lang_masks)
             num_tokens_list.append(lang_emb.shape[1])
 
-        # Concatenate using TTNN
+        # Defensive: TTNN concat requires all inputs in the same layout.
+        embs = [e if e.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(e, ttnn.TILE_LAYOUT) for e in embs]
+        pad_masks = [m if m.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(m, ttnn.TILE_LAYOUT) for m in pad_masks]
         prefix_embs = ttnn.concat(embs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         prefix_pad_masks = ttnn.concat(pad_masks, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
 

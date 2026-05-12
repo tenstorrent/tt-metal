@@ -134,6 +134,16 @@ class AdaRMSGemmaBlockTTNN:
         device_grid = device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
 
+        # HiFi2 for the per-block modulation Dense — matches the rest of the
+        # expert's projection linears and shaves real cycles since this runs
+        # 18 × 10 steps = 180 times per chunk.
+        self.mod_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def forward(
         self,
         hidden_states: "ttnn.Tensor",
@@ -152,6 +162,7 @@ class AdaRMSGemmaBlockTTNN:
             bias=self.mod_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.core_grid,
+            compute_kernel_config=self.mod_compute_kernel_config,
         )
         sa, ta, ga, sf, tf, gf = _split_modulation_6(mod)
         ttnn.deallocate(mod)

@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+PI0.5 LIBERO rollout evaluator — N=10 vs N=4 task success measurement.
+
+Pipeline:
+  obs (LIBERO env)
+    → resize images to 224x224, normalize to [-1,1]
+    → QUANTILE-normalize state via stats from finetune checkpoint
+    → discretize state to 256 bins → string
+    → prompt = f"Task: {desc}, State: {bins};\\nAction: "
+    → SentencePiece tokenize (max_len=200)
+  Pi0_5Model.sample_actions(images, masks, tokens, lang_masks)
+    → (B, 50, 32) normalized action chunk
+    → take first 7 dims, inverse-QUANTILE denorm
+    → env.step each of the 50 actions
+
+Run:
+  PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/storage/sdawle/libero_repo \\
+  MUJOCO_GL=osmesa python_env/bin/python \\
+  models/experimental/pi0_5/eval/libero_rollout.py --num-episodes 5 --max-steps 200
+"""
+
+import argparse
+import os
+import sys
+import time
+import numpy as np
+import torch
+
+# Bypass lerobot's transformers-replace check
+import types as _types
+
+_fake = _types.ModuleType("transformers.models.siglip.check")
+_fake.check_whether_transformers_replace_is_installed_correctly = lambda: True
+sys.modules["transformers.models.siglip.check"] = _fake
+
+REPO_ROOT = "/home/tt-admin/sdawle/pi0/tt-metal"
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+LIBERO_REPO = "/storage/sdawle/libero_repo"
+if LIBERO_REPO not in sys.path:
+    sys.path.insert(0, LIBERO_REPO)
+os.environ.setdefault("MUJOCO_GL", "osmesa")
+
+import sentencepiece
+from safetensors.torch import load_file
+
+from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
+from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model
+
+
+# TTNN imports are deferred so the pytorch backend doesn't require a Blackhole
+def _import_ttnn():
+    import ttnn
+    from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
+
+    return ttnn, Pi0_5ModelTTNN
+
+
+# ---------------------------------------------------------------------------
+# Preprocessor / postprocessor
+# ---------------------------------------------------------------------------
+
+
+class Pi0_5LiberoAdapter:
+    """Wraps Pi0_5Model (pytorch) or Pi0_5ModelTTNN + pi0.5 preprocessing for LIBERO."""
+
+    def __init__(
+        self,
+        checkpoint_dir: str,
+        tokenizer_path: str = "/storage/sdawle/pi05_weights/paligemma_tokenizer.model",
+        backend: str = "pytorch",
+        ttnn_device=None,
+        max_action_dim: int = 32,
+        max_state_dim: int = 32,
+        chunk_size: int = 50,
+        max_token_len: int = 200,
+    ):
+        self.backend = backend
+        self.ttnn_device = ttnn_device
+        self.max_action_dim = max_action_dim
+        self.max_state_dim = max_state_dim
+        self.chunk_size = chunk_size
+        self.max_token_len = max_token_len
+        self.image_size = 224
+
+        # Tokenizer
+        self.sp = sentencepiece.SentencePieceProcessor()
+        self.sp.load(tokenizer_path)
+
+        # Normalizer stats (action.q01/q99, observation.state.q01/q99)
+        stats_path = os.path.join(
+            checkpoint_dir,
+            "policy_preprocessor_step_2_normalizer_processor.safetensors",
+        )
+        flat = load_file(stats_path)
+        self.action_q01 = flat["action.q01"].float().numpy()  # (7,)
+        self.action_q99 = flat["action.q99"].float().numpy()
+        self.state_q01 = flat["observation.state.q01"].float().numpy()  # (8,)
+        self.state_q99 = flat["observation.state.q99"].float().numpy()
+        self.real_action_dim = len(self.action_q01)
+        self.real_state_dim = len(self.state_q01)
+
+        # Model
+        cfg = Pi0_5ModelConfig()
+        loader = Pi0_5WeightLoader(checkpoint_dir)
+        if backend == "pytorch":
+            self.model = Pi0_5Model(cfg, loader)
+            self._ttnn = None
+            self._Pi0_5ModelTTNN = None
+        elif backend == "ttnn":
+            assert ttnn_device is not None, "TTNN backend requires an open ttnn_device"
+            ttnn_mod, Pi0_5ModelTTNN = _import_ttnn()
+            self._ttnn = ttnn_mod
+            self._Pi0_5ModelTTNN = Pi0_5ModelTTNN
+            self.model = Pi0_5ModelTTNN(cfg, loader, ttnn_device)
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+        self.cfg = cfg
+        self.device = torch.device("cpu")
+
+    # --- image ---
+    @staticmethod
+    def _resize_with_pad_centered(img_hwc_uint8: np.ndarray, size: int = 224) -> np.ndarray:
+        """Aspect-preserving bilinear resize, centered pad with -1.0 (black in
+        PaliGemma's [-1, 1] space). Mirrors lerobot's resize_with_pad_torch.
+
+        img: (H, W, 3) uint8 → (size, size, 3) float32 in [-1, 1].
+        """
+        from PIL import Image
+
+        h, w = img_hwc_uint8.shape[:2]
+        scale = size / max(h, w)
+        nh, nw = int(round(h * scale)), int(round(w * scale))
+        resized = (
+            np.asarray(
+                Image.fromarray(img_hwc_uint8).resize((nw, nh), Image.BILINEAR),
+                dtype=np.float32,
+            )
+            / 255.0
+        )
+        resized = resized * 2.0 - 1.0  # [-1, 1]
+        # Center pad with -1 (black)
+        out = -np.ones((size, size, 3), dtype=np.float32)
+        oy = (size - nh) // 2
+        ox = (size - nw) // 2
+        out[oy : oy + nh, ox : ox + nw] = resized
+        return out
+
+    def _image_for_pi05(self, img_hwc_uint8: np.ndarray) -> torch.Tensor:
+        """(H, W, 3) uint8 → (1, 3, 224, 224) float32 in [-1, 1] (PaliGemma convention)."""
+        img_pad = self._resize_with_pad_centered(img_hwc_uint8, self.image_size)
+        chw = np.transpose(img_pad, (2, 0, 1))  # (3, H, W)
+        return torch.from_numpy(chw).unsqueeze(0).contiguous()
+
+    # --- state ---
+    def _state_normalize(self, state: np.ndarray) -> np.ndarray:
+        """QUANTILES normalization → padded to max_state_dim. No clipping
+        (matches lerobot's NormalizerProcessorStep QUANTILES forward formula).
+        """
+        eps = 1e-8
+        s = 2.0 * (state - self.state_q01) / (self.state_q99 - self.state_q01 + eps) - 1.0
+        padded = np.zeros(self.max_state_dim, dtype=np.float32)
+        padded[: len(s)] = s
+        return padded
+
+    @staticmethod
+    def _discretize_state(s_norm: np.ndarray, n_bins: int = 256) -> np.ndarray:
+        edges = np.linspace(-1.0, 1.0, n_bins + 1)[:-1]
+        return np.digitize(s_norm, bins=edges) - 1  # ints in [0, n_bins-1]
+
+    # --- prompt + tokenize ---
+    def _make_tokens(self, task_desc: str, state: np.ndarray):
+        """Returns (tokens (max_token_len,), mask (max_token_len,)) as torch tensors."""
+        s_norm = self._state_normalize(state)
+        bins = self._discretize_state(s_norm)
+        state_str = " ".join(str(int(b)) for b in bins)
+        cleaned = task_desc.strip().replace("_", " ").replace("\n", " ")
+        full = f"Task: {cleaned}, State: {state_str};\nAction: "
+        tokens = self.sp.encode(full, add_bos=True)
+        L = len(tokens)
+        if L < self.max_token_len:
+            mask = [True] * L + [False] * (self.max_token_len - L)
+            tokens = tokens + [0] * (self.max_token_len - L)
+        else:
+            tokens = tokens[: self.max_token_len]
+            mask = [True] * self.max_token_len
+        return (
+            torch.tensor(tokens, dtype=torch.int32).unsqueeze(0),
+            torch.tensor(mask, dtype=torch.bool).unsqueeze(0),
+        )
+
+    # --- action denorm ---
+    def _denormalize_actions(self, actions_norm: np.ndarray) -> np.ndarray:
+        """(chunk, max_action_dim) normalized → (chunk, real_action_dim) raw."""
+        eps = 1e-8
+        a = actions_norm[:, : self.real_action_dim]
+        a = (a + 1.0) * (self.action_q99 - self.action_q01) / 2.0 + self.action_q01
+        return a
+
+    # --- main entry: predict a chunk given LIBERO obs ---
+    def predict_chunk(
+        self,
+        agentview_image: np.ndarray,
+        wrist_image: np.ndarray,
+        state: np.ndarray,
+        task_desc: str,
+        num_denoising_steps: int = 10,
+    ) -> np.ndarray:
+        """Returns (chunk_size, real_action_dim) numpy array of LIBERO-space actions."""
+        # 3 cameras: agentview, wrist, empty.
+        # IMPORTANT: empty camera is filled with -1 (black in PaliGemma's [-1,1]
+        # input convention), NOT 0 (which would be mid-gray). Matches
+        # lerobot.policies.pi05.modeling_pi05._preprocess_images.
+        img1 = self._image_for_pi05(agentview_image)
+        img2 = self._image_for_pi05(wrist_image)
+        img3 = torch.ones_like(img1) * -1.0
+        images = [img1, img2, img3]
+        img_masks = [
+            torch.ones(1, dtype=torch.bool),
+            torch.ones(1, dtype=torch.bool),
+            torch.zeros(1, dtype=torch.bool),
+        ]
+
+        tokens, lang_mask = self._make_tokens(task_desc, state)
+
+        if self.backend == "pytorch":
+            # Override the num_denoising_steps for this call (pytorch reference)
+            original_steps = self.model.denoising.config.num_steps
+            self.model.denoising.config.num_steps = num_denoising_steps
+            with torch.no_grad():
+                actions = self.model.sample_actions(
+                    images=images,
+                    img_masks=img_masks,
+                    lang_tokens=tokens,
+                    lang_masks=lang_mask,
+                    state=None,
+                )
+            self.model.denoising.config.num_steps = original_steps
+            actions_np = actions[0].float().cpu().numpy()
+        else:
+            # TTNN backend: convert torch inputs → ttnn, run, convert back.
+            ttnn = self._ttnn
+            device = self.ttnn_device
+            # Override num_denoising_steps on the TTNN model (rebuild precomputed lists)
+            self.model.denoise_config.num_steps = num_denoising_steps
+            self.model._precompute_bs1_timestep_tensors()
+            self.model._precompute_bs1_adarms_cond()
+            # Build TTNN inputs
+            images_ttnn = []
+            for img in images:
+                images_ttnn.append(
+                    ttnn.from_torch(
+                        img,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                )
+            img_masks_ttnn = []
+            for m in img_masks:
+                img_masks_ttnn.append(
+                    ttnn.from_torch(
+                        m.float(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                )
+            tokens_ttnn = ttnn.from_torch(
+                tokens.to(torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            lang_mask_ttnn = ttnn.from_torch(
+                lang_mask.to(torch.float32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            out = self.model.sample_actions(
+                images=images_ttnn,
+                img_masks=img_masks_ttnn,
+                lang_tokens=tokens_ttnn,
+                lang_masks=lang_mask_ttnn,
+                state=None,
+            )
+            actions_np = ttnn.to_torch(out).float().numpy()
+            if actions_np.ndim == 3:
+                actions_np = actions_np[0]
+            actions_np = actions_np[: self.chunk_size, : self.max_action_dim]
+            # Free TTNN intermediates
+            for t in images_ttnn:
+                ttnn.deallocate(t)
+            for t in img_masks_ttnn:
+                ttnn.deallocate(t)
+            ttnn.deallocate(tokens_ttnn)
+            ttnn.deallocate(lang_mask_ttnn)
+            ttnn.deallocate(out)
+
+        return self._denormalize_actions(actions_np)  # (50, 7)
+
+
+# ---------------------------------------------------------------------------
+# LIBERO env helper
+# ---------------------------------------------------------------------------
+
+
+def make_libero_env(suite_name: str = "libero_spatial", task_idx: int = 0, img_size: int = 256):
+    # LIBERO uses torch.load(...) on pickled numpy arrays for init states.
+    # PyTorch 2.6 changed default `weights_only=True` which blocks this. Patch.
+    import torch as _torch
+
+    _orig_load = _torch.load
+
+    def _patched_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return _orig_load(*args, **kwargs)
+
+    _torch.load = _patched_load
+    from libero.libero import benchmark, get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
+
+    suite = benchmark.get_benchmark_dict()[suite_name]()
+    task = suite.get_task(task_idx)
+    bddl = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
+    env_kwargs = dict(
+        bddl_file_name=bddl,
+        camera_heights=img_size,
+        camera_widths=img_size,
+    )
+    env = OffScreenRenderEnv(**env_kwargs)
+    env.seed(0)  # important per openpi comment: affects object positions even with set_init_state
+    # Canonical seeded initial states for this task (the model is trained on these).
+    initial_states = suite.get_task_init_states(task_idx)
+    return env, task, initial_states
+
+
+# ---------------------------------------------------------------------------
+# Rollout loop
+# ---------------------------------------------------------------------------
+
+
+def run_episode(
+    env,
+    adapter: "Pi0_5LiberoAdapter",
+    task_desc: str,
+    num_denoising_steps: int,
+    max_steps: int = 200,
+    chunk_action_horizon: int = 50,
+    num_steps_wait: int = 10,
+    initial_state=None,
+    seed: int = 0,
+) -> dict:
+    """Run one episode. Returns metrics dict.
+
+    Matches openpi's LIBERO eval pipeline:
+      - sets a canonical seeded init state (the model is trained on these)
+      - waits `num_steps_wait` dummy steps for physics to settle
+      - rotates camera images 180° (LIBERO renders are flipped vs training)
+      - replans every `chunk_action_horizon` actions
+    """
+    LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]  # no motion, gripper open
+    env.reset()
+    if initial_state is not None:
+        obs = env.set_init_state(initial_state)
+    else:
+        obs = (
+            env.regenerate_obs_from_state(env.get_sim_state())
+            if hasattr(env, "regenerate_obs_from_state")
+            else env.reset()
+        )
+    # Let physics settle (dropped objects need to fall in LIBERO)
+    for _ in range(num_steps_wait):
+        obs, _, _, _ = env.step(LIBERO_DUMMY_ACTION)
+    success = False
+    n_steps = 0
+    inference_times = []
+    while n_steps < max_steps:
+        # Build adapter inputs — IMPORTANT: rotate 180° to match training (openpi convention)
+        agent_img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+        # 8-dim state matching pi05_libero training:
+        #   eef_pos (3) + eef axis-angle (3) + gripper_qpos (2) = 8
+        # robosuite stores eef_quat as (x, y, z, w). Convert to axis*angle.
+        quat_xyzw = obs["robot0_eef_quat"].astype(np.float32)
+        w = float(np.clip(quat_xyzw[3], -1.0, 1.0))
+        angle = 2.0 * np.arccos(w)
+        sinh = max(float(np.sqrt(max(1.0 - w * w, 0.0))), 1e-8)
+        axis_angle = (quat_xyzw[:3] / sinh) * angle
+        state = np.concatenate(
+            [
+                obs["robot0_eef_pos"].astype(np.float32),  # 3
+                axis_angle.astype(np.float32),  # 3
+                obs["robot0_gripper_qpos"].astype(np.float32),  # 2
+            ]
+        )  # total 8
+        # Predict chunk
+        t0 = time.perf_counter()
+        chunk = adapter.predict_chunk(
+            agent_img,
+            wrist_img,
+            state,
+            task_desc,
+            num_denoising_steps=num_denoising_steps,
+        )
+        dt = time.perf_counter() - t0
+        inference_times.append(dt)
+        print(f"      chunk {len(inference_times)} at step {n_steps}: pred {dt:.1f}s", flush=True)
+        # Apply each action in the chunk
+        for a in chunk[:chunk_action_horizon]:
+            obs, _, done, _ = env.step(a.astype(np.float64))
+            n_steps += 1
+            if done:
+                success = True
+                break
+            if n_steps >= max_steps:
+                break
+        if success:
+            break
+
+    return {
+        "success": success,
+        "steps": n_steps,
+        "avg_chunk_pred_time": float(np.mean(inference_times)) if inference_times else 0.0,
+        "n_chunks": len(inference_times),
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoint", default="/storage/sdawle/pi05_weights/pi05_libero_finetuned")
+    ap.add_argument("--suite", default="libero_spatial")
+    ap.add_argument("--task-idx", type=int, default=0)
+    ap.add_argument("--num-episodes", type=int, default=3)
+    ap.add_argument("--max-steps", type=int, default=200)
+    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn"])
+    ap.add_argument(
+        "--replan-steps",
+        type=int,
+        default=10,
+        help="Replan a new action chunk every N env steps (openpi default = 5; "
+        "lower = more responsive but more CPU inference per episode).",
+    )
+    ap.add_argument(
+        "--steps-sweep",
+        type=int,
+        nargs="+",
+        default=[10, 4],
+        help="Denoising step counts to sweep over.",
+    )
+    args = ap.parse_args()
+
+    print(f"\n📋 Loading PI0.5 LIBERO adapter (backend={args.backend}) from {args.checkpoint}")
+    t0 = time.time()
+    ttnn_device = None
+    if args.backend == "ttnn":
+        import ttnn
+
+        ttnn_device = ttnn.open_device(
+            device_id=0,
+            l1_small_size=24576,
+            trace_region_size=134_217_728,
+        )
+        print(f"   ttnn device opened in {time.time() - t0:.1f}s")
+    adapter = Pi0_5LiberoAdapter(args.checkpoint, backend=args.backend, ttnn_device=ttnn_device)
+    print(
+        f"   adapter loaded in {time.time() - t0:.1f}s "
+        f"(real action dim = {adapter.real_action_dim}, state = {adapter.real_state_dim})"
+    )
+
+    print(f"\n🤖 Making LIBERO env: {args.suite}, task {args.task_idx}")
+    env, task, initial_states = make_libero_env(args.suite, args.task_idx)
+    task_desc = task.language
+    print(f"   task: {task_desc!r}; {len(initial_states)} canonical init states available")
+
+    results = {}
+    try:
+        for N in args.steps_sweep:
+            print(f"\n⏱️  Rollouts at N={N} ({args.num_episodes} episodes)")
+            stats = []
+            for ep in range(args.num_episodes):
+                t_ep = time.time()
+                print(f"   ep {ep+1} starting…", flush=True)
+                m = run_episode(
+                    env,
+                    adapter,
+                    task_desc,
+                    N,
+                    max_steps=args.max_steps,
+                    chunk_action_horizon=args.replan_steps,
+                    initial_state=initial_states[ep % len(initial_states)],
+                    seed=ep,
+                )
+                stats.append(m)
+                print(
+                    f"   ep {ep+1}: success={m['success']} steps={m['steps']} "
+                    f"avg_chunk={1000*m['avg_chunk_pred_time']:.0f}ms "
+                    f"wall={time.time()-t_ep:.1f}s",
+                    flush=True,
+                )
+            results[N] = stats
+    finally:
+        env.close()
+
+    # Summary
+    print("\n" + "=" * 72)
+    print(f"  LIBERO ROLLOUT SUMMARY — backend={args.backend}, {args.suite} task {args.task_idx}")
+    print(f"  task: {task_desc!r}")
+    print(f"  episodes/N = {args.num_episodes}, max_steps = {args.max_steps}, " f"replan = {args.replan_steps}")
+    print("=" * 72)
+    for N, stats in results.items():
+        succ = sum(s["success"] for s in stats)
+        avg_steps = float(np.mean([s["steps"] for s in stats]))
+        avg_chunk = float(np.mean([s["avg_chunk_pred_time"] for s in stats]))
+        print(
+            f"  N={N:2d}:  success {succ}/{len(stats)}  avg_steps={avg_steps:.1f}  "
+            f"avg_chunk_pred={1000*avg_chunk:.0f}ms"
+        )
+    print("=" * 72)
+    if ttnn_device is not None:
+        import ttnn
+
+        ttnn.close_device(ttnn_device)
+
+
+if __name__ == "__main__":
+    main()
