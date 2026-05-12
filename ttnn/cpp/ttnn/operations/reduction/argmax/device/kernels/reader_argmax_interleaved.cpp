@@ -83,7 +83,12 @@ void kernel_main() {
         }
 
         if constexpr (not reduce_all) {
-            noc.async_write(dst_cb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
+            noc.async_write(
+                experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                s_dst,
+                dst_page_size,
+                {.offset_bytes = 0},
+                {.page_id = k});
             noc.async_write_barrier();
         }
     }
@@ -91,7 +96,12 @@ void kernel_main() {
     // TODO: Generalize write for argmax for other dims
     if constexpr (reduce_all) {
         out_idxs[0] = max_idx;
-        noc.async_write(dst_cb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
+        noc.async_write(
+            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+            s_dst,
+            dst_page_size,
+            {.offset_bytes = 0},
+            {.page_id = 0});
         noc.async_write_barrier();
     }
 }

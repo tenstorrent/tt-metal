@@ -433,7 +433,12 @@ void kernel_main() {
                         red_idx_size_per_core);
                 }
 
-                noc.async_write(dst_cb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
+                noc.async_write(
+                    experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                    s_dst,
+                    dst_page_size,
+                    {.offset_bytes = 0},
+                    {.page_id = k});
                 noc.async_write_barrier();
             }
         }
@@ -476,7 +481,12 @@ void kernel_main() {
                 red_val_size_per_core,
                 red_idx_size_per_core);
 
-            noc.async_write(dst_cb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
+            noc.async_write(
+                experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                s_dst,
+                dst_page_size,
+                {.offset_bytes = 0},
+                {.page_id = 0});
             noc.async_write_barrier();
         }
     }  // if constexpr (reduce_all)

@@ -231,6 +231,11 @@ void kernel_main() {
 
     const auto s_out = TensorAccessor(dst_args, dst_addr);
     // Write individual core result - output buffer should handle alignment
-    noc.async_write(cb_out, s_out, 4, {.offset_bytes = core_id * 4}, {.page_id = 0, .offset_bytes = core_id * 4});
+    noc.async_write(
+        experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_out),
+        s_out,
+        4,
+        {.offset_bytes = core_id * 4},
+        {.page_id = 0, .offset_bytes = core_id * 4});
     noc.async_write_barrier();
 }
