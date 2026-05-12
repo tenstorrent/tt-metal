@@ -208,7 +208,20 @@ def create_mesh_device(
     # Default: COL (gives compute grid 7x10) since most lead_models traces use
     # cores in the 7-wide pattern with y up to 9. Switch to ROW only if any of
     # the op's master shard_specs uses x=7 (which COL excludes).
-    # Env-var override takes highest priority when explicitly set.
+    # When x=7 or 8-8 grid is needed, use ETH dispatch so all 8x8
+    # compute cores are available. ETH takes priority over the env-var
+    # because the op cannot run at all without the full grid.
+    if needs_row_only:
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+            )
+        except Exception:
+            pass
+
+    # 3. Env-var override (when ETH not needed).
     if _env_axis in ("col", "row"):
         _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
         try:
@@ -220,18 +233,7 @@ def create_mesh_device(
         except Exception:
             pass
 
-    # When x=7 or 8-8 grid is needed and no explicit env-var override,
-    # use ETH dispatch so all 8x8 compute cores are available.
-    if needs_row_only:
-        try:
-            return ttnn.open_mesh_device(
-                mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
-                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
-            )
-        except Exception:
-            pass
-
+    # 4. Default to COL.
     use_axis = ttnn.DispatchCoreAxis.COL
 
     try:
