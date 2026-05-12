@@ -287,7 +287,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
     uint32_t start_src_stick_wi = 0;  // start of stick segment for 2d decomp
     uint32_t start_dst_stick_wi = 0;
     int32_t local_nsticks = ntiles_per_core_h * TILE_HEIGHT;
-    for (int32_t b = 0; b < nbatch; ++b) {
+    for (uint32_t b = 0; b < nbatch; ++b) {
         int32_t rem_src_nsticks = a.padded_shape()[2];
         for (uint32_t j = 0; j < ncores_per_batch_h; ++j) {
             uint32_t num_local_unpadded_nsticks = local_nsticks;

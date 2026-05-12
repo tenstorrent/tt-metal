@@ -79,8 +79,8 @@ RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::creat
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t done = 0;
-    for (int core_x = 0; core_x < num_cores_x; core_x++) {
-        for (int core_y = 0; core_y < num_cores_y; core_y++) {
+    for (uint32_t core_x = 0; core_x < num_cores_x; core_x++) {
+        for (uint32_t core_y = 0; core_y < num_cores_y; core_y++) {
             CoreCoord core = {core_x, core_y};
             if (done == 1) {
                 const std::vector<uint32_t> reader_runtime_args = {

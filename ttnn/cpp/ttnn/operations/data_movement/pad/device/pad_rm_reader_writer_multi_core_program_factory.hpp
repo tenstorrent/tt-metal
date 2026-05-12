@@ -12,8 +12,8 @@
 namespace ttnn::prim {
 
 struct PadRmReaderWriterMultiCoreSharedVariables {
-    int ncores_h{};
-    int ncores_w{};
+    uint32_t ncores_h{};
+    uint32_t ncores_w{};
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
 };

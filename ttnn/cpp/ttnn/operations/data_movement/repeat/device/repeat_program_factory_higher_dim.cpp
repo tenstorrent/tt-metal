@@ -85,8 +85,8 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
         (divide_on_higher ? number_of_higher_pages : number_of_lower_pages) / num_cores_total;
     uint32_t responsibility_mod = (divide_on_higher ? number_of_higher_pages : number_of_lower_pages) % num_cores_total;
     uint32_t core_count = 0;
-    for (int core_x = 0; core_x < num_cores_x; core_x++) {
-        for (int core_y = 0; core_y < num_cores_y; core_y++) {
+    for (uint32_t core_x = 0; core_x < num_cores_x; core_x++) {
+        for (uint32_t core_y = 0; core_y < num_cores_y; core_y++) {
             uint32_t responsibility =
                 core_count++ < responsibility_mod ? responsibility_chunk + 1 : responsibility_chunk;
             CoreCoord core = {core_x, core_y};

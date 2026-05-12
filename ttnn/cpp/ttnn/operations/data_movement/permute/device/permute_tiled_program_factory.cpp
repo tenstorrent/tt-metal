@@ -33,7 +33,7 @@ ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& shape = input_tensor.padded_shape();
     ttnn::SmallVector<uint32_t> tiled_shape;
     tiled_shape.reserve(shape.rank());
-    for (int i = 0; i < shape.rank(); i++) {
+    for (size_t i = 0; i < shape.rank(); i++) {
         uint32_t dim = 0;
         if (i == shape.rank() - 1) {
             dim = shape[i] / tile_shape[1];

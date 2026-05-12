@@ -182,9 +182,9 @@ std::vector<SegmentMapData> reshape_map_output_page(
         prev_page_idx_i = page_idx_i;
     }
 
-    auto total_num_elements = std::accumulate(map_data.begin(), map_data.end(), 0, [](auto acc, auto& v) {
+    auto total_num_elements = std::accumulate(map_data.begin(), map_data.end(), 0u, [](auto acc, auto& v) {
         return acc + std::accumulate(
-                         v.second.begin(), v.second.end(), 0, [](auto acc2, auto& d) { return acc2 + d.num_elements; });
+                         v.second.begin(), v.second.end(), 0u, [](auto acc2, auto& d) { return acc2 + d.num_elements; });
     });
 
     TT_ASSERT(output_tile_iterator.size() == total_num_elements);

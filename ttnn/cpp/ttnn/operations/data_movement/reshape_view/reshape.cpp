@@ -186,13 +186,13 @@ std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
     // Correct the shape to account for inferred dimensions
     uint32_t input_volume = tensor.logical_volume();
     uint32_t output_volume = 1;
-    uint32_t inferred_dim = -1;
+    int32_t inferred_dim = -1;
     for (uint32_t i = 0; i < logical_shape.rank(); i++) {
         if ((static_cast<int>(logical_shape[i])) == -1) {
             if (inferred_dim != -1) {
                 TT_FATAL(false, "Only one dimension can be inferred in reshape");
             }
-            inferred_dim = i;
+            inferred_dim = static_cast<int32_t>(i);
         } else {
             output_volume = output_volume * logical_shape[i];
         }
