@@ -754,6 +754,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Validate per-DFB sizing: entry_size and num_entries must be set to non-zero values.
+    // (Sizes may still be overridden at runtime via ProgramRunParams, but a ProgramSpec value is required.)
+    for (const auto& dfb : spec.dataflow_buffers) {
+        TT_FATAL(
+            dfb.entry_size > 0,
+            "DataflowBufferSpec '{}' has entry_size = 0. entry_size must be set to a non-zero value.",
+            dfb.unique_id);
+        TT_FATAL(
+            dfb.num_entries > 0,
+            "DataflowBufferSpec '{}' has num_entries = 0. num_entries must be set to a non-zero value.",
+            dfb.unique_id);
+    }
+
     // Validate local DFB endpoint placement:
     // A local DFB's producer and consumer kernels must be on the same node (sharing SRAM memory).
     // For this to be true, the producer and consumer kernels need IDENTICAL WorkUnitSpec membership.
