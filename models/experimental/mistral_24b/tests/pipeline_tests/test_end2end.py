@@ -23,7 +23,7 @@ from models.experimental.mistral_24b.tt.generator import MistralGenerator
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
-from models.experimental.mistral_24b.tt.model_config import Mistral24BModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
 import re
@@ -227,7 +227,7 @@ def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optim
     """Setup model arguments for vision-enabled model (Single Responsibility)."""
     instruct = True if weights == "instruct" else False
 
-    model_args = Mistral24BModelArgs(
+    model_args = ModelArgs(
         mesh_device=mesh_device,
         instruct=instruct,
         optimizations=optimizations,
