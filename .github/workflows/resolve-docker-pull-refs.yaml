@@ -1,5 +1,12 @@
 # Prefix canonical GHCR image refs with Harbor pull-through when healthy.
 # Callers pass check-harbor.outputs.harbor-prefix plus canonical tags; outputs are pull-ready strings.
+#
+# TODO: Convert to a composite action (.github/actions/resolve-docker-pull-refs/action.yml)
+# to eliminate the ~20-40s ubuntu-latest runner overhead per pipeline invocation.
+# This is deferred because 17+ callers use `needs: [resolve-docker-pull-refs]` and
+# reference `needs.resolve-docker-pull-refs.outputs.*`, so the migration requires
+# updating each caller's dependency graph (moving the step into an existing job
+# and rewiring output references). Track as a follow-up optimization.
 name: "[internal] Resolve Docker pull refs"
 
 on:
