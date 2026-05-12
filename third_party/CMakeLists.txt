@@ -25,6 +25,25 @@ if(NOT HWLOC_LIBRARY)
 endif()
 
 ############################################################################################################################
+# BLAKE3 : https://github.com/BLAKE3-team/BLAKE3
+############################################################################################################################
+
+CPMAddPackage(
+    NAME blake3
+    GITHUB_REPOSITORY BLAKE3-team/BLAKE3
+    GIT_TAG 1.8.4
+    SOURCE_SUBDIR c
+    PATCHES
+        blake3_install_dir.patch
+    OPTIONS
+        "BUILD_SHARED_LIBS OFF"
+        "BLAKE3_USE_TBB OFF"
+        "BLAKE3_FETCH_TBB OFF"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+############################################################################################################################
 # Boost
 ############################################################################################################################
 
@@ -262,6 +281,22 @@ CPMAddPackage(
     CUSTOM_CACHE_KEY "0_22_0_patched"
 )
 
+# Mark xtensor stack headers as SYSTEM so clang-tidy and the compiler suppress
+# warnings from vendored headers when they are included in project TUs.
+foreach(_xtensor_target xtl xtensor xtensor-blas)
+    if(TARGET ${_xtensor_target})
+        get_target_property(_incs ${_xtensor_target} INTERFACE_INCLUDE_DIRECTORIES)
+        if(_incs)
+            set_target_properties(
+                ${_xtensor_target}
+                PROPERTIES
+                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                        "${_incs}"
+            )
+        endif()
+    endif()
+endforeach()
+
 ############################################################################################################################
 # benchmark : https://github.com/google/benchmark
 ############################################################################################################################
@@ -364,6 +399,71 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
+# libdwarf : https://github.com/davea42/libdwarf-code
+# Portable DWARF debug info parser (no libelf dependency, built-in ELF reader)
+####################################################################################################################
+CPMAddPackage(
+    NAME libdwarf
+    GITHUB_REPOSITORY davea42/libdwarf-code
+    GIT_TAG v0.12.0
+    OPTIONS
+        "BUILD_DWARFDUMP OFF"
+        "BUILD_DWARFEXAMPLE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "PIC_ALWAYS ON"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+####################################################################################################################
+# Kissat SAT solver (MIT): https://github.com/arminbiere/kissat — IPASIR C API, built via upstream configure+make.
+# Fetched with CPM; build uses ExternalProject + GNU Make (not Ninja) so it works when the main project uses Ninja.
+####################################################################################################################
+CPMAddPackage(NAME kissat GITHUB_REPOSITORY arminbiere/kissat GIT_TAG sc2024 DOWNLOAD_ONLY YES)
+
+find_program(
+    KISSAT_GNU_MAKE
+    NAMES
+        gmake
+        make
+    REQUIRED
+)
+
+set(KISSAT_EXT_BUILD_DIR "${kissat_SOURCE_DIR}/build")
+include(ExternalProject)
+ExternalProject_Add(
+    kissat_external
+    SOURCE_DIR "${kissat_SOURCE_DIR}"
+    BINARY_DIR "${KISSAT_EXT_BUILD_DIR}"
+    DOWNLOAD_COMMAND
+        ""
+    UPDATE_COMMAND
+        ""
+    CONFIGURE_COMMAND
+        "${CMAKE_COMMAND}" -E chdir "${kissat_SOURCE_DIR}" "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}" sh
+        "${kissat_SOURCE_DIR}/configure" -fPIC
+    BUILD_COMMAND
+        "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" ${KISSAT_GNU_MAKE} -j4 libkissat.a
+    INSTALL_COMMAND
+        ""
+    BUILD_BYPRODUCTS
+        "${KISSAT_EXT_BUILD_DIR}/libkissat.a"
+    USES_TERMINAL_BUILD YES
+)
+
+add_library(kissat STATIC IMPORTED GLOBAL)
+add_library(kissat::kissat ALIAS kissat)
+set_target_properties(
+    kissat
+    PROPERTIES
+        IMPORTED_LOCATION
+            "${KISSAT_EXT_BUILD_DIR}/libkissat.a"
+        INTERFACE_INCLUDE_DIRECTORIES
+            "${kissat_SOURCE_DIR}/src"
+)
+add_dependencies(kissat kissat_external)
+
+####################################################################################################################
 # Cap'n Proto : https://github.com/capnproto/capnproto
 ####################################################################################################################
 CPMAddPackage(
@@ -380,3 +480,15 @@ CPMAddPackage(
         capnproto_capture_this.patch
         capnproto_pthread.patch
 )
+
+############################################################################################################################
+# tt-emule (software emulation, header-only consumption)
+############################################################################################################################
+if(TT_METAL_USE_EMULE)
+    CPMAddPackage(
+        NAME tt_emule
+        GITHUB_REPOSITORY tenstorrent/tt-emule
+        GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
+        EXCLUDE_FROM_ALL YES
+    )
+endif()

@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_uniform ${LIB_TYPE})
 add_library(TTNN::Ops::Uniform ALIAS ttnn_op_uniform)
 
-target_precompile_headers(ttnn_op_uniform REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_uniform TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_uniform)
 
 # Only kernels FILE_SET; disable interface header verification
@@ -27,9 +29,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/uniform_device_operation.cpp
-        device/uniform_program_factory.cpp
-        uniform.cpp
+        ${TTNN_OP_UNIFORM_SRCS}
 )
 
 target_include_directories(ttnn_op_uniform PRIVATE ${FixmeOpIncDirs})

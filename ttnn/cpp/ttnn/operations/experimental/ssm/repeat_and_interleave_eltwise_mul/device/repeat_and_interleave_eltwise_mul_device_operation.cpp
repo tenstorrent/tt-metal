@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -110,7 +110,7 @@ Tensor RepeatAndInterleaveEltwiseMulDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
 }
 
-tt::stl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
@@ -145,14 +145,14 @@ Tensor repeat_and_interleave_eltwise_mul(
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
-    std::optional<MathFidelity> math_fidelity,
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::experimental::prim::RepeatAndInterleaveEltwiseMulDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(a.memory_config()),
         .dtype = dtype.value_or(a.dtype()),
-        .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
+        .math_fidelity = math_fidelity.value_or(tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{.a = a, .b = b, .preallocated_output = preallocated_output};
 

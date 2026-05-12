@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -39,6 +39,8 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 
@@ -58,6 +60,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
     {"sqrt", {{"SFPU_OP_CHAIN_0", "sqrt_tile_init(); sqrt_tile(0);"}}},
     {"sigmoid", {{"SFPU_OP_CHAIN_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
+    {"silu", {{"SFPU_OP_CHAIN_0", "silu_tile_init(); silu_tile(0);"}}},
     {"log", {{"SFPU_OP_CHAIN_0", "log_tile_init(); log_tile(0);"}}},
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
     {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
@@ -86,6 +89,11 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "sigmoid") {
         auto x = static_cast<float>(input);
         float result = 1 / (1 + std::exp(-x));
+        return bfloat16(result);
+    }
+    if (op_name == "silu") {
+        auto x = static_cast<float>(input);
+        float result = x / (1 + std::exp(-x));
         return bfloat16(result);
     }
     if (op_name == "log") {
@@ -173,11 +181,6 @@ bool run_sfpu_all_same_buffer(
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    vector<uint32_t> compute_kernel_args = {
-        uint32_t(test_config.num_tiles),  // per_core_block_cnt
-        1                                 // per_core_block_cnt
-    };
-
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
         byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
@@ -204,29 +207,70 @@ bool run_sfpu_all_same_buffer(
     };
 
     for (const CoreRange& core_range : test_config.cores.ranges()) {
-        tt_metal::CircularBufferConfig l1_input_cb_config =
-            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
-                .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, core_range, l1_input_cb_config);
+        uint32_t in_dfb = 0;
+        uint32_t out_dfb = 0;
+        KernelHandle reader_kernel;
+        KernelHandle writer_kernel;
+        KernelHandle compute_kernel;
 
-        tt_metal::CircularBufferConfig l1_output_cb_config =
-            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
-                .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, core_range, l1_output_cb_config);
+        if (device->arch() == ARCH::QUASAR) {
+            tt_metal::experimental::dfb::DataflowBufferConfig in_dfb_config = {
+                .entry_size = test_config.tile_byte_size,
+                .num_entries = test_config.num_tiles,
+                .num_producers = 1,
+                .num_consumers = 1,
+                .enable_implicit_sync = false,
+                .data_format = test_config.l1_input_data_format};
 
-        auto reader_kernel = tt_metal::CreateKernel(
-            program_,
-            "tt_metal/kernels/dataflow/reader_unary.cpp",
-            test_config.cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            tt_metal::experimental::dfb::DataflowBufferConfig out_dfb_config = {
+                .entry_size = test_config.tile_byte_size,
+                .num_entries = test_config.num_tiles,
+                .num_producers = 1,
+                .num_consumers = 1,
+                .enable_implicit_sync = false,
+                .data_format = test_config.l1_output_data_format};
 
-        auto writer_kernel = tt_metal::CreateKernel(
-            program_,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            test_config.cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            in_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core_range, in_dfb_config);
+            out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core_range, out_dfb_config);
+
+            reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/reader_unary.cpp",
+                test_config.cores,
+                tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = {in_dfb}});
+
+            writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/writer_unary.cpp",
+                test_config.cores,
+                tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = {out_dfb}});
+        } else {
+            tt_metal::CircularBufferConfig l1_input_cb_config =
+                tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
+                    .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
+            tt_metal::CreateCircularBuffer(program_, core_range, l1_input_cb_config);
+
+            tt_metal::CircularBufferConfig l1_output_cb_config =
+                tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
+                    .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
+            tt_metal::CreateCircularBuffer(program_, core_range, l1_output_cb_config);
+
+            reader_kernel = tt_metal::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/reader_unary.cpp",
+                test_config.cores,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+
+            writer_kernel = tt_metal::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/writer_unary.cpp",
+                test_config.cores,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        }
 
         std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
 
@@ -240,14 +284,37 @@ bool run_sfpu_all_same_buffer(
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
-        tt_metal::CreateKernel(
-            program_,
-            "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-            test_config.cores,
-            tt_metal::ComputeConfig{
-                .math_approx_mode = test_config.approx_mode,
-                .compile_args = compute_kernel_args,
-                .defines = sfpu_defines});
+        vector<uint32_t> compute_kernel_args = {
+            uint32_t(test_config.num_tiles),  // per_core_block_cnt
+            1                                 // per_core_block_dim
+        };
+
+        if (device->arch() == ARCH::QUASAR) {
+            compute_kernel_args.push_back(in_dfb);
+            compute_kernel_args.push_back(out_dfb);
+            compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+                program_,
+                "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                test_config.cores,
+                tt_metal::experimental::quasar::QuasarComputeConfig{
+                    .num_threads_per_cluster = 1,
+                    .math_approx_mode = test_config.approx_mode,
+                    .compile_args = compute_kernel_args,
+                    .defines = sfpu_defines});
+            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+                program_, in_dfb, reader_kernel, compute_kernel);
+            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+                program_, out_dfb, compute_kernel, writer_kernel);
+        } else {
+            compute_kernel = tt_metal::CreateKernel(
+                program_,
+                "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                test_config.cores,
+                tt_metal::ComputeConfig{
+                    .math_approx_mode = test_config.approx_mode,
+                    .compile_args = compute_kernel_args,
+                    .defines = sfpu_defines});
+        }
 
         for (const CoreCoord& core_coord : core_range) {
             SetRuntimeArgs(program_, writer_kernel, core_coord, writer_rt_args);
@@ -266,7 +333,7 @@ bool run_sfpu_all_same_buffer(
 
 }  // namespace unit_tests::compute::sfpu
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
@@ -298,6 +365,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "gelu"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
+        std::make_tuple(1, "silu"),
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
@@ -307,11 +375,13 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "gelu"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
+        std::make_tuple(4, "silu"),
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));
+
 class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {
@@ -348,6 +418,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "gelu"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
+        std::make_tuple(1, "silu"),
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
@@ -357,6 +428,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "gelu"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
+        std::make_tuple(4, "silu"),
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));

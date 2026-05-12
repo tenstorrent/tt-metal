@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <tracy/Tracy.hpp>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -84,7 +85,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
 
 uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions) {
     // Collect all the parameters that affect the build configuration
-    FNV1a hasher;
+    StableHasher hasher;
 
     hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
@@ -154,23 +155,35 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
-
-    auto& dev_build_env = device_id_to_build_env_[device_id];
     auto dev_config = create_jit_device_config(device_id, num_hw_cqs);
-    const auto& rtoptions = MetalContext::instance().rtoptions();
+    add_build_env_locked(device_id, dev_config, MetalContext::instance().rtoptions());
+}
 
+void BuildEnvManager::add_build_env(
+    ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
+    const std::lock_guard<std::mutex> lock(this->lock);
+    add_build_env_locked(device_id, dev_config, rtoptions);
+}
+
+void BuildEnvManager::add_build_env_locked(
+    ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
+    auto& dev_build_env = device_id_to_build_env_[device_id];
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
-
     dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
-    auto precompiled_dir = precompiled::find_precompiled_dir(
-        MetalContext::instance().rtoptions().get_root_dir(), dev_build_env.build_env.get_build_key());
-    if (precompiled_dir.has_value()) {
-        dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
-        dev_build_env.firmware_precompiled = true;
-        log_info(tt::LogBuildKernels, "Using pre-compiled firmware from: {}", *precompiled_dir);
+    if (rtoptions.get_disable_precompiled_fw()) {
+        dev_build_env.firmware_precompiled = false;
+    } else {
+        auto precompiled_dir =
+            precompiled::find_precompiled_dir(rtoptions.get_root_dir(), dev_build_env.build_env.get_build_key());
+        if (precompiled_dir.has_value()) {
+            dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
+            dev_build_env.firmware_precompiled = true;
+        } else {
+            dev_build_env.firmware_precompiled = false;
+            log_debug(tt::LogBuildKernels, "No pre-compiled firmware found for build key: {}", build_key);
+        }
     }
-
     dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, dev_config, true);
     dev_build_env.kernel_build_states = create_build_state(dev_build_env.build_env, dev_config, false);
 }
@@ -237,10 +250,14 @@ BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
     return get_kernel_build_index_and_state_count(programmable_core, processor_class);
 }
 
-void BuildEnvManager::build_firmware(ChipId device_id) {
+void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) {
     ZoneScoped;
     const auto& build_env = get_device_build_env(device_id);
-    if (build_env.firmware_precompiled) {
+    if (!ignore_precompiled && build_env.firmware_precompiled) {
+        log_info(
+            tt::LogBuildKernels,
+            "Using pre-compiled firmware from: {}",
+            build_env.build_env.get_firmware_binary_root());
         return;
     }
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
@@ -253,13 +270,26 @@ std::string BuildEnvManager::get_firmware_binary_path(
     return env.get_firmware_binary_root() + state.get_target_full_path();
 }
 
+std::string BuildEnvManager::get_kernel_binary_path(
+    ChipId device_id,
+    uint32_t programmable_core,
+    uint32_t processor_class,
+    int processor_id,
+    const std::string& binary_root,
+    const std::string& kernel_full_name) {
+    const auto& state = get_kernel_build_state(device_id, programmable_core, processor_class, processor_id);
+    auto path = std::filesystem::path(binary_root) / kernel_full_name;
+    path += state.get_target_full_path();
+    return path.string();
+}
+
 // Get build environment info for all devices
 std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     const std::lock_guard<std::mutex> lock(this->lock);
     std::vector<BuildEnvInfo> build_env_info;
     build_env_info.reserve(device_id_to_build_env_.size());
     for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_out_firmware_root_path());
+        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_firmware_binary_root());
     }
     return build_env_info;
 }

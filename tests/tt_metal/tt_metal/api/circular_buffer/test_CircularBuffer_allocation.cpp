@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,12 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -33,8 +39,10 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-// Access to internal API: ProgramImpl::get_cb_base_addr
+// Access to internal API: ProgramImpl::get_cb_base_addr, circular_buffers_unique_coreranges, etc.
 #include "impl/program/program_impl.hpp"
+// Access to CircularBufferImpl::size(), local_buffer_indices(), etc.
+#include "impl/buffers/circular_buffer.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -381,6 +389,72 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
     }
 }
 
+// Verifies that the MeshTensor overloads of CircularBufferConfig::set_globally_allocated_address[_and_total_size]
+// produce a CircularBufferConfig with identical state to the underlying Buffer overload. CircularBufferConfig's
+// operator== compares total_size, globally_allocated_address, data_formats, page_sizes, tiles, and
+// shadow_global_buffer.
+TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMatchesBuffer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& mesh_device = devices_.at(id);
+        CBConfig cb_config;
+
+        // Single-tile BFLOAT16 tensor → exactly one L1 page of cb_config.page_size (2048 B) bytes in one bank,
+        // matching the CB's total_size and satisfying the dynamic-CB bank-size validation.
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+
+        Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(underlying_buffer, nullptr);
+
+        CircularBufferConfig config_via_buffer = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                                     .set_page_size(0, cb_config.page_size)
+                                                     .set_globally_allocated_address(*underlying_buffer);
+        CircularBufferConfig config_via_tensor = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                                     .set_page_size(0, cb_config.page_size)
+                                                     .set_globally_allocated_address(tensor);
+
+        EXPECT_EQ(config_via_buffer, config_via_tensor);
+    }
+}
+
+TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromMeshTensorMatchesBuffer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& mesh_device = devices_.at(id);
+        CBConfig cb_config;
+
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+
+        Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(underlying_buffer, nullptr);
+
+        const uint32_t new_total_size = cb_config.page_size / 2;
+
+        CircularBufferConfig config_via_buffer =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(*underlying_buffer, new_total_size);
+        CircularBufferConfig config_via_tensor =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(tensor, new_total_size);
+
+        EXPECT_EQ(config_via_buffer, config_via_tensor);
+        EXPECT_EQ(config_via_buffer.total_size(), new_total_size);
+        EXPECT_EQ(config_via_tensor.total_size(), new_total_size);
+        EXPECT_EQ(config_via_buffer.globally_allocated_address(), underlying_buffer->address());
+        EXPECT_EQ(config_via_tensor.globally_allocated_address(), underlying_buffer->address());
+    }
+}
+
 TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto& cq = devices_.at(id)->mesh_command_queue();
@@ -525,15 +599,22 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
             core,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = {cb_index}});
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = {cb_index, /*use_dfbs=*/false}});
 
         auto writer_kernel = CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
             core,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {cb_index}});
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {cb_index, /*use_dfbs=*/false}});
 
+        // DRAM buffers use page_size = buffer_size (whole buffer), so compute
+        // the per-tile stride directly. single_tile_size is the real per-tile
+        // stride here since tiles are packed contiguously inside the buffer.
         SetRuntimeArgs(
             program_,
             reader_kernel,
@@ -542,6 +623,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)src_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                single_tile_size,
             });
         SetRuntimeArgs(
             program_,
@@ -551,6 +633,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)dst_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                single_tile_size,
             });
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
@@ -592,6 +675,100 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         detail::ReadFromDeviceL1(
             this->devices_.at(id)->get_devices()[0], core, global_cb_buffer->address(), buffer_size, second_cb_data);
         EXPECT_EQ(src_vec, second_cb_data);
+    }
+}
+
+// Regression test for CB config dispatch corruption bug (same pattern as argmax).
+// Replicates dispatch.cpp's CB config payload construction using
+// circular_buffers_unique_coreranges() and circular_buffers_on_corerange().
+TEST_F(MeshDispatchFixture, TensixTestCircularBufferConfigDispatchWithOverlappingCoreRanges) {
+    // The argmax factory creates:
+    //   1. CB index 0 on cores0 with size0   (first core group)
+    //   2. CB index 0 on cores1 with size1   (second core group, different size)
+    //   3. CB index 1 on all_cores           (union of cores0 + cores1)
+    //
+    // CreateCircularBuffer internally calls merge_ranges() on the input CoreRangeSet.
+    // When all_cores = {(0,0)-(2,0), (3,0)-(4,0)}, merge_ranges() combines these
+    // adjacent ranges into {(0,0)-(4,0)}.
+    //
+    // Without fix, circular_buffers_unique_coreranges() returns:
+    //   {(0,0)-(2,0)}, {(3,0)-(4,0)}, {(0,0)-(4,0)}
+    //                                   ^^^^^^^^^^^^^ overlaps both!
+    //
+    // Dispatch builds one multicast payload per unique range (dispatch.cpp:1046-1096).
+    // For the merged {(0,0)-(4,0)}, circular_buffers_on_corerange() returns all three
+    // CBs. CB#1 writes size0 for index 0, then CB#2 overwrites with size1.
+    // This payload gets multicast to ALL cores, corrupting cores0's config.
+    CBConfig cb_config;
+
+    // Two non-overlapping core groups, adjacent so merge_ranges() combines them.
+    CoreRange cores0_range({0, 0}, {2, 0});  // 3 cores
+    CoreRange cores1_range({3, 0}, {4, 0});  // 2 cores
+    CoreRangeSet cores0({cores0_range});
+    CoreRangeSet cores1({cores1_range});
+    // Two separate ranges — merge_ranges() inside CreateCircularBuffer will
+    // merge them into {(0,0)-(4,0)}.
+    CoreRangeSet all_cores(std::vector<CoreRange>{cores0_range, cores1_range});
+
+    Program program;
+
+    uint32_t size0 = cb_config.page_size;
+    uint32_t size1 = cb_config.page_size * 2;
+
+    // CB index 0 on cores0 with size0
+    CircularBufferConfig cfg0 =
+        CircularBufferConfig(size0, {{0, cb_config.data_format}}).set_page_size(0, cb_config.page_size);
+    CreateCircularBuffer(program, cores0, cfg0);
+
+    // CB index 0 on cores1 with size1 — different size, same index
+    CircularBufferConfig cfg1 =
+        CircularBufferConfig(size1, {{0, cb_config.data_format}}).set_page_size(0, cb_config.page_size);
+    CreateCircularBuffer(program, cores1, cfg1);
+
+    // CB index 1 spanning all_cores.
+    // merge_ranges() merges {(0,0)-(2,0), (3,0)-(4,0)} into {(0,0)-(4,0)}.
+    CircularBufferConfig spanning_cfg =
+        CircularBufferConfig(cb_config.page_size, {{1, cb_config.data_format}}).set_page_size(1, cb_config.page_size);
+    CreateCircularBuffer(program, all_cores, spanning_cfg);
+
+    // Replicate dispatch.cpp's CB config payload construction (lines 1046-1096).
+    // For each unique core range, dispatch builds a payload from all intersecting CBs
+    // via circular_buffers_on_corerange(), then multicasts it to all cores in that range.
+    const auto& unique_ranges = program.impl().circular_buffers_unique_coreranges();
+
+    // Simulate multicast: build per-range payload, write to all covered cores.
+    // Last range covering a core overwrites previous values (same as hardware multicast).
+    std::map<CoreCoord, uint32_t> core_to_cb0_size;
+    for (const CoreRange& range : unique_ranges) {
+        // Build payload for this range exactly like dispatch.cpp:1054-1066
+        uint32_t payload_cb0_size = 0;
+        const auto& cbs_on_range = program.impl().circular_buffers_on_corerange(range);
+        for (const auto& cb : cbs_on_range) {
+            for (const auto& buffer_index : cb->local_buffer_indices()) {
+                if (buffer_index == 0) {
+                    payload_cb0_size = cb->size();
+                }
+            }
+        }
+
+        // Simulate multicast to all cores in this range
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
+            for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+                core_to_cb0_size[CoreCoord(x, y)] = payload_cb0_size;
+            }
+        }
+    }
+
+    // Verify: cores0 should have size0, cores1 should have size1.
+    // Without the fix, cores0 gets size1 because the merged range's payload
+    // (with CB#2 overwriting CB#1 for index 0) is multicast last to all cores.
+    for (uint32_t x = cores0_range.start_coord.x; x <= cores0_range.end_coord.x; x++) {
+        EXPECT_EQ(size0, core_to_cb0_size[CoreCoord(x, 0)])
+            << "Core (" << x << ", 0) in cores0 got wrong size for CB index 0";
+    }
+    for (uint32_t x = cores1_range.start_coord.x; x <= cores1_range.end_coord.x; x++) {
+        EXPECT_EQ(size1, core_to_cb0_size[CoreCoord(x, 0)])
+            << "Core (" << x << ", 0) in cores1 got wrong size for CB index 0";
     }
 }
 

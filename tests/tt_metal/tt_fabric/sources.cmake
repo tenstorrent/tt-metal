@@ -11,6 +11,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_topology_mapper.cpp
     fabric_router/test_topology_mapper_utils.cpp
     fabric_router/test_topology_solver.cpp
+    fabric_router/test_topology_sat_encoder.cpp
     fabric_router/test_custom_routing_tables.cpp
     fabric_router/test_multi_host.cpp
     fabric_router/test_connection_registry.cpp
@@ -26,6 +27,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_fabric_topology_helpers.cpp
     fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp
+    disaggregation/test_kv_chunk_address_table_protobuf.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
     fabric_data_movement/test_basic_fabric_mux.cpp

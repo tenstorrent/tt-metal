@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -103,6 +103,7 @@ std::vector<uint32_t> factor_cores_into_dims(uint32_t num_cores, size_t num_dims
         }
 
         factors[d] = factor;
+        TT_ASSERT(factor > 0);
         remaining /= factor;
 
         // Update target for remaining dimensions

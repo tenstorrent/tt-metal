@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -17,7 +18,6 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
     constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
-    constexpr uint32_t input_tensor_page_size = get_named_compile_time_arg_val("input_tensor_page_size");
     constexpr auto src_args = TensorAccessorArgs<0>();
 
     // Precomputed constants: size of a 32 element block along the W dimension (measured in bytes)
@@ -50,7 +50,7 @@ void kernel_main() {
     uint32_t X = input_shape[x_dim];
     uint32_t X_stride = src_strides[x_dim];
 
-    const auto s0 = TensorAccessor(src_args, src_addr, input_tensor_page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t idxs[N];
     idxs[N - 1] = 0;
@@ -100,8 +100,9 @@ void kernel_main() {
         }
 
         // Reserve space in the circular buffer for the X-block length
-        cb_reserve_back(tt::CBIndex::c_0, x_block_size);
-        uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        experimental::CircularBuffer cb(tt::CBIndex::c_0);
+        cb.reserve_back(x_block_size);
+        uint32_t src_buffer_l1_addr = cb.get_write_ptr();
 
         // We read in 'x_block_len' chunks along the X dimension
         uint32_t page_offset = 0;
@@ -120,6 +121,6 @@ void kernel_main() {
         // Wait for all async reads to complete before proceeding
         noc_async_read_barrier();
         // Push the filled block into the circular buffer
-        cb_push_back(tt::CBIndex::c_0, x_block_size);
+        cb.push_back(x_block_size);
     }
 }

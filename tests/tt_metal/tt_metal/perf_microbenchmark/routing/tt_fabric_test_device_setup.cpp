@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_device_setup.hpp"
+#include "tt_metal/fabric/fabric_vc2_connection.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -12,8 +13,13 @@ namespace tt::tt_fabric::fabric_tests {
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type) {
-    ConnectionKey key = {direction, link_idx};
+    const CoreCoord& core,
+    RoutingDirection direction,
+    uint32_t link_idx,
+    TestWorkerType worker_type,
+    const FabricNodeId& dst_node_id,
+    uint8_t vc_id) {
+    ConnectionKey key = {direction, link_idx, vc_id, dst_node_id};
     auto& conn = connections_[key];
 
     // Store worker type for this core (for channel assignment later)
@@ -204,7 +210,6 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
     const CoreCoord& core,
     TestWorkerType worker_type,
     const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
-    const std::shared_ptr<IRouteManager>& route_manager,
     const FabricNodeId& fabric_node_id,
     tt::tt_metal::Program& program_handle) const {
     std::vector<uint32_t> rt_args;
@@ -272,10 +277,16 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                 static_cast<uint32_t>(mux_config->get_status_address())};
             rt_args.insert(rt_args.end(), mux_rt_args.begin(), mux_rt_args.end());
         } else {
-            // Generate fabric connection args directly using passed parameters
-            const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
-            append_fabric_connection_rt_args(
-                fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            // Use the destination from the ConnectionKey directly instead of re-deriving
+            // from direction, which would lose multi-Z disambiguation.
+            const auto& neighbor_node_id = key.dst_node_id;
+            if (key.use_vc2()) {
+                append_fabric_vc2_connection_rt_args(
+                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            } else {
+                append_fabric_connection_rt_args(
+                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            }
         }
     }
 
@@ -405,7 +416,9 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
         TestWorkerType::SENDER,
         this->test_device_ptr_->connection_manager_,
         outgoing_direction,
-        config.link_id);
+        config.link_id,
+        dst_node_id,
+        config.vc_id);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key);
 }
@@ -465,7 +478,8 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
             TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
-            config.link_id);
+            config.link_id,
+            dst_node_id);
     }
 
     this->configs_.emplace_back(std::move(config), credit_connection_key);
@@ -521,7 +535,8 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
         TestWorkerType::SYNC,
         this->test_device_ptr_->get_sync_connection_manager(),
         outgoing_direction,
-        sender_config.link_id);
+        sender_config.link_id,
+        sender_config.dst_node_ids[0]);
 
     this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
 }
@@ -607,7 +622,9 @@ ConnectionKey TestDevice::register_fabric_connection(
     TestWorkerType worker_type,
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
-    uint32_t link_idx) {
+    uint32_t link_idx,
+    const FabricNodeId& dst_node_id,
+    uint8_t vc_id) {
     // Get available link indices for this direction (to validate link_idx)
     std::vector<uint32_t> available_link_indices = get_forwarding_link_indices_in_direction(outgoing_direction);
 
@@ -625,25 +642,31 @@ ConnectionKey TestDevice::register_fabric_connection(
         link_idx,
         static_cast<int>(outgoing_direction));
 
-    // Check if this core already registered this connection
-    ConnectionKey connection_key{outgoing_direction, link_idx};
+    // Collapse cardinal-direction dst to the immediate next-hop neighbor so multi-hop flows
+    // sharing the same first-hop link dedup to one ConnectionKey (avoids per-key worker
+    // semaphore allocations in append_fabric_connection_rt_args). Z is single-hop; keep dst
+    // as-is to preserve cross-mesh disambiguation.
+    FabricNodeId key_dst = (outgoing_direction == RoutingDirection::Z)
+                               ? dst_node_id
+                               : route_manager_->get_neighbor_node_id(fabric_node_id_, outgoing_direction);
+
+    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, key_dst};
     auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
 
     if (std::find(registered_keys.begin(), registered_keys.end(), connection_key) != registered_keys.end()) {
-        // Connection already registered - reuse it
         return connection_key;
     }
 
-    // Register the new connection with the connection manager
-    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type);
+    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, key_dst, vc_id);
 
     log_debug(
         tt::LogTest,
-        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}",
+        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}, next_hop={}",
         static_cast<int>(worker_type),
         logical_core,
         static_cast<int>(outgoing_direction),
-        link_idx);
+        link_idx,
+        key_dst);
 
     return connection_key;
 }
@@ -712,7 +735,9 @@ void TestDevice::create_mux_kernels() {
         auto* mux_config = mux_worker.config_;
         const auto& connection_key = mux_worker.connection_key_;
 
-        const auto dst_node_id = route_manager_->get_neighbor_node_id(fabric_node_id_, connection_key.direction);
+        // Use the destination from the ConnectionKey directly instead of re-deriving
+        // from direction, which would lose multi-Z disambiguation.
+        const auto& dst_node_id = connection_key.dst_node_id;
 
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
@@ -773,7 +798,7 @@ void TestDevice::create_sync_kernel() {
     std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
 
     auto sync_connection_args = sync_connection_manager.generate_connection_args_for_core(
-        sync_core, TestWorkerType::SYNC, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
+        sync_core, TestWorkerType::SYNC, device_info_provider_, fabric_node_id_, program_handle_);
     rt_args.insert(rt_args.end(), sync_connection_args.begin(), sync_connection_args.end());
 
     // Local args (all the rest go to local args buffer)
@@ -870,6 +895,22 @@ void TestDevice::create_sender_kernels() {
         bool has_mux_connections = connection_manager_.is_mux_client(core);
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
 
+        // All configs on a core must share the same vc_id: the kernel is compiled with a single
+        // VC_ID template arg and all EDM connection runtime args are interpreted using that adapter
+        // type. Mixing VC0 and VC2 configs on the same core would silently corrupt connection parsing.
+        const uint8_t first_vc_id =
+            sender.configs_.empty() ? default_worker_vc_id : sender.configs_.front().first.vc_id;
+        for (const auto& [config, _] : sender.configs_) {
+            TT_FATAL(
+                config.vc_id == first_vc_id,
+                "All sender configs on a core must use the same vc_id, but found vc_id={} and vc_id={} on the same "
+                "core. "
+                "Split configs onto separate cores to mix VCs.",
+                first_vc_id,
+                config.vc_id);
+        }
+        uint8_t sender_vc_id = first_vc_id;
+
         // Compile-time args (FLOW_CONTROL_ENABLED removed - now handled per-traffic-config)
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled,
@@ -880,7 +921,8 @@ void TestDevice::create_sender_kernels() {
             num_local_sync_cores,                                /* num local sync cores */
             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
-            num_muxes_to_terminate                               /* NUM_MUXES_TO_TERMINATE */
+            num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+            sender_vc_id                                         /* VC_ID */
         };
 
         // Runtime args with connection type information
@@ -888,7 +930,7 @@ void TestDevice::create_sender_kernels() {
 
         // Add all connection args via FabricConnectionManager
         auto connection_args = connection_manager_.generate_connection_args_for_core(
-            core, TestWorkerType::SENDER, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
+            core, TestWorkerType::SENDER, device_info_provider_, fabric_node_id_, program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
 
         // Local args for traffic configs (existing logic)
@@ -941,6 +983,7 @@ void TestDevice::create_sender_kernels() {
 
         // Only clear result buffer from host if progress monitoring is enabled
         if (progress_monitoring_enabled_) {
+            sender_memory_map_->common.validate_per_config_capacity(static_cast<uint8_t>(sender.configs_.size()));
             addresses_and_size_to_clear.push_back(
                 {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
         }
@@ -1007,7 +1050,7 @@ void TestDevice::create_receiver_kernels() {
 
         // Add all connection args via FabricConnectionManager (for credit return)
         auto connection_args = connection_manager_.generate_connection_args_for_core(
-            core, TestWorkerType::RECEIVER, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
+            core, TestWorkerType::RECEIVER, device_info_provider_, fabric_node_id_, program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
 
         // Build traffic config to credit connection mapping (same as sender side)
@@ -1034,6 +1077,7 @@ void TestDevice::create_receiver_kernels() {
 
         // Only clear result buffer from host if progress monitoring is enabled
         if (progress_monitoring_enabled_) {
+            receiver_memory_map_->common.validate_per_config_capacity(static_cast<uint8_t>(receiver.configs_.size()));
             addresses_and_size_to_clear.push_back(
                 {receiver_memory_map_->get_result_buffer_address(), receiver_memory_map_->get_result_buffer_size()});
         }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -412,7 +412,7 @@ def _run_prepare_expert_tensors_test(
     )
 
     def op_fn():
-        return gpt_oss_prepare_expert_tensors_ttnn(
+        hidden_rm, indices_rm, _ = gpt_oss_prepare_expert_tensors_ttnn(
             tt_hidden_states,
             tt_topk_indices,
             tt_topk_weights,
@@ -421,6 +421,10 @@ def _run_prepare_expert_tensors_test(
             hidden_size,
             num_experts_per_tok,
         )
+        # Only return tensors that own their own device buffer.
+        # The weights output is a reshape-view aliasing the input's buffer;
+        # deallocating it would free the input and crash subsequent iterations.
+        return (hidden_rm, indices_rm)
 
     # Device performance measurement mode (when env var is set)
     if os.getenv(DEVICE_PERF_ENV_VAR) is not None:

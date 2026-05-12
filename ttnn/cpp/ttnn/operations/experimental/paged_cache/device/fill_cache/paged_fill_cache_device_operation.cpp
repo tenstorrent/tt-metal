@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,7 +68,7 @@ Tensor PagedFillCacheDeviceOperation::create_output_tensors(
     return tensor_args.cache_tensor;
 }
 
-tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(args, tensor_args);
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -11,6 +11,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_paged_attention,
     run_test_sdpa_decode_paged_attention_single_iter,
     run_test_sdpa_decode_ndpcc,
+    run_test_sdpa_decode_broadcast_mask_batch,
     num_to_corerange,
     nearest_n,
     nearest_pow_2,
@@ -483,15 +484,15 @@ def test_sdpa_decode_perf(device):
     "b, nh, nkv, s, d",
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
-def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
+def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, reset_seeds):
     import torch
 
     dummy_tensors = []
+    # One cur_pos vector for both outer passes: compute_program_hash includes cur_pos, so resampling
+    # per iteration would compile extra programs for cur_pos_tensor=False paths (expected cache size 4).
+    start_indices = np.random.randint(0, s - 1, b).tolist()
+    start_indices[0] = s - 1
     for i in range(2):
-        # generate random start indices from 0 to s-1
-        start_indices = np.random.randint(0, s - 1, b).tolist()
-        start_indices[0] = s - 1
-
         dummy_tensors.append(
             ttnn.as_tensor(
                 torch.zeros(32, 32),
@@ -688,3 +689,20 @@ def test_sdpa_decode_sliding_window(
             start_indices=[cur_pos + i for i in range(b)],  # test a batch with different start positions
             sliding_window_size=sliding_window_size,
         )
+
+
+@pytest.mark.parametrize(
+    "mask_dtype",
+    [ttnn.bfloat4_b, ttnn.bfloat16],
+    ids=["mask_bfp4", "mask_bf16"],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    [
+        [32, 8, 1, 128, 128, (8, 4)],  # llama2-70B-style, batch=32 exposes OOB reads for batches 1-31
+    ],
+)
+@pytest.mark.timeout(120)
+def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, grid_size, mask_dtype):
+    """Regression test for issue #39910: mask batch-broadcast reads OOB DRAM."""
+    run_test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, ttnn.bfloat16, grid_size, mask_dtype)

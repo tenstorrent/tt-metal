@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,7 @@ class TtUNetMidBlock2DCrossAttn(LightweightModule):
         num_attn_heads,
         out_dim,
         debug_mode=False,
+        lora_weights_manager=None,
     ):
         super().__init__()
 
@@ -36,6 +37,7 @@ class TtUNetMidBlock2DCrossAttn(LightweightModule):
                     query_dim,
                     num_attn_heads,
                     out_dim,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
 

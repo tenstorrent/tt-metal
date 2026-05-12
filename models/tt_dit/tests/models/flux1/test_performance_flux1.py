@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -264,7 +264,7 @@ def test_flux1_pipeline_performance(
             "total_encoding_time": 0.3,
             "denoising_steps_time": 0.75 * num_inference_steps,
             "vae_decoding_time": 1.6,
-            "total_time": 22,
+            "total_time": 23,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {

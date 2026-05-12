@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include <cstddef>
 #include <filesystem>
 #include <map>
@@ -18,6 +19,7 @@
 
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
+#include "context/context_types.hpp"
 #include "core_coord.hpp"
 #include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"
@@ -71,6 +73,9 @@ private:
     // Device ID
     ChipId device_id{};
 
+    // ContextID extracted from the device
+    ContextId context_id;
+
     // Device frequency
     int device_core_frequency{};
 
@@ -82,6 +87,9 @@ private:
 
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
+
+    // Set if any risc reported DROPPED_ZONES; downgrades start-without-end errors to warnings.
+    std::atomic<bool> had_dropped_markers{false};
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
@@ -355,13 +363,14 @@ public:
     void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
-bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device);
+bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id);
 
 void writeToCoreControlBuffer(
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const CoreCoord& virtual_core,
     const std::vector<uint32_t>& data,
-    bool force_slow_dispatch);
+    bool force_slow_dispatch,
+    ContextId context_id);
 
 }  // namespace tt::tt_metal

@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,6 +41,7 @@ void kernel_main() {
         uint32_t expected = ((i + 1) * page_size);
         if (cb_val != expected) {
             DPRINT << "Problem with CB idx: " << i << " Expected: " << expected << " Got: " << cb_val << ENDL();
+            DEVICE_PRINT("Problem with CB idx: {} Expected: {} Got: {}\n", i, expected, cb_val);
             while (true);  // Purposefully hang the kernel if CBs did not arrive correctly
         }
     }
@@ -51,6 +52,7 @@ void kernel_main() {
             uint32_t expected = i + 1;
             if (sem_val != expected) {
                 DPRINT << "Problem with Sem idx: " << i << " Expected: " << expected << " Got: " << sem_val << ENDL();
+                DEVICE_PRINT("Problem with Sem idx: {} Expected: {} Got: {}\n", i, expected, sem_val);
                 while (true);  // Purposefully hang the kernel if semaphores did not arrive correctly
             }
         }
@@ -62,6 +64,7 @@ void kernel_main() {
             if (rt_arg != expected) {
                 DPRINT << "Problem with unique RT Arg idx: " << i << " Expected: " << expected << " Got: " << rt_arg
                        << ENDL();
+                DEVICE_PRINT("Problem with unique RT Arg idx: {} Expected: {} Got: {}\n", i, expected, rt_arg);
                 while (true);  // Purposefully hang the kernel if Unique RT Args did not arrive correctly.
             }
         }
@@ -72,15 +75,13 @@ void kernel_main() {
             if (rt_arg != expected) {
                 DPRINT << "Problem with common RT Arg idx: " << i << " Expected: " << expected << " Got: " << rt_arg
                        << ENDL();
+                DEVICE_PRINT("Problem with common RT Arg idx: {} Expected: {} Got: {}\n", i, expected, rt_arg);
                 while (true);  // Purposefully hang the kernel if Common RT Args did not arrive correctly.
             }
         }
 
-#pragma unroll(get_compile_time_arg_val(0))
         for (volatile uint32_t i = 0; i < outer_loop; i++) {
-#pragma unroll(get_compile_time_arg_val(1))
             for (volatile uint32_t j = 0; j < middle_loop; j++) {
-#pragma unroll(get_compile_time_arg_val(2))
                 for (volatile uint32_t k = 0; k < inner_loop; k++) {
                     // Do nothing
                 }

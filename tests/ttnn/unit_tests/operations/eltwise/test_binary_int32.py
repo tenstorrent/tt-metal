@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -63,8 +63,7 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
         ttnn.rsub,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_legacy, device):
+def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
@@ -93,7 +92,7 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_l
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -159,7 +158,7 @@ def test_binary_int32_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -235,7 +234,7 @@ def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device)
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -407,8 +406,7 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
         ttnn.uint32,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
+def test_logical_right_shift(device, ttnn_function, ttnn_dtype):
     x_torch = torch.tensor(
         [
             [
@@ -444,7 +442,7 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=use_legacy)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
@@ -521,8 +519,7 @@ def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_mul_int32_edge_cases(use_legacy, device):
+def test_binary_mul_int32_edge_cases(device):
     torch_input_tensor_a = torch.tensor(
         [
             0,
@@ -571,7 +568,7 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
     golden_function = ttnn.get_golden_function(ttnn.mul)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -1221,3 +1218,337 @@ def test_binary_remainder_fmod_int32_range_1e15(input_shapes, ttnn_op, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+def test_bitwise_and_subcore_grid_tensor_tensor(device, shape, sub_core_grid):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    y_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden = torch.bitwise_and(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_and(x_tt, y_tt, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("scalar", [7, 0xFF, 0])
+def test_bitwise_and_subcore_grid_tensor_scalar(device, shape, sub_core_grid, scalar):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden = torch.bitwise_and(x_torch, torch.tensor(scalar, dtype=torch.int32))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_and(x_tt, scalar, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+def test_bitwise_right_shift_subcore_grid_tensor_tensor(device, shape, sub_core_grid):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    y_torch = torch.randint(0, 31, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    golden = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_right_shift(x_tt, y_tt, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("scalar", [4, 0, 15])
+def test_bitwise_right_shift_subcore_grid_tensor_scalar(device, shape, sub_core_grid, scalar):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    golden = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_right_shift(x_tt, scalar, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+# ── sub_core_grid tests for bitwise_or ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6))]),
+        ),
+    ],
+)
+def test_bitwise_or_subcore_grid_tensor_tensor(device, shape, sub_core_grid):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    y_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_or)
+    golden = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_or(x_tt, y_tt, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6))]),
+        ),
+    ],
+)
+@pytest.mark.parametrize("scalar", [7, 0xFF, 0])
+def test_bitwise_or_subcore_grid_tensor_scalar(device, shape, sub_core_grid, scalar):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_or)
+    golden = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_or(x_tt, scalar, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+# ── sub_core_grid tests for bitwise_xor ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6))]),
+        ),
+    ],
+)
+def test_bitwise_xor_subcore_grid_tensor_tensor(device, shape, sub_core_grid):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    y_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_xor)
+    golden = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_xor(x_tt, y_tt, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6))]),
+        ),
+    ],
+)
+@pytest.mark.parametrize("scalar", [7, 0xFF, 0])
+def test_bitwise_xor_subcore_grid_tensor_scalar(device, shape, sub_core_grid, scalar):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_xor)
+    golden = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_xor(x_tt, scalar, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+# ── sub_core_grid tests for bitwise_left_shift / logical_left_shift ──────────
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6))]),
+        ),
+    ],
+)
+def test_bitwise_left_shift_subcore_grid_tensor_tensor(device, shape, sub_core_grid):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    y_torch = torch.randint(0, 15, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_left_shift)
+    golden = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_left_shift(x_tt, y_tt, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6))]),
+        ),
+    ],
+)
+@pytest.mark.parametrize("scalar", [1, 4, 0])
+def test_bitwise_left_shift_subcore_grid_tensor_scalar(device, shape, sub_core_grid, scalar):
+    torch.manual_seed(0)
+    x_torch = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_left_shift)
+    golden = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.bitwise_left_shift(x_tt, scalar, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(result_tt)
+
+    assert torch.equal(result, golden)

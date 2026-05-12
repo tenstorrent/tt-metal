@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,11 +12,14 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include "context/context_types.hpp"
+#include "context/metal_env_impl.hpp"
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 
 namespace tt::tt_metal {
 
@@ -62,7 +65,7 @@ public:
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
     /// @param dispatch_core_config specifies the core type that is designated for dispatch functionality
-    dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
+    dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env);
 
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
 
@@ -150,10 +153,19 @@ public:
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
+    /// @brief Returns the tensix reserved at construction time for the real-time profiler.
+    /// Taken from the back of the WORKER dispatch pool (dispatch consumes from the front), so
+    /// this core is never assigned to dispatch / prefetch / dispatch_s / fabric-mux kernels.
+    /// Returns nullopt for ETH dispatch or when no spare slot was available.
+    /// @param device_id ID of the device
+    /// @return tt_cxy_pair logical location of the reserved tensix, or empty if no reservation exists
+    std::optional<tt_cxy_pair> get_reserved_realtime_profiler_core(ChipId device_id);
+
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
     /// @param dispatch_core_config specifies the core type for dispatch kernels
-    void reset_dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
+    void reset_dispatch_core_manager(
+        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env);
 
     /// @brief getting any available dispatch core for a device
     /// @param device_id
@@ -190,8 +202,12 @@ private:
     std::unordered_map<ChipId, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
         dispatch_core_assignments;
     std::unordered_map<ChipId, std::list<CoreCoord>> available_dispatch_cores_by_device;
+    // Tensix reserved at construction time for the real-time profiler kernel.
+    // Removed from available_dispatch_cores_by_device so dispatch cannot reach it.
+    std::unordered_map<ChipId, tt_cxy_pair> reserved_realtime_profiler_core_by_device_;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
+    MetalEnvImpl& env_;
     static dispatch_core_manager* _inst;
 };
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,8 +40,8 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
     const Tensor& joint_tensor_q = tensor_args.joint_q;
     const Tensor& joint_tensor_k = tensor_args.joint_k;
     const Tensor& joint_tensor_v = tensor_args.joint_v;
-    const Tensor& output_tensor = output_tensors.output;
-    const Tensor& joint_output_tensor = output_tensors.joint_output;
+    const Tensor& output_tensor = output_tensors[JOINT_SDPA_OUTPUT_IDX];
+    const Tensor& joint_output_tensor = output_tensors[JOINT_SDPA_JOINT_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -384,7 +384,8 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -581,8 +582,8 @@ void JointSDPAProgramFactory::override_runtime_arguments(
     auto* joint_v_buffer = tensor_args.joint_v.buffer();
 
     // Get addresses for output tensors
-    auto* out_buffer = output_tensors.output.buffer();
-    auto* joint_out_buffer = output_tensors.joint_output.buffer();
+    auto* out_buffer = output_tensors[JOINT_SDPA_OUTPUT_IDX].buffer();
+    auto* joint_out_buffer = output_tensors[JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
 
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();

@@ -10,7 +10,9 @@ Any discrepancies, in the form of missing chips or connections are reported to t
 
 Additionally, the user can choose to send point to point traffic across all discovered connections, and validate the health of the links.
 
-For Multi-Node validation, this tool relies on MPI to be used as the distributed process launcher. In these cases, the user must wrap their validation call with mpirun, and pass in the appropriate hostfile or rankfile.
+For multi-node validation, this tool relies on **MPI** as the distributed process launcher. In these cases, wrap your validation call with **`mpirun`** and pass the appropriate **hostfile** (or equivalent host list). That pattern applies directly to `./build/tools/scaleout/run_cluster_validation`.
+
+For **TT-Metal / TTNN** workloads that need **rank bindings** and a **Mesh Graph Descriptor** (for example SuperPod fabric tests), use **`tt-run`** instead of hand-rolling `mpirun` arguments when possible. `tt-run` can **auto-generate** rank bindings and rankfiles from an MGD plus `--hosts` (see [tt-run README](../../../ttnn/ttnn/distributed/README_ttrun.md)); you can still use **legacy** mode with an explicit `--rank-binding` and rankfile when you need full control.
 
 ## Usage
 
@@ -54,23 +56,30 @@ Notes:
 
 
 ## Extending to Multi-Node Clusters
-As mentioned above, MPI can be used as a distributed process launcher for multi-node discovery and validation. This is fairly straightforward, once the user has an environment and MPI based networking setup on both hosts.
+As mentioned above, MPI is the distributed process launcher for multi-node discovery and validation. This is straightforward once you have MPI and cluster networking configured.
 
-Example MPI Command:
+### `run_cluster_validation` with `mpirun`
+
+For the Ethernet validation binary, call **`mpirun`** directly with a hostfile (or `--host`) and any site-specific MCA options:
 
 ```
 mpirun --hostfile path/to/hostfile --deployment-specific-mpi-args ./build/tools/scaleout/run_cluster_validation --additional-arguments-depending-on-use-case
 ```
 
-The user may need to pass in additional MPI arguments depending on their networking setup (example the NIC they want to bind traffic to, CPU binding policy, etc.).
+You may need extra MPI arguments for your environment (for example the NIC for TCP: `--mca btl self,tcp --mca btl_tcp_if_include <nic>`, CPU binding, etc.).
 
-The hostfile contains the list of hosts that the user wants to run validation on. An example hostfile is provided below (for a cluster of four hosts):
+The hostfile lists the hosts that participate in validation. Example (four hosts, one slot each):
+
 ```
 hostname0 slots=1
 hostname1 slots=1
 hostname2 slots=1
 hostname3 slots=1
 ```
+
+### `tt-run` for TT stack tests (fabric, multi-mesh, etc.)
+
+For binaries that consume **rank bindings** and an **MGD** (see [SuperPod and Multi-Mesh Fabric Testing](#superpod-and-multi-mesh-fabric-testing) below), prefer **`tt-run`**. See the full launcher guide: [ttnn/ttnn/distributed/README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) (**auto allocation** vs **legacy** mode, `generated/ttrun/` cache, `--force-rediscovery`, mock clusters).
 
 ## Generated Output Files
 
@@ -239,6 +248,171 @@ To visualize the discovered connectivity, the user can use the `--print-connecti
         Connected to [metal-wh-09] Unique ID: 26190e003 Tray: 3, ASIC Location: 0, Ethernet Channel: 6
 
 ```
+
+## SuperPod and Multi-Mesh Fabric Testing
+
+SuperPod testing goes beyond single-pod validation: it exercises the fabric across multiple pods (meshes) and requires matching Mesh Graph Descriptors, rank bindings, and MPI placement to your physical deployment.
+
+### Mainlined Artifacts
+
+The following artifacts are provided for minimal multi-pod (SuperPod) fabric testing:
+
+- **Fabric test config (2D torus, multi-mesh):**
+  `tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml`
+  Defines fabric tests (e.g. RandomPairingMesh, AllToAllMesh, and 2D Torus XY variants) for Mesh and Torus topologies.
+
+- **Minimal 4-mesh (e.g. 4× SuperPod, each pod 32×4) Mesh Graph Descriptor:**
+  `tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto`
+  Describes four meshes (each 32×4, 4 hosts per mesh) with full 2D torus-style connectivity between meshes (SP4 = Super-Pod 4).
+
+### Building Your Mesh Graph Descriptor
+
+Your Mesh Graph Descriptor must match your physical SuperPod layout:
+
+- **Number of meshes** — One graph instance per pod (or per logical mesh).
+- **Shape of each mesh** — e.g. 32×4 (device dims) and host topology (e.g. 4×1) must match how many hosts and devices you have per pod.
+- **Connectivity** — Inter-pod links (and optional torus wrap) must reflect how pods are wired (e.g. XY torus between pods).
+
+Descriptor files live under `tt_metal/fabric/mesh_graph_descriptors/`. Use the mainlined `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` as a reference; adapt or add descriptors for different pod counts and shapes. See the [Cabling Generator README](../README.md) and fabric docs for generating or customizing descriptors from your deployment.
+
+### Rank Files and Rank Binding Files
+
+Fabric tests use rank bindings to map MPI ranks to [mesh_id, mesh_host_rank]. These parameters specify where a Galaxy Node "lives" in the graph, and correspond to the Mesh Graph Descriptor.
+
+When building rank bindings manually, you effectively stamp out the config for a single pod multiple times.
+
+**Auto allocation (recommended for many deployments):** With **`tt-run --mesh-graph-descriptor <mgd> --hosts <comma-separated-hosts>`**, Phase 1 runs `generate_rank_bindings` (or uses a cache hit under `generated/ttrun/<cache_id>/`) and writes **`rank_bindings.yaml`**, **`rankfile`**, and **`hostfile`** there. You do not need to author a rankfile by hand unless you switch to **legacy** mode or edit the generated files. Host order for MPI ranks follows **lexicographic sort** of the host multiset (see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md)). If cached bindings are stale after a cluster change, use **`--force-rediscovery`**.
+
+**Legacy / hand-crafted files:**
+
+- **Rank bindings file** — YAML listing each rank’s `mesh_id`, `mesh_host_rank`, and optional `env_overrides`; plus top-level `mesh_graph_desc_path` pointing at your Mesh Graph Descriptor.
+- **Rankfile** — OpenMPI rankfile that maps each rank to a (hostname, slot). Create one per deployment (do not commit; deployment-specific). **How to create one:** one line per MPI rank in order (rank 0, 1, 2, …), form `rank <N>=<hostname> slot=0`. Line count must equal the number of ranks in your rank bindings; hostnames and order must match your `--host` list. Example:
+
+  ```
+  rank 0=myhost-01 slot=0
+  rank 1=myhost-02 slot=0
+  rank 2=myhost-03 slot=0
+  rank 3=myhost-04 slot=0
+  ```
+
+**Rank bindings** for 4 meshes × 4 hosts (16 ranks): see `tests/tt_metal/distributed/config/bh_galaxy_sp4_rank_bindings.yaml` for the full file. Excerpt:
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+  # ... one entry per rank (16 for 4 meshes × 4 hosts)
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto"
+```
+
+### Examples
+
+This section walks through how rank bindings and the Mesh Graph Descriptor are built for Dual Pod (SP2) and Quad Pod (SP4) configurations, how to assign hostnames to MPI ranks from your physical topology, and a visual example for SP2.
+
+#### Building rank bindings and Mesh Graph Descriptor for SP2 and SP4
+
+- **SP2 (Dual Pod)** — Two meshes (pods). The Mesh Graph Descriptor defines two mesh instances and the links between them (e.g. a single connection or torus XY). Rank bindings repeat the per-pod pattern twice: one block of entries for mesh_id 0 (ranks 0 … N−1, where N = hosts per mesh) and one for mesh_id 1 (ranks N … 2N−1). Each entry sets `mesh_id`, `mesh_host_rank`, and the file includes `mesh_graph_desc_path` to your two-mesh descriptor.
+
+- **SP4 (Quad Pod)** — Four meshes (pods). Same idea at larger scale: the mainlined `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` defines four mesh instances with 2D torus connectivity. The mainlined `bh_galaxy_sp4_rank_bindings.yaml` stamps out the config for one pod four times — 4 meshes × 4 hosts = 16 ranks, with `mesh_id` 0..3 and `mesh_host_rank` 0..3 in each mesh. The descriptor path in that file points at the SP4 MGD.
+
+In both cases, the MGD must match your real pod count, mesh shape (device and host topology), and inter-pod wiring; rank bindings must have one entry per MPI rank and the same `mesh_graph_desc_path`.
+
+
+#### Assigning hostnames to MPI ranks
+
+MPI ranks must align with the rank bindings. Each rank's (mesh_id, mesh_host_rank) identifies where that host sits in the graph. Typically: rank = mesh_id × hosts_per_mesh + mesh_host_rank.
+
+The rankfile maps hostnames to ranks (line 1 = rank 0, line 2 = rank 1, etc.). Map each physical host to its (mesh_id, mesh_host_rank) from your deployment, then list hostnames in rank order.
+
+#### Visualization: SP2 with MPI rank, mesh_id, and mesh_host_rank
+
+Below is a sketch of a Dual Pod (SP2) system with 2 meshes and 4 hosts per mesh (8 ranks). Each box is a host; the label shows (mesh_id, mesh_host_rank) and the MPI rank.
+
+```
+    Mesh 0 (mesh_id=0)              Mesh 1 (mesh_id=1)
+    ┌─────────┬─────────┐            ┌─────────┬─────────┐
+    │ (0,0)   │ (0,1)   │            │ (1,0)   │ (1,1)   │
+    │ rank 0  │ rank 1  │  ═══════►  │ rank 4  │ rank 5  │
+    ├─────────┼─────────┤   link     ├─────────┼─────────┤
+    │ (0,2)   │ (0,3)   │            │ (1,2)   │ (1,3)   │
+    │ rank 2  │ rank 3  │            │ rank 6  │ rank 7  │
+    └─────────┴─────────┘            └─────────┴─────────┘
+```
+
+In this example: rank 0 → (0,0), rank 1 → (0,1), rank 4 → (1,0), etc. The rankfile lists hostnames in this rank order. For SP4, the same pattern extends to 4 meshes and 16 ranks.
+
+### Running Fabric Tests with tt-run
+
+The test binary is `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`. Pass the fabric test config with **`--test_config`**.
+
+**Preferred — auto allocation:** Provide the **Mesh Graph Descriptor** and **`--hosts`**; `tt-run` runs Phase 1 (or uses `generated/ttrun/…` cache), then launches with the generated rankfile and host binding. Set **`--tcp-interface`** to your MPI NIC (equivalent to wiring `btl_tcp_if_include`); `tt-run` also applies its usual multihost defaults, **`--bind-to none`**, and **`--tag-output`** unless you pass **`--bare`**.
+
+```bash
+tt-run \
+  --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto \
+  --hosts <host0>,<host1>,... \
+  --tcp-interface <nic> \
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+  --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
+```
+
+Fix the MGD path if your file lives under a different name; the mainlined SP4 descriptor is `tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto`.
+
+**Legacy mode — explicit rank binding:** Use a checked-in or hand-written **`--rank-binding`** and pass **`--map-by rankfile:file=…`** via **`--mpi-args`** together with **`--host`** and TCP MCA options if you are not relying on `tt-run`’s defaults:
+
+```bash
+tt-run \
+  --rank-binding tests/tt_metal/distributed/config/bh_galaxy_sp4_rank_bindings.yaml \
+  --mpi-args "--host <host0>,<host1>,... --map-by rankfile:file=<your_rankfile> --mca btl self,tcp --mca btl_tcp_if_include <nic> --bind-to none --tag-output" \
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+  --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
+```
+
+After a successful **auto allocation** run, `tt-run` logs a **Phase 2–only** command using paths under `generated/ttrun/<cache_id>/` so you can re-run without Phase 1 when the cache still matches.
+
+For mock / single-machine 16-rank runs, use **`--mock-cluster-rank-binding`** with auto allocation (no `--hosts`); see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) and [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
+
+For rankfiles and generating cluster descriptors from multiple hosts, see [README_generate_cluster_descriptors.md](../../../scripts/scaleout/README_generate_cluster_descriptors.md).
+
+### Validating the setup (without a SuperPod)
+
+You can sanity-check the mainlined artifacts before running on real hardware. All commands below assume you run from the **repository root** (paths are relative to repo root).
+
+1. **Build the test binary** (from repo root): `./build_metal.sh --build-tests` builds all tests; the fabric test binary is at `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`.
+
+2. **Validate the fabric test config YAML** (parses and has expected structure):
+   ```bash
+   python3 -c "
+   import yaml
+   with open('tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml') as f:
+       d = yaml.safe_load(f)
+   assert 'Tests' in d and len(d['Tests']) >= 1
+   print('YAML OK:', len(d['Tests']), 'test(s)')
+   "
+   ```
+
+3. **Validate the mesh graph descriptor** (parses and loads):
+   ```bash
+   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphDescriptorTests.ParsesBhGalaxySp4TorusXY"
+   ```
+   Run from repo root so the descriptor path resolves.
+
+4. **Validate the rank bindings YAML** (optional):
+   ```bash
+   python3 -c "
+   import yaml
+   with open('tests/tt_metal/distributed/config/bh_galaxy_sp4_rank_bindings.yaml') as f:
+       d = yaml.safe_load(f)
+   assert 'rank_bindings' in d and 'mesh_graph_desc_path' in d
+   print('Rank bindings OK:', len(d['rank_bindings']), 'ranks')
+   "
+   ```
+
+**Full end-to-end** validation requires either a 16-host SuperPod (run the **auto allocation** `tt-run` example above) or a mock cluster: use **`tt-run --mesh-graph-descriptor … --mock-cluster-rank-binding <mapping>`** so Phase 1 generates rank bindings and the rankfile (add **`--mpi-args "--allow-run-as-root"`** if your OpenMPI setup requires it), or use **legacy** mode with an explicit `--rank-binding` and rankfile. See [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
 
 ## Directed Link Retrains (Wormhole Only)
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,16 +32,16 @@ RingSDPAFwDeviceOperation::spec_return_value_t RingSDPAFwDeviceOperation::comput
                   tt::tt_metal::TensorLayout(
                       tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
 
-    // Handle intermediates spec - shape is (B, H, S, 64)
+    // Handle intermediates spec - shape is (B, H, S, 32) = 1 FP32 tile wide (logsumexp)
     auto query_shape = tensor_args.query.logical_shape();
     auto [batch, heads, seq_len, dim] = query_shape.to_array_4D();
     ttnn::TensorSpec intermediates_spec =
         tensor_args.preallocated_intermediates.has_value()
             ? tensor_args.preallocated_intermediates->tensor_spec()
             : ttnn::TensorSpec(
-                  ttnn::Shape{batch, heads, seq_len, 64U},
+                  ttnn::Shape{batch, heads, seq_len, 32U},
                   tt::tt_metal::TensorLayout(
-                      tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+                      ttnn::DataType::FLOAT32, tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
 
     return {output_spec, intermediates_spec};
 }
@@ -63,10 +63,10 @@ RingSDPAFwDeviceOperation::tensor_return_value_t RingSDPAFwDeviceOperation::crea
     return {output, intermediates};
 }
 
-tt::stl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // Hash based on operation configuration - buffer addresses are updated via override_runtime_arguments
-    return tt::stl::hash::hash_objects(
+    return ttsl::hash::hash_objects(
         attrs.ring_size,
         attrs.ring_axis,
         attrs.step,

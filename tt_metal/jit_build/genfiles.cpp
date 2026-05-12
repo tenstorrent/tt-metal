@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -16,8 +17,8 @@
 #include <iostream>
 #include <ostream>
 #include <fstream>
+#include <sstream>
 #include <ranges>
-#include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -35,9 +36,11 @@
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "impl/kernels/kernel.hpp"
+#include "impl/kernels/kernel_source.hpp"
 
+namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
+}  // namespace tt::tt_metal
 
 namespace fs = std::filesystem;
 
@@ -57,86 +60,15 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
     ttsl::unreachable();
 }
 
-// Simple kernel syntax refers to declaring kernel entry point as just "void kernel_main()"
-// This is in contrast to legacy syntax: "namespace NAMESPACE { void MAIN() { ... } }"
-// Eventually we may want to deprecate legacy syntax, but for now we support both.
-// This namespace isolates the logic related to simple kernel syntax.
-namespace simple_kernel_syntax {
-
-const std::regex kernel_main_pattern(R"(\bvoid\s+kernel_main\s*\(\s*\)\s*\{)");
-
-size_t find_kernel_main_definition(const string& source) {
-    std::smatch match;
-    if (std::regex_search(source, match, kernel_main_pattern)) {
-        return static_cast<size_t>(match.position());
-    }
-    return string::npos;
-}
-
-bool has_legacy_syntax_markers(const string& source) {
-    // Check for legacy syntax markers: "namespace NAMESPACE" or "void MAIN"
-    // If found, the file uses legacy syntax (possibly mixed with kernel_main for data movement)
-    return source.find("namespace NAMESPACE") != string::npos || source.find("void MAIN") != string::npos;
-}
-
-size_t count_kernel_main_definitions(const string& source) {
-    auto begin = std::sregex_iterator(source.begin(), source.end(), kernel_main_pattern);
-    auto end = std::sregex_iterator();
-    return std::distance(begin, end);
-}
-
-bool is_used_in_source(const string& source) {
-    // Use simplified syntax only if kernel_main is found AND no legacy markers present.
-    // This handles kernels with multiple entrypoints that have kernel_main() for data movement
-    // but legacy syntax for compute - we must not transform those.
-    if (find_kernel_main_definition(source) == string::npos) {
-        return false;
-    }
-    if (has_legacy_syntax_markers(source)) {
-        return false;
-    }
-    // Multiple kernel_main() with simplified syntax for compute is not supported.
-    // We cannot determine which kernel_main belongs to compute. Use legacy syntax for compute.
-    if (count_kernel_main_definitions(source) > 1) {
-        throw std::runtime_error(
-            "Multiple kernel_main() definitions found. Kernels with multiple entrypoints must use "
-            "legacy syntax (namespace NAMESPACE { void MAIN { } }) for the compute path.");
-    }
-    return true;
-}
-
-// Transforms simplified kernel to legacy format:
-//   - Splits at "void kernel_main()"
-//   - Preamble (#includes) stays outside namespace
-//   - Function body wrapped in namespace, renamed to func_name
-string transform_to_legacy_syntax(const string& source, const char* ns_name, const char* func_name) {
-    size_t func_pos = find_kernel_main_definition(source);
-    if (func_pos == string::npos) {
-        throw std::runtime_error("Could not find 'void kernel_main() {' in source");
-    }
-
-    string preamble = source.substr(0, func_pos);
-    string function_part = source.substr(func_pos);
-
-    // Rename kernel_main -> func_name
-    size_t name_pos = function_part.find("kernel_main");
-    if (name_pos != string::npos) {
-        function_part.replace(name_pos, strlen("kernel_main"), func_name);
-    }
-
-    ostringstream result;
-    result << preamble;
-    result << "namespace " << ns_name << " {\n";
-    result << function_part;
-    result << "\n}  // namespace " << ns_name << "\n";
-    return result.str();
-}
-}  // namespace simple_kernel_syntax
-
-// Generates TRISC prolog: #define + #include for defines_generated.h
-string build_trisc_prolog(const char* trisc_define) {
+// Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
+// Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
+string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
+    if (is_metal2_kernel) {
+        prolog << "#include \"kernel_bindings_generated.h\"\n";
+        prolog << "#include \"kernel_args_generated.h\"\n";
+    }
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -154,6 +86,199 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+// METAL 2.0 only:
+// This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
+// Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
+void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+    const string path = out_dir + "kernel_bindings_generated.h";
+
+    // Get the DFB bindings from the settings callback
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    vector<pair<string, uint16_t>> dfb_entries;
+    settings.process_dataflow_buffer_local_accessor_handles(
+        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
+    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Get the semaphore bindings from the settings callback
+    // Sort them to ensure the file output is deterministic, as explained above
+    vector<pair<string, uint16_t>> sem_entries;
+    settings.process_semaphore_local_accessor_handles(
+        [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
+    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Get the tensor binding handles from the settings callback
+    // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
+    // (Kernel::compute_hash also hashes them in the same order... these two must be the same.)
+    struct TaEntry {
+        string name;
+        uint32_t cta_offset;
+        uint32_t addr_crta_offset;
+    };
+    vector<TaEntry> ta_entries;
+    settings.process_tensor_binding_handles(
+        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
+            ta_entries.push_back({name, cta_offset, addr_crta_offset});
+        });
+
+    // Emit the header content:
+    //  - DFB accessors are emitted into the dfb namespace
+    //  - Semaphore accessors are emitted into the sem namespace
+    //  - TensorBindings are emitted into the ta namespace
+    //
+    // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
+    //       This is a design decision; we could alternatively emit them as implicit CRTAs.
+    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-accessor basis.)
+    //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
+    //       We are starting simple and can adjust later if problems arise.
+    //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
+    //
+    //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
+    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArg.
+    //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
+    //       added automatically by the Metal 2.0 host API machinery.
+    ostringstream content;
+    content << "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n";
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty()) {
+        content << "// No bindings for this kernel.\n";
+    } else {
+        if (!dfb_entries.empty()) {
+            content << "#include \"experimental/dataflow_buffer.h\"\n";
+        }
+        if (!sem_entries.empty()) {
+            content << "#include <cstdint>\n";
+        }
+        if (!ta_entries.empty()) {
+            content << "#include \"api/tensor/tensor_accessor.h\"\n";
+        }
+        content << "\n";
+
+        if (!dfb_entries.empty()) {
+            content << "namespace dfb {\n";
+            for (const auto& [name, id] : dfb_entries) {
+                content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
+            }
+            content << "}  // namespace dfb\n";
+        }
+
+        if (!sem_entries.empty()) {
+            content << "namespace sem {\n";
+            for (const auto& [name, id] : sem_entries) {
+                content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+            }
+            content << "}  // namespace sem\n";
+        }
+
+        if (!ta_entries.empty()) {
+            // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+            // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
+            // its implicit base-address CRTA. The kernel-side TensorAccessor(token) constructor
+            // unpacks both pieces.
+            //
+            // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
+            // template with extra metadata in the future without touching kernel source.
+            content << "namespace ta {\n";
+            for (const auto& entry : ta_entries) {
+                content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
+                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            content << "}  // namespace ta\n";
+        }
+    }
+    write_file(path, content.str());
+}
+
+// METAL 2.0 only:
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
+// Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
+// in, so that vararg indices in kernel code are stable across schema changes.
+//
+// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
+//       Legacy kernels do not get kernel_args_generated.h.
+void write_kernel_args_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
+    const fs::path path = out_dir / "kernel_args_generated.h";
+
+    // Named RTAs/CRTAs come straight from the settings as ordered vectors.
+    const vector<string>& rta_names = settings.get_named_runtime_args();
+    const vector<string>& crta_names = settings.get_named_common_runtime_args();
+
+    // TensorBinding addresses occupy a structurally-separate, position-indexed section appended
+    // immediately after the user-named CRTAs in the kernel's CRTA buffer.
+    // We need to know how many there are so the vararg helpers below skip past the binding
+    // section to land at the first user vararg.
+    uint32_t tensor_binding_count = 0;
+    settings.process_tensor_binding_handles(
+        [&tensor_binding_count](const std::string&, uint32_t, uint32_t) { ++tensor_binding_count; });
+
+    // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
+    // The order in which we emit them DOES matter!
+    // We sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    vector<pair<string, uint32_t>> cta_entries;
+    settings.process_named_compile_time_args(
+        [&cta_entries](const std::unordered_map<std::string, uint32_t>& named_args) {
+            for (const auto& [name, value] : named_args) {
+                cta_entries.emplace_back(name, value);
+            }
+        });
+    sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    ostringstream content;
+    content << "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n"
+               "#include \"experimental/kernel_args.h\"\n\n";
+
+    // Named args namespace: emit only when the kernel has at least one named arg or CTA.
+    // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
+    // so we keep emitting those unconditionally.
+    const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
+    if (has_named_args) {
+        content << "namespace args {\n";
+
+        // Named RTAs
+        // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
+        // (Only uint32_t arg types are currently supported, but we later want to extend this.)
+        uint32_t rta_offset = 0;
+        for (const auto& name : rta_names) {
+            content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
+            rta_offset += sizeof(uint32_t);
+        }
+        // Named CRTAs
+        // The TensorBinding address section follows immediately after the named CRTA slots in the CRTA
+        // buffer (see vararg-offset computation below).
+        uint32_t crta_offset = 0;
+        for (const auto& name : crta_names) {
+            content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+            crta_offset += sizeof(uint32_t);
+        }
+        // Named CTAs
+        // No offsets to deal with here; CTA values are emitted directly into the generated header.
+        for (const auto& [name, value] : cta_entries) {
+            content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+        }
+
+        content << "}  // namespace args\n\n";
+    }
+
+    // Vararg helpers — always emitted.
+    // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
+    // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
+    // there are no named args, the offset is zero and these helpers are just thin wrappers
+    // around get_arg_val / get_common_arg_val.
+    // CRTA-side note: the kernel's CRTA buffer holds [user-named CRTAs, TensorBinding
+    // address section, varargs]. The vararg base must skip past the binding section as well.
+    const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
+    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size()) + tensor_binding_count;
+    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
+            << " + idx); }\n"
+            << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
+            << named_crta_words << " + idx); }\n";
+
+    write_file(path, content.str());
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -162,10 +287,21 @@ void jit_build_genfiles_kernel_include(
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    string kernel_header = out_dir + "kernel_includes.hpp";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
-    write_file(kernel_header, kernel_src_to_include);
+    // Metal 2.0 generated headers and their includes are emitted only for Metal 2.0 kernels.
+    // Legacy kernels created via the old host API are fenced out of this code path.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    string kernel_header_content;
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+        kernel_header_content =
+            string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
+    }
+    kernel_header_content += get_kernel_source_to_include(kernel_src);
+
+    string kernel_header = out_dir + "kernel_includes.hpp";
+    write_file(kernel_header, kernel_header_content);
 }
 
 void jit_build_genfiles_triscs_src(
@@ -174,61 +310,33 @@ void jit_build_genfiles_triscs_src(
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+
+    // Metal 2.0 generated headers are emitted and referenced only for Metal 2.0 kernels.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+    }
+
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
     const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
-    // Read content for syntax detection (needed for both paths)
-    const string kernel_content = kernel_src.get_content();
-    const bool simplified = simple_kernel_syntax::is_used_in_source(kernel_content);
 
-    if (simplified) {
-        log_trace(tt::LogBuildKernels, "Detected simplified compute kernel syntax (kernel_main)");
-    } else {
-        log_warning(
-            tt::LogBuildKernels,
-            "Compute kernel '{}' uses deprecated 'namespace NAMESPACE {{ void MAIN {{ }} }}' syntax. "
-            "Please migrate to simplified 'void kernel_main() {{ }}' syntax.",
-            settings.get_full_kernel_name());
-    }
+    // Build prologs for each TRISC
+    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2);
+    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2);
+    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2);
+    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2);
 
-    // Build prologs (same for both syntaxes)
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
-    const string math_prolog = build_trisc_prolog("TRISC_MATH");
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK");
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
-    // Determine kernel source for each TRISC.
-    //
-    // Why the if-else structure is necessary:
-    // - Simplified syntax: MUST transform source, so we inline the transformed content
-    // - Legacy syntax: use existing get_kernel_source_to_include() which returns:
-    //   - FILE_PATH: #include directive (preserves file refs in compiler errors)
-    //   - SOURCE_CODE: the source directly
-    string unpack_src, math_src, pack_src, isolate_sfpu_src;
-    if (simplified) {
-        // For FILE_PATH sources, add #line directive to preserve original file's line numbers
-        // in compiler diagnostics and __LINE__ macro. This ensures error messages reference
-        // the original kernel file, not the generated file.
-        string line_directive;
-        if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
-            line_directive = "#line 1 \"" + kernel_src.path_.string() + "\"\n";
-        }
-        unpack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_unpack", "unpack_main");
-        math_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_math", "math_main");
-        pack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_pack", "pack_main");
-        isolate_sfpu_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(
-                                                kernel_content, "chlkc_isolate_sfpu", "isolate_sfpu_main");
-    } else {
-        // Legacy: use existing helper that handles FILE_PATH vs SOURCE_CODE appropriately
-        const string src = get_kernel_source_to_include(kernel_src);
-        unpack_src = math_src = pack_src = isolate_sfpu_src = src;
-    }
+    // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
+    const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     // Generate the four TRISC source files (fourth only used on Quasar)
-    write_file(unpack_cpp, unpack_prolog + unpack_src);
-    write_file(math_cpp, math_prolog + math_src);
-    write_file(pack_cpp, pack_prolog + pack_src);
-    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + isolate_sfpu_src);
+    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include);
+    write_file(math_cpp, math_prolog + kernel_src_to_include);
+    write_file(pack_cpp, pack_prolog + kernel_src_to_include);
+    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include);
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
@@ -266,7 +374,15 @@ void emit_formats_array(
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) { return static_cast<std::underlying_type_t<DataFormat>>(f); };
+    // Remap host-only enum values to HW values for device compilation.
+    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
+    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
+    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
+        if (f == DataFormat::Int16) {
+            return 9;  // HW value from tensix_types.h
+        }
+        return static_cast<std::underlying_type_t<DataFormat>>(f);
+    };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -314,6 +430,29 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
         desc.buf_dataformat_arr);
+
+    // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
+    // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
+    // the input is Fp8, so non-Fp8 output CBs need A-family pack_src to match.
+    // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
+    // CBs that are themselves Fp8_e4m3 are already handled by get_single_pack_src_format.
+    if (!fp32_dest_acc_en &&
+        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::Fp8_e4m3;
+        })) {
+        for (size_t i = 0; i < src_formats.size(); i++) {
+            if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
+                continue;
+            }
+            switch (src_formats[i]) {
+                case DataFormat::Float16_b: src_formats[i] = DataFormat::Float16; break;
+                case DataFormat::Bfp8_b: src_formats[i] = DataFormat::Bfp8; break;
+                case DataFormat::Bfp4_b: src_formats[i] = DataFormat::Bfp4; break;
+                case DataFormat::Bfp2_b: src_formats[i] = DataFormat::Bfp2; break;
+                default: break;
+            }
+        }
+    }
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -374,6 +513,12 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     if (options.fp32_dest_acc_en &&
         (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;
+    }
+
+    if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::MxFp4;
+        })) {
+        TT_FATAL(arch == tt::ARCH::QUASAR, "MxFp4 format is only supported on Quasar");
     }
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
@@ -504,6 +649,11 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_math_scalar_descriptors(out, desc);
     out << "#endif\n\n";
 
+    out << "#if defined(UCK_CHLKC_PACK)\n"
+           "#include \"llk_defs.h\"\n";
+    emit_math_scalar_descriptors(out, desc);
+    out << "#endif\n\n";
+
     out << "#if !defined(UCK_CHLKC_PACK)\n";
     emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
     emit_unpack_tile_dims(out, desc, max_cbs);
@@ -512,7 +662,13 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
     emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
     emit_pack_tile_dims(out, desc, max_cbs);
-    out << "#endif\n\n";
+    // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
+    // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
+    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
+    out << "#if defined(UCK_CHLKC_PACK)\n";
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    out << "#endif\n";   // if pack
+    out << "#endif\n\n"; // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";

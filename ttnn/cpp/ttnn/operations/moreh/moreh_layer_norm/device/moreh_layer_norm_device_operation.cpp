@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -136,7 +136,7 @@ ttnn::operations::moreh::moreh_layer_norm::MorehLayerNormOperation::tensor_retur
         normalized_dims,
         eps,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_full ${LIB_TYPE})
 add_library(TTNN::Ops::Full ALIAS ttnn_op_full)
 
-target_precompile_headers(ttnn_op_full REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_full TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_full)
 
 set_target_properties(
@@ -25,11 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/full_device_operation.cpp
-        device/full_program_factory_interleaved.cpp
-        device/full_program_factory_nd_sharded.cpp
-        device/full_program_factory_sharded.cpp
-        full.cpp
+        ${TTNN_OP_FULL_SRCS}
 )
 
 target_include_directories(ttnn_op_full PRIVATE ${FixmeOpIncDirs})

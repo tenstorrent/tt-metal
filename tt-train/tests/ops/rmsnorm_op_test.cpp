@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,13 @@
 
 #include <cassert>
 #include <umd/device/cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
-#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/random_data.hpp"
 
 class RMSNormOpTest : public ::testing::Test {
 protected:
@@ -62,8 +61,10 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto example_tensor = autograd::create_tensor(
+        core::from_xtensor(example_xtensor, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -90,10 +91,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -132,10 +129,6 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -143,8 +136,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
     xt::xarray<float> a_xarray = xt::xarray<float>::from_shape(a_shape);
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto example_tensor =
+        autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -193,8 +188,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Backward) {
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto example_tensor = autograd::create_tensor(
+        core::from_xtensor(example_xtensor, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -266,8 +263,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
     xt::xarray<float> a_xarray = xt::xarray<float>::from_shape(a_shape);
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto example_tensor =
+        autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -324,24 +323,20 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 
     // Generate random input data
     std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
-    xt::xarray<float> x_data = xt::empty<float>(shape);
     auto rng = autograd::ctx().get_generator();
     uint32_t seed1 = rng();
-    core::parallel_generate<float>(x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed1);
-
-    xt::xarray<float> gamma_data = xt::empty<float>(gamma_shape);
+    xt::xarray<float> x_data = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed1);
     uint32_t seed2 = rng();
-    core::parallel_generate<float>(
-        gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed2);
+    xt::xarray<float> gamma_data = ttml::test_utils::make_uniform_xarray<float>(gamma_shape, 0.0F, 1.0F, seed2);
 
     // Test forward pass - kernel vs composite
-    auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device));
-    auto gamma_kernel = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+    auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);
+    auto gamma_kernel = autograd::create_tensor(core::from_xtensor(gamma_data, device), /* requires_grad */ true);
     auto result_kernel = ops::rmsnorm(x_kernel, gamma_kernel, eps);
     auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
 
-    auto x_composite = autograd::create_tensor(core::from_xtensor(x_data, device));
-    auto gamma_composite = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+    auto x_composite = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);
+    auto gamma_composite = autograd::create_tensor(core::from_xtensor(gamma_data, device), /* requires_grad */ true);
     auto result_composite = ops::rmsnorm_composite(x_composite, gamma_composite, eps);
     auto result_composite_xtensor = core::to_xtensor(result_composite->get_value());
 
@@ -480,20 +475,12 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
 
 // Test small batch and sequence dimensions (non-1 values)
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     CompareKernelVsComposite({2U, 1U, 4U, 64U});
     CompareKernelVsComposite({32U, 1U, 64U, 128U});
 }
 
 // Test different masking patterns with larger batches
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 11
     CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
     CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1

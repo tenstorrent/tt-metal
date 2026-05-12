@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,9 @@
 #include "manual_seed_device_operation_types.hpp"
 #include "manual_seed_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <functional>
 #include <optional>
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

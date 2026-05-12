@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,11 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     FABRIC_HEADER_RB = 7,
     FABRIC_SYNC_STATUS = 8,
     DISPATCH_PROGRESS = 9,
-    UNRESERVED = 10,
+    // Real-time profiler control block (realtime_profiler_msgs::realtime_profiler_msg_t). Shared between the
+    // dispatch cores and the reserved RT-profiler tensix; allocated as a dispatch-core-local
+    // region rather than a per-core mailbox because no worker core touches it.
+    REALTIME_PROFILER_MSG = 10,
+    UNRESERVED = 11,
 };
 
 // likely only used in impl
@@ -56,7 +60,7 @@ uint16_t get_umd_channel(uint16_t channel);
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
-uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size);
+uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t base = 0);
 
 // mostly used in debug_tools
 template <bool addr_16B>

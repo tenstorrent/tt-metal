@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
@@ -71,6 +72,40 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
 
     uint32_t q_base_addr = input_tensor.buffer()->address();
 
+    // The reader kernel reads each face row as a single 16-element noc_async_read transaction
+    // (`16 * element_size` bytes). When the input is DRAM-interleaved and that read size is below
+    // the device DRAM read alignment (Blackhole bf16: 32 < 64), the NOC alignment rule
+    // ((src & (alignment-1)) == (dst & (alignment-1))) is violated for half the (batch, head)
+    // parities and the read silently returns wrong data (issue #43270). When that condition
+    // holds, switch the kernel to a DRAM-aligned scratch+memcpy path; otherwise the original
+    // direct-read fast path runs unchanged. Sharded inputs do not go through this factory.
+    const bool is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const bool use_aligned_path = is_dram && (sub_tile_line_bytes < dram_alignment);
+
+    // Per-RISC scratch CB sized for one DRAM-aligned chunk per tile in a single head. The two
+    // RISCs read different phases concurrently, so they need independent scratch slots — assign
+    // distinct CB indices. The kernel reads DRAM-aligned chunks into this CB; the NOC requires
+    // (src & (alignment-1)) == (dst & (alignment-1)). Since the source addresses are aligned to
+    // dram_alignment, the destination addresses inside the scratch must also be aligned to
+    // dram_alignment. CBs in L1 are only allocated at L1 alignment (16 B on BH), so oversize the
+    // CB by one dram_alignment chunk and have the kernel round its base up.
+    constexpr uint32_t reader_scratch_cb_index = CBIndex::c_0;
+    constexpr uint32_t writer_scratch_cb_index = CBIndex::c_1;
+    if (use_aligned_path) {
+        const uint32_t scratch_size_bytes = (head_tiles + 1) * dram_alignment;
+        // Float16_b is just a placeholder DataFormat for this scratch CB — the kernel only treats
+        // it as raw L1 storage and copies bytes via memcpy.
+        CircularBufferConfig cb_reader_scratch_config =
+            CircularBufferConfig(scratch_size_bytes, {{reader_scratch_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(reader_scratch_cb_index, dram_alignment);
+        CreateCircularBuffer(program, q_cores, cb_reader_scratch_config);
+        CircularBufferConfig cb_writer_scratch_config =
+            CircularBufferConfig(scratch_size_bytes, {{writer_scratch_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(writer_scratch_cb_index, dram_alignment);
+        CreateCircularBuffer(program, q_cores, cb_writer_scratch_config);
+    }
+
     // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2
     // of a tile respectively)
     std::vector<uint32_t> reader_compile_time_args = {
@@ -84,6 +119,9 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
         num_kv_heads,
         head_tiles,
         1,  // read the first phase
+        static_cast<uint32_t>(use_aligned_path),
+        dram_alignment,
+        reader_scratch_cb_index,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     auto reader_kernel_id = CreateKernel(
@@ -93,6 +131,7 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
         q_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
     reader_compile_time_args[9] = 2;  // read the second phase
+    reader_compile_time_args[12] = writer_scratch_cb_index;
     auto writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"

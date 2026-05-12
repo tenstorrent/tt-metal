@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,7 +60,8 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
         {
             {tt::CBIndex::c_0, 2},                         // input
             {tt::CBIndex::c_1, 1},                         // mask
-            {tt::CBIndex::c_2, 1},                         // scaler
+            {tt::CBIndex::c_2, 1},                         // max scaler
+            {tt::CBIndex::c_3, 1},                         // sum scaler
             {tt::CBIndex::c_16, 2},                        // output
             {tt::CBIndex::c_24, 2, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},  // reduce

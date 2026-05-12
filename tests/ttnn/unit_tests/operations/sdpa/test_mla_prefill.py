@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -50,4 +50,24 @@ def test_flash_mla_prefill(
         dtype,
         use_paged_attention,
         block_size,
+    )
+
+
+def test_chunked_flash_mla_prefill_partial_single_page_paged_cache(
+    device,
+    function_level_defaults,
+    reset_seeds,
+):
+    run_flash_mla_prefill_impl(
+        device,
+        batch=1,
+        seq_len=64,
+        nh=32,
+        nkv=1,
+        kv_lora_rank=64,
+        d_rope=64,
+        q_dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
+        use_paged_attention=True,
+        block_size=64,
     )

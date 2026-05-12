@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,15 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -1096,6 +1099,157 @@ void py_module(nb::module_& mod) {
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
+
+    // Bind MatmulParams for descriptor-based operations
+    nb::class_<ttnn::prim::MatmulParams>(mod, "MatmulParams")
+        .def(nb::init<>())
+        .def_rw("program_config", &ttnn::prim::MatmulParams::program_config)
+        .def_rw("bcast_batch", &ttnn::prim::MatmulParams::bcast_batch)
+        .def_rw("output_mem_config", &ttnn::prim::MatmulParams::output_mem_config)
+        .def_rw("output_dtype", &ttnn::prim::MatmulParams::output_dtype)
+        .def_rw("compute_kernel_config", &ttnn::prim::MatmulParams::compute_kernel_config)
+        .def_rw("untilize_out", &ttnn::prim::MatmulParams::untilize_out)
+        .def_rw("transpose_a", &ttnn::prim::MatmulParams::transpose_a)
+        .def_rw("transpose_b", &ttnn::prim::MatmulParams::transpose_b);
+
+    // Bind MatmulInputs for descriptor-based operations
+    nb::class_<ttnn::prim::MatmulInputs>(mod, "MatmulInputs")
+        .def("__init__", [](ttnn::prim::MatmulInputs* t) { new (t) ttnn::prim::MatmulInputs{{}, {}, {}}; })
+        .def_rw("input_tensors", &ttnn::prim::MatmulInputs::input_tensors)
+        .def_rw("optional_input_tensors", &ttnn::prim::MatmulInputs::optional_input_tensors)
+        .def_rw("optional_output_tensors", &ttnn::prim::MatmulInputs::optional_output_tensors);
+
+    // Bind MatmulDeviceOperation for descriptor-based operations
+    nb::class_<ttnn::prim::MatmulDeviceOperation>(mod, "MatmulDeviceOperation")
+        .def_static(
+            "create_output_tensors",
+            &ttnn::prim::MatmulDeviceOperation::create_output_tensors,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_output_specs",
+            &ttnn::prim::MatmulDeviceOperation::compute_output_specs,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"));
+
+    // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory>(
+        mod, "MatmulMultiCoreReuseOptimizedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt)
+        .def_static(
+            "default_core_range",
+            &ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
+            nb::arg("device"));
+
+    // Bind MatmulMultiCoreProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreProgramFactory>(mod, "MatmulMultiCoreProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMcast2DProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory>(mod, "MatmulMultiCoreReuseMcast2DProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>(
+        mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>(
+        mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind select_program_factory for Python-side factory dispatch
+    mod.def(
+        "matmul_select_program_factory",
+        &ttnn::prim::MatmulDeviceOperation::select_program_factory,
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"));
+
+    // Bind create_matmul_attributes helper
+    mod.def(
+        "create_matmul_attributes",
+        &ttnn::prim::create_matmul_attributes,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg("parameters"),
+        nb::arg("optional_output_tensors"));
 }
 
 }  // namespace ttnn::operations::matmul

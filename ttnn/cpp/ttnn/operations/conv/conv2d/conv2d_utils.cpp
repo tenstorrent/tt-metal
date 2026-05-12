@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -554,7 +554,7 @@ DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
     bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
     return init_device_compute_kernel_config(
-        device->arch(), std::nullopt, MathFidelity::HiFi4, true, default_fp32_acc, false);
+        device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
@@ -1233,7 +1233,8 @@ conv_op_l1_usage calculate_L1_usage(
     const bool enable_bias,
     bool is_1d_depthwise_conv,
     uint32_t input_channels_padded,
-    bool skip_act_cb_create) {
+    bool skip_act_cb_create,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
     // Input shard doesn't affect L1 usage calculation.
     std::array<uint32_t, 2> dummy_input_shard_shape = {0, 0};
     std::vector<CBInfo> cb_info = get_cb_info(
@@ -1252,7 +1253,8 @@ conv_op_l1_usage calculate_L1_usage(
         enable_bias,
         is_1d_depthwise_conv,
         skip_act_cb_create,
-        input_channels_padded);
+        input_channels_padded,
+        reader_indices_actual_page_size);
     uint32_t total_CB_size = 0;
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {
@@ -1439,7 +1441,7 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
 }
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
-    tt::stl::reflection::operator<<(os, config);
+    ttsl::reflection::operator<<(os, config);
     return os;
 }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ namespace ttnn {
 DeviceComputeKernelConfig layernorm_default_compute_config(tt::ARCH arch) {
     bool approx_mode = false;
     bool fp32_acc = true;
-    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc);
+    return init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
 }
 
 Tensor layer_norm(
@@ -50,7 +50,10 @@ Tensor layer_norm(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
+        program_config.value_or(ttnn::prim::create_layernorm_program_config(
+            input_tensor.shard_spec(),
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
         std::nullopt,                                      // dtype
         prim::LayerNormType::LAYERNORM,                    // norm_type

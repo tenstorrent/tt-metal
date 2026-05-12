@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,10 @@
 
 #include <string>
 #include <map>
-#include "../common/types.hpp"
+#include <tt-metalium/experimental/noc_estimator/types.hpp>
 
-namespace tt::tt_metal::noc_estimator::offline {
+namespace tt::tt_metal::experimental::noc_estimator::offline {
 
-bool save_latency_data_to_yaml(
-    const std::map<common::GroupKey, common::LatencyData>& data, const std::string& yaml_path);
+bool save_latency_data_to_yaml(const std::map<GroupKey, LatencyData>& data, const std::string& yaml_path);
 
-}  // namespace tt::tt_metal::noc_estimator::offline
+}  // namespace tt::tt_metal::experimental::noc_estimator::offline

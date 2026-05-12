@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -100,11 +100,6 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
             "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
-        TT_FATAL(
-            input_tensor.padded_shape()[-1] % 32 == 0,
-            "Typecast operation requires Row-Major input tensor's padded shape to be multiple of 32. "
-            "Padded shape: {}",
-            input_tensor.padded_shape());
     }
 
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
@@ -158,7 +153,7 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
     return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();

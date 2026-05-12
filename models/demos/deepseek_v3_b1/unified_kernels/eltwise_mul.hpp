@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -169,7 +169,6 @@ struct EltwiseMul {
                     pack_reconfig_data_format<true>(CTArgs::cb_out);
                 }
                 deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::cb_in0, CTArgs::cb_scalar);
-
                 tile_regs_acquire();
 
                 // Step 1: cb_in0 * scalar -> dest (using scalar broadcast)

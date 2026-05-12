@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,6 +48,7 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(33);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -69,6 +70,7 @@ void kernel_main() {
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
@@ -113,7 +115,32 @@ void kernel_main() {
         // No row buffers needed. c_4 used only as 1-tile recip scratch for normalization.
         constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_4;
 
+        // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
+        cb_wait_front(cb_identity_scale_in, 1);
+
+        // Lightweight-mask context: writer pre-generates [neginf(0), causal_diag?, k_partial?] tiles
+        // permanently fronted. Causal uses neginf + diag (2 tiles). Non-causal partial-tile K
+        // uses neginf + partial (2 tiles); the per-row stamp masks the partial col + trailing neginf.
+        LightweightMaskContext lw_mask;
+        if constexpr (is_causal) {
+            lw_mask.is_causal = true;
+            lw_mask.neginf_tile_idx = 0;
+            lw_mask.causal_diag_tile_idx = 1;
+            cb_wait_front(cb_mask_in, 2);
+        } else if constexpr (k_partial_col > 0) {
+            lw_mask.global_n_partial_col = k_partial_col;
+            lw_mask.global_n_partial_tile_idx = 1;  // [neginf(0), partial(1)]
+            // global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk
+            constexpr uint32_t last_chunk_first_tile =
+                (valid_Skt > Sk_chunk_t) ? ((valid_Skt - 1) / Sk_chunk_t) * Sk_chunk_t : 0u;
+            constexpr uint32_t valid_tiles_in_last_chunk = valid_Skt - last_chunk_first_tile;
+            lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk;
+            cb_wait_front(cb_mask_in, 2);
+        }
+
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
+            const uint32_t phase_chunked_offset =
+                (phase == 0) ? chunked_q_chunk_offset_phase_1 : chunked_q_chunk_offset_phase_2;
             for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
                 for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                     sdpa_standard_v2<
@@ -124,6 +151,9 @@ void kernel_main() {
                         vDHt,
                         scale_fp32,
                         qk_subblock_h,
+                        qk_subblock_w,
+                        out_subblock_h,
+                        out_subblock_w,
                         use_padded_mask,
                         cb_q_in,
                         cb_k_in,
@@ -135,7 +165,8 @@ void kernel_main() {
                         cb_recip_scratch,
                         cb_out,  // normalized output goes directly to output CB
                         cb_mask_in,
-                        uniform_dataformat>(
+                        uniform_dataformat,
+                        is_causal>(
                         q_chunks_per_core,
                         k_num_chunks,
                         cb_out_im_A,
@@ -143,12 +174,26 @@ void kernel_main() {
                         cb_max_A,
                         cb_max_B,
                         cb_sum_A,
-                        cb_sum_B);
+                        cb_sum_B,
+                        local_q_start,
+                        phase_chunked_offset,
+                        lw_mask,
+                        q_num_chunks);
                 }
             }
         }
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
+        constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
+
+        LightweightMaskContext lw_mask;
+        if constexpr (use_lightweight_causal_mask) {
+            lw_mask.is_causal = true;
+            lw_mask.neginf_tile_idx = 0;
+            lw_mask.causal_diag_tile_idx = 1;
+            cb_wait_front(cb_mask_in, 2);
+        }
+
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
             if (phase == 0) {
                 chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
@@ -172,7 +217,8 @@ void kernel_main() {
                         use_padded_mask,
                         is_chunked,
                         scale_fp32,
-                        sliding_window_size>(
+                        sliding_window_size,
+                        use_lightweight_causal_mask>(
                         Skt,
                         qk_in0_block_w,
                         qk_subblock_w,
@@ -194,6 +240,7 @@ void kernel_main() {
                         k_num_chunks,
                         q_chunk_tiles,
                         k_chunk_tiles,
+                        v_chunk_tiles,
                         qk_chunk_tiles,
                         out_chunk_tiles,
                         cb_q_in,
@@ -208,7 +255,8 @@ void kernel_main() {
                         cb_sum_A,
                         cb_sum_B,
                         cb_exp_max_diff,
-                        cb_out);
+                        cb_out,
+                        lw_mask);
                 }
             }
         }

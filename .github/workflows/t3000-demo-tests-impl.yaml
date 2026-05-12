@@ -119,7 +119,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source tests/scripts/t3000/run_t3000_demo_tests.sh
-          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
 
       - name: Save environment data
@@ -144,12 +143,6 @@ jobs:
           path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

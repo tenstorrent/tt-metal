@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +8,13 @@
 #include <memory>
 #include <tt_stl/span.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <hostdevcommon/common_values.hpp>
 #include "umd/device/types/cluster_descriptor_types.hpp"
 #include "device_impl.hpp"
+#include "impl/context/context_types.hpp"
+#include "impl/context/metal_env_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -28,7 +31,7 @@ enum class InitializerKey;
 class DeviceManager {
 public:
     ~DeviceManager();
-    DeviceManager();
+    DeviceManager(MetalEnv& env, MetalContext& ctx);
 
     bool is_initialized() const { return is_initialized_; }
 
@@ -59,7 +62,16 @@ public:
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
 
+    // Per-chip: mesh RT-profiler init pass finished for this chip (ineligible skip, socket skip, or kernels launched).
+    // Cleared when the device is closed via DeviceManager. Used so low-level code can query without MeshDevice.
+    bool is_rt_profiler_device_init_complete(ChipId chip_id) const;
+    void mark_rt_profiler_device_init_complete(ChipId chip_id);
+    void clear_rt_profiler_device_init_complete(ChipId chip_id);
+
 private:
+    MetalEnv& env_;
+    MetalEnvImpl& env_impl_;
+    MetalContext& ctx_;
     uint8_t num_hw_cqs_{};
     size_t l1_small_size_{};
     size_t trace_region_size_{};
@@ -82,6 +94,7 @@ private:
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map_;
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map_;
+    std::unordered_set<ChipId> rt_profiler_device_init_complete_;
     void init_firmware_on_active_devices();
     void activate_device(ChipId id);
     Device* get_active_device_internal(ChipId device_id) const;

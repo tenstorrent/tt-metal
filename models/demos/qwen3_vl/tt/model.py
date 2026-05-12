@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -117,10 +117,7 @@ class VisionTransformer(LightweightModule):
         x = patch_input
         seq_len = ((patch_seq_len // 128) + 1) * 128 if seq_len is None else seq_len
         x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len)).unsqueeze(0)
-        x = self.args.prepare_residual_tensor_prefill(
-            x,
-            force_replicated=False if self.args.is_galaxy else True,
-        )
+        x = self.args.prepare_residual_tensor_prefill(x)
         return x
 
     def forward(
@@ -275,18 +272,14 @@ class DropInVisionTransformer(torch.nn.Module):
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
             )
             sin = ttnn.from_torch(
                 sin_padded,
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
             )
             rot_mats = [cos, sin]
 
@@ -308,31 +301,16 @@ class DropInVisionTransformer(torch.nn.Module):
             ttnn.deallocate(rot_mats[1])
 
             # --- Postprocessing ---
-            # 1. Convert TT output back to torch tensor
-            tt_output_torch = ttnn.to_torch(
-                tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            )
-
-            deepstack_visual_embeds_torch_list = [
-                ttnn.to_torch(
-                    deepstack_visual_embeds[i],
-                    mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1),
-                )
-                for i in range(len(deepstack_visual_embeds))
-            ]
-
-            # deallocate TT output
-            ttnn.deallocate(tt_out)
-            [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
-
-            # 2. Extract the relevant output part and adjust shape (matching test logic)
+            # 1. Extract the relevant output part and adjust shape (matching test logic)
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
-            final_output = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
-            deepstack_visual_embeds_torch = [
-                deepstack_visual_embeds_torch_list[i][:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
-                for i in range(len(deepstack_visual_embeds_torch_list))
+            final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+            ttnn.deallocate(tt_out)
+            deepstack_visual_embeds_output = [
+                ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+                for i in range(len(deepstack_visual_embeds))
             ]
+            [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
 
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
@@ -340,16 +318,141 @@ class DropInVisionTransformer(torch.nn.Module):
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
-            final_outputs.append(final_output)
+            # 2. Convert the output to the desired tensor sharding format
+            # TODO: Modify this once we implement TP+DP to use just convert to desired output sharding
+            final_output_sharded = ttnn.mesh_partition(final_output, 1)
+            ttnn.deallocate(final_output)
+            deepstack_visual_embeds_sharded = [
+                ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
+                for i in range(len(deepstack_visual_embeds_output))
+            ]
+            [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
+
+            # 3. Aggregate in batched users list
+            final_outputs.append(final_output_sharded)
             for i in range(len(deepstack_visual_embeds_list)):
                 if deepstack_visual_embeds_list[i] is None:
-                    deepstack_visual_embeds_list[i] = deepstack_visual_embeds_torch[i]
+                    deepstack_visual_embeds_list[i] = [deepstack_visual_embeds_sharded[i]]
                 else:
-                    deepstack_visual_embeds_list[i] = torch.cat(
-                        [deepstack_visual_embeds_list[i], deepstack_visual_embeds_torch[i]], dim=0
-                    )
+                    deepstack_visual_embeds_list[i].append(deepstack_visual_embeds_sharded[i])
+
         # concatenate all the outputs
-        return torch.cat(final_outputs, dim=0), deepstack_visual_embeds_list
+        tt_out = ttnn.concat(final_outputs, dim=0)
+        for i in range(len(deepstack_visual_embeds_list)):
+            deepstack_visual_embeds_list[i] = ttnn.concat(deepstack_visual_embeds_list[i], dim=0)
+        (ttnn.deallocate(final_outputs[i]) for i in range(len(final_outputs)))
+        return tt_out, deepstack_visual_embeds_list
+
+    def forward_single_user(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for a single user's image data. Avoids concat operations by processing
+        one user at a time.
+
+        Args:
+            pixel_values (torch.Tensor): Input pixel values for a single user.
+                                         Shape [num_patches, hidden_size].
+            grid_thw (torch.Tensor): Grid dimensions for this user's image(s).
+                                     Shape [num_images, 3] or [3] for single image.
+
+        Returns:
+            Tuple[ttnn.Tensor, List[ttnn.Tensor]]: Output embeddings and deepstack visual embeddings
+                                                   for this single user.
+        """
+        # Ensure grid_thw has batch dimension
+        if grid_thw.dim() == 1:
+            grid_thw = grid_thw.unsqueeze(0)
+
+        # For single user, we process all their images together
+        # Calculate total unpadded sequence length across all images for this user
+        unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
+        # Calculate padded sequence length (divisible by 2048)
+        seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+
+        # Use preprocessing function from reference/functional to get indices and embeddings
+        cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
+            seq_len=unpadded_seq_len,
+            grid_thw=grid_thw,
+            head_dim=self.model_args.head_dim,
+            spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
+        )
+
+        # Use reference model's patch embedding
+        patch_input = self.reference_model.patch_embed(pixel_values)
+        pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
+        patch_input = patch_input + pos_embeds
+
+        # Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
+        cos_orig, sin_orig = position_embeddings
+        cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
+        # pad sequence length with cos = 1, sin = 0 (identity rotation)
+        cos_padded = (
+            torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1).unsqueeze(0).unsqueeze(0)
+        )
+        sin_padded = (
+            torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=0).unsqueeze(0).unsqueeze(0)
+        )
+        # Convert to TT tensors on the mesh device
+        cos = ttnn.from_torch(
+            cos_padded,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.model_args.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+        )
+        sin = ttnn.from_torch(
+            sin_padded,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.model_args.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+        )
+        rot_mats = [cos, sin]
+
+        # Prepare input tensor for the TT model
+        tt_input = self.tt_model.prepare_input(patch_input, seq_len)
+
+        # TT Model Execution
+        tt_out, deepstack_visual_embeds = self.tt_model(
+            tt_input,
+            unpadded_seq_len=unpadded_seq_len,
+            rot_mats=rot_mats,
+        )
+
+        # Deallocate device tensors that are not needed
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
+        ttnn.deallocate(rot_mats[0])
+        ttnn.deallocate(rot_mats[1])
+
+        # Postprocessing - extract relevant output and adjust shape
+        out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
+        final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+        ttnn.deallocate(tt_out)
+
+        deepstack_visual_embeds_output = [
+            ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+            for i in range(len(deepstack_visual_embeds))
+        ]
+        [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
+
+        if self.debug:
+            logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
+            reference_output, deepstack_ref = self.reference_model.forward(pixel_values, grid_thw)
+            _, pcc = comp_pcc(reference_output, final_output)
+            logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
+
+        # Convert the output to the desired tensor sharding format
+        final_output_sharded = ttnn.mesh_partition(final_output, 1)
+        ttnn.deallocate(final_output)
+
+        deepstack_visual_embeds_sharded = [
+            ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
+            for i in range(len(deepstack_visual_embeds_output))
+        ]
+        [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
+
+        return final_output_sharded, deepstack_visual_embeds_sharded
 
 
 class Transformer(TTTransformer):
@@ -405,31 +508,9 @@ class Transformer(TTTransformer):
         assert isinstance(rot_mats[0], torch.Tensor)
         assert isinstance(rot_mats[1], torch.Tensor)
         # tokens is actually embeddings
-        assert tokens.dim() == 3, "tokens should be a 3D tensor"  # [batch_size = 1, seq_len, head_dim]
+        assert len(tokens.shape) == 3, "tokens should be a 3D tensor"  # [batch_size = 1, seq_len, head_dim]
         S = tokens.shape[-2]
-        tokens_embd = ttnn.from_torch(
-            tokens.unsqueeze(1),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
-            ),
-        )
-
-        if deepstack_visual_embeds is not None:
-            deepstack_visual_embeds = [
-                ttnn.from_torch(
-                    deepstack_visual_embeds[i].unsqueeze(0).unsqueeze(0),
-                    device=self.mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
-                    ),
-                )
-                for i in range(len(deepstack_visual_embeds))
-            ]
+        tokens_embd = ttnn.unsqueeze(tokens, 1)
 
         # Slice the rot mats to the prefill seqlen
         cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
@@ -512,7 +593,19 @@ class Transformer(TTTransformer):
         kv_cache=None,
         visual_pos_masks=None,
         deepstack_visual_embeds=None,
+        page_tables_per_layer=None,
     ):
+        # The parent ``ttnn_*_forward`` always passes ``page_tables_per_layer``
+        # (the hybrid kv-cache-groups kwarg). Qwen3-VL is non-hybrid today so
+        # the list is None in practice, but accept it and route per-layer the
+        # same way the parent does so behaviour stays aligned if/when this
+        # model is ever migrated.
+        if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(self.layers)} layers"
+            )
+
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
             activation_dtype = self.decoders_optimizations.get_tensor_dtype(decoder_id=i, tensor=TensorGroup.ACTIVATION)
@@ -521,6 +614,7 @@ class Transformer(TTTransformer):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
+            layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
             x = layer(
                 x,
                 current_pos,
@@ -528,7 +622,7 @@ class Transformer(TTTransformer):
                 rot_mats_local=rot_mats_local,
                 user_id=user_id,
                 mode=mode,
-                page_table=page_table,
+                page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ void kernel_main() {
     constexpr uint32_t base_idx_crta = 0;
 
     auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
-    auto tensor_accessor = TensorAccessor(args, 0, 1024);
+    auto tensor_accessor = TensorAccessor(args, 0);
 
     constexpr size_t benchmark_iterations = 125;
     for (size_t iteration = 0; iteration < benchmark_iterations; ++iteration) {

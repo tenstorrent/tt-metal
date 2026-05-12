@@ -122,6 +122,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
+          filter: blob:none
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -154,12 +155,6 @@ jobs:
           echo "::group::CCache Statistics"
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

@@ -1,3 +1,12 @@
+# Wrapper around target_precompile_headers(REUSE_FROM) that silently no-ops when
+# CMAKE_DISABLE_PRECOMPILE_HEADERS is set, avoiding spurious CMake warnings about
+# REUSE_FROM sources that have DISABLE_PRECOMPILE_HEADERS set on them.
+function(tt_reuse_precompile_headers target pch_source)
+    if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
+        target_precompile_headers(${target} REUSE_FROM ${pch_source})
+    endif()
+endfunction()
+
 function(CREATE_EAGER_TEST_EXE TESTLIST)
     foreach(TEST_SRC ${TESTLIST})
         get_filename_component(TEST_NAME ${TEST_SRC} NAME_WE)

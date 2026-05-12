@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,8 +34,13 @@ void kernel_main() {
                 get_noc_multicast_addr(NOC_ADDR_X, NOC_ADDR_Y, MCAST_NOC_END_ADDR_X, MCAST_NOC_END_ADDR_Y, write_ptr);
             noc_async_write_multicast(read_ptr, dst_noc_multicast_addr, page_size, NUM_MCAST_DESTS, LINKED);
 #elif WRITE
+#if WRITE_DRAM
+            uint64_t noc_write_addr = NOC_XY_ADDR(NOC_X(NOC_ADDR_X), NOC_Y(NOC_ADDR_Y), NOC_MEM_ADDR);
+            noc_async_write(write_ptr, noc_write_addr, page_size);
+#else
             uint64_t noc_write_addr = NOC_XY_ADDR(NOC_X(NOC_ADDR_X), NOC_Y(NOC_ADDR_Y), write_ptr);
             noc_async_write(NOC_MEM_ADDR, noc_write_addr, page_size);
+#endif
 #elif READ_ONE_PACKET
             noc_async_read_one_packet(noc_addr, read_ptr, page_size);
 #else

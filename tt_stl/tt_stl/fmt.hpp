@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -179,6 +179,26 @@ struct fmt::formatter<std::vector<T, Alloc>> {
 
     auto format(const std::vector<T, Alloc>& vec, format_context& ctx) const -> format_context::iterator {
         return ttsl::fmt_detail::format_sequence(vec.begin(), vec.end(), ctx.out(), "{", "}");
+    }
+};
+
+// std::vector<bool> — special case: operator[] returns a proxy reference type, not a real bool.
+// fmt 11 cannot format such proxy references directly; cast each element to bool explicitly.
+template <typename Alloc>
+struct fmt::formatter<std::vector<bool, Alloc>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::vector<bool, Alloc>& vec, format_context& ctx) const -> format_context::iterator {
+        auto out = fmt::format_to(ctx.out(), "{{");
+        bool first = true;
+        for (bool val : vec) {
+            if (!first) {
+                out = fmt::format_to(out, ", ");
+            }
+            out = fmt::format_to(out, "{}", val);
+            first = false;
+        }
+        return fmt::format_to(out, "}}");
     }
 };
 

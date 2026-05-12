@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ class TtUNet2DConditionModel(LightweightModule):
         module_path,
         model_config,
         debug_mode=False,
+        lora_weights_manager=None,
     ):
         super().__init__()
 
@@ -152,6 +153,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     640,
                     True,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
             self.down_blocks.append(
@@ -165,6 +167,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     1280,
                     False,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
 
@@ -177,6 +180,7 @@ class TtUNet2DConditionModel(LightweightModule):
                 20,
                 1280,
                 debug_mode=debug_mode,
+                lora_weights_manager=lora_weights_manager,
             )
 
             self.up_blocks.append(
@@ -190,6 +194,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     1280,
                     True,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
             self.up_blocks.append(
@@ -203,6 +208,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     640,
                     True,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
             self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2", model_config, debug_mode=debug_mode))
@@ -272,7 +278,7 @@ class TtUNet2DConditionModel(LightweightModule):
         temb_add = ttnn.to_layout(temb_add, ttnn.TILE_LAYOUT)
         temb_add = self.add_embedding.forward(temb_add)
 
-        temb = ttnn.add_(temb, temb_add, use_legacy=False, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)])
+        temb = ttnn.add_(temb, temb_add, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)])
         ttnn.deallocate(temb_add)
 
         [sample, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(

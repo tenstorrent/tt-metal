@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,9 +28,8 @@ constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;         // softmax_output
 constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;         // upstream_grad
 constexpr uint32_t ones_cb_index = tt::CBIndex::c_2;         // ones vector for matmul reduction
 constexpr uint32_t out_cb_index = tt::CBIndex::c_7;          // output
-constexpr uint32_t ygrad_cb_index = tt::CBIndex::c_13;       // y * grad
-constexpr uint32_t sum_reduce_cb_index = tt::CBIndex::c_14;  // sum(y * grad) - accumulated
-constexpr uint32_t block_sum_cb_index = tt::CBIndex::c_15;   // block sum temporary
+constexpr uint32_t sum_reduce_cb_index = tt::CBIndex::c_14;  // sum(y * grad)
+constexpr uint32_t partial_cb_index = tt::CBIndex::c_15;     // 32 column partials before final reduction
 
 constexpr const char* const kReaderPath =
     "tt-train/sources/ttml/metal/ops/softmax_backward/device/kernels/dataflow/reader_softmax_backward.cpp";
@@ -40,26 +39,26 @@ constexpr const char* const kComputePath =
     "tt-train/sources/ttml/metal/ops/softmax_backward/device/kernels/compute/softmax_backward_kernel.cpp";
 
 struct CoreRowAssignment {
-    CoreCoord core;
+    tt::tt_metal::CoreCoord core;
     uint32_t start_row;
     uint32_t num_rows;
 };
 
-static std::vector<CoreCoord> get_worker_cores_in_order(
-    const std::optional<CoreRangeSet>& sub_core_grids, const tt::tt_metal::IDevice* device) {
+static std::vector<tt::tt_metal::CoreCoord> get_worker_cores_in_order(
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids, const tt::tt_metal::IDevice* device) {
     if (sub_core_grids.has_value()) {
-        const CoreRangeSet& sub = *sub_core_grids;
-        std::vector<CoreCoord> cores;
+        const tt::tt_metal::CoreRangeSet& sub = *sub_core_grids;
+        std::vector<tt::tt_metal::CoreCoord> cores;
         cores.reserve(sub.num_cores());
-        for (const CoreRange& range : sub.ranges()) {
-            for (CoreCoord core : range) {
+        for (const tt::tt_metal::CoreRange& range : sub.ranges()) {
+            for (tt::tt_metal::CoreCoord core : range) {
                 cores.push_back(core);
             }
         }
         return cores;
     }
-    const CoreCoord grid_size = device->compute_with_storage_grid_size();
-    std::vector<CoreCoord> cores;
+    const tt::tt_metal::CoreCoord grid_size = device->compute_with_storage_grid_size();
+    std::vector<tt::tt_metal::CoreCoord> cores;
     cores.reserve(grid_size.x * grid_size.y);
     for (uint32_t x = 0; x < grid_size.x; ++x) {
         for (uint32_t y = 0; y < grid_size.y; ++y) {
@@ -70,9 +69,9 @@ static std::vector<CoreCoord> get_worker_cores_in_order(
 }
 
 static void assign_rows_to_cores(
-    const std::vector<CoreCoord>& cores_in_order,
+    const std::vector<tt::tt_metal::CoreCoord>& cores_in_order,
     uint32_t num_rows,
-    std::vector<CoreRange>& worker_core_ranges,
+    std::vector<tt::tt_metal::CoreRange>& worker_core_ranges,
     std::vector<CoreRowAssignment>& core_row_assignments) {
     const uint32_t num_cores = static_cast<uint32_t>(cores_in_order.size());
     if (num_cores == 0)
@@ -86,8 +85,8 @@ static void assign_rows_to_cores(
         const uint32_t num_rows_this_core = end_row - start_row;
         if (num_rows_this_core == 0)
             continue;
-        const CoreCoord& core = cores_in_order[core_idx];
-        worker_core_ranges.push_back(CoreRange(core, core));
+        const tt::tt_metal::CoreCoord& core = cores_in_order[core_idx];
+        worker_core_ranges.push_back(tt::tt_metal::CoreRange(core, core));
         core_row_assignments.push_back({core, start_row, num_rows_this_core});
     }
 }
@@ -103,7 +102,7 @@ struct KernelMode {
 };
 
 static constexpr uint32_t memory_estimator(uint32_t width_tiles, uint32_t tile_size) {
-    return (width_tiles * tile_size) * 4U + (1U * tile_size) * 2U;  // src0, src1, out, ygrad; sum_reduce, ones
+    return (width_tiles * tile_size) * 3U + (1U * tile_size) * 3U;  // src0, src1, out; sum_reduce, ones, partial
 }
 
 static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device) {
@@ -148,7 +147,8 @@ static void get_tensor_properties(
     num_rows = num_outer_dims * height_tiles;
     input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
     output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    intermed_data_format = tt::DataFormat::Float16_b;
+    // y*grad and reduction tiles use the same format as activations (BFLOAT16 or FLOAT32 today).
+    intermed_data_format = input_data_format;
     input_tile_size = tile_size(input_data_format);
     output_tile_size = tile_size(output_data_format);
     intermed_tile_size = tile_size(intermed_data_format);
@@ -159,7 +159,7 @@ static tt::tt_metal::ComputeConfig precise(
     tt::tt_metal::ComputeConfig config;
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
-    config.math_fidelity = MathFidelity::HiFi4;
+    config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     config.compile_args = std::move(compile_time_args);
     config.defines = std::move(defines);
     return config;
@@ -196,7 +196,7 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
 
     log_debug(
         tt::LogOp,
-        "SoftmaxBackward: Using {} kernel | Shape: {}x{} tiles | {}x buffering | Estimated L1: {} KB",
+        "SoftmaxBackward: Using {} approach | Shape: {}x{} tiles | {}x buffering | Estimated L1: {} KB",
         tiles_per_block == width_tiles ? "NON-STREAMING" : "STREAMING",
         num_rows,
         width_tiles,
@@ -204,17 +204,16 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         required_memory_bytes / 1024);
 
     // Collect worker cores in deterministic order and assign rows to each.
-    std::vector<CoreRange> worker_core_ranges;
+    std::vector<tt::tt_metal::CoreRange> worker_core_ranges;
     std::vector<CoreRowAssignment> core_row_assignments;
-    const std::vector<CoreCoord> cores_in_order =
+    const std::vector<tt::tt_metal::CoreCoord> cores_in_order =
         get_worker_cores_in_order(operation_attributes.sub_core_grids, device);
     assign_rows_to_cores(cores_in_order, num_rows, worker_core_ranges, core_row_assignments);
     TT_FATAL(!worker_core_ranges.empty(), "SoftmaxBackward: no cores have work");
-    const CoreRangeSet worker_cores(worker_core_ranges);
+    const tt::tt_metal::CoreRangeSet worker_cores(worker_core_ranges);
 
     const uint32_t block_cb_size_in0 = buffering_multiplier * tiles_per_block * input_tile_size;
     const uint32_t block_cb_size_out = buffering_multiplier * tiles_per_block * output_tile_size;
-    const uint32_t block_cb_size_intermed0 = buffering_multiplier * tiles_per_block * intermed_tile_size;
 
     auto c_in0_config = CircularBufferConfig(block_cb_size_in0, {{src0_cb_index, input_data_format}})
                             .set_page_size(src0_cb_index, input_tile_size);
@@ -228,15 +227,12 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     auto c_out_config = CircularBufferConfig(block_cb_size_out, {{out_cb_index, output_data_format}})
                             .set_page_size(out_cb_index, output_tile_size);
     CreateCircularBuffer(program, worker_cores, c_out_config);
-    auto c_ygrad_config = CircularBufferConfig(block_cb_size_intermed0, {{ygrad_cb_index, intermed_data_format}})
-                              .set_page_size(ygrad_cb_index, intermed_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_ygrad_config);
     auto c_sum_reduce_config = CircularBufferConfig(intermed_tile_size, {{sum_reduce_cb_index, intermed_data_format}})
                                    .set_page_size(sum_reduce_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, worker_cores, c_sum_reduce_config);
-    auto c_block_sum_config = CircularBufferConfig(intermed_tile_size, {{block_sum_cb_index, intermed_data_format}})
-                                  .set_page_size(block_sum_cb_index, intermed_tile_size);
-    CreateCircularBuffer(program, worker_cores, c_block_sum_config);
+    auto c_partial_config = CircularBufferConfig(intermed_tile_size, {{partial_cb_index, intermed_data_format}})
+                                .set_page_size(partial_cb_index, intermed_tile_size);
+    CreateCircularBuffer(program, worker_cores, c_partial_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index, src1_cb_index, ones_cb_index, width_tiles, tiles_per_block, mask_w};
@@ -250,14 +246,14 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         src0_cb_index,
         src1_cb_index,
         out_cb_index,
-        ygrad_cb_index,
         sum_reduce_cb_index,
         ones_cb_index,
-        block_sum_cb_index,
+        partial_cb_index,
         width_tiles,
         tiles_per_block};
 
-    std::map<std::string, std::string> compute_defines = {{"BROADCAST_TYPE", "BroadcastType::COL"}};
+    std::map<std::string, std::string> compute_defines = {
+        {"BROADCAST_TYPE", "BroadcastType::COL"}, {"FP32_DEST_ACC_EN", "1"}};
     const ComputeConfig wconf = precise(compute_compile_time_args, compute_defines);
 
     auto reader_kernel_id =

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,10 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
 void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank sender_host_rank);
 
 void RandomizedInterMeshUnicast(BaseFabricFixture* fixture);
+
+// Returns the MPI rank that owns the given mesh_id, queried from the
+// control plane's global logical bindings (topology mapper).
+uint32_t get_rank_for_mesh_id(uint32_t target_mesh_id);
 
 void InterMeshLineMcast(
     BaseFabricFixture* fixture,

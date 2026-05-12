@@ -8,6 +8,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sd_mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device_view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket_utils.cpp
@@ -23,5 +24,9 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/h2d_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/d2h_socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/named_shm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shm_resource_tracker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/hd_socket_descriptor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pcie_core_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
 )

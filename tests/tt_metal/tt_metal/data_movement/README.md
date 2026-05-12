@@ -51,11 +51,16 @@ Both API versions run the same test cases but use different underlying implement
 | Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.                          |
 | Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
-| Inline Direct Write         | 500-501                         | Inline DW transactions between two Tensix cores.                                        |
+| Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
+| DRAM Neighbour Tests        | 502-505, 508-509                | Each core reads from its closest DRAM.                                                  |
 | Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
-| PCIe Read Bandwidth         | 603                             | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+| PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+| PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
+| Matmul                      | 1000-1231                       | 1D v1, 1D v2, and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. Per-variant offsets: 1D v1 +0 (1000-1031), 1D v2 +100 (1100-1131), 2D +200 (1200-1231). 1D: in0 row multicast + in1 column multicast (row 0 reads its DRAM slice once, then multicasts down the column). 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). Perf-characterization sweeps: 1029 (4x4 K=1 sub_r {1..256}), 1030 (4x4 K=8 (sub_r, sub_c) 2D), 1031 (8x7 K=8 (sub_r, sub_c) 2D). |
 | NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
+| Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
+| Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
 
 
 ## Running Tests
@@ -141,3 +146,10 @@ python tests/tt_metal/tt_metal/data_movement/python/heatmap.py -n 16 -s 4096
 The script generates:
 - A heatmap PNG file showing per-core bandwidth
 - Console output with numerical bandwidth values per core
+
+### Per-core stamps (`Per-core bytes`)
+By default, per-core bandwidth is computed as `(Number of transactions × Transaction size) / duration_cycles` using the global per-run attributes — same numerator on every core. For tests where the per-core NOC traffic is asymmetric (e.g. matmul multicast, where only one column actually sends), kernels can stamp a per-core override:
+```cpp
+DeviceTimestampedData("Per-core bytes", actual_bytes_pushed_by_this_core);
+```
+When present, `gather_bw_per_core` uses this stamp as the numerator for that core, exposing sender-vs-receiver asymmetry on the heatmap. All five matmul multicast kernels (`in0_kernel.cpp`, `in0_kernel_v2.cpp`, `in0_kernel_2d.cpp`, `in1_kernel.cpp`, `in1_kernel_2d.cpp`) do this so the heatmaps correctly show which cores are doing the multicast work.

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
+
+import ttnn
 
 from ..layers.module import Module
 
@@ -77,10 +79,6 @@ def load_model(
     if tt_model.is_loaded():
         return
 
-    # unload any modules that need to be unloaded before loading this module
-    for module in tt_model.unload_set or []:
-        module.deallocate_weights()
-
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,
@@ -99,25 +97,28 @@ def load_model(
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
         tt_model.load_torch_state_dict(get_torch_state_dict())
+        ttnn.distributed_context_barrier()
         return
 
     if Path(cache_dir).is_dir():
         logger.info(f"loading cache at '{cache_dir}'.")
         tt_model.load(cache_dir)
+        ttnn.distributed_context_barrier()
         return
 
     if get_torch_state_dict is None:
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
-    # Create host tensors when creating the cache to circumvent the issue that replicated device
-    # tensors lead to redundant copies when saved to disk.
-    tt_model.load_torch_state_dict(get_torch_state_dict(), on_host=create_cache)
+    tt_model.load_torch_state_dict(get_torch_state_dict())
+
+    # If distributed, ensure that all processes have completed the check whether cache_dir exists,
+    # before any rank might proceed to create that dir to save.
+    ttnn.distributed_context_barrier()
 
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
-        tt_model.load(cache_dir)  # move to device
 
 
 def model_cache_dir(

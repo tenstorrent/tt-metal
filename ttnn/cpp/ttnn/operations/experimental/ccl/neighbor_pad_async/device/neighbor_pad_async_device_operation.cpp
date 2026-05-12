@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,23 +58,12 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(num_sticks_per_halo_dim >= args.num_links, "Not enough work to split among links, reduce num links");
     }
 
-    if (args.secondary_cluster_axis.has_value()) {
-        const auto& mesh_view = tensor_args.input_tensor.device()->get_view();
-        uint32_t target_ring_size = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    if (args.t_front_pad > 0) {
+        TT_FATAL(args.dim >= 1, "t_front_pad requires dim >= 1 (T dim is dim-1), got dim={}", args.dim);
         TT_FATAL(
-            args.secondary_cluster_axis.value() == 0 || args.secondary_cluster_axis.value() == 1,
-            "Unsupported secondary cluster axis {}.",
-            args.secondary_cluster_axis.value());
-        TT_FATAL(
-            args.secondary_mesh_shape.has_value(),
-            "If secondary cluster axis is specified, need to have a secondary mesh shape");
-        TT_FATAL(
-            !(target_ring_size % args.secondary_mesh_shape.value().at(0)) &&
-                !(target_ring_size % args.secondary_mesh_shape.value().at(1)),
-            "Secondary mesh shape ({},{}) is not valid given main cluster axis device count {}",
-            args.secondary_mesh_shape.value().at(0),
-            args.secondary_mesh_shape.value().at(1),
-            target_ring_size);
+            input_tensor_shape[0] == 1,
+            "t_front_pad only supports B=1 tensors, got B={}",
+            input_tensor_shape[0]);
     }
 
     // Validate secondary padding dimension (2D padding)
@@ -124,6 +113,9 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
         if (args.pad_dim2.has_value()) {
             expected_shape[args.pad_dim2.value()] += (args.pad2_left + args.pad2_right);
         }
+        if (args.t_front_pad > 0) {
+            expected_shape[args.dim - 1] += args.t_front_pad;
+        }
         TT_FATAL(
             output_tensor.logical_shape() == expected_shape,
             "Preallocated output tensor shape {} must match expected output shape {}.",
@@ -140,6 +132,9 @@ TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     if (args.pad_dim2.has_value()) {
         shape[args.pad_dim2.value()] += (args.pad2_left + args.pad2_right);
     }
+    if (args.t_front_pad > 0) {
+        shape[args.dim - 1] += args.t_front_pad;
+    }
     return TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
@@ -153,7 +148,7 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
     return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
@@ -166,13 +161,13 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.output_mem_config,
         args.topology,
         args.ring_size,
-        args.secondary_cluster_axis,
-        args.secondary_mesh_shape,
         args.pad_dim2,
         args.pad2_left,
         args.pad2_right,
         args.pad2_cluster_axis,
         args.pad2_num_links,
+        args.logical_h,
+        args.t_front_pad,
         tensor_args);
 }
 
@@ -193,14 +188,14 @@ Tensor neighbor_pad_async(
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
-    std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
     std::optional<uint32_t> pad_dim2,
     uint32_t pad2_left,
     uint32_t pad2_right,
     std::optional<uint32_t> pad2_cluster_axis,
     std::optional<size_t> pad2_num_links,
-    const std::optional<Tensor>& persistent_output_buffer) {
+    const std::optional<Tensor>& persistent_output_buffer,
+    uint32_t logical_h,
+    uint32_t t_front_pad) {
     using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
@@ -224,14 +219,14 @@ Tensor neighbor_pad_async(
         memory_config.value_or(input_tensor.memory_config()),
         topology_,
         num_devices,
-        secondary_cluster_axis,
-        secondary_mesh_shape,
         pad_dim2,
         pad2_left,
         pad2_right,
         pad2_cluster_axis,
         pad2_num_links.value_or(0),
-        persistent_output_buffer.has_value());
+        persistent_output_buffer.has_value(),
+        logical_h,
+        t_front_pad);
 
     auto tensor_args =
         OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = persistent_output_buffer};

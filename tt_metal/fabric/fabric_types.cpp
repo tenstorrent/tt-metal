@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,4 +71,33 @@ size_t hash<tt::tt_fabric::FabricNodeId>::operator()(const tt::tt_fabric::Fabric
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
     const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
     return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
+}
+
+auto fmt::formatter<tt::tt_fabric::MeshId>::format(const tt::tt_fabric::MeshId& mesh_id, format_context& ctx) const
+    -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "{}", *mesh_id);
+}
+
+namespace tt::tt_metal {
+
+std::ostream& operator<<(std::ostream& os, const AsicID& asic_id) {
+    os << *asic_id;
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const TrayID& tray_id) {
+    os << *tray_id;
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ASICLocation& asic_location) {
+    os << *asic_location;
+    return os;
+}
+
+}  // namespace tt::tt_metal
+
+auto fmt::formatter<tt::tt_metal::AsicID>::format(const tt::tt_metal::AsicID& asic_id, format_context& ctx) const
+    -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "{}", *asic_id);
 }

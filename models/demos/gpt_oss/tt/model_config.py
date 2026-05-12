@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -108,6 +108,7 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
+        self.disable_batched_prefill = True
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
@@ -233,7 +234,7 @@ class ModelArgs:
                 weights_path,
                 torch_dtype="auto"
                 # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
             )
             state_dict = model.state_dict()

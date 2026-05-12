@@ -88,7 +88,7 @@ Current best example can be found in the training framework here:
 All tests can be found under tests/ttnn
 
 #### What is the difference between each kind of test?
- * tests/ttnn/sweep_tests
+ * tests/ttnn/python_api_testing/sweep_tests
      * Used to check coverage of what is and what is NOT supported
      * Tests can be added well before the actual implementation is finished
      * These tests do not block the continuous integration pipeline
@@ -101,13 +101,8 @@ All tests can be found under tests/ttnn
 #### Why do the sweep tests use a dictionary for all the combinations of input and then use a special run method?  Could you not have done this with a traditional pytest instead?
 The primary reason was because we needed a way to create a consolidated report per operation in the form of a csv file.  The idea was that each operation would get its own python file where all the test combinations are handled by a single run method.  Each permutation of the input combinations would become the header for the resulting csv which is then uploaded and reported on.
 
-How do I run sweep tests with pytest?
- To run all of the sweep tests for a given python operation file:
-  * `pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>`
-  * Example for matmul: `pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul`
- To run just one sample combination for an operation:
-   * `pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>[<operation>.py-<index-of-test-instance>]`
-   * Example for matmul: `pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul[matmul.py-0]`
+#### How do I run sweep tests with pytest?
+See [sweep test readme](../tests/ttnn/python_api_testing/sweep_tests/README.md).
 
 #### What if my device hangs?
 Reset with `tt-smi -tr 0` where 0 represents the device id.

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,8 +74,10 @@ void py_cluster_module_types(nb::module_& mod) {
         .value("SIMULATOR_BLACKHOLE", tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "Simulator Blackhole")
         .value("N300_2x2", tt::tt_metal::ClusterType::N300_2x2, "2 N300 cards, ethernet connected to form 2x2")
         .value("P300", tt::tt_metal::ClusterType::P300, "Production P300")
+        .value("SIMULATOR_QUASAR", tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "Simulator Quasar")
         .value("BLACKHOLE_GALAXY", tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "Blackhole Galaxy, all chips with mmio")
-        .value("P300_X2", tt::tt_metal::ClusterType::P300_X2, "2 P300 cards");
+        .value("P300_X2", tt::tt_metal::ClusterType::P300_X2, "2 P300 cards")
+        .value("CUSTOM", tt::tt_metal::ClusterType::CUSTOM, "Custom cluster");
 }
 
 void py_cluster_module(nb::module_& mod) { bind_ttnn_cluster(mod); }

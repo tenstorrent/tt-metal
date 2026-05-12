@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #define HAL_BUILD tt::tt_metal::blackhole::tensix
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::tensix;
 
 #include <cstdint>
@@ -29,6 +30,10 @@ namespace tensix_dev_msgs {
 
 namespace tensix_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
+}
+
+namespace tensix_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
 HalCoreInfoType create_tensix_mem_map() {
@@ -153,10 +158,11 @@ HalCoreInfoType create_tensix_mem_map() {
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         true /*supports_cbs*/,
-        false /*supports_dfbs*/,
+        true /*supports_dfbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory(),
-        tensix_fabric_telemetry::create_factory()};
+        tensix_fabric_telemetry::create_factory(),
+        tensix_realtime_profiler_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

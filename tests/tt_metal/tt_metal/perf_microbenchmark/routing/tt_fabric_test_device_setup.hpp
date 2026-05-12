@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,20 +40,30 @@ namespace tt::tt_fabric::fabric_tests {
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
+    uint8_t vc_id = 0;  // 0=VC0, 2=VC2
+    FabricNodeId dst_node_id{MeshId{0}, 0};
+
+    bool use_vc2() const { return vc_id == 2; }
 
     bool operator==(const ConnectionKey& other) const {
-        return direction == other.direction && link_idx == other.link_idx;
+        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id &&
+               dst_node_id == other.dst_node_id;
     }
 
     bool operator<(const ConnectionKey& other) const {
-        return std::tie(direction, link_idx) < std::tie(other.direction, other.link_idx);
+        return std::tie(direction, link_idx, vc_id, dst_node_id) <
+               std::tie(other.direction, other.link_idx, other.vc_id, other.dst_node_id);
     }
 };
 
 // Hash function for ConnectionKey to enable unordered_map
 struct ConnectionKeyHash {
     std::size_t operator()(const ConnectionKey& key) const {
-        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1);
+        std::size_t h = std::hash<int>()(static_cast<int>(key.direction));
+        h ^= std::hash<uint32_t>()(key.link_idx) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint8_t>()(key.vc_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<FabricNodeId>()(key.dst_node_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
     }
 };
 
@@ -117,7 +127,12 @@ public:
 
     // Register a connection from a core in a specific direction and link
     void register_client(
-        const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type);
+        const CoreCoord& core,
+        RoutingDirection direction,
+        uint32_t link_idx,
+        TestWorkerType worker_type,
+        const FabricNodeId& dst_node_id,
+        uint8_t vc_id = 0);
 
     // Processing: Call once at start of create_kernels()
     // local_alloc: allocator for on-demand mux core allocation
@@ -159,7 +174,6 @@ public:
         const CoreCoord& core,
         TestWorkerType worker_type,
         const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
-        const std::shared_ptr<IRouteManager>& route_manager,
         const FabricNodeId& fabric_node_id,
         tt::tt_metal::Program& program_handle) const;
 
@@ -390,13 +404,15 @@ private:
     void create_mux_kernels();
 
     // Helper: Common connection registration logic for senders and receivers
-    // Registers a fabric connection for the specified direction and link
+    // Registers a fabric connection for the specified direction, link, and destination
     ConnectionKey register_fabric_connection(
         CoreCoord logical_core,
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
-        uint32_t link_idx);
+        uint32_t link_idx,
+        const FabricNodeId& dst_node_id,
+        uint8_t vc_id = 0);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;

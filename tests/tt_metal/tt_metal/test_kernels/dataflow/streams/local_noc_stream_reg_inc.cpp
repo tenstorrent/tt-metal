@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 void kernel_main() {
 #if defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC)
     constexpr uint32_t num_streams = ETH_NOC_NUM_STREAMS;
+#elif defined(COMPILE_FOR_DRISC)
+    constexpr uint32_t num_streams = DRAM_NOC_NUM_STREAMS;
 #else
     constexpr uint32_t num_streams = NOC_NUM_STREAMS;
 #endif

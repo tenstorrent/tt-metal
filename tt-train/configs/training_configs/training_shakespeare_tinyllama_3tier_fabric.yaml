@@ -7,7 +7,7 @@ training_config:
   max_steps: 5000
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003
@@ -20,7 +20,7 @@ training_config:
 
 device_config:
   enable_ddp: true
-  mesh_shape: [1, 32]
+  mesh_shape: [32, 1]
 
 eval_config:
   repetition_penalty: 1.0

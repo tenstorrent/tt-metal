@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include "thread_pool.hpp"
+#include "impl/threading/thread_pool.hpp"
 
 namespace tt::tt_metal {
 

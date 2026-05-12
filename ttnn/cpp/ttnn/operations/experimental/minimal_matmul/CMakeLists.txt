@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_minimal_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::MinimalMatmul ALIAS ttnn_op_experimental_minimal_matmul)
 
-target_precompile_headers(ttnn_op_experimental_minimal_matmul REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_minimal_matmul TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_minimal_matmul)
 
 set_target_properties(
@@ -25,10 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        minimal_matmul.cpp
-        minimal_matmul_split.cpp
-        device/minimal_matmul_device_operation.cpp
-        device/minimal_matmul_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_MINIMAL_MATMUL_SRCS}
 )
 
 # Disable unity build for program factory files to avoid symbol collisions

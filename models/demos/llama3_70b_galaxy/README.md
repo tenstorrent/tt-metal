@@ -26,7 +26,7 @@ Read more about this model at the huggingface page for [Llama-3.3-70B-Instruct](
 #### Option 1: From Meta or Huggingface-cli
 You can download llama models [directly from Meta](https://www.llama.com/llama-downloads/), or through the `huggingface-cli` via:
 ```
-huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
+huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3.3-70B-Instruct
 ```
 - **The downloaded weights directories** include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
 
@@ -43,6 +43,7 @@ export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
 ```
 ```
 # If you manually downloaded the weight files
+# Make sure directory contains llama name: Llama-3.3-70B-Instruct
 export HF_MODEL=<PATH_TO_HF_WEIGHTS>
 ```
 

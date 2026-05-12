@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,11 +38,13 @@ public:
     // materialized.
     template <typename T>
     Tensor operator()(
-        tt::stl::Span<T> buffer,
+        ttsl::Span<T> buffer,
         const ttnn::Shape& shape,
         const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
+
+    const MeshMapperConfig& config() const;
 
 private:
     class Impl;
@@ -115,7 +117,7 @@ Tensor distribute_tensor(
 // `buffer_pin` as the RAII to retain reference count to the object.
 template <typename T>
 Tensor create_distributed_tensor(
-    tt::stl::Span<T> buffer,
+    ttsl::Span<T> buffer,
     const ttnn::Shape& global_shape,
     const tt::tt_metal::MemoryPin& buffer_pin,
     const tt::tt_metal::TensorLayout& shard_layout,
@@ -127,7 +129,7 @@ Tensor create_distributed_tensor(
 // Overload for unowned spans of data.
 template <typename T>
 Tensor create_distributed_tensor(
-    tt::stl::Span<const T> buffer,
+    ttsl::Span<const T> buffer,
     const ttnn::Shape& global_shape,
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,

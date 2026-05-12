@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_isin ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::IsIn ALIAS ttnn_op_experimental_isin)
 
-target_precompile_headers(ttnn_op_experimental_isin REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_isin TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_isin)
 
 set_target_properties(
@@ -25,9 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/isin_device_operation.cpp
-        device/isin_program_factory.cpp
-        isin.cpp
+        ${TTNN_OP_EXPERIMENTAL_ISIN_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_isin PRIVATE ${FixmeOpIncDirs})

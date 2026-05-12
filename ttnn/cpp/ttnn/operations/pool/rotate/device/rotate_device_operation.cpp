@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -123,17 +123,20 @@ RotateDeviceOperation::tensor_return_value_t RotateDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t RotateDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RotateDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tt::stl::hash::hash_objects_with_default_seed(
+    return ttsl::hash::hash_objects_with_default_seed(
         operation_attributes.memory_config,
         operation_attributes.interpolation_mode,
         tensor_args.input.logical_shape(),
         tensor_args.input.dtype());
 }
 
-std::tuple<RotateDeviceOperation::operation_attributes_t, RotateDeviceOperation::tensor_args_t>
-RotateDeviceOperation::invoke(
+}  // namespace ttnn::operations::rotate
+
+namespace ttnn::prim {
+
+ttnn::Tensor rotate(
     const Tensor& input,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
@@ -141,10 +144,11 @@ RotateDeviceOperation::invoke(
     bool expand,
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
-    return {
-        operation_attributes_t{
+    using Op = ttnn::operations::rotate::RotateDeviceOperation;
+    return ttnn::device_operation::launch<Op>(
+        Op::operation_attributes_t{
             angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())},
-        tensor_args_t{input}};
+        Op::tensor_args_t{input});
 }
 
-}  // namespace ttnn::operations::rotate
+}  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -131,12 +131,12 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
     return result;
 }
 
-tt::stl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto operation_attributes_without_step_and_lr = operation_attributes;
     operation_attributes_without_step_and_lr.step = 0;
     operation_attributes_without_step_and_lr.lr = 0.0f;
-    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
 }
 }  // namespace ttnn::operations::moreh::moreh_adamw
 
@@ -172,7 +172,7 @@ ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_v
             .amsgrad = amsgrad.value_or(false),
             .memory_config = memory_config.value_or(param_in.memory_config()),
             .compute_kernel_config = init_device_compute_kernel_config(
-                param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+                param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)},
         OperationType::tensor_args_t{
             .param_in = param_in,
             .grad = grad,

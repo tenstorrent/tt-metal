@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -73,13 +73,12 @@ void bind_manual_seed_operation(nb::module_& mod) {
     ttnn::bind_function<"manual_seed">(
         mod,
         doc,
-        ttnn::overload_t(
-            &manual_seed_wrapper,
-            nb::arg("seeds") = 0,
-            nb::kw_only(),
-            nb::arg("device") = nb::none(),
-            nb::arg("user_ids") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+        &manual_seed_wrapper,
+        nb::arg("seeds") = 0,
+        nb::kw_only(),
+        nb::arg("device") = nb::none(),
+        nb::arg("user_ids") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

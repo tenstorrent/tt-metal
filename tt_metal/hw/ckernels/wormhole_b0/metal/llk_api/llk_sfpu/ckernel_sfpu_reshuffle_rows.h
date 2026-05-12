@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_reshuffle_rows.h"
+#include "sfpu/ckernel_sfpu_reshuffle_rows.h"
 
 namespace ckernel {
 namespace sfpu {

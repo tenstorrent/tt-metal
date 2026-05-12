@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_device.hpp>
 
 #include "generic_op_program_factory.hpp"
 
@@ -104,7 +102,7 @@ void override_program_runtime_arguments(
             }
         }
         if (cb_desc.buffer != nullptr) {
-            UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer, cb_desc.address_offset);
         }
         if (cb_desc.global_circular_buffer != nullptr) {
             experimental::UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.global_circular_buffer);

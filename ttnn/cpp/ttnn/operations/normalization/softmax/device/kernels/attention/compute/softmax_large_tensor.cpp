@@ -1,10 +1,7 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
-
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary.h"
@@ -17,8 +14,10 @@
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #include "api/debug/assert.h"
+#include "experimental/circular_buffer.h"
 
 // clang-format off
 // 3 Loops in code
@@ -82,6 +81,8 @@ void apply_fused_scale_mask(
     // Requirements:
     //   cb_length_t of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length_t
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_fused_scale_mask);
     pack_reconfig_data_format(cb_out);
     mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
@@ -90,8 +91,8 @@ void apply_fused_scale_mask(
             blk = cb_length_t- cur_blk;
         }
         tile_regs_acquire();
-        cb_wait_front(cb_in, blk);
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_out_obj.reserve_back(blk);
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
@@ -103,14 +104,18 @@ void apply_fused_scale_mask(
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
-        cb_pop_front(cb_in, blk);
+        cb_out_obj.push_back(blk);
+        cb_in_obj.pop_front(blk);
         tile_regs_release();
     }
 }
 void apply_fused_attn_mask(
     uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk, bool do_mask) {
     auto cb_mask_padded = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_fused_attn_mask_obj(cb_fused_attn_mask);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     reconfig_data_format(cb_in, cb_fused_attn_mask);
     pack_reconfig_data_format(cb_out);
 #ifdef CAUSAL_MASK
@@ -124,9 +129,9 @@ void apply_fused_attn_mask(
             blk = cb_length_t- cur_blk;
         }
         tile_regs_wait();
-        cb_wait_front(cb_in, blk);
-        cb_wait_front(cb_fused_attn_mask, blk);  // cumulative wait for up to wt tiles
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_fused_attn_mask_obj.wait_front(blk);  // cumulative wait for up to wt tiles
+        cb_out_obj.reserve_back(blk);
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
@@ -143,16 +148,16 @@ void apply_fused_attn_mask(
             // add mask to the last register to pad with -inf
             reconfig_data_format_srca(cb_mask_padded);
             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded);
-            cb_wait_front(cb_mask_padded, 1);
+            cb_mask_padded_obj.wait_front(1);
             binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded, 0, blk - 1);
         }
         tile_regs_commit();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
-        cb_pop_front(cb_in, blk);
-        cb_pop_front(cb_fused_attn_mask, blk);
+        cb_out_obj.push_back(blk);
+        cb_in_obj.pop_front(blk);
+        cb_fused_attn_mask_obj.pop_front(blk);
         tile_regs_release();
     }
 }
@@ -160,20 +165,23 @@ void apply_fused_attn_mask(
 // applies pad to the last pass cb if needed
 void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     auto cb_mask_padded = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     reconfig_data_format(cb_in, cb_mask_padded);
     pack_reconfig_data_format(cb_out);
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         tile_regs_acquire();
-        cb_wait_front(cb_in, blk);
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_out_obj.reserve_back(blk);
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
                 add_tiles_init(cb_in, cb_mask_padded);
-                cb_wait_front(cb_mask_padded, 1);
+                cb_mask_padded_obj.wait_front(1);
                 add_tiles(cb_in, cb_mask_padded, cur_dst, 0, cur_dst);
             } else {
                 copy_tile(cb_in, cur_dst, cur_dst);
@@ -184,8 +192,8 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
-        cb_pop_front(cb_in, blk);
+        cb_out_obj.push_back(blk);
+        cb_in_obj.pop_front(blk);
         tile_regs_release();
     }
 }
@@ -198,11 +206,13 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
     ASSERT(cb_length_t % blk == 0);
 
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 #ifdef NUMERIC_STABLE
     reconfig_data_format_srcb(cb_max);
-    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(cb_in, cb_max, cb_out);
+    sub_bcast_cols_init_short(cb_in, cb_max);
 #else
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
@@ -212,8 +222,8 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
         if (cb_length_t - cur_blk < blk) {
             blk = cb_length_t - cur_blk;
         }
-        cb_wait_front(cb_in, blk);
-        cb_reserve_back(cb_out, blk);
+        cb_in_obj.wait_front(blk);
+        cb_out_obj.reserve_back(blk);
         tile_regs_acquire();
 #ifdef NUMERIC_STABLE
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
@@ -224,7 +234,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
             copy_tile(cb_in, cur_dst, cur_dst);
         }
 #endif
-        cb_pop_front(cb_in, blk);
+        cb_in_obj.pop_front(blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             exp_tile<EXP_APPROX>(cur_dst);  // exp on DST[0]
         }
@@ -233,7 +243,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_push_back(cb_out, blk);
+        cb_out_obj.push_back(blk);
         tile_regs_release();
     }
 }
@@ -246,54 +256,49 @@ void reduce_cb(
     uint32_t cb_out,
     bool use_prev_reduce,
     uint32_t cb_length_t) {
-    // Requirements:
-    //   blk is a divisor of cb_length_t reconfig_data_format(cb_in, cb_scaler);
-    //   len(Data) fed into cb_in, does not need all at once== cb_length_t
-    //   len(cb_out) == 1
+    // Single reduce call with lambda that conditionally accumulates
+    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
+        cb_in,
+        cb_scaler,
+        cb_out,
+        compute_kernel_lib::ReduceInputBlockShape::row(cb_length_t),
+        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+        compute_kernel_lib::NoAccumulation{},
+        // PostReduceOp: conditionally accumulate with previous result
+        [cb_prev_out, use_prev_reduce](uint32_t) {
+            if (use_prev_reduce) {
+                // At this point, DST[0] contains the current reduce result
+                // Load previous result into DST[1] and accumulate
+                cb_wait_front(cb_prev_out, 1);
+                reconfig_data_format_srca(cb_prev_out);
+                copy_tile_init(cb_prev_out);
+                copy_tile(cb_prev_out, 0, 1);
 
-    reconfig_data_format(cb_in, cb_scaler);
-    pack_reconfig_data_format(cb_out);
-    reduce_init<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, cb_out);
-    tile_regs_acquire();
-    cb_reserve_back(cb_out, 1);
-    for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
-        cb_wait_front(cb_in, 1);
-        reduce_tile<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, 0, 0, 0);
-        cb_pop_front(cb_in, 1);
-    }
+                // Accumulate based on reduce type
+                if constexpr (reduce_type == PoolType::MAX) {
+                    binary_max_tile_init();
+                    binary_max_tile(0, 1, 0);  // max(DST[0], DST[1]) -> DST[0]
+                } else {
+                    // SUM reduction
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, 0);  // add(DST[0], DST[1]) -> DST[0]
+                }
 
-    if (use_prev_reduce) {
-        reconfig_data_format_srca(cb_prev_out);
-        cb_wait_front(cb_prev_out, 1);
-        copy_tile_init(cb_prev_out);
-        copy_tile(cb_prev_out, 0, 1);
-        if (reduce_type == PoolType::MAX) {
-            // path if we are doing a max redudce
-            binary_max_tile_init();
-            // garbage data will be in data outside the first column, but since we broadcast this column it shouldn't
-            // matter
-            binary_max_tile(0, 1, 0);
-        } else {
-            // path if we are doing a sum redudce
-            add_binary_tile_init();
-            add_binary_tile(0, 1, 0);
-        }
-        cb_pop_front(cb_prev_out, 1);
-    }
-    tile_regs_wait();
-    tile_regs_commit();
-    pack_tile(0, cb_out);
-    cb_push_back(cb_out, 1);
-    tile_regs_release();
-    reduce_uninit();
+                cb_pop_front(cb_prev_out, 1);
+            }
+            // If !use_prev_reduce, lambda is no-op (compiles away)
+        });
 }
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_recip_obj(cb_recip);
+    experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_recip);
     pack_reconfig_data_format(cb_out);
-    cb_wait_front(cb_recip, 1);
+    cb_recip_obj.wait_front(1);
     mul_bcast_cols_init_short(cb_in, cb_recip);
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
-        cb_wait_front(cb_in, blk);
+        cb_in_obj.wait_front(blk);
         tile_regs_acquire();
         tile_regs_wait();
         if (cb_length_t - cur_blk < blk) {
@@ -303,12 +308,12 @@ void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb
             mul_tiles_bcast_cols(cb_in, cb_recip, cur_dst, 0, cur_dst);
         }
         tile_regs_commit();
-        cb_reserve_back(cb_out, blk);
+        cb_out_obj.reserve_back(blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_pop_front(cb_in, blk);
-        cb_push_back(cb_out, blk);
+        cb_in_obj.pop_front(blk);
+        cb_out_obj.push_back(blk);
         tile_regs_release();
     }
 }
@@ -326,7 +331,8 @@ void kernel_main() {
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    auto cb_scaler = tt::CBIndex::c_2;
+    auto cb_max_scaler = tt::CBIndex::c_2;
+    auto cb_sum_scaler = tt::CBIndex::c_13;
     auto cb_fused_scale = tt::CBIndex::c_3;
     auto cb_fused_attn = tt::CBIndex::c_4;
     auto cb_exps = tt::CBIndex::c_6;
@@ -341,13 +347,19 @@ void kernel_main() {
     auto cb_recip = tt::CBIndex::c_16;
     auto cb_prev_max = tt::CBIndex::c_15;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    experimental::CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
+    experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
+    experimental::CircularBuffer cb_recip_obj(cb_recip);
+    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(cb_mask_padded, cb_mask_padded);
 
-    cb_wait_front(tt::CBIndex::c_2, 1);  // comes from the reader
+    cb_max_scaler_obj.wait_front(1);  // comes from the reader
+    cb_sum_scaler_obj.wait_front(1);  // comes from the reader
 
 #if FUSED_SCALE_MASK
-    cb_wait_front(cb_fused_scale, 1);
+    cb_fused_scale_obj.wait_front(1);
 #endif
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
@@ -380,14 +392,14 @@ void kernel_main() {
 #else
             if (do_mask && cur_pass == num_cb_passes - 1) {
                 // pad
-                pad_input(cb_in0, cb_x, cb_length_t, blk);
+                pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
                 // no Pad
                 cb_processed_input = cb_in0;
             }
 #endif
-            reduce_cb<PoolType::MAX>(cb_processed_input, tt::CBIndex::c_2, cb_prev_max, cb_max, use_prev_reduce, cur_cb_length_t);
+            reduce_cb<PoolType::MAX>(cb_processed_input, cb_max_scaler, cb_prev_max, cb_max, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
@@ -400,7 +412,7 @@ void kernel_main() {
         cur_cb_length_t = cb_length_t;
 #endif
 #ifdef NUMERIC_STABLE
-        cb_wait_front(cb_max, 1);
+        experimental::CircularBuffer(cb_max).wait_front(1);
 #endif
 
         /*
@@ -421,7 +433,7 @@ void kernel_main() {
             // a part of the tensor
             if (do_mask && cur_pass == num_cb_passes - 1) {
                 // pad
-                pad_input(cb_in0, cb_x, cb_length_t, blk);
+                pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
                 // no Pad
@@ -432,7 +444,7 @@ void kernel_main() {
             exp_cb(cb_processed_input, cb_exps, cb_max, cur_cb_length_t, blk);
 
             reduce_cb<PoolType::SUM>(
-                cb_exps, tt::CBIndex::c_2, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
+                cb_exps, cb_sum_scaler, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;  // We want to accumulate the previous cb reductions
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
@@ -447,7 +459,7 @@ void kernel_main() {
          * --------------------------------------------------------
          * --------------------------------------------------------
          */
-        cb_wait_front(cb_sumexps, 1);
+        experimental::CircularBuffer(cb_sumexps).wait_front(1);
 
         reconfig_data_format_srca(cb_sumexps);
         pack_reconfig_data_format(cb_sumexps, cb_recip);
@@ -455,7 +467,7 @@ void kernel_main() {
         copy_tile_init(cb_sumexps);
         copy_tile(cb_sumexps, 0, dst0);
 
-        cb_pop_front(cb_sumexps, 1);
+        experimental::CircularBuffer(cb_sumexps).pop_front(1);
 
         recip_tile_init();
         recip_tile(dst0);
@@ -463,13 +475,13 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        cb_reserve_back(cb_recip, 1);
+        cb_recip_obj.reserve_back(1);
         pack_tile(dst0, cb_recip);
-        cb_push_back(cb_recip, 1);
+        cb_recip_obj.push_back(1);
 
         tile_regs_release();
 
-        cb_wait_front(cb_recip, 1);
+        cb_recip_obj.wait_front(1);
         /*
          * --------------------------------------------------------
          * --------------------------------------------------------
@@ -488,7 +500,7 @@ void kernel_main() {
 #else
             if (do_mask && cur_pass == num_cb_passes - 1) {
                 // pad
-                pad_input(cb_in0, cb_x, cb_length_t, blk);
+                pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
                 // no Pad
@@ -501,10 +513,10 @@ void kernel_main() {
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
-        cb_pop_front(cb_recip, 1);
+        cb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
-        cb_pop_front(cb_max, 1);
+        experimental::CircularBuffer(cb_max).pop_front(1);
 #endif
     }
-    cb_pop_front(cb_mask_padded, 1);
+    cb_mask_padded_obj.pop_front(1);
 }  // MAIN

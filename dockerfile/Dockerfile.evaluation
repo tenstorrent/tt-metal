@@ -16,12 +16,12 @@ COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
 COPY tools/triage/requirements.txt tools/triage/
 RUN uv pip install --system --no-cache setuptools
 RUN uv pip install --system --no-cache -r tt_metal/python_env/requirements-dev.txt
+RUN uv pip install --system --no-cache -r tools/triage/requirements.txt
 
 ## Install Metal dependencies
 COPY install_dependencies.sh .
 COPY tt_metal/sfpi-info.sh tt_metal/
 COPY tt_metal/sfpi-version tt_metal/
-COPY scripts/ttexalens_ref.txt scripts/
 RUN ./install_dependencies.sh --docker
 
 # Install ccache

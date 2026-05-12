@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -123,11 +123,11 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
             a_dim,
             b_dim);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}",
                 i,
                 largest_rank,
                 a_dim,
@@ -250,8 +250,8 @@ static MemoryConfig resolve_mem_config_actual(
 
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
-tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return tt::stl::hash::hash_objects_with_default_seed(
+ttsl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
+    return ttsl::hash::hash_objects_with_default_seed(
         ternary_op_type,
         ternary_variant,
         broadcast_type,
@@ -482,7 +482,7 @@ Tensor TernaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
     const auto& input_b = tensor_args.input_tensor_b;
@@ -491,7 +491,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     TernaryVariant variant = args.ternary_variant;
 
     TT_FATAL(is_device_tensor(input_a), "Unexpected Tensor type {}", input_a.storage_type());
-    tt::stl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
+    ttsl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
         args, input_a.dtype(), input_a.memory_config(), a_shape.volume());
 
     if (variant == TernaryVariant::TTT) {
@@ -506,8 +506,22 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         // Include true/false tensor volumes so "true broadcast, false full" and "true full, false
         // broadcast" get distinct cache keys (broadcast_type alone is the same for both).
+        // Also include H,W dimensions (last 2 dims) since they determine per-tensor broadcast
+        // configuration (SRC_BCAST_*, SRC_ROW_BCAST_*, SRC_SCALAR_*) in ROW_COL_BCAST kernels.
         const auto b_shape = input_b->padded_shape();
         const auto c_shape = input_c->padded_shape();
+
+        // Extract H,W dims (last 2 dimensions) for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& b_logical = input_b->logical_shape();
+        const auto& c_logical = input_c->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
+        const uint32_t b_w = b_logical[-1];
+        const uint32_t c_h = c_logical.rank() >= 2 ? c_logical[-2] : 1;
+        const uint32_t c_w = c_logical[-1];
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
@@ -520,6 +534,12 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             a_shape.volume(),
             b_shape.volume(),
             c_shape.volume(),
+            a_h,
+            a_w,  // Predicate H,W
+            b_h,
+            b_w,  // True tensor H,W
+            c_h,
+            c_w,  // False tensor H,W
             shard_volumes);
 
     } else if (variant == TernaryVariant::TTS) {
@@ -529,6 +549,16 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, compute_output_specs(args, tensor_args));
 
         const auto b_shape = input_b->padded_shape();
+
+        // Include H,W dims for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& b_logical = input_b->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
+        const uint32_t b_w = b_logical[-1];
+
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             input_a.dtype(),
@@ -537,6 +567,10 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_b.value().memory_config(),
             a_shape.volume(),
             b_shape.volume(),
+            a_h,
+            a_w,
+            b_h,
+            b_w,
             shard_volumes);
     } else if (variant == TernaryVariant::TST) {
         TT_FATAL(is_device_tensor(*input_c), "Unexpected Tensor type {}", input_c->storage_type());
@@ -545,6 +579,16 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), compute_output_specs(args, tensor_args));
 
         const auto c_shape = input_c->padded_shape();
+
+        // Include H,W dims for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& c_logical = input_c->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t c_h = c_logical.rank() >= 2 ? c_logical[-2] : 1;
+        const uint32_t c_w = c_logical[-1];
+
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             input_a.dtype(),
@@ -553,6 +597,10 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_c.value().memory_config(),
             a_shape.volume(),
             c_shape.volume(),
+            a_h,
+            a_w,
+            c_h,
+            c_w,
             shard_volumes);
     }
 

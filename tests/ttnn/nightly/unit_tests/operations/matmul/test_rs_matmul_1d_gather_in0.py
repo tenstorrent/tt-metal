@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -666,6 +666,7 @@ def test_tg_matmul_1d_ring_llama_with_rs_perf(
     output_grid,
     dtype,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -785,6 +786,7 @@ def test_6U_matmul_1d_ring_llama_with_rs_perf(
     output_grid,
     dtype,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):

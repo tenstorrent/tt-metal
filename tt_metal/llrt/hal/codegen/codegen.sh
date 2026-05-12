@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Run this script when dev_msgs.h or fabric_telemetry_msgs.h changes.
+# Run this script when dev_msgs.h, fabric_telemetry_msgs.h, or realtime_profiler_msgs.h changes.
 
 set -o errexit
 set -o nounset
@@ -16,14 +16,17 @@ YEAR=$(date +%Y)
 declare -a SRC_FILES=(
     "tt_metal/hw/inc/hostdev/dev_msgs.h"
     "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+    "tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h"
 )
 declare -a OUT_BASENAMES=(
     "dev_msgs"
     "fabric_telemetry"
+    "realtime_profiler_msgs"
 )
 declare -a INTERFACE_NAMESPACES=(
     "tt::tt_metal::dev_msgs"
     "tt::tt_fabric::fabric_telemetry"
+    "tt::tt_metal::realtime_profiler_msgs"
 )
 
 mkdir -p "${OUT_DIR}"
@@ -36,7 +39,7 @@ for idx in "${!SRC_FILES[@]}"; do
     OUT_IMPL_FILE="${OUT_DIR}/${BASENAME}_impl.hpp"
 
     cat > "${OUT_INTF_FILE}" <<EOF
-// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: ${YEAR} Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,7 +53,7 @@ for idx in "${!SRC_FILES[@]}"; do
 EOF
 
     cat > "${OUT_IMPL_FILE}" <<EOF
-// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: ${YEAR} Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 

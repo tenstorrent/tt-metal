@@ -1,18 +1,21 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """Python models package for ttml.
 
 This package provides Python implementations of models using ttml operations.
+C++ types are imported from _ttml.models and must be available before Python
+submodules that depend on them.
 """
 
+# Import C++ types first (needed by Python submodules)
+# Note: _ttml is a top-level module, not a subpackage of ttml
+import _ttml
 import sys
 
-from .. import _ttml
-
 # --- C++ enums and classes from _ttml.models ---
-from .._ttml.models import (
+from _ttml.models import (
     BaseTransformer,
     KvCache,
     KvCacheConfig,
@@ -37,6 +40,8 @@ sys.modules[f"{__name__}.distributed"] = distributed
 from .linear_regression import LinearRegression, create_linear_regression_model
 from .nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 from .llama import Llama, LlamaConfig
+from .deepseek import DeepSeek, DeepSeekConfig
+from .qwen3 import Qwen3, Qwen3Config
 
 __all__ = [
     # C++ enums / classes
@@ -51,11 +56,15 @@ __all__ = [
     "gpt2",
     "mlp",
     # Python implementations
+    "DeepSeek",
+    "DeepSeekConfig",
     "Llama",
     "LlamaConfig",
     "LinearRegression",
     "NanoGPT",
     "NanoGPTConfig",
+    "Qwen3",
+    "Qwen3Config",
     "create_linear_regression_model",
     "create_nanogpt",
 ]

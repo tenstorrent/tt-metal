@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -95,6 +95,6 @@ ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binary_shift_tile_init() { MATH((llk_math_eltwise_binary_sfpu_shift_init<APPROX>())); }
+ALWI void binary_shift_tile_init() { MATH((llk_math_eltwise_binary_sfpu_shift_init())); }
 
 }  // namespace ckernel

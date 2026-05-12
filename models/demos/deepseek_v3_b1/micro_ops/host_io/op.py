@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,19 +9,25 @@ Provides bidirectional communication between host and device using H2D (Host-to-
 and D2H (Device-to-Host) sockets with termination support.
 
 Current Limitations:
-- Only supports communication with a single core on a single chip
-- H2D and D2H sockets must be on the same core
-- No multi-chip or multi-core host communication support
+- H2D side talks to a single downstream core on the same device.
+- D2H side talks to either a single upstream core (single-upstream mode) or N upstream
+  cores on the same device (multi-upstream mode). Cross-device upstreams are not
+  supported on the D2H side.
+- Loopback mode requires H2D and D2H sockets to share a core.
 
 Modes:
 - Loopback mode: H2D receiver and D2H sender communicate via circular buffers (CBs)
   for testing purposes
-- Socket mode: H2D receiver and D2H sender forward data to/from downstream/upstream cores
-  via D2D (Device-to-Device) sockets
+- Socket mode (single-upstream D2H): H2D receiver forwards downstream and D2H sender
+  reads from a single upstream socket pair via D2D (Device-to-Device) sockets
+- Socket mode (multi-upstream D2H): D2H sender (BRISC-only kernel) reads one page from
+  each of N same-device upstream cores and assembles them into a single D2H page in
+  PCIe order. Selected by passing ``d2h_upstream_cores`` (list) instead of
+  ``d2h_upstream_core``.
 
 Components:
 - H2D receiver: Pulls data from host (or receives via PCIe push), forwards to downstream
-- D2H sender: Receives data from upstream, pushes to host via PCIe
+- D2H sender: Receives data from upstream(s), pushes to host via PCIe
 
 Termination:
 - Controlled via global semaphore that both kernels poll during blocking operations
@@ -32,7 +38,8 @@ blocking on socket_wait_for_pages() and cb_wait_front() operations.
 """
 
 import ttnn
-from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_interleaved_tensor_accessor_args
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_tensor_accessor_args
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
 
@@ -44,96 +51,201 @@ class HostInterface:
         h2d_page_size,
         d2h_page_size,
         core_to_core_socket_buffer_size=1024,
-        h2d_downstream_core=ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
-        d2h_upstream_core=ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
+        h2d_downstream_core=None,
+        d2h_upstream_core=None,
         embedding_tensor=None,
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
+        sender_mesh=None,
+        receiver_mesh=None,
+        metadata_size_bytes=0,
+        # Multi-upstream D2H: pass a list of upstream cores (mutually exclusive with
+        # d2h_upstream_core). All cores must live on the same device as the D2H kernel.
+        d2h_upstream_cores=None,
+        d2h_upstream_page_size=None,
+        d2h_socket_fifo_size=None,
+        d2h_forward_metadata_size_bytes=0,
     ):
+        assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
+
+        if h2d_socket and d2h_socket:
+            assert (
+                h2d_socket.get_mesh_device() == d2h_socket.get_mesh_device()
+            ), "Expected Host <-> Device Communication for Blitz Decode to be on the same mesh device."
+
+        # Multi-upstream D2H configuration: validate up front so later code can branch on a single flag.
+        self.multi_upstream_d2h = d2h_upstream_cores is not None
+        if self.multi_upstream_d2h:
+            assert d2h_socket is not None, "d2h_upstream_cores requires a d2h_socket"
+            assert not loopback_mode, "Multi-upstream D2H is not supported in loopback_mode"
+            assert (
+                d2h_upstream_core is None
+            ), "Pass either d2h_upstream_core (single) or d2h_upstream_cores (list), not both"
+            assert (
+                isinstance(d2h_upstream_cores, list) and len(d2h_upstream_cores) >= 1
+            ), "d2h_upstream_cores must be a non-empty list"
+            assert d2h_upstream_page_size is not None, "d2h_upstream_page_size is required for multi-upstream D2H"
+            assert d2h_socket_fifo_size is not None, "d2h_socket_fifo_size is required for multi-upstream D2H"
+            assert d2h_socket_fifo_size % d2h_page_size == 0, (
+                f"d2h_socket_fifo_size ({d2h_socket_fifo_size}) must be a multiple of d2h_page_size "
+                f"({d2h_page_size}) so per-upstream FIFO depth matches the D2H FIFO depth"
+            )
+            assert (
+                d2h_page_size == len(d2h_upstream_cores) * d2h_upstream_page_size + d2h_forward_metadata_size_bytes
+            ), (
+                f"d2h_page_size ({d2h_page_size}) must equal "
+                f"len(d2h_upstream_cores) ({len(d2h_upstream_cores)}) * d2h_upstream_page_size "
+                f"({d2h_upstream_page_size}) + d2h_forward_metadata_size_bytes "
+                f"({d2h_forward_metadata_size_bytes})"
+            )
+
         self.h2d_socket = h2d_socket
         self.d2h_socket = d2h_socket
         self.h2d_page_size = h2d_page_size
         self.d2h_page_size = d2h_page_size
-        self.h2d_socket.set_page_size(self.h2d_page_size)
-        self.d2h_socket.set_page_size(self.d2h_page_size)
+        if self.h2d_socket:
+            self.h2d_socket.set_page_size(self.h2d_page_size)
+        if self.d2h_socket:
+            self.d2h_socket.set_page_size(self.d2h_page_size)
         self.loopback_mode = loopback_mode
         self.core_to_core_socket_buffer_size = core_to_core_socket_buffer_size
         self.embedding_tensor = embedding_tensor
         self.h2d_downstream_core = h2d_downstream_core
         self.d2h_upstream_core = d2h_upstream_core
-        # Validate single-core, single-chip constraint
-        # Current implementation only supports host communication with one core on one chip
-        if len(h2d_socket.get_active_cores()) != 1 or len(d2h_socket.get_active_cores()) != 1:
-            raise ValueError("Host <-> Device Communication for Blitz Decode must be on a single core.")
-        if h2d_socket.get_mesh_device().id() != d2h_socket.get_mesh_device().id():
-            raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same mesh device.")
+        self.d2h_upstream_cores = d2h_upstream_cores
+        self.d2h_upstream_page_size = d2h_upstream_page_size
+        self.d2h_socket_fifo_size = d2h_socket_fifo_size
+        self.d2h_forward_metadata_size_bytes = d2h_forward_metadata_size_bytes
+        self.metadata_size_bytes = metadata_size_bytes
+
+        if self.h2d_socket:
+            if len(self.h2d_socket.get_active_cores()) != 1:
+                raise ValueError("Host <-> Device Communication for Blitz Decode must be on a single core.")
+        if self.d2h_socket:
+            if len(self.d2h_socket.get_active_cores()) != 1:
+                raise ValueError("Host <-> Device Communication for Blitz Decode must be on a single core.")
 
         if loopback_mode:
+            assert h2d_socket and d2h_socket, "Loopback mode requires both H2D and D2H sockets"
             if h2d_socket.get_active_cores()[0] != d2h_socket.get_active_cores()[0]:
                 raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same core.")
-
-        self.mesh_device = h2d_socket.get_mesh_device()
-        self.h2d_mesh_core_coord = self.h2d_socket.get_active_cores()[0]
-        self.d2h_mesh_core_coord = self.d2h_socket.get_active_cores()[0]
-
-        if self.h2d_mesh_core_coord.core_coord == self.d2h_mesh_core_coord.core_coord:
-            termination_semaphore_core_range = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
-                ]
-            )
         else:
-            termination_semaphore_core_range = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
-                    ttnn.CoreRange(self.d2h_mesh_core_coord.core_coord, self.d2h_mesh_core_coord.core_coord),
-                ]
+            if self.h2d_socket:
+                assert self.h2d_downstream_core is not None
+            if self.d2h_socket:
+                assert (
+                    self.d2h_upstream_core is not None or self.multi_upstream_d2h
+                ), "D2H socket requires either d2h_upstream_core (single) or d2h_upstream_cores (multi)"
+
+        self.mesh_device = self.h2d_socket.get_mesh_device() if self.h2d_socket else self.d2h_socket.get_mesh_device()
+
+        self.h2d_mesh_core_coord = self.h2d_socket.get_active_cores()[0] if self.h2d_socket else None
+        self.d2h_mesh_core_coord = self.d2h_socket.get_active_cores()[0] if self.d2h_socket else None
+
+        # Build termination semaphore core range from whichever sockets are present
+        sem_core_ranges = []
+        if self.h2d_mesh_core_coord is not None:
+            sem_core_ranges.append(
+                ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord)
             )
+        if self.d2h_mesh_core_coord is not None:
+            d2h_range = ttnn.CoreRange(self.d2h_mesh_core_coord.core_coord, self.d2h_mesh_core_coord.core_coord)
+            if not sem_core_ranges or self.d2h_mesh_core_coord.core_coord != self.h2d_mesh_core_coord.core_coord:
+                sem_core_ranges.append(d2h_range)
+
+        termination_semaphore_core_range = ttnn.CoreRangeSet(sem_core_ranges)
         self.termination_semaphore = ttnn.create_global_semaphore(
             self.mesh_device,
             termination_semaphore_core_range,
             0,
             ttnn.BufferType.L1,
         )
-        # Loopback mode is for testing purposes only - H2D receiver <-> D2H sender communication over CBs
-        # For real workloads, downstream/upstream cores connect to H2D receiver and D2H sender via D2D sockets
-        # NOTE: Downstream and upstream cores must be on the same device as the host I/O core (single-chip constraint)
-        if not loopback_mode:
-            downstream_socket_connection = ttnn.SocketConnection(
-                self.h2d_mesh_core_coord,
-                self.h2d_downstream_core,
-            )
-            upstream_socket_connection = ttnn.SocketConnection(
-                self.d2h_upstream_core,
-                self.d2h_mesh_core_coord,
-            )
+
+        self.downstream_socket_pair = None
+        self.downstream_mesh_socket = None
+        self.upstream_socket_pair = None
+        self.upstream_socket_pairs = None  # populated only in multi-upstream D2H mode
+        self.sender_mesh = sender_mesh
+        self.receiver_mesh = receiver_mesh
+        self.inter_mesh_downstream = (
+            sender_mesh is not None
+            and receiver_mesh is not None
+            and sender_mesh.get_mesh_id() != receiver_mesh.get_mesh_id()
+        )
+
+        if loopback_mode:
+            self.intermed_cb_index = 0
+        else:
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, core_to_core_socket_buffer_size)
 
-            downstream_socket_config = ttnn.SocketConfig(
-                [downstream_socket_connection],
-                socket_memory_config,
-            )
+            if self.h2d_socket and self.h2d_downstream_core is not None:
+                downstream_socket_connection = ttnn.SocketConnection(
+                    self.h2d_mesh_core_coord,
+                    self.h2d_downstream_core,
+                )
+                if self.inter_mesh_downstream:
+                    downstream_socket_config = ttnn.SocketConfig(
+                        connections=[downstream_socket_connection],
+                        memory_config=socket_memory_config,
+                        sender_mesh_id=sender_mesh.get_mesh_id(),
+                        receiver_mesh_id=receiver_mesh.get_mesh_id(),
+                    )
+                    self.downstream_mesh_socket = ttnn.MeshSocket(self.mesh_device, downstream_socket_config)
+                else:
+                    downstream_socket_config = ttnn.SocketConfig(
+                        [downstream_socket_connection],
+                        socket_memory_config,
+                    )
+                    self.downstream_socket_pair = ttnn.create_socket_pair(
+                        self.mesh_device, self.mesh_device, downstream_socket_config
+                    )
 
-            upstream_socket_config = ttnn.SocketConfig(
-                [upstream_socket_connection],
-                socket_memory_config,
-            )
-
-            self.downstream_socket_pair = ttnn.create_socket_pair(
-                self.mesh_device, self.mesh_device, downstream_socket_config
-            )
-            self.upstream_socket_pair = ttnn.create_socket_pair(
-                self.mesh_device, self.mesh_device, upstream_socket_config
-            )
-        else:
-            self.intermed_cb_index = 0
+            if self.d2h_socket and self.multi_upstream_d2h:
+                # Per-upstream FIFO depth matches the D2H FIFO depth, mirroring the
+                # SocketInterface multi-upstream sizing in d2d_exchange/op.py.
+                buffer_depth = self.d2h_socket_fifo_size // self.d2h_page_size
+                upstream_fifo_size = self.d2h_upstream_page_size * buffer_depth
+                last_upstream_fifo_size = (
+                    self.d2h_upstream_page_size + self.d2h_forward_metadata_size_bytes
+                ) * buffer_depth
+                num_upstreams = len(self.d2h_upstream_cores)
+                self.upstream_socket_pairs = []
+                for idx, uc in enumerate(self.d2h_upstream_cores):
+                    assert uc.device_coord == self.d2h_mesh_core_coord.device_coord, (
+                        f"d2h_upstream_cores[{idx}] is on device {uc.device_coord}, expected "
+                        f"{self.d2h_mesh_core_coord.device_coord} (same device as the D2H kernel)"
+                    )
+                    is_last = idx == num_upstreams - 1
+                    fifo_size = last_upstream_fifo_size if is_last else upstream_fifo_size
+                    pair_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, fifo_size)
+                    pair_connection = ttnn.SocketConnection(uc, self.d2h_mesh_core_coord)
+                    pair_config = ttnn.SocketConfig([pair_connection], pair_memory_config)
+                    self.upstream_socket_pairs.append(
+                        ttnn.create_socket_pair(self.mesh_device, self.mesh_device, pair_config)
+                    )
+            elif self.d2h_socket and self.d2h_upstream_core is not None:
+                upstream_socket_connection = ttnn.SocketConnection(
+                    self.d2h_upstream_core,
+                    self.d2h_mesh_core_coord,
+                )
+                upstream_socket_config = ttnn.SocketConfig(
+                    [upstream_socket_connection],
+                    socket_memory_config,
+                )
+                self.upstream_socket_pair = ttnn.create_socket_pair(
+                    self.mesh_device, self.mesh_device, upstream_socket_config
+                )
 
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:
-            # For now, we assume that tokens will be passed in as 64 bytes packets to embedding.
-            # This allows us to add more information in the input packet as needed.
-            assert self.h2d_page_size == 64
+            # The fused H2D+embedding kernel reads `metadata_size_bytes` worth of bytes
+            # from each H2D socket page (after the token id) and forwards them downstream
+            # alongside the embedding lookup. To keep the read in-bounds, the H2D socket
+            # page must be at least the full DeepseekMetadata struct.
+            assert (
+                self.h2d_page_size == DeepseekMetadata.aligned_size_bytes()
+            ), f"H2D page size ({self.h2d_page_size}) must equal DeepseekMetadata.aligned_size_bytes() ({DeepseekMetadata.aligned_size_bytes()}) for the fused embedding path"
             assert (
                 self.embedding_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
                 and self.embedding_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
@@ -149,9 +261,16 @@ class HostInterface:
         self.num_fwd_links = 2
         self.num_bwd_links = 1
 
+    def _get_downstream_sender_socket(self):
+        if self.inter_mesh_downstream:
+            return self.downstream_mesh_socket
+        elif self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[0]
+        return None
+
     def _create_h2d_kernel(self):
         use_fabric = (not self.loopback_mode) and (
-            self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
+            self.inter_mesh_downstream or self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
         )
 
         fabric_max_payload_size = 0
@@ -160,37 +279,38 @@ class HostInterface:
 
         if use_fabric:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-            if self.has_embedding:
-                page_size_per_link = self.embedding_page_size // self.num_fwd_links
-            else:
-                page_size_per_link = self.h2d_page_size // self.num_fwd_links
+            base_data_transfer_size = self.embedding_page_size if self.has_embedding else self.h2d_page_size
+            total_data_transfer_size = base_data_transfer_size + self.metadata_size_bytes
+            page_size_per_link = total_data_transfer_size // self.num_fwd_links
             num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
             partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
 
-        # H2D Receiver Core will forward data to downstream core via fabric if:
-        # 1. Not in loopback mode (i.e. real workload)
-        # 2. Downstream core is not on the same device as the H2D receiver core
+        downstream_sender_socket = self._get_downstream_sender_socket()
+
         h2d_socket_kernel_ct_args = [
             self.h2d_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
             self.h2d_page_size,
             self.h2d_socket.get_h2d_mode() == ttnn.H2DMode.DEVICE_PULL,
             self.loopback_mode,
-            self.intermed_cb_index
-            if self.loopback_mode
-            else self.downstream_socket_pair[0].get_config_buffer_address(),
+            self.intermed_cb_index if self.loopback_mode else downstream_sender_socket.get_config_buffer_address(),
             self.fabric_packet_header_cb_index,
             fabric_max_payload_size,
             num_whole_fabric_packets_per_link,
             partial_packet_size_per_link,
             use_fabric,
+            self.metadata_size_bytes,
         ]
         # Add CTAs for fused embedding op if needed
         if self.has_embedding:
             h2d_socket_kernel_ct_args.extend(
-                [self.embedding_cb_index, self.embedding_page_size, self.embedding_tensor.buffer_address()]
+                [
+                    self.embedding_cb_index,
+                    self.embedding_page_size,
+                    self.embedding_tensor.buffer_address(),
+                ]
             )
-            h2d_socket_kernel_ct_args.extend(get_interleaved_tensor_accessor_args(self.embedding_tensor))
+            h2d_socket_kernel_ct_args.extend(get_tensor_accessor_args(self.embedding_tensor))
 
         kernel_source = (
             "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/fused_h2d_receiver_embedding.cpp"
@@ -210,6 +330,11 @@ class HostInterface:
         return h2d_kernel
 
     def _create_d2h_kernel(self):
+        if self.multi_upstream_d2h:
+            return self._create_d2h_kernel_multi()
+        return self._create_d2h_kernel_single()
+
+    def _create_d2h_kernel_single(self):
         # D2H Sender Core will forward data to upstream core via fabric if:
         # 1. Not in loopback mode (i.e. real workload)
         # 2. Upstream core is not on the same device as the D2H sender core
@@ -237,7 +362,37 @@ class HostInterface:
         )
         return d2h_kernel
 
-    def _create_cb_descriptors(self, mesh_core_coord, use_fabric):
+    def _create_d2h_kernel_multi(self):
+        # CT-arg layout matches d2h_sender_multiple_upstreams.cpp:
+        #   0 send_socket_config_addr
+        #   1 termination_semaphore_addr
+        #   2 d2h_page_size
+        #   3 upstream_page_size
+        #   4 num_upstream_sockets
+        #   5 forward_metadata_size_bytes
+        #   6..6+N-1  upstream receiver socket config addrs
+        receiver_socket_config_addrs = [pair[1].get_config_buffer_address() for pair in self.upstream_socket_pairs]
+        d2h_socket_kernel_ct_args = [
+            self.d2h_socket.get_config_buffer_address(),
+            ttnn.get_global_semaphore_address(self.termination_semaphore),
+            self.d2h_page_size,
+            self.d2h_upstream_page_size,
+            len(self.upstream_socket_pairs),
+            self.d2h_forward_metadata_size_bytes,
+        ]
+        d2h_socket_kernel_ct_args.extend(receiver_socket_config_addrs)
+        d2h_kernel = ttnn.KernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2h_sender_multiple_upstreams.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=ttnn.CoreRangeSet(
+                [ttnn.CoreRange(self.d2h_mesh_core_coord.core_coord, self.d2h_mesh_core_coord.core_coord)]
+            ),
+            compile_time_args=d2h_socket_kernel_ct_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        return d2h_kernel
+
+    def _create_cb_descriptors(self, mesh_core_coord, use_fabric, *, include_embedding=False):
         cb_descriptors = []
         if self.loopback_mode:
             intermed_cb_desc = ttnn.CBDescriptor(
@@ -254,16 +409,18 @@ class HostInterface:
             )
             cb_descriptors.append(intermed_cb_desc)
 
-        # CB for embedding DRAM reads
-        if self.has_embedding:
+        # CB for embedding DRAM reads — only the H2D-side fused embedding kernel uses this CB.
+        # The D2H sender kernels (single- or multi-upstream) never reference it, so we skip
+        # allocating it on the D2H core to avoid wasted L1 there.
+        if self.has_embedding and include_embedding:
             embedding_cb_desc = ttnn.CBDescriptor(
-                total_size=self.embedding_page_size,
+                total_size=self.embedding_page_size + self.metadata_size_bytes,
                 core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=self.embedding_cb_index,
                         data_format=ttnn.bfloat16,
-                        page_size=self.embedding_page_size,
+                        page_size=self.embedding_page_size + self.metadata_size_bytes,
                     )
                 ],
             )
@@ -287,30 +444,74 @@ class HostInterface:
             cb_descriptors.append(packet_header_cb_desc)
         return cb_descriptors
 
-    def run(self):
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.h2d_socket.get_mesh_device()
+    def _build_programs(self):
+        """Build host IO programs and return (device_coord, program) pairs without dispatching.
+
+        This enables multiple HostInterface instances to have their programs merged
+        and dispatched together in a single generic_op call (e.g. for multi-channel
+        parallel pipelines where N HostInterface instances target the same device).
+        """
+        h2d_fabric_node_id = None
+        d2h_fabric_node_id = None
+        my_downstream_fabric_node_id = None
+        my_upstream_fabric_node_id = None
+
+        if self.h2d_mesh_core_coord is not None:
+            h2d_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_mesh_core_coord.device_coord)
+        if self.d2h_mesh_core_coord is not None:
+            d2h_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_mesh_core_coord.device_coord)
+        if self.h2d_downstream_core is not None:
+            if self.inter_mesh_downstream:
+                downstream_recv_device_coord = self.downstream_mesh_socket.get_connection_config()[
+                    0
+                ].receiver_core.device_coord
+                my_downstream_fabric_node_id = self.downstream_mesh_socket.get_fabric_node_id(
+                    ttnn.SocketEndpoint.RECEIVER, downstream_recv_device_coord
+                )
+            else:
+                my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(
+                    self.h2d_downstream_core.device_coord
+                )
+        if self.d2h_upstream_core is not None:
+            my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_upstream_core.device_coord)
+
+        h2d_kernel = None
+        h2d_cb_descriptors = None
+        d2h_kernel = None
+        d2h_cb_descriptors = None
+        h2d_uses_fabric = False
+        d2h_uses_fabric = False
+
+        if self.h2d_socket:
+            h2d_kernel = self._create_h2d_kernel()
+            h2d_uses_fabric = (
+                h2d_fabric_node_id is not None
+                and my_downstream_fabric_node_id is not None
+                and h2d_fabric_node_id != my_downstream_fabric_node_id
+            )
+            h2d_cb_descriptors = self._create_cb_descriptors(
+                self.h2d_mesh_core_coord, h2d_uses_fabric, include_embedding=True
+            )
+
+        if self.d2h_socket:
+            d2h_kernel = self._create_d2h_kernel()
+            d2h_uses_fabric = (
+                d2h_fabric_node_id is not None
+                and my_upstream_fabric_node_id is not None
+                and d2h_fabric_node_id != my_upstream_fabric_node_id
+            )
+            d2h_cb_descriptors = self._create_cb_descriptors(self.d2h_mesh_core_coord, d2h_uses_fabric)
+
+        same_device = (
+            self.h2d_socket
+            and self.d2h_socket
+            and self.h2d_mesh_core_coord.device_coord == self.d2h_mesh_core_coord.device_coord
         )
 
-        h2d_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_mesh_core_coord.device_coord)
-        d2h_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_mesh_core_coord.device_coord)
-
-        my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_downstream_core.device_coord)
-        my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_upstream_core.device_coord)
-
-        h2d_kernel = self._create_h2d_kernel()
-        d2h_kernel = self._create_d2h_kernel()
-        h2d_cb_descriptors = self._create_cb_descriptors(
-            self.h2d_mesh_core_coord, h2d_fabric_node_id != my_downstream_fabric_node_id
-        )
-        d2h_cb_descriptors = self._create_cb_descriptors(
-            self.d2h_mesh_core_coord, d2h_fabric_node_id != my_upstream_fabric_node_id
-        )
-
-        same_device = self.h2d_mesh_core_coord.device_coord == self.d2h_mesh_core_coord.device_coord
+        h2d_program = None
+        d2h_program = None
 
         if same_device:
-            # Place both kernels in a single program when on the same device
             h2d_cb_ids = {fd.buffer_index for cb in h2d_cb_descriptors for fd in cb.format_descriptors}
             combined_cbs = h2d_cb_descriptors + [
                 cb
@@ -322,83 +523,125 @@ class HostInterface:
                 semaphores=[],
                 cbs=combined_cbs,
             )
-            d2h_program = h2d_program  # alias so d2h references point to the same program
+            d2h_program = h2d_program
         else:
-            h2d_program = ttnn.ProgramDescriptor(
-                kernels=[h2d_kernel],
-                semaphores=[],
-                cbs=h2d_cb_descriptors,
-            )
-            d2h_program = ttnn.ProgramDescriptor(
-                kernels=[d2h_kernel],
-                semaphores=[],
-                cbs=d2h_cb_descriptors,
-            )
-
-        # h2d kernel is always kernels[0]
-        h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
-            self.h2d_mesh_core_coord.core_coord.y
-        ] = []
-        h2d_rt_args_ref = h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
-            self.h2d_mesh_core_coord.core_coord.y
-        ]
-        if h2d_fabric_node_id != my_downstream_fabric_node_id:
-            for idx in range(self.num_fwd_links):
-                fwd_fabric_args = ttnn.setup_fabric_connection(
-                    h2d_fabric_node_id,
-                    my_downstream_fabric_node_id,
-                    idx,
-                    h2d_program,
-                    self.h2d_mesh_core_coord.core_coord,
+            if self.h2d_socket:
+                h2d_program = ttnn.ProgramDescriptor(
+                    kernels=[h2d_kernel],
+                    semaphores=[],
+                    cbs=h2d_cb_descriptors,
                 )
-                h2d_rt_args_ref.extend(fwd_fabric_args)
-
-        # d2h kernel is kernels[1] when combined, kernels[0] when separate
-        d2h_kernel_idx = 1 if same_device else 0
-        d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
-            self.d2h_mesh_core_coord.core_coord.y
-        ] = []
-        d2h_rt_args_ref = d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
-            self.d2h_mesh_core_coord.core_coord.y
-        ]
-
-        if d2h_fabric_node_id != my_upstream_fabric_node_id:
-            for idx in range(self.num_bwd_links):
-                bwd_fabric_args = ttnn.setup_fabric_connection(
-                    d2h_fabric_node_id,
-                    my_upstream_fabric_node_id,
-                    idx,
-                    d2h_program,
-                    self.d2h_mesh_core_coord.core_coord,
+            if self.d2h_socket:
+                d2h_program = ttnn.ProgramDescriptor(
+                    kernels=[d2h_kernel],
+                    semaphores=[],
+                    cbs=d2h_cb_descriptors,
                 )
-                d2h_rt_args_ref.extend(bwd_fabric_args)
 
+        if self.h2d_socket and h2d_program is not None:
+            h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
+                self.h2d_mesh_core_coord.core_coord.y
+            ] = []
+            h2d_rt_args_ref = h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
+                self.h2d_mesh_core_coord.core_coord.y
+            ]
+            if h2d_uses_fabric:
+                for idx in range(self.num_fwd_links):
+                    fwd_fabric_args = ttnn.setup_fabric_connection(
+                        h2d_fabric_node_id,
+                        my_downstream_fabric_node_id,
+                        idx,
+                        h2d_program,
+                        self.h2d_mesh_core_coord.core_coord,
+                    )
+                    h2d_rt_args_ref.extend(fwd_fabric_args)
+
+        if self.d2h_socket and d2h_program is not None:
+            d2h_kernel_idx = 1 if same_device else 0
+            d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+                self.d2h_mesh_core_coord.core_coord.y
+            ] = []
+            d2h_rt_args_ref = d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+                self.d2h_mesh_core_coord.core_coord.y
+            ]
+
+            if d2h_uses_fabric:
+                for idx in range(self.num_bwd_links):
+                    bwd_fabric_args = ttnn.setup_fabric_connection(
+                        d2h_fabric_node_id,
+                        my_upstream_fabric_node_id,
+                        idx,
+                        d2h_program,
+                        self.d2h_mesh_core_coord.core_coord,
+                    )
+                    d2h_rt_args_ref.extend(bwd_fabric_args)
+
+        entries = []
+        if self.h2d_socket and h2d_program is not None:
+            entries.append((self.h2d_mesh_core_coord.device_coord, h2d_program))
+        if self.d2h_socket and d2h_program is not None and not same_device:
+            entries.append((self.d2h_mesh_core_coord.device_coord, d2h_program))
+        return entries
+
+    def run(self):
+        entries = self._build_programs()
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+        )
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        mesh_program_descriptor[
-            ttnn.MeshCoordinateRange(self.h2d_mesh_core_coord.device_coord, self.h2d_mesh_core_coord.device_coord)
-        ] = h2d_program
-
-        if not same_device:
-            mesh_program_descriptor[
-                ttnn.MeshCoordinateRange(self.d2h_mesh_core_coord.device_coord, self.d2h_mesh_core_coord.device_coord)
-            ] = d2h_program
-
-        io_tensors = [
-            dummy_tensor,
-            dummy_tensor,
-        ]
-
-        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+        for device_coord, program in entries:
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
+        return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def get_downstream_socket(self):
-        return self.downstream_socket_pair[1]
+        if self.downstream_mesh_socket is not None:
+            return self.downstream_mesh_socket
+        elif self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[1]
+        elif self.downstream_mesh_socket is not None:
+            raise ValueError("Downstream receiver socket not available for inter-mesh configuration")
+        else:
+            raise ValueError("Downstream socket not available")
+
+    def get_downstream_sender_socket(self):
+        if self.downstream_mesh_socket is not None:
+            return self.downstream_mesh_socket
+        elif self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[0]
+        else:
+            raise ValueError("Downstream sender socket not available")
 
     def get_upstream_socket(self):
-        return self.upstream_socket_pair[0]
+        if self.multi_upstream_d2h:
+            raise RuntimeError(
+                "HostInterface is in multi-upstream D2H mode; use get_upstream_sockets() to retrieve all "
+                "per-upstream sender sockets"
+            )
+        if self.upstream_socket_pair is not None:
+            return self.upstream_socket_pair[0]
+        else:
+            raise ValueError("Upstream socket not available")
+
+    def get_upstream_sockets(self):
+        """Return a list of upstream sender sockets, one per upstream core.
+
+        In single-upstream mode this is a length-1 list; in multi-upstream D2H mode it
+        is length N. Each returned socket is the sender side of a local socket pair
+        whose receiver is the D2H kernel core, so producers can push pages to the D2H
+        sender by writing into these sockets.
+        """
+        if self.multi_upstream_d2h:
+            return [pair[0] for pair in self.upstream_socket_pairs]
+        if self.upstream_socket_pair is not None:
+            return [self.upstream_socket_pair[0]]
+        raise ValueError("Upstream socket not available")
 
     def terminate(self, sync_devices):
-        self.h2d_socket.barrier()
-        self.d2h_socket.barrier()
+        if self.h2d_socket:
+            self.h2d_socket.barrier()
+        if self.d2h_socket:
+            self.d2h_socket.barrier()
+
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
         if sync_devices:
             ttnn.synchronize_device(self.mesh_device)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,10 +62,10 @@ RingSDPABwKVDeviceOperation::tensor_return_value_t RingSDPABwKVDeviceOperation::
     return {grad_key, grad_value};
 }
 
-tt::stl::hash::hash_t RingSDPABwKVDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingSDPABwKVDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // Hash based on operation configuration - buffer addresses are updated via override_runtime_arguments
-    return tt::stl::hash::hash_objects(
+    return ttsl::hash::hash_objects(
         1,  // KV marker (different from Q)
         attrs.ring_size,
         attrs.ring_axis,
@@ -83,7 +83,7 @@ namespace ttnn::prim {
 
 ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_value_t ttml_ring_sdpa_bw_kv(
     const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
+    const ttnn::Tensor& u_scaler,
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
@@ -106,7 +106,7 @@ ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_v
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
-        .attn_output = attn_output,
+        .u_scaler = u_scaler,
         .query = query,
         .key = key,
         .value = value,

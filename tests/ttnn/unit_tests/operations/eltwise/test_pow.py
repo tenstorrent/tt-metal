@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -259,7 +259,7 @@ def test_special_input_fp32(device):
 
     output = ttnn.pow(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
-    assert_allclose(torch_output_tensor, output, rtol=0.001, atol=1e-6)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
@@ -345,7 +345,7 @@ def test_binary_ng_pow(device, input_a, input_b, dtype):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = ttnn.pow(input_tensor_a, input_tensor_b, use_legacy=None)
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
     pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
