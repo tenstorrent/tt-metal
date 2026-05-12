@@ -439,10 +439,22 @@ def create_routed_expert_tensors(
             num_routed_experts=8,
             move_to_device=True,
         )
-        # DenseRoutedExpertWeights: single tensor per projection (mesh-shaped), no list
+        # 8 CTs per projection (one per dense-MLP chunk along the N-routed dim).
         gate_proj_weights = routed_weights.routed_gate_proj
         up_proj_weights = routed_weights.routed_up_proj
         down_proj_weights = routed_weights.routed_down_proj
+        # Dense+SRAM placement: keep ALL 8 chunks in the DRAM list. The kernel
+        # iterates num_active_experts=8 and OR's EXPERT_SRAM_FLAG onto slots
+        # >= num_dram_experts_pre_selected (set in op.py from sram_expert_ids),
+        # so the existing is_sram_expert filter skips them at runtime — same
+        # well-tested path as MoE 1dram-7sram. Requires SRAM-flagged chunks
+        # to be the contiguous tail (i.e. ``sram_expert_ids == [N, N+1, ..., 7]``),
+        # which all current dense placements satisfy.
+        if sram_expert_ids:
+            assert sram_expert_ids == list(range(8 - len(sram_expert_ids), 8)), (
+                f"sram_expert_ids must be the contiguous tail of [0..7] for the dense "
+                f"workaround; got {sram_expert_ids}"
+            )
         gate_proj_expert_tensors = None  # unused when is_moe=False
         up_proj_expert_tensors = None
         down_proj_expert_tensors = None
@@ -516,10 +528,15 @@ def create_routed_expert_tensors(
 
     # SRAM routed gate_proj weights: build T L1-resident CompressedTensors for
     # the placed eids. Mirrors how DRAM CTs come from prepare_routed_expert_weights.
+    # Used by both routing mode (sram_expert_ids = TopK experts placed in L1)
+    # AND dense MLP mode (sram_expert_ids = dense-MLP chunk indices placed in L1
+    # — see test_mlp_with_reduce's dense_placement parametrize). The per-eid
+    # torch weights come from the same expert_weights_dict (routing builds 1
+    # entry per TopK winner; dense builds 1 entry per chunk).
     sram_gate_proj_weights = None
     sram_up_proj_weights = None
     sram_down_proj_weights = None
-    if sram_expert_ids and is_moe and enable_routing:
+    if sram_expert_ids:
         from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
         from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
 
@@ -1962,10 +1979,21 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
 @pytest.mark.parametrize("use_mlp_weights", [True], ids=["mlp"])
 @pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+# Per-device dense-MLP placement of the 8 routed-N chunks across SRAM vs DRAM.
+#   all-dram      → existing baseline (all 8 chunks via DRAM matmul).
+#   half-half     → chunks 0..3 via DRAM, 4..7 via SRAM (per-device).
+#   7sram-1dram   → chunk 0 via DRAM, chunks 1..7 via SRAM (op.py requires
+#                   ≥1 DRAM chunk for sizing/CB-descriptor probes).
+# All three are mathematically equivalent — chunks partition the N dim and
+# down_proj's accum_experts sums their (M, K) contributions.
+@pytest.mark.parametrize(
+    "dense_placement",
+    ["all-dram", "half-half", "7sram-1dram"],
+)
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
 def test_mlp_with_reduce(
-    bh_2d_mesh_device, use_mlp_weights, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+    bh_2d_mesh_device, use_mlp_weights, dense_placement, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
@@ -2003,6 +2031,23 @@ def test_mlp_with_reduce(
         include_global=False,
     )
 
+    # Translate dense_placement → which dense-MLP chunks go to SRAM. DRAM stays
+    # intact in all modes (op.py needs at least 1 DRAM chunk for sizing/CB-
+    # descriptor probes). The math (sum-of-chunks) is unaffected by placement.
+    _num_dense_chunks = 8 if not is_moe else 1
+    if dense_placement == "all-dram":
+        sram_expert_ids = []
+    elif dense_placement == "half-half":
+        if _num_dense_chunks < 2:
+            pytest.skip("half-half requires >=2 chunks; is_moe=True dense has only 1")
+        sram_expert_ids = list(range(_num_dense_chunks // 2, _num_dense_chunks))
+    elif dense_placement == "7sram-1dram":
+        if _num_dense_chunks < 2:
+            pytest.skip("7sram-1dram requires >=2 chunks")
+        sram_expert_ids = list(range(1, _num_dense_chunks))  # 1 in DRAM (chunk 0), N-1 in SRAM
+    else:
+        raise ValueError(f"unknown dense_placement: {dense_placement}")
+
     # ── Create MLP tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(
@@ -2013,6 +2058,7 @@ def test_mlp_with_reduce(
         state_dict=state_dict,
         is_moe=is_moe,
         layer_idx=layer_idx,
+        sram_expert_ids=sram_expert_ids,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -2143,6 +2189,9 @@ def test_mlp_with_reduce(
         gate_proj_weights_tensor=r.gate_proj_weights,
         up_proj_weights_tensor=r.up_proj_weights,
         down_proj_weights_tensor=r.down_proj_weights,
+        sram_gate_proj_weights_tensor=r.sram_gate_proj_weights,
+        sram_up_proj_weights_tensor=r.sram_up_proj_weights,
+        sram_down_proj_weights_tensor=r.sram_down_proj_weights,
         final_output_tensor=r.final_output_tensor,
         rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
         shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,

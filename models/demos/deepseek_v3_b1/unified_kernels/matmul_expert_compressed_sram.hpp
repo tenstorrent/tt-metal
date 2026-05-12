@@ -79,7 +79,16 @@ struct MatmulExpertCompressedSRAM {
         uint32_t sram_k_per_core_ = 0,
         uint32_t sram_k_offset_ = 0,
         uint32_t cb_out_sram_ = 0,
-        uint32_t compact_in0_ = 0>
+        uint32_t compact_in0_ = 0,
+        // Mirror of MatmulExpertCompressedDRAM::ComputeCTArgs::enable_indexing.
+        // 1 (default) = read index_ptr[exp_i] from L1 (routed MoE path).
+        // 0 = synthesize raw_idx = EXPERT_SRAM_FLAG | exp_i — every iteration
+        //     treated as a SRAM-flagged expert with slot=exp_i. Used by the
+        //     dense-MLP path (no routing): no mcast_index, no scan; op.py
+        //     wires index_l1_addr=0 and cb_index=0. Symmetric with the DRAM
+        //     kernel where enable_indexing=0 synthesizes raw_idx = exp_i
+        //     (DRAM-flagged), so each kernel runs all iters as its native type.
+        uint32_t enable_indexing_ = 1>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -102,6 +111,7 @@ struct MatmulExpertCompressedSRAM {
         // (expanded, indexed by exp_i). Used by SRAM down_proj where the mcast
         // dst CB only carries the SRAM-flagged TopK experts' GR outputs.
         static constexpr bool compact_in0 = compact_in0_ != 0;
+        static constexpr bool enable_indexing = enable_indexing_ != 0;
     };
 
     struct WriterCTArgs {};
@@ -177,10 +187,17 @@ struct MatmulExpertCompressedSRAM {
             UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(cb_in0); }));
 
             if constexpr (CTArgs::accum_experts) {
-                uint32_t num_sram_experts = 0;
-                for (uint32_t i = 0; i < num_active_experts; i++) {
-                    if (is_sram_expert(index_ptr[i])) {
-                        num_sram_experts++;
+                // When enable_indexing=false (dense MLP), every iter is SRAM-flagged
+                // so num_sram_experts is a CT-known constant.
+                uint32_t num_sram_experts;
+                if constexpr (!CTArgs::enable_indexing) {
+                    num_sram_experts = num_active_experts;
+                } else {
+                    num_sram_experts = 0;
+                    for (uint32_t i = 0; i < num_active_experts; i++) {
+                        if (is_sram_expert(index_ptr[i])) {
+                            num_sram_experts++;
+                        }
                     }
                 }
 
@@ -190,7 +207,12 @@ struct MatmulExpertCompressedSRAM {
 
                     uint32_t sram_idx = 0;
                     for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                        uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                        uint32_t raw_idx;
+                        if constexpr (CTArgs::enable_indexing) {
+                            raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                        } else {
+                            raw_idx = EXPERT_SRAM_FLAG | exp_i;  // synthesized: slot=exp_i, SRAM-flagged
+                        }
                         if (!(is_sram_expert(raw_idx))) {
                             continue;
                         }
@@ -238,7 +260,12 @@ struct MatmulExpertCompressedSRAM {
 
                 uint32_t num_sram_experts_pushed = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                    uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                    uint32_t raw_idx;
+                    if constexpr (CTArgs::enable_indexing) {
+                        raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                    } else {
+                        raw_idx = EXPERT_SRAM_FLAG | exp_i;  // synthesized: slot=exp_i, SRAM-flagged
+                    }
                     if (!(is_sram_expert(raw_idx))) {
                         continue;
                     }

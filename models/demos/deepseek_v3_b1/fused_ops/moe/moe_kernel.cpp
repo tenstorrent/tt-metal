@@ -230,7 +230,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_internal_acc"),
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("gate_proj_num_dram_experts_pre_selected")>;
 
             // up_proj DRAM Matmul Expert Compressed (reader) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
@@ -273,7 +274,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_internal_acc"),
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("up_proj_num_dram_experts_pre_selected")>;
 
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
@@ -334,7 +336,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_internal_acc"),
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("down_proj_num_dram_experts_pre_selected")>;
 
             // SRAM gate_proj Matmul Expert (reader, NCRISC).
             // Mirrors MatmulExpertCompressedSRAM::ReaderCTArgs (12 params).
@@ -1112,7 +1115,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_internal_acc"),
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("gate_proj_num_dram_experts_pre_selected")>;
 
             // up_proj DRAM Matmul Expert Compressed (compute) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
@@ -1151,7 +1155,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_internal_acc"),
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("up_proj_num_dram_experts_pre_selected")>;
 
             // Eltwise Mul (compute)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
@@ -1215,10 +1220,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_internal_acc"),
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("down_proj_num_dram_experts_pre_selected")>;
 
             // SRAM gate_proj Matmul Expert (compute, TRISC).
-            // Mirrors MatmulExpertCompressedSRAM::ComputeCTArgs (16 params).
+            // The trailing /*compact_in0=*/0 and enable_routing args map onto the
+            // kernel's ComputeCTArgs trailing template params. enable_routing→
+            // enable_indexing: 1 = read index_ptr (routed MoE); 0 = synthesize
+            // raw_idx = EXPERT_SRAM_FLAG | exp_i (dense MLP, no mcast_index).
             using SramGateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
                 get_named_compile_time_arg_val("sram_gate_proj_cb_in0"),
                 get_named_compile_time_arg_val("sram_gate_proj_cb_in1"),
@@ -1235,7 +1244,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gate_proj_accum_experts"),
                 get_named_compile_time_arg_val("sram_gate_proj_k_per_core"),
                 get_named_compile_time_arg_val("sram_gate_proj_k_offset"),
-                get_named_compile_time_arg_val("sram_gate_proj_cb_out_sram")>;
+                get_named_compile_time_arg_val("sram_gate_proj_cb_out_sram"),
+                /*compact_in0=*/0,
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // SRAM up_proj Matmul Expert (compute, TRISC) — mirror of gate_proj.
             using SramUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
@@ -1254,7 +1265,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_accum_experts"),
                 get_named_compile_time_arg_val("sram_up_proj_k_per_core"),
                 get_named_compile_time_arg_val("sram_up_proj_k_offset"),
-                get_named_compile_time_arg_val("sram_up_proj_cb_out_sram")>;
+                get_named_compile_time_arg_val("sram_up_proj_cb_out_sram"),
+                /*compact_in0=*/0,
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // SRAM down_proj Matmul Expert (compute, TRISC) — accum_experts=1 +
             // compact_in0=1 path. Reads compact mcast dst (n_sram_active face
@@ -1277,15 +1290,20 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_down_proj_k_per_core"),
                 get_named_compile_time_arg_val("sram_down_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_down_proj_cb_out_sram"),
-                get_named_compile_time_arg_val("sram_down_proj_compact_in0")>;
+                get_named_compile_time_arg_val("sram_down_proj_compact_in0"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // SRAM extended GatedReduce (compute, sender_core only).
             // tiles_per_k = 8 K-partial faces per output face. k_num_tiles is
             // a runtime field, set to n_sram_active before the call.
-            // SRAM path: enable_scalar=1 → multiply by per-K scalar from scalar_cb.
+            // enable_scalar tracks enable_routing:
+            //   routing → 1: multiply by per-K scalar from scalar_cb (TopK score).
+            //   dense   → 0: silu(g1) * g2 only (no scale; matches dense MLP math).
+            //              BRISC's scalar copy is also CT-gated off via op.py
+            //              setting sram_gr_scalar_cb=0 in dense mode.
             using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
                 get_named_compile_time_arg_val("sram_gated_reduce_tiles_per_k"),
-                /*enable_scalar=*/1>;
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_scalar
             deepseek_b1_ops::GatedReduce::ComputeArgs sram_gated_reduce_args{
                 get_named_compile_time_arg_val("sram_gated_reduce_group1_cb"),
                 get_named_compile_time_arg_val("sram_gated_reduce_group2_cb"),
@@ -1582,23 +1600,33 @@ void kernel_main() {
 #endif
 #endif
 
-        // n_sram_active is computed inside the ENABLE_ROUTING block (post mcast_index
-        // scan on a/b cores + 112 mcast receivers + DRAM streamer cores). Declared
-        // here so SRAM_DOWN_MERGE (which lives outside the routing ifdef, since
-        // shared_down always runs) can read it. Stays 0 in the dense MLP path
-        // (no routing) → merge defaults to copy(shared_down → merged).
-        uint32_t n_sram_active = 0;
-
-        // n_dram_active gates every op in the DRAM gate/up/mul/gather/mcast/down/
-        // eltwise_add chain. Routing mode defaults to 0 → non-scan cores (e.g.,
-        // mcast_worker_grid extras that don't receive mcast_index) skip
-        // uniformly with scan-derived skips; scan cores overwrite below to
-        // num_active_experts - n_sram_active. Dense MLP path defaults to 1 →
-        // DRAM runs once with all experts treated as DRAM.
+        // n_sram_active / n_dram_active gate every op in the SRAM and DRAM
+        // pipelines respectively. Read by sram_invoke_* / dram_invoke_*
+        // helpers below, plus SRAM_DOWN_MERGE (do_add = n_sram_active > 0)
+        // and the final ELTWISE_ADD (do_add = n_dram_active > 0).
+        //
+        //   Routing mode:
+        //     - Both default to 0 — non-scan cores (e.g., mcast_worker_grid
+        //       extras that don't receive mcast_index) skip uniformly with
+        //       scan-derived skips.
+        //     - Scan cores overwrite below: n_sram_active from scan_n_sram_active,
+        //       n_dram_active = num_active_experts - n_sram_active. Routing
+        //       runs at most one TopK per iter so n_sram + n_dram = num_active.
+        //
+        //   Dense MLP (no routing): each leg's count comes from its own CT arg,
+        //   so the two pipelines are independent — a leg runs iff its CT count
+        //   is non-zero. The final ELTWISE_ADD uses do_add = (n_dram>0) so it
+        //   adds when DRAM contributed, or copies shared_output through when
+        //   it didn't. Configurations:
+        //     - dram-only (today's test_mlp):      n_sram=0,    n_dram=N_dram
+        //     - sram-only:                         n_sram=N_sram, n_dram=0
+        //     - half-half (both contribute):       n_sram=N_sram, n_dram=N_dram
 #ifdef ENABLE_ROUTING
+        uint32_t n_sram_active = 0;
         uint32_t n_dram_active = 0;
 #else
-        uint32_t n_dram_active = 1;
+        uint32_t n_sram_active = get_named_compile_time_arg_val("sram_gather_num_active_experts");
+        uint32_t n_dram_active = get_named_compile_time_arg_val("gate_proj_num_active_experts");
 #endif
 
 #ifdef ENABLE_ROUTING
@@ -1745,11 +1773,21 @@ void kernel_main() {
             deepseek_b1_ops::dram_invoke_mcast(expert_scale_mcast, moe.routed.expert_scale_mcast_args, n_dram_active);
         }
 
+#endif  // ENABLE_ROUTING
+
         // 5c. SRAM Routed Expert pipeline (matmul → gather → GatedReduce → mcast → matmul).
-        //     Each helper early-returns when n_sram_active == 0, so all
-        //     participating cores skip uniformly with no CB pushes / NOC writes /
-        //     sem incs (sender_core via pre-mcast scan, a/b cores and shared
-        //     mcast receivers via post-mcast scan all see the same n_sram_active).
+        //     Lifted OUTSIDE #ifdef ENABLE_ROUTING so the dense MLP path can run
+        //     the same SRAM chain (single expert per device, enable_indexing=0
+        //     on the SRAM matmul kernel — see matmul_expert_compressed_sram.hpp).
+        //     Every helper early-returns when n_sram_active == 0:
+        //       - Routing mode: sender pre-mcast scan + a/b/112/streamers post-mcast
+        //         scan set n_sram_active; non-scan cores keep 0 (uniform skip).
+        //       - Dense MLP (today): n_sram_active stays 0 → all helpers skip.
+        //       - Dense+SRAM (future): op.py sets n_sram_active=num_active_experts
+        //         and n_dram_active=0 (DRAM chain skipped via the dram_invoke_* path).
+        //     All Moe::Routed::Sram* / McastCTArgs types and moe.routed.sram_*_args
+        //     runtime args are defined unconditionally for both routing and dense
+        //     compilations, so no struct-level changes are required.
         //
         // SRAM gate_proj on 64 shared gate compute cores. Iterates 8 TopK
         // entries, processes SRAM-flagged, skips DRAM-flagged.
@@ -1867,7 +1905,6 @@ void kernel_main() {
                 sram_down_proj;
             deepseek_b1_ops::sram_invoke_matmul(sram_down_proj, n_sram_active);
         }
-#endif  // ENABLE_ROUTING
 
         // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
         {

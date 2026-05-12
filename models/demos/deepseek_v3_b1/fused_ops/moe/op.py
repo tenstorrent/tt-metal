@@ -1771,6 +1771,25 @@ class MoeRoutedExpertOp:
         # cb_index or index_l1_addr — every device runs the same [0..N-1] sequence
         # against its own TP-sliced weights.
         gate_up_num_active_experts = 8 if enable_routing else len(gate_proj_weights_tensor)
+        # SRAM matmul kernels iterate `num_active_experts` slots.
+        #   Routing: 8 (TopK count, matches DRAM; kernel filters via is_sram_expert).
+        #   Dense:   len(sram_*_weights_tensor) — kernel synthesizes raw_idx for each
+        #            slot (enable_indexing=0). 0 when no SRAM weights are provided.
+        if enable_routing:
+            sram_num_active_experts = gate_up_num_active_experts
+        elif sram_gate_proj_weights_tensor:
+            sram_num_active_experts = len(sram_gate_proj_weights_tensor)
+        else:
+            sram_num_active_experts = 0
+        # Dense-MLP workaround for the low-num_active DRAM kernel bug: when SRAM
+        # is placed in dense mode, the DRAM weights list stays at full length
+        # (8 chunks). The kernel iterates all 8 slots and OR's EXPERT_SRAM_FLAG
+        # onto slots >= ``num_dram_experts_pre_selected`` so the existing
+        # is_sram_expert filter skips them — same well-tested code path as MoE
+        # 1dram-7sram. Only read by the kernel's synthesized-index path
+        # (``enable_indexing=0``); routing reads real indices from L1, so the
+        # value is dead for MoE.
+        num_dram_experts_pre_selected = gate_up_num_active_experts - sram_num_active_experts
         if isinstance(gate_proj_weights_tensor, list):
             # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
             # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
@@ -1787,6 +1806,7 @@ class MoeRoutedExpertOp:
                 num_active_experts=gate_up_num_active_experts,
                 primary_worker_cores=gate_proj_worker_cores,
             )
+            gate_proj_params["num_dram_experts_pre_selected"] = num_dram_experts_pre_selected
 
             # SRAM routed gate_proj setup (mirrors DRAM helper above). Caller
             # passes pre-built L1 CompressedTensors; we derive K/N tiling from
@@ -1816,7 +1836,7 @@ class MoeRoutedExpertOp:
                     num_tiles_k=_sram_num_tiles_k,
                     per_core_n=_sram_per_core_n,
                     Kt=num_tiles_k,
-                    num_active_experts=gate_up_num_active_experts,
+                    num_active_experts=sram_num_active_experts,
                     accum_experts=False,
                 )
                 # cb_in1 descriptor: built via CompressedTensor.cb_descriptor_from_compressed_tensor,
@@ -1855,6 +1875,7 @@ class MoeRoutedExpertOp:
                 num_active_experts=gate_up_num_active_experts,
                 primary_worker_cores=gate_proj_worker_cores,
             )
+            up_proj_params["num_dram_experts_pre_selected"] = num_dram_experts_pre_selected
         else:
             raise AssertionError(
                 "up_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
@@ -1884,7 +1905,7 @@ class MoeRoutedExpertOp:
                 num_tiles_k=_sram_num_tiles_k_up,
                 per_core_n=_sram_per_core_n_up,
                 Kt=num_tiles_k,
-                num_active_experts=gate_up_num_active_experts,
+                num_active_experts=sram_num_active_experts,
                 accum_experts=False,
             )
             sram_up_proj_cb_in1_descriptors_per_device = {}
@@ -1916,7 +1937,7 @@ class MoeRoutedExpertOp:
                 num_tiles_k=_sram_num_tiles_k_dn,
                 per_core_n=_sram_per_core_n_dn,
                 Kt=_sram_num_tiles_k_dn,  # no K-slicing per core
-                num_active_experts=gate_up_num_active_experts,
+                num_active_experts=sram_num_active_experts,
                 accum_experts=True,
             )
             sram_down_proj_cb_in1_descriptors_per_device = {}
@@ -1944,7 +1965,9 @@ class MoeRoutedExpertOp:
             sram_gather_data_size_bytes = tile_1x32_size  # 1 tile = 64 bytes
             _sram_total_cores = 64  # a_cores = b_cores = 64
             sram_gather_expert_dst_stride = _sram_total_cores * tile_1x32_size
-            sram_gather_total_tiles = gate_up_num_active_experts * _sram_total_cores
+            # Dense+SRAM: len(sram_*_weights_tensor); routing: TopK count (= 8). Both
+            # flow through sram_num_active_experts.
+            sram_gather_total_tiles = sram_num_active_experts * _sram_total_cores
 
             # Per-core sender_idx: offset within one expert's 64-tile slab.
             # SRAM gate/up cores arranged as 8 K-slices × 8 N-slices row-major
@@ -2034,9 +2057,10 @@ class MoeRoutedExpertOp:
         # (n_active_experts faces); kernel overrides to n_sram_active × face
         # size at runtime.
         # ==================================================================
-        sram_down_mcast_num_tiles = (
-            gate_up_num_active_experts if (sram_gate_proj_weights_tensor is not None and enable_routing) else 0
-        )
+        # Dense+SRAM uses len(sram_*_weights_tensor) for the worst-case mcast
+        # tile count; routing mode uses TopK count. Both flow through
+        # sram_num_active_experts.
+        sram_down_mcast_num_tiles = sram_num_active_experts if sram_gate_proj_weights_tensor is not None else 0
         sram_down_mcast_data_size_bytes = sram_down_mcast_num_tiles * face_tile_size
         sram_down_mcast_params = MoeOp.setup_mcast(
             device=device,
@@ -2082,6 +2106,7 @@ class MoeRoutedExpertOp:
                 accum_experts=1,
                 primary_worker_cores=gate_proj_worker_cores,
             )
+            down_proj_params["num_dram_experts_pre_selected"] = num_dram_experts_pre_selected
         else:
             raise AssertionError(
                 "down_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
@@ -2588,6 +2613,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_partial_sem_addr", ctx.gate_proj_params["partial_sem_addr"]),
             ("gate_proj_cores_per_bank", ctx.gate_proj_params["cores_per_bank"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
+            ("gate_proj_num_dram_experts_pre_selected", ctx.gate_proj_params["num_dram_experts_pre_selected"]),
             ("gate_proj_index_l1_addr", ctx.gate_proj_params["index_l1_addr"]),
             ("gate_proj_cb_fmt", ctx.gate_proj_cb_fmt),
             ("gate_proj_fmt_dram_addr", ctx.gate_proj_params["fmt_dram_addr"]),
@@ -2627,6 +2653,7 @@ class MoeRoutedExpertOp:
             ("up_proj_partial_sem_addr", ctx.up_proj_params["partial_sem_addr"]),
             ("up_proj_cores_per_bank", ctx.up_proj_params["cores_per_bank"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
+            ("up_proj_num_dram_experts_pre_selected", ctx.up_proj_params["num_dram_experts_pre_selected"]),
             ("up_proj_index_l1_addr", ctx.up_proj_params["index_l1_addr"]),
             ("up_proj_cb_fmt", ctx.up_proj_cb_fmt),
             ("up_proj_fmt_dram_addr", ctx.up_proj_params["fmt_dram_addr"]),
@@ -2660,6 +2687,7 @@ class MoeRoutedExpertOp:
             ("down_proj_partial_sem_addr", ctx.down_proj_params["partial_sem_addr"]),
             ("down_proj_cores_per_bank", ctx.down_proj_params["cores_per_bank"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
+            ("down_proj_num_dram_experts_pre_selected", ctx.down_proj_params["num_dram_experts_pre_selected"]),
             ("down_proj_index_l1_addr", ctx.down_proj_params["index_l1_addr"]),
             ("down_proj_cb_fmt", ctx.down_proj_cb_fmt),
             ("down_proj_fmt_dram_addr", ctx.down_proj_params["fmt_dram_addr"]),
@@ -2744,6 +2772,10 @@ class MoeRoutedExpertOp:
             # Required for MatmulExpertCompressedDRAM ResetCBIn1 template param (referenced in moe_kernel.cpp outer scope)
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
+            # Read by moe_kernel.cpp's dense-mode n_dram_active derivation —
+            # BRISC needs it to gate the mcast helpers consistently with TRISC/NCRISC.
+            ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
+            ("gate_proj_num_dram_experts_pre_selected", ctx.gate_proj_params["num_dram_experts_pre_selected"]),
             # Expert scale mcast sender (routing only)
             ("expert_scale_mcast_sender_semaphore_addr", ctx.expert_scale_mcast_sender_semaphore_addr),
             ("expert_scale_mcast_receiver_semaphore_addr", ctx.expert_scale_mcast_receiver_semaphore_addr),
@@ -2798,6 +2830,7 @@ class MoeRoutedExpertOp:
                 ctx.down_proj_mcast_params["src_num_pages"] // ctx.down_proj_params["num_active_experts"],
             ),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
+            ("down_proj_num_dram_experts_pre_selected", ctx.down_proj_params["num_dram_experts_pre_selected"]),
             # SRAM down mcast (sender + receiver). data_size_bytes / num_pages
             # are CT worst-case (n_active faces); kernel overrides at runtime to
             # n_sram_active × face_tile_size.
@@ -2874,6 +2907,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
+            ("gate_proj_num_dram_experts_pre_selected", ctx.gate_proj_params["num_dram_experts_pre_selected"]),
             ("gate_proj_index_l1_addr", ctx.gate_proj_params["index_l1_addr"]),
             ("gate_proj_cb_fmt", ctx.gate_proj_cb_fmt),
             ("gate_proj_dram_meta_words_per_block", ctx.gate_proj_params["dram_meta_words_per_block"]),
@@ -2910,6 +2944,7 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
+            ("up_proj_num_dram_experts_pre_selected", ctx.up_proj_params["num_dram_experts_pre_selected"]),
             ("up_proj_index_l1_addr", ctx.up_proj_params["index_l1_addr"]),
             ("up_proj_cb_fmt", ctx.up_proj_cb_fmt),
             ("up_proj_dram_meta_words_per_block", ctx.up_proj_params["dram_meta_words_per_block"]),
@@ -2955,6 +2990,7 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
+            ("down_proj_num_dram_experts_pre_selected", ctx.down_proj_params["num_dram_experts_pre_selected"]),
             ("down_proj_index_l1_addr", ctx.down_proj_params["index_l1_addr"]),
             ("down_proj_cb_fmt", ctx.down_proj_cb_fmt),
             ("down_proj_dram_meta_words_per_block", ctx.down_proj_params["dram_meta_words_per_block"]),
@@ -3141,9 +3177,11 @@ class MoeRoutedExpertOp:
 
         # SRAM scalar copy on sender_core BRISC: reads top-K scores from
         # gate_output_scores_tensor's L1, writes one scalar per active expert
-        # to sram_gr_scalar_cb (at byte 0 of each face tile).
+        # to sram_gr_scalar_cb (at byte 0 of each face tile). Disabled (cb=0)
+        # in dense mode — TRISC's enable_scalar also goes off, taking the
+        # silu(g1)*g2 path with no scale.
         sram_gr_scalar_brisc_args = [
-            ("sram_gr_scalar_cb", ctx.sram_gr_scalar_cb),
+            ("sram_gr_scalar_cb", ctx.sram_gr_scalar_cb if ctx.enable_routing else 0),
             (
                 "sram_gr_scalar_src_l1_addr",
                 ctx.gate_proj_params.get("scores_l1_addr", 0) if ctx.enable_routing else 0,
