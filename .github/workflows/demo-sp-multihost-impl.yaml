@@ -175,14 +175,32 @@ jobs:
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd not found on runner, installing..."
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+          shopt -s globstar nullglob
+          build_archives=(/ci/artifacts/**/*.tar.zst)
+          echo "Found ${#build_archives[@]} .tar.zst candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${build_archives[@]}"
+          if [ ${#build_archives[@]} -eq 0 ]; then
+            echo "ERROR: Could not find any .tar.zst under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          BUILD_ARCHIVE="${build_archives[0]}"
+          echo "Using build archive: ${BUILD_ARCHIVE}"
+
           # Unpack build artifact locally as well. Pipeline config generation runs on the runner
           # and expects test binaries under /ci/tt-metal/build/test.
-          tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /ci/tt-metal
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           mpirun --pernode cp -r /ci/tt-metal /home/user
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
           # Unpack artifacts
-          mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
+          mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
           mpirun --pernode pip install $(find /ci/artifacts | grep whl)
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
