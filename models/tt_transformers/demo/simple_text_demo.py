@@ -1052,6 +1052,7 @@ def test_demo_text(
             )
 
     num_tokens_generated_decode = []
+    num_prefill_tokens = 0
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
@@ -1066,6 +1067,8 @@ def test_demo_text(
         ) = preprocess_inputs_prefill(
             input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
+        if mode != "decode":
+            num_prefill_tokens += int(sum(prefill_lens))
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
         assert (
@@ -1442,6 +1445,7 @@ def test_demo_text(
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
     logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
+    logger.info(f"Total prefilled tokens: {num_prefill_tokens}")
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
