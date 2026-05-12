@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <limits>
+
+#include "sfpi.h"
+
 // Helper function for _sfpu_binary_power_
 // This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
 // and makes it faster
