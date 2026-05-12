@@ -202,6 +202,9 @@ jobs:
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
           mpirun --pernode pip install $(find /ci/artifacts | grep whl)
+          # Install full tt-metal dev Python environment on runner and workers.
+          pip install -r /ci/tt-metal/tt_metal/python_env/requirements-dev.txt
+          mpirun --pernode pip install -r /home/user/tt-metal/tt_metal/python_env/requirements-dev.txt
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
