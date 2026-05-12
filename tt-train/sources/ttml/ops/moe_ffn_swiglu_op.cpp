@@ -13,11 +13,8 @@
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
 
@@ -78,11 +75,12 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets[-1] must equal token_capacity.");
     }
 
-    // Per-expert forward: slice grouped once per expert, run gate+up matmuls
-    // directly against the per-expert weight tensors (no slicing of weights),
-    // silu·multiply on the chunk, then down matmul. One concat at the end.
-    // gate_proj_e and up_proj_e are saved per-expert for backward; activated_e
-    // is recomputed in backward.
+    // Per-expert forward: variable_matmul reads each expert's rows directly from
+    // grouped via row-offset, runs gate+up matmuls against the per-expert weights,
+    // applies silu·multiply, then down_proj writes directly into the corresponding
+    // row range of the pre-allocated output. No per-expert slicing or output concat.
+    // gate_proj_e and up_proj_e are saved per-expert for backward; activated_e is
+    // recomputed in backward.
     //
     // Fused activation for the silu·multiply step: ttnn::multiply with a unary
     // activation on lhs computes silu(lhs) * rhs in one ttnn op (one read of
@@ -124,7 +122,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         const auto& w_up_e = w_up[e]->get_value();
         const auto& w_down_e = w_down[e]->get_value();
 
-        // Offset-read into the grouped tensor — avoids materializing X_e = slice_rows(grouped).
+        // Offset-read into grouped — avoids materializing a per-expert slice.
         // Tile-aligned offsets are guaranteed by the dispatch convention (counts rounded to 32).
         const uint32_t offset_tiles = row_lo / 32U;
         const uint32_t len_tiles = (row_hi - row_lo) / 32U;
