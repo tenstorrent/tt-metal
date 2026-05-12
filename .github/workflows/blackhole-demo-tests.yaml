@@ -21,6 +21,7 @@ on:
           - stable_diffusion_xl
           - llama3.3-70b
           - qwen3-32b
+          - qwen3-tts
           - flux.1-dev
           - mochi
           - wan2.2-t2v-a14b
