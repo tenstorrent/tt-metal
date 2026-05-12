@@ -1,6 +1,6 @@
 # Capabilities: multigammaln_lanczos
 
-> Last updated: 2026-05-12 by ttnn-verifier (Phase 0)
+> Last updated: 2026-05-12 by ttnn-implementer (Refinement 1)
 
 Source of truth for what `multigammaln_lanczos` currently accepts. Derived from the entry point validation (`multigammaln_lanczos.py:54-78`), the program descriptor (`multigammaln_lanczos_program_descriptor.py`), and the three kernels under `kernels/`. Update this table when a refinement broadens the supported surface.
 
@@ -27,3 +27,11 @@ Source of truth for what `multigammaln_lanczos` currently accepts. Derived from 
 | `len(shape) < 2` | `multigammaln_lanczos.py:71` |
 | `shape[-1] % 32 != 0` or `shape[-2] % 32 != 0` | `multigammaln_lanczos.py:74` |
 | Not on device | `multigammaln_lanczos.py:56` |
+
+## Internal Structure (not user-facing)
+
+| Aspect | Status | Details |
+|--------|--------|---------|
+| **Circular buffers** | 2 (input + output) | Refinement 1 eliminated the Phase-0 `cb_accumulator` intermediate (index 24). The global lgamma accumulator stays in DST (D0) across all 4 Lanczos sub-evaluations via a single `tile_regs_acquire`/`release` block per tile. Per-core L1 footprint dropped from 24 KB → 16 KB (2 CBs × 2 pages × 4096 B). |
+| **Compute kernel acquire blocks** | 1 per tile | Phase 0 had 6 acquire/commit/release cycles per tile (1 init-zero + 4 lgamma updates + 1 finalize). Refinement 1 collapses to a single block — no L1 round-trip between lgamma iterations. |
+| **DST slot usage** | D0=global accum, D1=a, D2=local sum, D3=scratch | 4-slot budget (fp32_dest_acc + half-sync). The `(a − 0.5)·log(a + 4.5)` multiply briefly corrupts D1 (= a → a − 0.5) and reloads D1 from `cb_input_tiles` afterwards. |

@@ -59,7 +59,7 @@
 - **Params**: none (p = 4 is permanent)
 - **Test shapes**: `(1,1,32,32)`, `(1,1,32,256)`, `(1,1,256,32)`, `(1,1,64,128)`, `(1,1,128,64)`, `(2,4,64,128)`
 
-### [ ] Refinement 1 — Reuse DST across lgamma iterations
+### [x] Refinement 1 — Reuse DST across lgamma iterations
 
 Try not to have a `cb_accumulator` round-trip between lgamma iterations.
 

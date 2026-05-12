@@ -31,3 +31,38 @@
   - `numerical_stability.md` — error sources, accumulation strategy, fidelity sensitivity, pole-mask analysis. Identifies the UnpackToDestFp32 finding that the verifier acted on.
   - `data_transfer.md` — DRAM bandwidth, NoC channel balance, per-core L1 footprint, intra-core L1 traffic for the accumulator round-trip.
   - `capabilities.md` — what the op currently accepts (data formats, layouts, memory configs, etc.).
+
+## Refinement 1 — Reuse DST across lgamma iterations
+
+- **Date**: 2026-05-12
+- **What was done**: Eliminated the `cb_accumulator` L1 round-trip between the 4 Lanczos lgamma sub-evaluations. The global accumulator now lives in DST (D0) across the entire per-tile block, wrapped in a single `tile_regs_acquire`/`release` instead of Phase-0's 6 acquire/commit/release cycles per tile (1 init-zero + 4 lgamma updates + 1 finalize). `cb_accumulator` (intermediate CB at index 24) was removed from the program descriptor entirely; the kernel now uses only `cb_input_tiles` and `cb_output_tiles`. Per-core L1 footprint dropped from 24 KB → 16 KB.
+
+  Slot-budget tactic for the 4-DST-slot fp32_dest_acc half-sync mode: with D0 (global accum), D1 (a), D2 (local lgamma sum), D3 (scratch) all in use, the `(a − 0.5) · log(a + 4.5)` multiply needs a 5th live value. We resolve this by corrupting D1 to `a − 0.5` for the one multiply, then reloading D1 from `cb_input_tiles` (held resident across all 4 iterations; popped only at end of tile) before pole zeroing. One extra `copy_tile` per iteration — negligible alongside the ~150 SFPU ops per tile.
+
+- **Accuracy achieved** (4 shapes, same domain `[2.0, 10.0]` as Phase 0):
+
+  | Shape | PCC | Max abs err | Mean abs err | Rel RMS err |
+  |-------|-----|-------------|--------------|-------------|
+  | `(1,1,32,32)` | 0.999999996 | 0.0048 | 0.00079 | 5.2e-5 |
+  | `(1,1,64,64)` | 0.999999996 | 0.0051 | 0.00081 | 5.3e-5 |
+  | `(1,1,256,256)` | 0.999999996 | 0.0052 | 0.00083 | 5.4e-5 |
+  | `(2,4,64,128)` | 0.999999996 | 0.0052 | 0.00083 | 5.4e-5 |
+
+  Numerically identical to the Phase-0 measured ceiling — no precision regression, as required by the refinement acceptance.
+
+- **Golden test progress**: N/A — no golden suite exists for `multigammaln_lanczos` (not yet wired into `eval/golden_tests/`).
+
+- **Issues encountered**: None. The kernel rewrite compiled and passed all 24 existing tests on the first attempt; precision baseline numbers were bit-identical to Phase 0 within the measured PCC.
+
+- **Tests added**:
+  - `test_multigammaln_lanczos_dst_reuse.py` — 8 cases pinning Refinement 1:
+    - **Structural** (would catch a re-introduced `cb_accumulator` immediately):
+      - `test_program_descriptor_has_no_cb_accumulator` — asserts `len(pd.cbs) == 2` and that CB index 24 is unused.
+      - `test_compute_kernel_has_two_cb_compile_time_args` — asserts the compute kernel CT args are exactly `[0, 16]`.
+      - `test_compute_config_unpack_to_dest_fp32_on_input_only` — asserts `cb_input_tiles` keeps `UnpackToDestFp32` and the legacy slot 24 is `Default`.
+    - **Behavioural** (exercises the new code path):
+      - `test_dst_resident_accumulator_matches_reference` (3 shapes) — same precision floor as Phase 0 baseline.
+      - `test_d1_corrupt_and_reload_correctness` — stresses the D1 corrupt/reload contract at pole-hitting (`x ∈ {2.0, 2.5}`) and high-magnitude (`x = 10.0`) values; verifies pole zeroing fires on the correct reloaded `a`, not the corrupted `a − 0.5`.
+      - `test_single_acquire_block_stress` — 65-tile multi-core shape with one long `tile_regs_acquire` per tile, verifies math/pack synchronisation at scale.
+
+  Total: 32 tests (24 pre-existing + 8 new), all passing in both `--dev` and production modes.
