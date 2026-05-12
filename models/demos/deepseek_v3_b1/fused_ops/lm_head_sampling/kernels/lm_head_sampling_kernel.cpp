@@ -465,7 +465,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_enable_metadata"),
         get_named_compile_time_arg_val("sampling_copy_probabilities"),
         get_named_compile_time_arg_val("metadata_output_l1_addr"),
-        get_named_compile_time_arg_val("sampling_copy_probabilities_to_q")>;
+        get_named_compile_time_arg_val("sampling_copy_probabilities_to_q"),
+        get_named_compile_time_arg_val("sampling_p_bcast_cb"),
+        get_named_compile_time_arg_val("sampling_rand_bcast_cb")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs sampling_args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -798,7 +800,7 @@ void kernel_main() {
         if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
-                DeviceZoneScopedN("CCL_BROADCAST");
+                // DeviceZoneScopedN("CCL_BROADCAST");
                 bcast(bcast_args);
             }
         }
@@ -848,14 +850,14 @@ void kernel_main() {
 #endif
 
         {
-            DeviceZoneScopedN("RMSNORM");
+            // DeviceZoneScopedN("RMSNORM");
             constexpr bool pop_rmsnorm_src = Core::is_e_norm_device || !Core::enable_mtp;
             deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, pop_rmsnorm_src> rmsnorm;
             rmsnorm(rmsnorm_args);
         }
 
         {
-            DeviceZoneScopedN("MCAST");
+            // DeviceZoneScopedN("MCAST");
             mcast(mcast_args);
         }
 
@@ -868,7 +870,7 @@ void kernel_main() {
 #endif
 
         {
-            DeviceZoneScopedN("MATMUL");
+            // DeviceZoneScopedN("MATMUL");
             matmul(matmul_args);
         }
 
@@ -1059,14 +1061,14 @@ void kernel_main() {
 #if defined(COMPILE_FOR_TRISC)
         if constexpr (Core::is_rmsnorm_core) {
             if constexpr (Core::is_e_norm_device) {
-                DeviceZoneScopedN("MTP_E_RMSNORM");
+                // DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
                 e_rmsnorm(rmsnorm_args);
             } else {
                 constexpr uint32_t hnorm_ready_cb = get_named_compile_time_arg_val("hnorm_ready_cb");
                 cb_wait_front(hnorm_ready_cb, 1);
                 cb_pop_front(hnorm_ready_cb, 1);
-                DeviceZoneScopedN("MTP_H_RMSNORM");
+                // DeviceZoneScopedN("MTP_H_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 h_rmsnorm(rmsnorm_args);
             }
@@ -1098,7 +1100,7 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::
                 Op<McastEhCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_eh_matmul_core, true>
                     mcast_eh;
-            DeviceZoneScopedN("MTP_EH_MCAST");
+            // DeviceZoneScopedN("MTP_EH_MCAST");
             mcast_eh(mcast_eh_args);
         }
 
@@ -1106,7 +1108,7 @@ void kernel_main() {
         if constexpr (Core::is_eh_matmul_core) {
             deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, 0, false, false, 3> eh_matmul;
             {
-                DeviceZoneScopedN("MTP_EH_DRAM_MATMUL");
+                // DeviceZoneScopedN("MTP_EH_DRAM_MATMUL");
                 eh_matmul();
             }
         }
@@ -1135,7 +1137,7 @@ void kernel_main() {
 #endif
 
         {
-            DeviceZoneScopedN("REDUCE_TO_ONE");
+            // DeviceZoneScopedN("REDUCE_TO_ONE");
             constexpr bool is_reduce_core = Core::is_eh_reduce_worker_core || Core::is_eh_reduce_fabric_core;
             deepseek_b1_ops::ReduceToOneB1::Op<ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
             reduce_op(reduce_rt_args);
@@ -1246,7 +1248,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (
             Core::sampling_is_final_core && SamplingCTArgs::defer_socket_output && SamplingCTArgs::socket_mode != 0) {
-            DeviceZoneScopedN("MTP_VERIFY_SEND");
+            // DeviceZoneScopedN("MTP_VERIFY_SEND");
 
             constexpr uint32_t sampling_socket_cb = SamplingCTArgs::socket_cb_id;
             cb_wait_front(sampling_socket_cb, 1);

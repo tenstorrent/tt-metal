@@ -304,20 +304,21 @@ class PassthroughStage(StageKind):
         else:
             up_fifo = down_fifo = TOKEN_META_FIFO_SIZE
             up_page = down_page = TOKEN_META_PAGE_SIZE_BYTES
-        # if self._host_loopback:
-        #     # d2h_core must differ from PIPELINE_CORE_COORD: both land on the same chip
-        #     # (no_loopback sets exit_node_coord = entry_node_coord), so using the same
-        #     # core would dispatch two persistent kernels to the same Tensix.
-        #     loopback = LoopbackConfig.host_loopback(
-        #         HostIoPlacement(
-        #             h2d_core=PIPELINE_CORE_COORD,
-        #             d2h_core=SECOND_PIPELINE_CORE_COORD,
-        #             fwd_d2d_core=PIPELINE_CORE_COORD,
-        #             lb_d2d_core=PIPELINE_CORE_COORD,
-        #         )
-        #     )
-        # else:
-        loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
+
+        if self._host_loopback:
+            # d2h_core must differ from PIPELINE_CORE_COORD: both land on the same chip
+            # (no_loopback sets exit_node_coord = entry_node_coord), so using the same
+            # core would dispatch two persistent kernels to the same Tensix.
+            loopback = LoopbackConfig.host_loopback(
+                HostIoPlacement(
+                    h2d_core=PIPELINE_CORE_COORD,
+                    d2h_core=SECOND_PIPELINE_CORE_COORD,
+                    fwd_d2d_core=PIPELINE_CORE_COORD,
+                    lb_d2d_core=PIPELINE_CORE_COORD,
+                )
+            )
+        else:
+            loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -617,8 +618,16 @@ class BaseLMHeadStage(StageKind):
     N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
     A_TILE = ttnn.Tile([1, 32])
     OUT_TILE = ttnn.Tile([1, 32])
-    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 1)
-    LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
+    ARGMAX_FINAL_CORE = ttnn.CoreCoord(1, 0)
+    # NOTE: LMHEAD_INPUT_CORE intentionally lives at col 11, not col 12. The
+    # mcast bounding box is the rectangular hull of matmul_core_grid ∪ {sender},
+    # so putting the sender at col 12 would force the bbox into col 12 — and
+    # col 12 hosts the persistent D2D socket relay at PIPELINE_CORE_COORD=(12,8)
+    # for BaseLMHeadStage. The LM-head kernel can't co-exist on (12,8) with the
+    # persistent socket kernel and the op hangs at launch. Keeping the sender
+    # at col 11 caps the bbox at col 11 (matching shared_expert/down_proj's
+    # avoidance pattern for the col-12 phantom cores).
+    LMHEAD_INPUT_CORE = ttnn.CoreCoord(11, 9)
 
     def __init__(
         self,
@@ -662,9 +671,6 @@ class BaseLMHeadStage(StageKind):
         down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
 
-        # Match PassthroughStage: fabric multi-host ring uses loopback; without this,
-        # loopback=None becomes no_loopback and the last rank hits _init_last_stage_with_d2h
-        # without d2h_socket_* (e.g. num_mtp_levels == num_procs - 1 → final stage is Base).
         loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,
@@ -697,8 +703,10 @@ class BaseLMHeadStage(StageKind):
         )
         matmul_core_grid = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(10, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(11, 0), ttnn.CoreCoord(11, 8)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 2)),
             ]
         )
         argmax_final_core_grid = ttnn.CoreRangeSet(
@@ -892,8 +900,6 @@ class BaseLMHeadStage(StageKind):
         lmhead_input_socket = pipeline_block.get_downstream_socket() if pipeline_block.has_exit else None
         lmhead_output_socket = pipeline_block.get_upstream_socket()
 
-        logger.info(f"LMHead input socket: {lmhead_input_socket}")
-        logger.info(f"LMHead output socket: {lmhead_output_socket}")
 
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         worker_crs = ttnn.CoreRangeSet(

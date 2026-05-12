@@ -88,18 +88,45 @@ static inline uint32_t bf16_pack_to_uint32(uint16_t bf16_val) {
 // Convenience: convert fp32 -> bf16 (RNE) and pack two copies into a uint32.
 static inline uint32_t float_to_bf16_packed(float x) { return bf16_pack_to_uint32(float_to_bf16_rne(x)); }
 
+// Fill row 0 (face-0 row-0 lanes 0..15 + face-1 row-0 lanes 0..15) of a 32x32
+// bf16 tile with `bf16_val`, repeated. Rows 1..31 are left as-is.
+//
+// Used by the Stage-B fused TRISC pipeline: TRISC's downstream element-wise
+// ops (mul_binary_tile, lt_binary_tile, ...) need the broadcast value at every
+// row-0 column, but only row 0 is read by BRISC, so filling rows 1..31 would
+// be wasted L1 traffic. The fill takes 16 u32 stores (~32 cy on BRISC).
+FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
+    cb_reserve_back(cb_id, 1);
+    auto* tile_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    const uint32_t packed = bf16_pack_to_uint32(bf16_val);
+    // Face 0 row 0: 16 bf16 lanes = 8 u32 words.
+    for (uint32_t i = 0; i < 8; ++i) {
+        tile_u32[i] = packed;
+    }
+    // Face 1 row 0: same, offset by one face (256 bf16 = 128 u32 words).
+    constexpr uint32_t FACE_U32 = 128;
+    for (uint32_t i = 0; i < 8; ++i) {
+        tile_u32[FACE_U32 + i] = packed;
+    }
+    cb_push_back(cb_id, 1);
+}
+
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
 #include "api/debug/dprint_tensix.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/transpose_wh.h"
+#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/cumsum.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -261,6 +288,11 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
         release_dst();
     }
 }
+
+
+template <uint32_t in_cb, uint32_t out_cb, uint32_t temp_cb, uint32_t num_tiles, >
+
+
 
 template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t out_cb, uint32_t num_tiles>
 void softmax_mul_block_bcast_scalar() {
@@ -655,7 +687,12 @@ struct TopKSampling {
         uint32_t EnableMetadata = 0,
         uint32_t CopyProbabilities = 0,
         uint32_t MetadataOutputL1Addr = 0,
-        uint32_t CopyProbabilitiesToQ = 0>
+        uint32_t CopyProbabilitiesToQ = 0,
+        // Stage-B fused-TRISC sampling pipeline reuses two existing compute-side
+        // CBs (`softmax_sub_cb`, `sum_cb`) as broadcast inputs from BRISC to TRISC.
+        // BRISC pushes `p` and `rand` as broadcast tiles; TRISC pops them.
+        uint32_t PBcastCBId = 0xFFFFFFFF,
+        uint32_t RandBcastCBId = 0xFFFFFFFF>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
@@ -680,6 +717,11 @@ struct TopKSampling {
         static constexpr bool copy_probabilities = CopyProbabilities == 1;
         static constexpr bool copy_probabilities_to_q = CopyProbabilitiesToQ == 1;
         static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
+        // Stage-B broadcast CBs (mapped onto the existing compute-side
+        // `softmax_sub_cb` / `sum_cb` slots, which the softmax tail never
+        // touches): BRISC pushes one-tile broadcasts of `p` and `rand` here.
+        static constexpr uint32_t p_bcast_cb = PBcastCBId;
+        static constexpr uint32_t rand_bcast_cb = RandBcastCBId;
         static_assert(
             !CopyProbabilities || EnableMetadata,
             "EnableMetadata must be true when CopyProbabilities is true as we copy into the metadata buffer");
@@ -722,6 +764,12 @@ struct TopKSampling {
         static constexpr uint32_t softmax_sub_cb = SoftmaxSubCBId;
         static constexpr uint32_t max_cb = MaxCBId;
         static constexpr uint32_t sum_cb = SumCBId;
+        // Stage-B semantic aliases (same physical CBs as softmax_sub_cb / sum_cb,
+        // which the softmax tail never reads). BRISC pushes broadcast `p` to
+        // p_bcast_cb and broadcast `rand` to rand_bcast_cb; TRISC pops them
+        // in the fused post-softmax pipeline.
+        static constexpr uint32_t p_bcast_cb = SoftmaxSubCBId;
+        static constexpr uint32_t rand_bcast_cb = SumCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
         static constexpr uint32_t temp_cb = TempCBId;
         static constexpr uint32_t rand_cb = RandCBId;
@@ -1174,13 +1222,17 @@ struct TopKSampling {
                     cb_wait_front(CTArgs::topk_out_scores_cb, 1);
                     cb_wait_front(CTArgs::topk_out_indices_cb, 1);
 
-                    phase1_send_topk_to_final(
-                        get_read_ptr(CTArgs::topk_out_scores_cb),
-                        get_read_ptr(CTArgs::topk_out_indices_cb),
-                        dst_scores_l1,
-                        dst_indices_l1,
-                        args.final_noc_x,
-                        args.final_noc_y);
+
+                    {
+                        DeviceZoneScopedN("SP-PHASE1SEND");
+                        phase1_send_topk_to_final(
+                            get_read_ptr(CTArgs::topk_out_scores_cb),
+                            get_read_ptr(CTArgs::topk_out_indices_cb),
+                            dst_scores_l1,
+                            dst_indices_l1,
+                            args.final_noc_x,
+                            args.final_noc_y);
+                    }
 
                     cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                     cb_pop_front(CTArgs::topk_out_indices_cb, 1);
@@ -1196,8 +1248,10 @@ struct TopKSampling {
             if constexpr (IsFinalCore) {
                 auto recv_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
-                wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
-
+                {
+                    DeviceZoneScopedN("SP-PHASE2WAIT");
+                    wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
+                }
                 cb_reserve_back(CTArgs::winner_cb_id, 1);
                 const uint32_t global_scores = get_write_ptr(CTArgs::winner_cb_id);
                 const uint32_t global_indices = global_scores + CTArgs::topk_scores_slot_bytes;
@@ -1219,11 +1273,14 @@ struct TopKSampling {
                     cb_wait_front(CTArgs::topk_out_scores_cb, 1);
                     cb_wait_front(CTArgs::topk_out_indices_cb, 1);
 
+                {
+                    DeviceZoneScopedN("SP-PHASE2READ");
                     auto llk_scores_addr = get_read_ptr(CTArgs::topk_out_scores_cb);
                     auto llk_indices_addr = get_read_ptr(CTArgs::topk_out_indices_cb);
                     noc_async_read(get_noc_addr(llk_scores_addr), global_scores, CTArgs::topk_scores_slot_bytes);
                     noc_async_read(get_noc_addr(llk_indices_addr), global_indices, CTArgs::topk_indices_slot_bytes);
                     noc_async_read_barrier();
+                }
 
                     cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                     cb_pop_front(CTArgs::topk_out_indices_cb, 1);
@@ -1246,7 +1303,11 @@ struct TopKSampling {
                             global_scores,
                             global_indices);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
-                        wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
+                        
+                        {
+                            DeviceZoneScopedN("SP-MESH1WAIT");
+                            wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
+                        }
 
                         if constexpr (CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
                             constexpr uint32_t s1_tiles = CTArgs::stage1_num_slots * CTArgs::topk_k;
@@ -1271,10 +1332,6 @@ struct TopKSampling {
                     }
 
                     // Signal BRISC to send via fabric (sends from winner CB directly).
-                    // if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
-                    //     cb_reserve_back(CTArgs::winner_cb_id, 1);
-
-                    // }
 
                     if constexpr (CTArgs::stage2_receiver) {
                         write_topk_slot(
@@ -1284,9 +1341,13 @@ struct TopKSampling {
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_indices_slot_bytes,
                             global_scores,
                             global_indices);
+                        
                         auto global_stage2_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
-                        wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
+                        {
+                            DeviceZoneScopedN("SP-MESH2WAIT");
+                            wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
+                        }
                         if constexpr (CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
                             constexpr uint32_t s2_tiles = CTArgs::stage2_num_slots * CTArgs::topk_k;
                             constexpr uint32_t s2_input_tiles = (s2_tiles + 1023) / 1024;
@@ -1330,14 +1391,20 @@ struct TopKSampling {
             PacketHeaderPool::reset();
 
             if constexpr (IsFinalCore) {
+
                 cb_wait_front(CTArgs::winner_cb_id, 1);
                 const uint32_t global_scores = get_read_ptr(CTArgs::winner_cb_id);
                 if constexpr (IsMeshSenderCore) {
                     // Mesh sender: wait for NCRISC to finish, then send via fabric
                     const BriscMeshSendMetadata fabric_meta = load_mesh_send_metadata(arg_idx);
-                    send_mesh_topk_via_fabric_brisc(
-                        args.final_noc_x, args.final_noc_y, global_scores, fabric_meta, arg_idx);
+                    {
+                        DeviceZoneScopedN("SP-MESHSEND");
+                        send_mesh_topk_via_fabric_brisc(
+                            args.final_noc_x, args.final_noc_y, global_scores, fabric_meta, arg_idx);
+                    }
                 } else {
+
+                    DeviceZoneScopedN("SP-FINALCORE");
                     // Top-P filtering + random categorical selection
                     if constexpr (!CTArgs::mesh_mode || CTArgs::stage2_receiver) {
                         // constexpr uint32_t FACE_ELEMS = 256;
@@ -1361,137 +1428,125 @@ struct TopKSampling {
                                 std::max(static_cast<float>(metadata_ptr->p), 0.0f), 1.0f);
                         }
 
-                        generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
+                        // Stage-B fused-TRISC pipeline: BRISC just stages inputs (logits +
+                        // broadcast `p` + broadcast `rand`), then consumes TRISC's outputs
+                        // (normalized probs + sample_mask). All of the soft-float that used
+                        // to live here (Pass 1 sum, Pass 2 top-P, Pass 3 sample +
+                        // normalize) now runs on TRISC's SFPU. The only BRISC math left
+                        // in SP-FINALCORE is a K-element integer scan for first-1 in the
+                        // sample_mask tile (~32 cy).
+                        {
+                            DeviceZoneScopedN("SP-FC-STAGE");
+                            generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
 
-                        cb_reserve_back(CTArgs::softmax_in_cb, 1);
-                        auto tile_u32 =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::softmax_in_cb));
-                        constexpr uint32_t NEG_INF_BF16_PAIR = 0xFF80FF80;
-                        constexpr uint32_t FACE_U32 = 128;  // 256 bf16 per face / 2
-                        for (uint32_t i = 0; i < 8; ++i) {
-                            tile_u32[i] = NEG_INF_BF16_PAIR;
-                        }
-                        for (uint32_t i = 0; i < 8; ++i) {
-                            tile_u32[FACE_U32 + i] = NEG_INF_BF16_PAIR;
-                        }
+                            // Broadcast `p` to TRISC for SP-FUSED-THR (mul_binary_tile against
+                            // dst[0]=total_exp). Done before the NOC reads so it overlaps with
+                            // softmax_mul_block_bcast_scalar on the compute side.
+                            generate_row0_bcast(CTArgs::p_bcast_cb, float_to_bf16_rne(p));
 
-                        noc_async_read(
-                            get_noc_addr(global_scores),
-                            get_write_ptr(CTArgs::softmax_in_cb),
-                            std::min(K, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
-                        if (K > ELEMS_PER_FACE_ROW) {
+                            cb_reserve_back(CTArgs::softmax_in_cb, 1);
+                            auto tile_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                get_write_ptr(CTArgs::softmax_in_cb));
+                            constexpr uint32_t NEG_INF_BF16_PAIR = 0xFF80FF80;
+                            constexpr uint32_t FACE_U32 = 128;  // 256 bf16 per face / 2
+                            for (uint32_t i = 0; i < 8; ++i) {
+                                tile_u32[i] = NEG_INF_BF16_PAIR;
+                            }
+                            for (uint32_t i = 0; i < 8; ++i) {
+                                tile_u32[FACE_U32 + i] = NEG_INF_BF16_PAIR;
+                            }
+
                             noc_async_read(
-                                get_noc_addr(global_scores + ELEMS_PER_FACE_ROW * sizeof(uint16_t)),
-                                get_write_ptr(CTArgs::softmax_in_cb) + FACE_ELEMS * sizeof(uint16_t),
-                                std::min(K - ELEMS_PER_FACE_ROW, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
+                                get_noc_addr(global_scores),
+                                get_write_ptr(CTArgs::softmax_in_cb),
+                                std::min(K, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
+                            if (K > ELEMS_PER_FACE_ROW) {
+                                noc_async_read(
+                                    get_noc_addr(global_scores + ELEMS_PER_FACE_ROW * sizeof(uint16_t)),
+                                    get_write_ptr(CTArgs::softmax_in_cb) + FACE_ELEMS * sizeof(uint16_t),
+                                    std::min(K - ELEMS_PER_FACE_ROW, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
+                            }
+                            noc_async_read_barrier();
+                            cb_push_back(CTArgs::softmax_in_cb, 1);
                         }
-                        noc_async_read_barrier();
-                        cb_push_back(CTArgs::softmax_in_cb, 1);
-                        cb_wait_front(CTArgs::softmax_out_cb, 1);
-                        cb_wait_front(CTArgs::rand_cb, 1);
+
+                        // rand_cb is generated by TRISC just after the softmax tail, so we
+                        // can stage rand_bcast_cb the moment it lands -- this push happens
+                        // long before TRISC reaches SP-FUSED-NORM, so it's effectively free.
+                        uint16_t rand;
+                        {
+                            DeviceZoneScopedN("SP-FC-RAND-STAGE");
+                            cb_wait_front(CTArgs::rand_cb, 1);
+                            auto rand_u16 =
+                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::rand_cb));
+                            rand = rand_u16[0];
+                            generate_row0_bcast(CTArgs::rand_bcast_cb, rand);
+                        }
+
+                        {
+                            DeviceZoneScopedN("SP-FC-WAIT");
+                            // softmax_out_cb now holds the *normalized* probabilities
+                            // (TRISC repacked it at the end of SP-FUSED-NORM).
+                            cb_wait_front(CTArgs::softmax_out_cb, 1);
+                            // softmax_in_cb has been recycled twice on TRISC since BRISC
+                            // pushed the staged logits: cumsum (popped in SP-FUSED-THR),
+                            // then the sample_mask we now consume.
+                            cb_wait_front(CTArgs::softmax_in_cb, 1);
+                        }
 
                         auto prob_u16 =
                             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_out_cb));
-                        auto rand_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::rand_cb));
+                        // mask_select tile from TRISC: bf16 0x3F80 (=1.0) at the selected
+                        // position(s) (positions where cumsum >= rand_scaled AND cumsum <=
+                        // cum_kept), bf16 0x0000 elsewhere. The earliest non-zero lane in
+                        // row 0 is our sampled token.
+                        auto mask_u16 =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_in_cb));
                         auto global_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                             get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes);
 
-                        uint16_t rand = rand_u16[0];
-
-                        // Top-P filter.
-                        //
-                        // Fast path: p >= 1.0 means "keep every token" (the cum mass of a
-                        // valid distribution can never exceed 1.0).  Skip the loop entirely
-                        // -- and skip the rescale below -- to avoid redundant divides that
-                        // bleed bf16 precision (see the long comment in the rescale block).
-                        //
-                        // General path: clamp the comparison at 1.0 so bf16 accumulation
-                        // noise pushing `cum_prob_acc` slightly above 1.0 cannot trip a
-                        // false-positive break (the `min` is what makes the kernel agree
-                        // with the math when p is close to but below 1.0).
-                        const bool skip_rescale = (p >= 1.0f);
-                        uint32_t kept_tokens = K;
-                        if (!skip_rescale) {
-                            float cum_prob_acc = 0.0f;
+                        uint32_t selected_index;
+                        {
+                            DeviceZoneScopedN("SP-FC-LOOKUP");
+                            // Default fallback: last kept token. TRISC's mask construction
+                            // guarantees at least one row-0 lane in [0, K) is non-zero (the
+                            // top-P cutoff position is always selected when rand_scaled ==
+                            // cum_kept), but defensive fallback in case of bf16 noise.
+                            selected_index = global_indices[K - 1];
                             for (uint32_t i = 0; i < K; ++i) {
-                                uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
-                                cum_prob_acc += bf16_to_float(prob);
-                                if (std::min(cum_prob_acc, 1.0f) > p) {
-                                    kept_tokens = i + 1;
+                                const uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
+                                if (mask_u16[tile_idx] != 0) {
+                                    selected_index = global_indices[i];
                                     break;
                                 }
                             }
                         }
-                        // Compute the rescale denominator from a *clean* second-pass sum
-                        // over exactly the kept tokens.  Don't reuse the filter-loop value
-                        // because (a) it carries the spurious bf16-noise overshoot, and
-                        // (b) for early breaks it is the partial sum at the break point,
-                        // not the sum of the full kept set.  Then convert to a reciprocal
-                        // so the per-element rescale becomes a multiply (one rounding)
-                        // rather than a divide (slower, same precision).
-                        float inv_cum = 1.0f;
-                        if (!skip_rescale) {
-                            float cum_kept = 0.0f;
-                            for (uint32_t i = 0; i < kept_tokens; ++i) {
-                                uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
-                                cum_kept += bf16_to_float(prob_u16[tile_idx]);
+                        {
+                            DeviceZoneScopedN("SP-FC-FINISH");
+                            // No need to zero filtered slots: SP-FUSED-NORM already multiplied
+                            // prob_u16 by mask_keep, so filtered positions are exactly 0.
+                            auto output_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::output_addr);
+                            output_ptr[0] = selected_index;
+
+                            if constexpr (CTArgs::socket_mode != 0) {
+                                cb_reserve_back(CTArgs::socket_cb_id, 1);
+                                auto d2h_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                    get_write_ptr(CTArgs::socket_cb_id));
+                                d2h_ptr[0] = selected_index;
+                                cb_push_back(CTArgs::socket_cb_id, 1);
                             }
-                            inv_cum = 1.0f / cum_kept;
-                        }
 
-                        // Rescale (or pass-through for the fast path) and run the
-                        // inverse-CDF selection in the same pass.  Default `selected_index`
-                        // to the last kept token so that, if bf16 noise leaves the running
-                        // `cum_sum` a hair under `rand_f`, we still return a valid winner
-                        // instead of silently falling back to index 0.
-                        float cum_sum = 0.0f;
-                        uint32_t selected_index = global_indices[kept_tokens - 1];
-                        bool selected = false;
-                        float rand_f = bf16_to_float(rand);
-                        for (uint32_t i = 0; i < kept_tokens; ++i) {
-                            uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
-                            uint16_t prob = prob_u16[tile_idx];
-                            float prob_f = bf16_to_float(prob);
-                            float final_prob = skip_rescale ? prob_f : prob_f * inv_cum;
-                            cum_sum += final_prob;
-                            if (!skip_rescale) {
-                                prob_u16[tile_idx] = float_to_bf16_rne(final_prob);
+                            if constexpr (CTArgs::rand_output_addr != 0) {
+                                auto rand_out =
+                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::rand_output_addr);
+                                rand_out[0] = rand;
                             }
-                            if (!selected && cum_sum > rand_f) {
-                                selected_index = global_indices[i];
-                                selected = true;
-                            }
-                        }
-                        // Zero out any top-K entries that got filtered by the top-P cutoff
-                        // so callers see a clean [rescaled..., 0, 0, ...] distribution in
-                        // p_scores. (No-op for the fast path since kept_tokens == K.)
-                        for (uint32_t i = kept_tokens; i < K; ++i) {
-                            uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
-                            prob_u16[tile_idx] = 0;
-                        }
-
-                        for (uint32_t i = 0; i < 3; ++i) {
-                            DPRINT << "  [" << i << "] idx, score=" << BF16(prob_u16[i]) << ENDL();
-                        }
-                        DPRINT << "Selected: idx=" << selected_index << " kept=" << kept_tokens << " K=" << K << ENDL();
-
-                        auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::output_addr);
-                        output_ptr[0] = selected_index;
-
-                        if constexpr (CTArgs::socket_mode != 0) {
-                            cb_reserve_back(CTArgs::socket_cb_id, 1);
-                            auto d2h_ptr =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
-                            d2h_ptr[0] = selected_index;
-                            cb_push_back(CTArgs::socket_cb_id, 1);
-                        }
-
-                        if constexpr (CTArgs::rand_output_addr != 0) {
-                            auto rand_out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::rand_output_addr);
-                            rand_out[0] = rand;
                         }
 
                         if constexpr (CTArgs::copy_probabilities) {
+                            DeviceZoneScopedN("SP-CPROBS");
+                            
                             // Scatter the 32 rescaled top-P probabilities out of the two-face
                             // tile layout and copy the 32 winning indices into the metadata.
                             // When copy_probabilities_to_q is set (spec/verification stage),
@@ -1528,6 +1583,7 @@ struct TopKSampling {
                         }
 
                         cb_pop_front(CTArgs::softmax_out_cb, 1);
+                        cb_pop_front(CTArgs::softmax_in_cb, 1);
                         cb_pop_front(CTArgs::rand_cb, 1);
                     }
                 }
@@ -1553,11 +1609,12 @@ struct TopKSampling {
 
             // Phase 1: LLK top-32 sort (all active cores, k==32 only)
             if constexpr (IsActiveCore && CTArgs::topk_k <= 32) {
+                DeviceZoneScopedN("SP-PHASE1LLK");
                 run_top32_llk<
-                    CTArgs::topk_in_scores_cb,
-                    CTArgs::topk_in_indices_cb,
-                    CTArgs::topk_out_scores_cb,
-                    CTArgs::topk_out_indices_cb>(CTArgs::num_values, CTArgs::phase1_num_input_tiles, 1);
+                CTArgs::topk_in_scores_cb,
+                CTArgs::topk_in_indices_cb,
+                CTArgs::topk_out_scores_cb,
+                CTArgs::topk_out_indices_cb>(CTArgs::num_values, CTArgs::phase1_num_input_tiles, 1);
             }
 
             // Non-final cores: consume dummy pages pushed by NCRISC to keep
@@ -1573,17 +1630,22 @@ struct TopKSampling {
 
             // Phase 2: global merge via LLK (final core only, k==32)
             if constexpr (IsFinalCore && CTArgs::topk_k <= 32) {
-                run_top32_llk_presorted_1024_opt<
+
+                {
+                    DeviceZoneScopedN("SP-PHASE2LLK");
+                    run_top32_llk_presorted_1024_opt<
                     CTArgs::topk_in_scores_cb,
                     CTArgs::topk_in_indices_cb,
                     CTArgs::topk_out_scores_cb,
                     CTArgs::topk_out_indices_cb>(CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles, 2);
+                }
             }
 
             // Mesh stage 1 merge via LLK (stage1_receiver, final core, k==32)
             if constexpr (
                 IsFinalCore && CTArgs::mesh_mode && CTArgs::stage1_receiver && CTArgs::topk_k <= 32 &&
                 CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                DeviceZoneScopedN("SP-MESH1LLK");
                 run_top32_llk<
                     CTArgs::mesh_stage_scores_cb,
                     CTArgs::mesh_stage_indices_cb,
@@ -1596,6 +1658,7 @@ struct TopKSampling {
             if constexpr (
                 IsFinalCore && CTArgs::mesh_mode && CTArgs::stage2_receiver && CTArgs::topk_k <= 32 &&
                 CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                DeviceZoneScopedN("SP-MESH2LLK");
                 run_top32_llk<
                     CTArgs::mesh_stage_scores_cb,
                     CTArgs::mesh_stage_indices_cb,
@@ -1604,32 +1667,277 @@ struct TopKSampling {
                     true>(CTArgs::stage2_row_elements, CTArgs::stage2_num_input_tiles, 4);
             }
 
-            // Softmax + random (final core only)
+            // Softmax tail + row-wise prefix sum (final core only).
+            //
+            // We deliberately stop the softmax after `sub_max + exp` and ship the
+            // *unnormalized* exponentials `e_i = exp((x_i - max(x))/T)` into
+            // `softmax_out_cb`. Then we immediately follow with a single SFPU
+            // cumsum across row 0 and pack it back into `softmax_in_cb` (which
+            // softmax_mul_block_bcast_scalar just finished consuming).
+            //
+            // The whole point is to let BRISC finish the math with bit-pattern
+            // uint16 compares instead of soft-float adds. `total_exp = cumsum[K-1]`
+            // is free, the top-P cut becomes ≤K uint16 compares against
+            // `p * total_exp`, and the inverse-CDF sample becomes ≤K uint16
+            // compares against `rand_f * cum_kept`. The TRISC normalization
+            // constant `Z` cancels in BRISC's rescale by `1/cum_kept` because we
+            // stayed in unnormalized space throughout
+            // (`(e_i/Z) / (S_norm) = e_i / cum_kept`), so the old
+            // `softmax_reduce_c<SUM>` + `softmax_recip_block_inplace` +
+            // `softmax_mul_block_bcast_cols` trio remains pure waste.
             if constexpr (IsFinalCore && (!CTArgs::mesh_mode || CTArgs::stage2_receiver)) {
-                softmax_mul_block_bcast_scalar<CTArgs::softmax_in_cb, CTArgs::temp_cb, CTArgs::softmax_exp_cb, 1>();
-                softmax_reduce_c<
-                    PoolType::MAX,
-                    ReduceDim::REDUCE_ROW,
-                    CTArgs::softmax_exp_cb,
-                    CTArgs::scaler_cb,
-                    CTArgs::max_cb,
-                    1,
-                    1>();
-                softmax_sub_exp_bcast_cols<CTArgs::softmax_exp_cb, CTArgs::max_cb, CTArgs::softmax_sub_cb, 1, 1>();
-                softmax_reduce_c<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_ROW,
-                    CTArgs::softmax_sub_cb,
-                    CTArgs::scaler_cb,
-                    CTArgs::sum_cb,
-                    1,
-                    1>();
-                // `scaler_cb` is reused across both reductions above; consume it once both are done.
-                cb_pop_front(CTArgs::scaler_cb, 1);
-                softmax_recip_block_inplace(CTArgs::sum_cb, 1);
-                softmax_mul_block_bcast_cols(CTArgs::softmax_sub_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
+                {
+                    DeviceZoneScopedN("SP-SOFTMAX");
+                    softmax_mul_block_bcast_scalar<
+                        CTArgs::softmax_in_cb,
+                        CTArgs::temp_cb,
+                        CTArgs::softmax_exp_cb,
+                        1>();
+                    softmax_reduce_c<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        CTArgs::softmax_exp_cb,
+                        CTArgs::scaler_cb,
+                        CTArgs::max_cb,
+                        1,
+                        1>();
+                    softmax_sub_exp_bcast_cols<
+                        CTArgs::softmax_exp_cb,
+                        CTArgs::max_cb,
+                        CTArgs::softmax_out_cb,
+                        1,
+                        1>();
+                    // NB: scaler_cb pop is delayed until SP-FUSED-NORM so that
+                    // the same 1.0-broadcast tile feeds all three reductions
+                    // (softmax_reduce_c, SP-FUSED-THR reduce_max, SP-FUSED-NORM
+                    // reduce_min). NCRISC pushes scaler_cb only once per step.
 
-                generate_rand_tile(CTArgs::rand_cb);
+                    generate_rand_tile(CTArgs::rand_cb);
+                }
+
+                // Row-wise prefix sum of the unnormalized exponentials e_i that
+                // softmax_sub_exp_bcast_cols just produced in softmax_out_cb. We
+                // pack the result back into softmax_in_cb -- it's free at this
+                // point (softmax_mul_block_bcast_scalar popped it) so we get the
+                // staging buffer for free as a return-trip CB.
+                //
+                // cumsum_tile is a column-wise SFPU scan, so we sandwich it
+                // between two transposes to scan row 0 instead.
+                {
+                    DeviceZoneScopedN("SP-CUMSUM");
+
+                    transpose_wh_init(CTArgs::softmax_out_cb, CTArgs::softmax_in_cb);
+                    cumsum_tile_init();
+
+                    cb_wait_front(CTArgs::softmax_out_cb, 1);
+                    cb_reserve_back(CTArgs::softmax_in_cb, 1);
+
+                    tile_regs_acquire();
+                    transpose_wh_init_short(CTArgs::softmax_out_cb);
+                    transpose_wh_tile(CTArgs::softmax_out_cb, 0, 0);
+                    cumsum_tile(0, /*first=*/true);
+                    transpose_wh_dest_init_short();
+                    transpose_wh_dest(0);
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    pack_reconfig_data_format(CTArgs::softmax_in_cb);
+                    pack_tile(0, CTArgs::softmax_in_cb);
+                    cb_push_back(CTArgs::softmax_in_cb, 1);
+                    tile_regs_release();
+                }
+
+                // ── Stage B: fused top-P + inverse-CDF + normalize on SFPU ──
+                //
+                // Inputs:
+                //   softmax_in_cb     row-0 prefix sum (from SP-CUMSUM above)
+                //   softmax_out_cb    row-0 unnormalized exponentials e_i
+                //   p_bcast_cb        row-0 broadcast of `p`  (BRISC-staged)
+                //   rand_bcast_cb     row-0 broadcast of `rand` (BRISC-staged)
+                //   scaler_cb         broadcast 1.0 for reduces
+                //
+                // Outputs:
+                //   softmax_out_cb    row-0 normalized probabilities (0 for filtered)
+                //   softmax_in_cb     row-0 mask_select tile (BRISC scans for first 1)
+                //
+                // Math:
+                //   threshold   = p * total_exp,  total_exp = max(cumsum)
+                //   filt_cumsum = cumsum + (cumsum < threshold) * BIG_VAL
+                //   cum_kept    = min(filt_cumsum)
+                //   rand_scaled = rand * cum_kept
+                //   mask_keep   = cumsum <= cum_kept
+                //   mask_select = (cumsum >= rand_scaled) AND mask_keep
+                //   prob_i      = (e_i / cum_kept) * mask_keep
+                //
+                // All scalars live broadcast across row 0 (only row 0 is read
+                // by BRISC downstream; rows 1..31 carry through as don't-care
+                // garbage). The 1/cum_kept divide is one SFPU recip_tile instead
+                // of BRISC's old __divsf3 + K __mulsf3 loop.
+                // Both SP-FUSED-THR and SP-FUSED-NORM are written to fit in 4 DST
+                // tiles (half-sync mode, the default for bf16 dst with
+                // fp32_dest_acc_en=false). Registers are aggressively reused; the
+                // comments mark each overwrite point.
+                {
+                    DeviceZoneScopedN("SP-FUSED-THR");
+
+                    cb_wait_front(CTArgs::softmax_in_cb, 1);   // cumsum tile
+                    cb_wait_front(CTArgs::p_bcast_cb, 1);       // p tile
+
+                    tile_regs_acquire();
+
+                    // dst[0] = total_exp broadcast across row 0
+                    sampling_reduce_init<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        false,
+                        MathFidelity::HiFi4>(
+                        CTArgs::softmax_in_cb, CTArgs::scaler_cb, CTArgs::softmax_exp_cb);
+                    sampling_reduce_tile<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        false,
+                        MathFidelity::HiFi4>(
+                        CTArgs::softmax_in_cb, CTArgs::scaler_cb, 0, 0, 0);
+                    reduce_uninit();
+
+                    // dst[1] = p (row-0 lanes 0..31 all carry p)
+                    copy_tile_to_dst_init_short(CTArgs::p_bcast_cb);
+                    copy_tile(CTArgs::p_bcast_cb, 0, 1);
+
+                    // dst[1] = total_exp * p = threshold
+                    mul_binary_tile_init();
+                    mul_binary_tile(0, 1, 1);
+
+                    // dst[2] = cumsum reloaded into DST so we can compare against threshold
+                    copy_tile_to_dst_init_short(CTArgs::softmax_in_cb);
+                    copy_tile(CTArgs::softmax_in_cb, 0, 2);
+
+                    // dst[3] = (cumsum < threshold) ? 1 : 0   (1 = "below cutoff, filter out for reduce_min")
+                    lt_binary_tile_init();
+                    lt_binary_tile(2, 1, 3);
+
+                    // dst[3] *= BIG_VAL (fp32 ~3.4e38). mul_unary_tile's param1
+                    // is a fp32 scalar encoded as uint32 (NOT bf16-packed).
+                    constexpr uint32_t BIG_VAL_FP32_U32 = 0x7F7FFFFFu;  // FLT_MAX bit pattern
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(3, BIG_VAL_FP32_U32);
+
+                    // dst[2] = filtered cumsum = cumsum + mask_filter_out * BIG_VAL.
+                    // Overwrites dst[2]=cumsum, which is no longer needed (we'll
+                    // recompute it cheaply in SP-FUSED-NORM if we need it again).
+                    add_binary_tile_init();
+                    add_binary_tile(2, 3, 2);
+
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    cb_reserve_back(CTArgs::softmax_exp_cb, 1);
+                    pack_reconfig_data_format(CTArgs::softmax_exp_cb);
+                    pack_tile(2, CTArgs::softmax_exp_cb);
+                    cb_push_back(CTArgs::softmax_exp_cb, 1);
+                    tile_regs_release();
+
+                    cb_pop_front(CTArgs::softmax_in_cb, 1);
+                    cb_pop_front(CTArgs::p_bcast_cb, 1);
+                }
+
+                {
+                    DeviceZoneScopedN("SP-FUSED-NORM");
+
+                    cb_wait_front(CTArgs::softmax_exp_cb, 1);   // filtered cumsum
+                    cb_wait_front(CTArgs::rand_bcast_cb, 1);     // rand tile
+
+                    tile_regs_acquire();
+
+                    // dst[0] = cum_kept broadcast (min over row-0 lanes of filtered cumsum)
+                    sampling_reduce_init<
+                        PoolType::MIN,
+                        ReduceDim::REDUCE_ROW,
+                        false,
+                        MathFidelity::HiFi4>(
+                        CTArgs::softmax_exp_cb, CTArgs::scaler_cb, CTArgs::softmax_out_cb);
+                    sampling_reduce_tile<
+                        PoolType::MIN,
+                        ReduceDim::REDUCE_ROW,
+                        false,
+                        MathFidelity::HiFi4>(
+                        CTArgs::softmax_exp_cb, CTArgs::scaler_cb, 0, 0, 0);
+                    reduce_uninit();
+
+                    // dst[1] = rand (row-0 broadcast)
+                    copy_tile_to_dst_init_short(CTArgs::rand_bcast_cb);
+                    copy_tile(CTArgs::rand_bcast_cb, 0, 1);
+
+                    // dst[1] = cum_kept * rand = rand_scaled
+                    mul_binary_tile_init();
+                    mul_binary_tile(0, 1, 1);
+
+                    // dst[2] = cumsum (recompute from softmax_out_cb -- cheaper than packing
+                    // a second copy to a CB during SP-CUMSUM).
+                    transpose_wh_init_short(CTArgs::softmax_out_cb);
+                    transpose_wh_tile(CTArgs::softmax_out_cb, 0, 2);
+                    cumsum_tile_init();
+                    cumsum_tile(2, /*first=*/true);
+                    transpose_wh_dest_init_short();
+                    transpose_wh_dest(2);
+
+                    // dst[3] = mask_keep = (cumsum <= cum_kept). Needed for both the
+                    // mask_select AND-mask below AND for zeroing filtered probs.
+                    le_binary_tile_init();
+                    le_binary_tile(2, 0, 3);
+
+                    // dst[1] = mask_ge_rand = (cumsum >= rand_scaled). Overwrites
+                    // dst[1]=rand_scaled, which is no longer needed.
+                    ge_binary_tile_init();
+                    ge_binary_tile(2, 1, 1);
+
+                    // dst[1] = mask_select_final = mask_ge_rand * mask_keep.
+                    // ANDing with mask_keep guarantees BRISC's scan never selects a
+                    // filtered token in the rand_scaled == cum_kept edge case.
+                    mul_binary_tile_init();
+                    mul_binary_tile(1, 3, 1);
+
+                    // dst[0] = 1 / cum_kept (overwrites the cum_kept broadcast).
+                    recip_tile_init();
+                    recip_tile(0);
+
+                    // dst[2] = e_i (overwrites the cumsum we computed above; cumsum
+                    // is no longer needed now that mask_keep and mask_select are built).
+                    copy_tile_to_dst_init_short(CTArgs::softmax_out_cb);
+                    copy_tile(CTArgs::softmax_out_cb, 0, 2);
+
+                    // dst[2] = e_i * (1/cum_kept) = preliminary normalized prob
+                    mul_binary_tile_init();
+                    mul_binary_tile(2, 0, 2);
+
+                    // dst[2] *= mask_keep => exact zero in filtered positions
+                    mul_binary_tile(2, 3, 2);
+
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+
+                    // Re-pack normalized probs over softmax_out_cb (single-slot CB,
+                    // so pop before reserve).
+                    cb_pop_front(CTArgs::softmax_out_cb, 1);
+                    cb_reserve_back(CTArgs::softmax_out_cb, 1);
+                    pack_reconfig_data_format(CTArgs::softmax_out_cb);
+                    pack_tile(2, CTArgs::softmax_out_cb);
+                    cb_push_back(CTArgs::softmax_out_cb, 1);
+
+                    // softmax_in_cb is free (popped at the end of SP-FUSED-THR); reuse
+                    // it as the sample-mask buffer that BRISC will scan.
+                    cb_reserve_back(CTArgs::softmax_in_cb, 1);
+                    pack_reconfig_data_format(CTArgs::softmax_in_cb);
+                    pack_tile(1, CTArgs::softmax_in_cb);
+                    cb_push_back(CTArgs::softmax_in_cb, 1);
+
+                    tile_regs_release();
+
+                    cb_pop_front(CTArgs::softmax_exp_cb, 1);
+                    cb_pop_front(CTArgs::rand_bcast_cb, 1);
+                    cb_pop_front(CTArgs::scaler_cb, 1);
+                }
             }
 #endif
         }

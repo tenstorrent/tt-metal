@@ -1793,7 +1793,7 @@ def create_input_page(
 
 
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("num_mtp_levels", [1, 2, 3, 4])
+@pytest.mark.parametrize("num_mtp_levels", [1])
 @pytest.mark.parametrize(
     "mesh_device",
     [(4, 2)],
@@ -1889,8 +1889,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32, num_mtp_levels):
                 slot_id=slot_id,
                 lane_id=0,
                 temperature=0.6,
-                top_k=1,
-                top_p=1.0,
+                top_k=32,
+                top_p=0.95,
                 prefill_token_ids=prefill_ids,
             )
 

@@ -1554,6 +1554,12 @@ class LMHeadSampling:
                     ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                     ("sampling_softmax_in_cb", sampling_softmax_in_cb),
                     ("sampling_temp_cb", sampling_temp_cb),
+                    # Stage-B broadcast CBs. We physically reuse the two compute-side
+                    # buffers `softmax_sub_cb` and `sum_cb` (which the softmax tail
+                    # never touches) as cross-RISC broadcast slots: BRISC pushes `p`
+                    # and `rand` here, TRISC reads them in the fused post-softmax pipeline.
+                    ("sampling_p_bcast_cb", sampling_softmax_sub_cb),
+                    ("sampling_rand_bcast_cb", sampling_sum_cb),
                     ("sampling_enable_metadata", sampling_enable_metadata_value),
                     ("sampling_copy_probabilities", sampling_copy_probabilities_value),
                     ("sampling_copy_probabilities_to_q", sampling_copy_probabilities_to_q_value),
