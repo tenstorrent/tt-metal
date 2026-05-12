@@ -18,7 +18,7 @@ on:
           - P300 (1xP300)
           - QuietBox 2 (2xP300)
       model:
-        description: 'Filter stress tests by model-name (e.g. llama3.1-8b)'
+        description: 'Filter stress tests by model-name (see tests/pipeline_reorg/blackhole_stress_tests.yaml)'
         required: false
         type: choice
         default: "all"
@@ -63,6 +63,16 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable watcher on device test jobs"
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts on device test jobs"
   workflow_call:
     inputs:
       system-type:
@@ -74,10 +84,12 @@ on:
         required: false
         type: string
         default: "all"
+        description: "Filter stress tests by model-name (see tests/pipeline_reorg/blackhole_stress_tests.yaml)"
       test-selection:
         required: false
         type: string
         default: "all"
+        description: "Run all stress suites or one id (see tests/pipeline_reorg/blackhole_stress_tests.yaml)"
       platform:
         required: false
         type: string
@@ -93,8 +105,18 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable watcher on device test jobs"
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts on device test jobs"
   schedule:
-    - cron: "0 3 * * 6"  # Run @ 3am every Saturday (matches Galaxy stress)
+    - cron: "0 3 * * 6"  # Saturday 03:00 UTC
 
 jobs:
   generate-card-matrix:
@@ -127,7 +149,6 @@ jobs:
             matrix_output=$(echo "{\"test-group\": $filtered}" | jq -c .)
           fi
           echo "Selected system type: $selected_system_type"
-          echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -154,3 +175,5 @@ jobs:
       enabled-skus: ${{ matrix.test-group.sku }}
       model: ${{ inputs.model || 'all' }}
       test-selection: ${{ inputs.test-selection || 'all' }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
